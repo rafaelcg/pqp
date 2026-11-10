@@ -43,22 +43,40 @@ import { z } from "zod";
  * against. For one track:
  *
  *   durationMs     the full length of the stored audio, as recorded.
- *   trimStartMs    milliseconds cut from the START of the audio (>= 0).
- *   trimEndMs      milliseconds cut from the END of the audio (>= 0).
- *   offsetMs       where the FIRST PLAYED sample sits on the song timeline.
- *                  May be negative (the stem starts before the song's zero:
- *                  a count-in, an anticipation). |offsetMs| <= JAM_OFFSET_MAX_MS.
+ *   offsetMs       the song time of the stored file's FIRST SAMPLE. May be
+ *                  negative: a take recorded with a count-in has its first
+ *                  sample before the song's zero, and the count-in stays in
+ *                  the file. |offsetMs| <= JAM_OFFSET_MAX_MS.
+ *   trimStartMs    milliseconds of the file's HEAD that are not heard (>= 0).
+ *   trimEndMs      milliseconds of the file's TAIL that are not heard (>= 0).
  *
- * So the track plays `audio[trimStartMs, durationMs - trimEndMs]` and that
- * slice occupies the song timeline from `offsetMs` to
- * `offsetMs + durationMs - trimStartMs - trimEndMs` (the track's played
- * length, `jamTrackPlayedMs`). `trimStartMs + trimEndMs < durationMs`, always:
- * a track never plays nothing. Trims are applied at PLAY time and never touch
- * the stored bytes, so every one of them can be changed back.
+ * A trim HIDES audio and never MOVES it. Stored frame `f` (milliseconds into
+ * the file) sounds at song time `offsetMs + f`, whatever the trims are, and
+ * only the frames from `trimStartMs` to `durationMs - trimEndMs` are heard. So
+ * the track is heard from `offsetMs + trimStartMs` (`jamTrackStartMs`) to
+ * `offsetMs + durationMs - trimEndMs` (`jamTrackEndMs`), for `durationMs -
+ * trimStartMs - trimEndMs` milliseconds (`jamTrackPlayedMs`).
+ * `trimStartMs + trimEndMs < durationMs`, always: a track never plays nothing.
+ * Trims are applied at PLAY time and never touch the stored bytes, so every one
+ * of them can be changed back, and changing a trim never makes any other sound
+ * in the song move.
  *
- * The song's `mixDurationMs` is the latest end of any `inMix` track, minus the
- * earliest start (or 0 when it has no `inMix` track: null). The engine decides
- * where it zeroes the transport; the server gives only this length.
+ * Worked example. The web recorder records a take from song time 0 with a
+ * one-bar count-in (2000 ms at 120 BPM) and a 23 ms round trip, and uploads
+ * `offsetMs -2023, trimStartMs 2023, trimEndMs 0, durationMs 62023`. The
+ * count-in is in the file at song times -2023..0 and is hidden by the head
+ * trim; the first sample heard is at song time 0 and the last at 60000. A
+ * second take recorded with no count-in and then trimmed 500 ms at its head in
+ * the editor has `offsetMs -137, trimStartMs 637`: it is heard from song time
+ * 500. Reading `offsetMs` as "where the first HEARD sample sits" would play the
+ * first take 2023 ms early against the second, which is how this header once
+ * read and what the two phone players once did.
+ *
+ * The song's `mixDurationMs` is the latest end (`jamTrackEndMs`) of any
+ * `inMix` track minus the earliest start (`jamTrackStartMs`), or null when it
+ * has no `inMix` track. The engine decides where it zeroes the transport (the
+ * web's is song time 0 and never later; the phones zero it at the earliest
+ * heard sample); the server gives only this length.
  *
  *   gain           a linear multiplier on the track, 0 (silent) to 2 (+6 dB),
  *                  default 1. Applied by the engine; the stored audio is raw.
@@ -404,7 +422,7 @@ const trimSchema = z.number().finite().min(0).max(JAM_TRACK_MAX_DURATION_MS);
 const gainSchema = z.number().finite().min(0).max(JAM_GAIN_MAX);
 const peaksSchema = z.array(z.number().finite().min(0).max(1)).max(JAM_PEAKS_MAX);
 
-/** The length a track plays for, on the song timeline. See the header. */
+/** The length a track is heard for, on the song timeline. See the header. */
 export function jamTrackPlayedMs(track: {
   durationMs: number;
   trimStartMs: number;
@@ -413,14 +431,25 @@ export function jamTrackPlayedMs(track: {
   return Math.max(0, track.durationMs - track.trimStartMs - track.trimEndMs);
 }
 
-/** Where a track's played slice ends on the song timeline. */
+/**
+ * Song time of a track's first HEARD sample: the file's first sample
+ * (`offsetMs`) plus the head the trim hides. See the header.
+ */
+export function jamTrackStartMs(track: { offsetMs: number; trimStartMs: number }): number {
+  return track.offsetMs + track.trimStartMs;
+}
+
+/**
+ * Song time just past a track's last HEARD sample: the file's last sample
+ * (`offsetMs + durationMs`) less the tail the trim hides. Always
+ * `jamTrackStartMs + jamTrackPlayedMs`.
+ */
 export function jamTrackEndMs(track: {
   offsetMs: number;
   durationMs: number;
-  trimStartMs: number;
   trimEndMs: number;
 }): number {
-  return track.offsetMs + jamTrackPlayedMs(track);
+  return track.offsetMs + track.durationMs - track.trimEndMs;
 }
 
 // ---------------------------------------------------------------- config

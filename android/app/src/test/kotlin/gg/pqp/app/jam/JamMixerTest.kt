@@ -15,9 +15,11 @@ import org.junit.Test
  * THE ALIGNMENT PROOF. Stems are impulse trains with known positions in the
  * stored file; the real mixer renders them against the real placement
  * arithmetic, and the test reads where each impulse lands in the OUTPUT, in
- * frames, and compares with what the contract (`jam.ts`, "THE TIMELINE")
- * says by hand. No hardware: the mixer is pure and the audio thread only
- * writes what it renders.
+ * frames, and compares with what the timeline rule (`jam.ts`, "THE TIMELINE":
+ * `offsetMs` is the stored file's FIRST sample, a trim hides audio without moving
+ * it) says by hand. No hardware: the mixer is pure and the audio thread only
+ * writes what it renders. `JamWebTakeAlignmentTest` plays takes shaped like the
+ * web recorder's uploads.
  *
  * The cases are the ones that go wrong: a negative `offsetMs` (a count-in), both
  * trims (head and tail, with an impulse just inside and just outside each), a
@@ -71,8 +73,8 @@ class JamMixerTest {
         val files = mapOf(
             "a" to stem(12_000, 0, 11_999),
             "b" to stem(6_000, 0, 5_999),
-            // 1.25 s file: head trim 9600 frames, tail trim 14400. Impulses at the first played sample, one just
-            // before it (cut), the last played sample, and one just after it (cut).
+            // 1.25 s file: head trim 9600 frames, tail trim 14400. Impulses at the first heard sample, one just
+            // before it (cut), the last heard sample, and one just after it (cut).
             "c" to stem(60_000, 9_599, 9_600, 45_599, 45_600),
             "late" to stem(4_800, 0),
         )
@@ -82,30 +84,31 @@ class JamMixerTest {
     }
 
     @Test
-    fun `each stem's first and last played sample land where the contract says`() {
+    fun `each stem's first and last played sample land where the timeline rule says`() {
         val (mixer, duration, _) = scenario()
         val out = render(mixer, 0, duration.toInt() + 100)
         val at = framesWithSound(out)
 
-        // Origin is the earliest start, b at -250 ms, so song time t sits at (t + 250) ms = (t + 250) * 48 frames.
+        // Origin is the earliest heard sample, b at -250 ms, so song time t sits at (t + 250) ms = (t + 250) * 48 frames.
         // b: first sample at 0, last (5999) at 5999.
         // a: offset 0 is 12000 frames in; its last sample is 12000 + 11999.
-        // c: starts at (100 + 250) * 48 = 16800. Played slice is file frames 9600..45599, so first played sample is
-        //    at 16800 and the last at 16800 + 36000 - 1 = 52799. The impulses at 9599 and 45600 are cut by the trims.
+        // c: its FILE starts at (100 + 250) * 48 = 16800 and a trim moves nothing, so file frame j sounds at 16800 + j.
+        //    The heard slice is file frames 9600..45599: the first heard sample is at 16800 + 9600 = 26400 and the last
+        //    at 16800 + 45599 = 62399. The impulses at 9599 and 45600 are cut by the trims.
         // late: (837 + 250) * 48 = 52176.
         println("alignment (frames): $at")
-        assertEquals(listOf(0, 5_999, 12_000, 23_999, 16_800, 52_799, 52_176).sorted(), at)
+        assertEquals(listOf(0, 5_999, 12_000, 23_999, 26_400, 62_399, 52_176).sorted(), at)
     }
 
     @Test
     fun `frames just outside both trims are absent`() {
         val (mixer, duration, _) = scenario()
         val out = render(mixer, 0, duration.toInt() + 100)
-        // File frame 9599 would be at 16799, file frame 45600 at 52800.
-        assertEquals(0, out[16_799].toInt())
-        assertEquals(0, out[52_800].toInt())
-        assertEquals(level.toInt(), out[16_800].toInt())
-        assertEquals(level.toInt(), out[52_799].toInt())
+        // File frame 9599 would be at 26399, file frame 45600 at 62400.
+        assertEquals(0, out[26_399].toInt())
+        assertEquals(0, out[62_400].toInt())
+        assertEquals(level.toInt(), out[26_400].toInt())
+        assertEquals(level.toInt(), out[62_399].toInt())
     }
 
     @Test
@@ -116,8 +119,8 @@ class JamMixerTest {
         val from = 24_000
         val tail = render(mixer, from.toLong(), duration.toInt() + 100 - from)
         assertEquals(whole.drop(from), tail.toList())
-        // c's last played sample, seen from there.
-        assertEquals(level.toInt(), tail[52_799 - from].toInt())
+        // c's last heard sample, seen from there.
+        assertEquals(level.toInt(), tail[62_399 - from].toInt())
     }
 
     @Test
@@ -172,7 +175,8 @@ class JamMixerTest {
 
     @Test
     fun `a 44_1 kHz stem with a trim and an offset keeps its place`() {
-        // Offset 100 ms, head trim 200 ms measured on the stored file. Impulse at stored 0.45 s: 250 ms after the cut.
+        // Offset 100 ms (the file's first sample), head trim 200 ms hidden from it: heard from song time 300 ms, which
+        // is this stem's own origin. Impulse at stored 0.45 s: 250 ms after the cut.
         val source = ShortArray(44_100).also { it[(0.45 * 44_100).toInt()] = level }
         val resampled = ArrayList<Short>()
         JamResampler.resample(ShortArrayPcm(source), 44_100, MIX_RATE) { block, count ->
@@ -180,9 +184,9 @@ class JamMixerTest {
         }
         val spec = JamStemSpec("x", offsetMs = 100.0, trimStartMs = 200.0, trimEndMs = 0.0)
         val mixer = JamMixer()
-        mixer.setStems(listOf(placed(spec, resampled.toShortArray(), 100.0)))
+        mixer.setStems(listOf(placed(spec, resampled.toShortArray(), JamAlignment.originMs(listOf(spec)))))
         val out = render(mixer, 0, 30_000)
-        // Played slice starts at the origin (frame 0). The impulse is 250 ms into it: 12000 frames.
+        // The heard slice starts at the origin (frame 0). The impulse is 250 ms into it: 12000 frames.
         val peak = out.indices.maxBy { out[it].toInt() }
         println("44.1 kHz stem, offset 100 ms, trim 200 ms: impulse at $peak (expected 12000)")
         assertEquals(12_000, peak)
@@ -230,9 +234,10 @@ class JamMixerTest {
     }
 
     @Test
-    fun `duration is from the earliest start to the latest end`() {
+    fun `duration is from the earliest heard sample to the latest`() {
         val (_, duration, _) = scenario()
-        // b starts at 0; the latest end is a's 24000 or c's 52800 or late's 52176 + 4800 = 56976.
-        assertEquals(56_976L, duration)
+        // b starts at 0; the latest end is a's 24000, late's 52176 + 4800 = 56976 or c's: its file starts at 16800
+        // and 14400 frames of its tail are hidden, so it is heard to 16800 + 60000 - 14400 = 62400.
+        assertEquals(62_400L, duration)
     }
 }

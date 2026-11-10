@@ -21,6 +21,7 @@ import {
   jamTrackEndMs,
   jamTrackPlayedMs,
   jamTrackSchema,
+  jamTrackStartMs,
   listJamSongsQuerySchema,
   setJamCoverSchema,
   updateJamSongSchema,
@@ -158,8 +159,29 @@ describe("jam contract", () => {
   });
 
   it("does the timeline arithmetic the header states", () => {
+    // offset -250 is the FILE's first sample; 100 ms of its head and 50 ms of its tail are hidden.
     expect(jamTrackPlayedMs(TRACK)).toBe(60_850);
-    expect(jamTrackEndMs(TRACK)).toBe(60_600);
+    expect(jamTrackStartMs(TRACK)).toBe(-150);
+    expect(jamTrackEndMs(TRACK)).toBe(60_700);
+    expect(jamTrackEndMs(TRACK)).toBe(jamTrackStartMs(TRACK) + jamTrackPlayedMs(TRACK));
+  });
+
+  it("a trim hides audio and never moves it: the web recorder's takes are heard from the same place", () => {
+    // The worked example in the header: a count-in take, and a take trimmed in the editor.
+    const countIn = { offsetMs: -2023, trimStartMs: 2023, trimEndMs: 0, durationMs: 62_023 };
+    const trimmed = { offsetMs: -137, trimStartMs: 637, trimEndMs: 1000, durationMs: 60_137 };
+    const keys = { offsetMs: -2050, trimStartMs: 2050, trimEndMs: 0, durationMs: 62_050 };
+    expect(jamTrackStartMs(countIn)).toBe(0);
+    expect(jamTrackEndMs(countIn)).toBe(60_000);
+    expect(jamTrackStartMs(trimmed)).toBe(500);
+    expect(jamTrackEndMs(trimmed)).toBe(59_000);
+    expect(jamTrackStartMs(keys)).toBe(0);
+    expect(jamTrackEndMs(keys)).toBe(60_000);
+    // Trimming more of the head later hides more and moves nothing: the end is where it was.
+    const moreHead = { ...countIn, trimStartMs: countIn.trimStartMs + 400 };
+    expect(jamTrackStartMs(moreHead)).toBe(400);
+    expect(jamTrackEndMs(moreHead)).toBe(jamTrackEndMs(countIn));
+    expect(jamTrackPlayedMs(moreHead)).toBe(jamTrackPlayedMs(countIn) - 400);
   });
 });
 

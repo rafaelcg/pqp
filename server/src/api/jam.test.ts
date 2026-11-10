@@ -1183,6 +1183,39 @@ describeDb("jam channels", () => {
     expect(summary.contributorCount).toBe(2);
   });
 
+  it("the mix length is earliest heard sample to latest, for takes shaped like the web recorder's uploads", async () => {
+    // Three takes as the web uploads them (`offsetMs` is the song time of the file's first sample, a trim hides
+    // audio without moving it): a count-in take, a camera take trimmed in the editor, a count-in take at 44.1 kHz.
+    // Heard slices: guitar 0..60 s, bass 0.5..59 s, keys 0..60 s, so the mix is 60 s. The old arithmetic (the
+    // earliest OFFSET to the latest end minus BOTH trims) said 62.05 s - 2.05 s of count-in nobody hears.
+    const song = await songId(alice);
+    await trackId(alice, song, "guitar", {
+      offsetMs: -2023,
+      trimStartMs: 2023,
+      trimEndMs: 0,
+      durationMs: 62_023,
+    });
+    await trackId(bob, song, "bass", {
+      offsetMs: -137,
+      trimStartMs: 637,
+      trimEndMs: 1000,
+      durationMs: 60_137,
+    });
+    const keys = await addTrack(carol, song, "keys", {
+      offsetMs: -2050,
+      trimStartMs: 2050,
+      trimEndMs: 0,
+      durationMs: 62_050,
+    });
+    expect(keys.status, JSON.stringify(keys.body)).toBe(201);
+    expect(keys.body.song.mixDurationMs).toBe(60_000);
+    expect((await detail(alice, song)).song.mixDurationMs).toBe(60_000);
+    // It is computed on read (nothing stores it), so a later take moves it with nothing to recompute: drums
+    // heard 0.1 s to 70.1 s make the mix 70.1 s.
+    await trackId(mod, song, "drums", { offsetMs: 100, durationMs: 70_000 });
+    expect((await detail(alice, song)).song.mixDurationMs).toBe(70_100);
+  });
+
   // ------------------------------------------------------------ track edits
 
   it("the track's author owns label, offset, trims and gain; nobody else, not even the song's author", async () => {
