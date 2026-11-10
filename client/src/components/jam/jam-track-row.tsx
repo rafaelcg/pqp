@@ -8,6 +8,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import type { JamClock, JamLaneMix } from "@/hooks/use-jam-playback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { volumeDelta } from "@/lib/jam-clip";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cn } from "@/lib/utils";
 import { JamLaneWave, type JamTimeline } from "./jam-lane-wave";
@@ -92,6 +93,8 @@ export function JamTrackRow({
   const person = mine ? t("jam.lane.you") : (track.authorName ?? t("jam.tile.anonymous"));
   const name = `${instrumentName}, ${person}`;
   const outOfMix = !track.inMix;
+  // The author's stored volume for THIS take, said on its own lane when it is not the recorded level.
+  const gainWords = volumeDelta(track.gain);
   const heard = track.inMix || auditioning;
 
   const menu: ContextMenuItemDef[] = [
@@ -278,8 +281,19 @@ export function JamTrackRow({
             dimmed={lane.muted || (outOfMix && !auditioning)}
             className="h-14"
             playhead="phone"
+            gain={track.gain}
           />
         </button>
+        {gainWords && (
+          <span
+            data-jam-gain=""
+            aria-label={`${t("jam.review.volume")}: ${gainWords}`}
+            title={`${t("jam.review.volume")}: ${gainWords}`}
+            className="pointer-events-none absolute left-1.5 top-1.5 rounded-full bg-surface-0/85 px-1.5 py-px text-[10px] font-bold tabular-nums text-text"
+          >
+            {gainWords}
+          </span>
+        )}
         {(loading || failed) && (
           <span
             role={failed ? "alert" : "status"}

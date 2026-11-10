@@ -7610,6 +7610,7 @@
   "jam.studio.countIn": "Contar antes de empezar",
   "jam.studio.video": "Grabar video también",
   "jam.studio.videoDenied": "No se pudo abrir la cámara. Se graba solo el audio.",
+  "jam.studio.videoHint": "Tu video se ve en tu pista, en lugar de tu foto.",
   "jam.studio.camera": "Tu cámara",
   "jam.studio.yourLane": "Tu pista aparece aquí",
   "jam.studio.record": "Grabar",

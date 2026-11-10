@@ -140,6 +140,23 @@ export function clipBars(peaks: readonly number[], source: ClipSource, count: nu
   return loudest > 0 ? out.map((value) => value / loudest) : out;
 }
 
+/**
+ * How tall a take's waveform is drawn for its volume, as a share of the lane:
+ * a quiet take is visibly shorter and a silent one is still a line. The clip
+ * editor and the song's lanes use the same number, so what the editor shows
+ * while it is open is what the lane keeps showing after "Guardar", and a lane
+ * nobody touched stays as it was.
+ */
+export function levelOfGain(gain: number): number {
+  return Math.min(1.12, 0.3 + 0.7 * Math.max(0, Number.isFinite(gain) ? gain : 1));
+}
+
+/** "+20%", "-75%"; null at the take's own level (100%). */
+export function volumeDelta(gain: number): string | null {
+  const percent = Math.round(gain * 100) - 100;
+  return percent === 0 ? null : `${percent > 0 ? "+" : "-"}${Math.abs(percent)}%`;
+}
+
 /** "+20 ms", "-5 ms", "0 ms". */
 export function signedMs(ms: number): string {
   const rounded = Math.round(ms);

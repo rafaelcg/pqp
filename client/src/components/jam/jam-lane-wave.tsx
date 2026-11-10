@@ -1,6 +1,7 @@
 import type { JamInstrument } from "@pqp/shared";
 import { useEffect, useMemo, useRef } from "react";
 import type { JamClock } from "@/hooks/use-jam-playback";
+import { levelOfGain } from "@/lib/jam-clip";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { barsFromPeaks, seededBars } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,7 @@ export function JamLaneWave({
   className,
   animate = false,
   playhead = false,
+  gain = 1,
 }: {
   instrument: JamInstrument;
   peaks: readonly number[];
@@ -61,6 +63,12 @@ export function JamLaneWave({
    * one line cannot cross them all, so each draws its piece at the same place.
    */
   playhead?: boolean | "phone";
+  /**
+   * The track's own stored volume (its author's): the bars are drawn as tall as
+   * it is loud, so a turned-down track looks turned down and its neighbours,
+   * which nobody touched, look as they did. 1 is the take as recorded.
+   */
+  gain?: number;
 }) {
   const look = JAM_INSTRUMENT_LOOK[instrument];
   const total = Math.max(1, timeline.endMs - timeline.startMs);
@@ -75,13 +83,15 @@ export function JamLaneWave({
     if (count === 0) {
       return [];
     }
+    // A lane is never drawn taller than itself, so +100% looks like 100%; the number says the rest.
+    const level = Math.min(1, levelOfGain(gain));
     if (peaks.length === 0) {
-      return seededBars(seed, count);
+      return seededBars(seed, count).map((height) => height * level);
     }
     const from = Math.floor((timing.trimStartMs / Math.max(1, timing.durationMs)) * peaks.length);
     const to = Math.ceil((1 - timing.trimEndMs / Math.max(1, timing.durationMs)) * peaks.length);
-    return barsFromPeaks(peaks.slice(from, Math.max(from + 1, to)), count);
-  }, [count, peaks, seed, timing.trimStartMs, timing.trimEndMs, timing.durationMs]);
+    return barsFromPeaks(peaks.slice(from, Math.max(from + 1, to)), count).map((height) => height * level);
+  }, [count, peaks, seed, gain, timing.trimStartMs, timing.trimEndMs, timing.durationMs]);
 
   useEffect(() => {
     if (!clock) {

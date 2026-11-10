@@ -7538,6 +7538,7 @@
   "jam.studio.countIn": "Contar antes de começar",
   "jam.studio.video": "Gravar vídeo também",
   "jam.studio.videoDenied": "Não deu pra abrir a câmera. Grava só o áudio.",
+  "jam.studio.videoHint": "Teu vídeo aparece na tua faixa, no lugar da tua foto.",
   "jam.studio.camera": "Tua câmera",
   "jam.studio.yourLane": "Tua faixa aparece aqui",
   "jam.studio.record": "Gravar",
