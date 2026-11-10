@@ -258,7 +258,7 @@
     opacity: 1;
   }
   50% {
-    opacity: 0.45;
+    opacity: 0.75;
   }
 }
 
@@ -297,7 +297,7 @@
 
 .jam-invite-ping,
 .jam-call-ping {
-  animation: jam-ping 2.4s var(--ease-standard) infinite;
+  animation: jam-ping 2.4s var(--ease-standard) 4;
 }
 
 /* The record button's own ping: smaller, so it stays inside the dock. */
@@ -332,11 +332,11 @@
 }
 
 .jam-howto-playhead {
-  animation: jam-howto-playhead 4.2s linear 1.1s infinite backwards;
+  animation: jam-howto-playhead 4.2s linear 1.1s 3 backwards;
 }
 
 .jam-howto-you {
-  animation: jam-soft-blink 2.4s var(--ease-standard) 1.2s infinite;
+  animation: jam-soft-blink 2.4s var(--ease-standard) 1.2s 3;
 }
 
 .jam-rec-ring {

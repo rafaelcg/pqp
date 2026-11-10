@@ -163,16 +163,25 @@ interface ApiTrack {
 }
 
 async function skipTheLatencyCheck(page: Page): Promise<void> {
-  // The first recording on a pair of devices asks to measure the round trip;
-  // skipping it is a real, supported answer ("use the estimate").
+  // The first recording on a pair of devices suggests measuring the round trip
+  // (a suggestion: the record button works either way); "Agora não" is a real,
+  // supported answer ("use the estimate"). The header chip says the delay is known.
   const skip = page.locator("[data-jam-skip-check]");
-  // Either the explainer (first use of these devices) or the measured card.
-  await expect(page.locator("[data-jam-latency-check], [data-jam-latency]").first()).toBeVisible({
-    timeout: 20_000,
-  });
+  await expect(page.locator("[data-jam-latency-chip]")).toBeVisible({ timeout: 20_000 });
   if (await skip.isVisible()) {
     await skip.click();
   }
+}
+
+/** "Teu som": input, count-in, video and the delay card live behind one button. */
+async function openSound(page: Page): Promise<void> {
+  await page.locator("[data-jam-sound]").click();
+  await expect(page.locator("[data-jam-sound-panel]")).toBeVisible();
+}
+
+async function closeSound(page: Page): Promise<void> {
+  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-jam-sound-panel]")).toHaveCount(0);
 }
 
 async function recordAndStop(page: Page, seconds: number): Promise<void> {
@@ -222,7 +231,10 @@ test("one person starts a song, another records over it from the wall in three t
   await expect(guest.locator('[data-jam-instrument][aria-checked="true"]')).toHaveCount(1);
 
   await skipTheLatencyCheck(guest);
+  await openSound(guest);
   await expect(guest.locator("[data-jam-latency]")).toContainText(/\d+ ms/);
+  await closeSound(guest);
+  await expect(guest.locator("[data-jam-studio]")).toBeVisible(); // Escape closed the dialog, not the studio
   await recordAndStop(guest, 4);
   await expect(guest.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
   // posting after stopping: one tap, no edits
@@ -309,11 +321,13 @@ test("a song has an address, and the studio shows and takes a typed latency", as
   const chip = guest.locator("[data-jam-latency-chip]");
   await expect(chip).toBeVisible();
   await expect(chip).toHaveAttribute("data-method", "estimate");
+  await openSound(guest);
   await guest.locator("[data-jam-latency-details] summary").click();
   await guest.locator("[data-jam-manual-latency]").fill("55");
   await guest.locator("[data-jam-manual-use]").click();
   await expect(chip).toHaveAttribute("data-method", "manual");
   await expect(chip).toContainText("55");
+  await closeSound(guest);
 
   // ---- and the take is placed with what was typed ----------------------------
   await recordAndStop(guest, 3);
@@ -403,10 +417,9 @@ test("a second song in the same visit is a second song, and a skipped latency ch
     if (firstTime) {
       await skipTheLatencyCheck(host);
     } else {
-      // skipped before on this pair of devices: no full-page explainer, just the chip
-      await expect(host.locator("[data-jam-latency]")).toBeVisible({ timeout: 20_000 });
+      // skipped before on this pair of devices: no suggestion again, just the chip
+      await expect(host.locator("[data-jam-latency-chip]")).toBeVisible({ timeout: 20_000 });
       await expect(host.locator("[data-jam-latency-check]")).toHaveCount(0);
-      await expect(host.locator("[data-jam-latency-chip]")).toBeVisible();
     }
     await recordAndStop(host, 3);
     await expect(host.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });

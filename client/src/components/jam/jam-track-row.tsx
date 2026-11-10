@@ -144,11 +144,28 @@ export function JamTrackRow({
                 </span>
               )}
             </span>
-            <span className="truncate text-xs text-text-secondary">
-              {person}
-              {track.label ? ` · ${track.label}` : ""}
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-xs text-text-secondary">
+                {person}
+                {track.label ? ` · ${track.label}` : ""}
+              </span>
             </span>
           </span>
+          {canAdjust && (
+            <button
+              type="button"
+              onClick={onAdjust}
+              aria-pressed={adjusting}
+              data-jam-adjust-open={track.id}
+              className={cn(
+                "flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-bold outline-none transition-colors duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring",
+                adjusting ? "bg-text text-surface-0" : "bg-surface-3 text-text hover:bg-border-strong",
+              )}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
+              {t("jam.take.adjust")}
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-0.5">
           {heard && (
@@ -175,18 +192,16 @@ export function JamTrackRow({
                   <Headphones className="h-4 w-4" aria-hidden />
                 </button>
               </Tooltip>
-              {!canAdjust && (
-                <Slider
-                  variant="volume"
-                  min={0}
-                  max={150}
-                  step={1}
-                  value={Math.round(lane.volume * 100)}
-                  onValueChange={(value) => onLane({ volume: value / 100 })}
-                  aria-label={t("jam.lane.volume", { name })}
-                  className="mx-1 min-w-0 flex-1 max-sm:hidden"
-                />
-              )}
+              <Slider
+                variant="volume"
+                min={0}
+                max={150}
+                step={1}
+                value={Math.round(lane.volume * 100)}
+                onValueChange={(value) => onLane({ volume: value / 100 })}
+                aria-label={t("jam.lane.volume", { name })}
+                className="mx-1 min-w-0 flex-1 max-sm:hidden"
+              />
             </>
           )}
           {outOfMix && (
@@ -218,21 +233,6 @@ export function JamTrackRow({
                 <span>{track.voteCount}</span>
               </button>
             </Tooltip>
-          )}
-          {canAdjust && (
-            <button
-              type="button"
-              onClick={onAdjust}
-              aria-pressed={adjusting}
-              data-jam-adjust-open={track.id}
-              className={cn(
-                "ml-1 flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-bold outline-none transition-colors duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring",
-                adjusting ? "bg-text text-surface-0" : "bg-surface-3 text-text hover:bg-border-strong",
-              )}
-            >
-              <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
-              {t("jam.take.adjust")}
-            </button>
           )}
           {canSwitchMix && outOfMix && (
             <button
@@ -323,7 +323,7 @@ function LaneVideo({
       aria-label={label}
       data-jam-lane-video=""
       className={cn(
-        "h-9 w-16 rounded-[var(--radius-control)] bg-surface-0 object-cover ring-1 ring-inset ring-border transition-opacity duration-[var(--duration-base)]",
+        "h-9 w-9 rounded-full bg-surface-0 object-cover ring-1 ring-inset ring-border transition-opacity duration-[var(--duration-base)]",
         muted && "opacity-40",
       )}
     />

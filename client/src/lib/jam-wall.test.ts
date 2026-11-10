@@ -10,10 +10,12 @@ import {
   latestActivity,
   orderTracks,
   planTiles,
+  rotateBars,
   seededBars,
   songNeed,
   songTimeline,
   sortByActivity,
+  stretchBars,
 } from "./jam-wall";
 
 describe("what a tile says a song needs", () => {
@@ -202,5 +204,25 @@ describe("jam channels that left their server's list", () => {
   it("an empty list says nothing", () => {
     const first = jamChannelsGone(new Map(), [ch("j1", "s1")]);
     expect(jamChannelsGone(first.next, []).gone).toEqual([]);
+  });
+});
+
+describe("small pictures of a song", () => {
+  it("a song loud all the way through still shows its shape, not a barcode", () => {
+    const out = stretchBars([0.9, 0.92, 0.95, 1, 0.9, 0.97, 0.91, 0.93, 0.9, 0.99]);
+    expect(Math.max(...out)).toBe(1);
+    expect(Math.min(...out)).toBeCloseTo(0.12, 5);
+  });
+
+  it("a flat signal is a calm middle line, silence is the floor", () => {
+    expect(stretchBars([0.5, 0.5, 0.5])).toEqual([0.6, 0.6, 0.6]);
+    expect(stretchBars([0, 0])).toEqual([0.12, 0.12]);
+    expect(stretchBars([])).toEqual([]);
+  });
+
+  it("rotating starts the same bars further along, either way", () => {
+    expect(rotateBars([1, 2, 3, 4], 1)).toEqual([2, 3, 4, 1]);
+    expect(rotateBars([1, 2, 3, 4], -1)).toEqual([4, 1, 2, 3]);
+    expect(rotateBars([], 3)).toEqual([]);
   });
 });

@@ -7688,7 +7688,7 @@
   "jam.take.adjustTitle": "Ajustando o teu take de {instrument}",
   "jam.clip.hint": "Arrasta as pontas pra cortar. Arrasta o meio pra mover no tempo.",
   "jam.clip.zoom": "Quanto mostrar",
-  "jam.clip.zoomWhole": "Ver tudo",
+  "jam.clip.zoomWhole": "O take todo",
   "jam.clip.zoomClose": "Ampliar o começo",
   "jam.clip.songStart": "início",
   "jam.clip.move": "Mover o take no tempo",
@@ -7713,7 +7713,7 @@
   "jam.studio.countInHint": "Quatro cliques e a banda entra. Não muda nada na música.",
   "jam.studio.wanted": "falta",
   "jam.review.editTitle": "Ajustar o take",
-  "jam.review.editDone": "Fechar ajuste",
+  "jam.review.editDone": "Pronto",
   "jam.review.edited": "Tu mexeu no take",
   "jam.latency.explain.short": "Mede o atraso do teu fone uma vez (7 s). Dá pra gravar agora de qualquer jeito.",
   "jam.latency.explain.why": "Por quê?",
@@ -7721,5 +7721,7 @@
   "jam.review.onTime": "Caiu no tempo sozinho",
   "jam.clip.volumeNormal": "normal",
   "jam.clip.band": "a banda",
-  "jam.latency.notNow": "Agora não"
+  "jam.latency.notNow": "Agora não",
+  "jam.needs.missingCount_one": "Falta {countLabel} parte",
+  "jam.needs.missingCount_other": "Faltam {countLabel} partes"
 }

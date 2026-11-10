@@ -209,7 +209,7 @@ export function NeedChip({
   need: JamNeed;
   className?: string;
   /** On a cover (over the dark scrim) or on a panel surface. */
-  tone?: "cover" | "panel";
+  tone?: "cover" | "panel" | "line";
   compact?: boolean;
 }) {
   const { t } = useTranslation();
@@ -218,15 +218,31 @@ export function NeedChip({
     const first = need.instruments[0]!;
     const look = JAM_INSTRUMENT_LOOK[first];
     const more = need.instruments.length - 1;
+    const words = compact
+      ? more > 0
+        ? t("jam.needs.missingCount", { count: more + 1, countLabel: more + 1 })
+        : t(look.missingKey as MessageKey)
+      : label;
+    // On a tile the missing part already shows as a dashed band: the words say it
+    // in that instrument's colour, without one more filled button.
+    if (tone === "line") {
+      return (
+        <span
+          data-jam-need="missing"
+          className={cn("inline-flex w-fit max-w-full items-center gap-1 text-[13px] font-bold", look.ink, className)}
+        >
+          <Plus className="h-3.5 w-3.5 shrink-0" strokeWidth={3} aria-hidden="true" />
+          <span className="truncate first-letter:uppercase">{words}</span>
+        </span>
+      );
+    }
     return (
       <span
         data-jam-need="missing"
         className={cn("inline-flex h-7 w-fit max-w-full items-center gap-1 rounded-full pl-2 pr-2.5 text-xs font-bold", look.fill, className)}
       >
         <Plus className="h-3.5 w-3.5 shrink-0" strokeWidth={3} aria-hidden="true" />
-        <span className="truncate first-letter:uppercase">
-          {compact ? `${t(look.nameKey as MessageKey)}${more > 0 ? ` +${more}` : ""}` : label}
-        </span>
+        <span className="truncate first-letter:uppercase">{words}</span>
       </span>
     );
   }
@@ -235,7 +251,7 @@ export function NeedChip({
     <span
       data-jam-need={need.kind}
       className={cn(
-        "inline-flex w-fit max-w-full items-center gap-1.5 text-xs font-semibold",
+        "inline-flex w-fit max-w-full items-center gap-1.5 text-[13px] font-semibold",
         tone === "cover" ? "text-on-media-muted" : "text-text-secondary",
         className,
       )}

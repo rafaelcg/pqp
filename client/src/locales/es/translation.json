@@ -7760,7 +7760,7 @@
   "jam.take.adjustTitle": "Ajustando tu toma de {instrument}",
   "jam.clip.hint": "Arrastra los bordes para cortar. Arrastra el centro para moverla en el tiempo.",
   "jam.clip.zoom": "Cuánto mostrar",
-  "jam.clip.zoomWhole": "Ver todo",
+  "jam.clip.zoomWhole": "Toda la toma",
   "jam.clip.zoomClose": "Ampliar el inicio",
   "jam.clip.songStart": "inicio",
   "jam.clip.move": "Mover la toma en el tiempo",
@@ -7785,7 +7785,7 @@
   "jam.studio.countInHint": "Cuatro clics y entra la banda. No cambia nada de la canción.",
   "jam.studio.wanted": "falta",
   "jam.review.editTitle": "Ajustar la toma",
-  "jam.review.editDone": "Cerrar ajuste",
+  "jam.review.editDone": "Listo",
   "jam.review.edited": "Cambiaste la toma",
   "jam.latency.explain.short": "Mide el retraso de tus auriculares una vez (7 s). Puedes grabar ya de todas formas.",
   "jam.latency.explain.why": "¿Por qué?",
@@ -7793,5 +7793,7 @@
   "jam.review.onTime": "Cayó a tiempo sola",
   "jam.clip.volumeNormal": "normal",
   "jam.clip.band": "la banda",
-  "jam.latency.notNow": "Ahora no"
+  "jam.latency.notNow": "Ahora no",
+  "jam.needs.missingCount_one": "Falta {countLabel} parte",
+  "jam.needs.missingCount_other": "Faltan {countLabel} partes"
 }

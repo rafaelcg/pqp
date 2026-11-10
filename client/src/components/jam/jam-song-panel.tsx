@@ -241,16 +241,27 @@ export function JamSongPanel({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 sm:px-5">
-        <section className="mt-4" aria-labelledby={`band-${song.id}`}>
-          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-            <h3 id={`band-${song.id}`} className="font-display text-lg font-extrabold text-text">
-              {t("jam.song.band")}
-            </h3>
-            {detail && (
-              <span className="text-xs font-semibold text-text-tertiary">
-                {t("jam.song.bandCount", { count: inMixCount, countLabel: inMixCount })}
-              </span>
-            )}
+        <section className="mt-1" aria-labelledby={`band-${song.id}`}>
+          <div className="sticky top-0 z-10 -mx-3 mb-2 flex flex-col gap-1 bg-surface-1/95 px-3 pb-2 pt-3 backdrop-blur-sm sm:-mx-5 sm:px-5">
+            <div className="flex items-baseline justify-between gap-3">
+              <h3 id={`band-${song.id}`} className="font-display text-lg font-extrabold text-text">
+                {t("jam.song.band")}
+              </h3>
+              {detail && (
+                <span className="text-[13px] font-semibold text-text-secondary">
+                  {t("jam.song.bandCount", { count: inMixCount, countLabel: inMixCount })}
+                </span>
+              )}
+            </div>
+            <JamTransport
+              clock={playback.clock}
+              playing={playing}
+              loading={!detail || playback.status === "loading"}
+              durationMs={durationMs}
+              onToggle={playback.toggle}
+              onSeek={playback.seek}
+              title={song.title}
+            />
           </div>
 
           {!detail ? (
@@ -380,17 +391,8 @@ export function JamSongPanel({
         )}
       </div>
 
-      {/* the dock: play and pause always in reach, and the one thing to do */}
+      {/* the dock: the one thing to do */}
       <footer className="safe-pb flex flex-col gap-3 border-t border-border bg-surface-1 px-3 py-3 sm:px-5">
-        <JamTransport
-          clock={playback.clock}
-          playing={playing}
-          loading={!detail || playback.status === "loading"}
-          durationMs={durationMs}
-          onToggle={playback.toggle}
-          onSeek={playback.seek}
-          title={song.title}
-        />
         {reason === null && first ? (
           <button
             type="button"

@@ -431,7 +431,7 @@ export function JamPane({
               </Tooltip>
               <div className={cn("flex items-center gap-1 max-sm:hidden", panelOpen && "lg:hidden")}>{headerActions}</div>
               {!empty && (
-                <div className="relative">
+                <div className={cn("relative", panelOpen && "lg:hidden")}>
                   {recordButton}
                   <div className="absolute right-0 top-full z-30 mt-2">
                     <FeatureHint

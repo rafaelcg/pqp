@@ -594,10 +594,10 @@ export function LevelRing({ clock }: { clock: JamStudio["levelClock"] }) {
       shown = Math.max(peak, shown * 0.85);
       const element = ring.current;
       if (element) {
-        element.style.transform = `scale(${1 + Math.min(1, levelBar(shown)) * 0.32})`;
+        element.style.transform = `scale(${1 + Math.min(1, levelBar(shown)) * 0.16})`;
         element.style.opacity = String(0.25 + Math.min(1, levelBar(shown)) * 0.5);
       }
     });
   }, [clock]);
-  return <span ref={ring} aria-hidden className="pointer-events-none absolute -inset-1.5 rounded-full bg-danger/50" style={{ opacity: 0.25 }} />;
+  return <span ref={ring} aria-hidden className="pointer-events-none absolute -inset-1 rounded-full bg-danger/50" style={{ opacity: 0.25 }} />;
 }

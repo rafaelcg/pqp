@@ -130,6 +130,33 @@ export function barsFromPeaks(peaks: readonly number[], count: number): number[]
 }
 
 /**
+ * Bars for a small picture of a song: the quietest tenth of them sits near the
+ * floor and the loudest at the top, so a song that is loud all the way through
+ * still shows its shape instead of a barcode of full-height bars.
+ */
+export function stretchBars(bars: readonly number[], floor = 0.12): number[] {
+  if (bars.length === 0) {
+    return [];
+  }
+  const sorted = [...bars].sort((a, b) => a - b);
+  const low = sorted[Math.floor(sorted.length * 0.1)] ?? 0;
+  const high = sorted[sorted.length - 1] ?? 0;
+  if (high - low < 1e-6) {
+    return bars.map(() => (high > 0 ? 0.6 : floor));
+  }
+  return bars.map((value) => floor + (1 - floor) * Math.min(1, Math.max(0, (value - low) / (high - low))));
+}
+
+/** The same bars started further along: one song's shape, told apart per band. */
+export function rotateBars(bars: readonly number[], by: number): number[] {
+  if (bars.length === 0) {
+    return [];
+  }
+  const shift = ((by % bars.length) + bars.length) % bars.length;
+  return [...bars.slice(shift), ...bars.slice(0, shift)];
+}
+
+/**
  * A stand-in waveform for a tile whose peaks have not arrived: the same bars
  * every time for the same seed, so the tile does not flicker as it fills in.
  */

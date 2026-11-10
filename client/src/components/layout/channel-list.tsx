@@ -4022,10 +4022,10 @@ function ChannelRow({
       {jam ? (
         <span className="flex min-w-0 flex-1 flex-col" data-jam-row="">
           <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
-            {channel.name}
+            {channel.name === "jam" ? t("jam.title") : channel.name}
           </span>
           {jam.loaded && (
-            <span className="truncate text-[10px] text-paper-muted">
+            <span className="truncate text-[11px] text-text-tertiary">
               {t("jam.row.songs", {
                 count: jam.songCount,
                 countLabel: jam.more ? `${jam.songCount}+` : String(jam.songCount),

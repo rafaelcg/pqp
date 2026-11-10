@@ -3,6 +3,7 @@ import { ArrowLeft, Camera, Check, ChevronDown, Loader2, MicOff, RotateCcw, Send
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -101,7 +102,18 @@ export function JamStudio({
   /** Which question the leave dialog is asking: a live recording, or a take not sent. */
   const [confirmLeave, setConfirmLeave] = useState<"recording" | "take" | null>(null);
   const [editing, setEditing] = useState(false);
+  const [soundOpen, setSoundOpen] = useState(false);
   const recordRef = useRef<HTMLButtonElement | null>(null);
+  const scroller = useRef<HTMLDivElement | null>(null);
+  // The delay suggestion answered (measured or "Agora não"): back to the top,
+  // where the instrument and the band are, instead of a page scrolled to nothing.
+  const wasChecking = useRef(false);
+  useEffect(() => {
+    if (wasChecking.current && !studio.needsCheck) {
+      scroller.current?.scrollTo?.({ top: 0, behavior: "smooth" });
+    }
+    wasChecking.current = studio.needsCheck;
+  }, [studio.needsCheck]);
 
   useEffect(() => {
     setJamHintContext({ studio: true });
@@ -111,7 +123,9 @@ export function JamStudio({
   const phase = studio.phase;
   const recording = phase === "countdown" || phase === "recording";
   const reviewing = phase === "review" || phase === "posting";
-  const names = Array.from(new Set(backing.map((track) => track.authorName ?? t("jam.tile.anonymous"))));
+  const names = Array.from(
+    new Set(backing.filter((track) => track.authorId !== viewerId).map((track) => track.authorName ?? t("jam.tile.anonymous"))),
+  );
   const instrumentName = t(JAM_INSTRUMENT_LOOK[studio.instrument].nameKey as MessageKey);
   // A new song is "Música nova" until it exists, and is itself once it does.
   const created = phase === "done" && !song && draft !== null;
@@ -185,7 +199,7 @@ export function JamStudio({
   // Escape leaves, the way every other panel does, after the same question.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape" && confirmLeave === null && phase !== "done") {
+      if (event.key === "Escape" && confirmLeave === null && !soundOpen && phase !== "done") {
         const target = event.target as HTMLElement | null;
         if (target?.closest("[role=dialog][aria-modal=true] [role=dialog]")) {
           return;
@@ -266,15 +280,20 @@ export function JamStudio({
           {subtitle && <p className="truncate text-xs text-text-secondary">{subtitle}</p>}
         </div>
         {phase !== "unsupported" && phase !== "done" && <LatencyChip studio={studio} />}
-        {phase === "recording" && (
-          <span className="flex h-9 shrink-0 items-center gap-2 rounded-full bg-danger px-3.5 text-sm font-extrabold text-on-danger">
-            <span aria-hidden className="jam-rec-dot h-2.5 w-2.5 rounded-full bg-on-danger" />
-            {t("jam.studio.rec")}
-          </span>
+        {(phase === "setup" || phase === "boot") && (
+          <button
+            type="button"
+            onClick={() => setSoundOpen(true)}
+            data-jam-sound=""
+            className="flex h-10 shrink-0 items-center gap-2 rounded-full px-3 text-sm font-semibold text-text-secondary outline-none ring-1 ring-inset ring-border transition-colors hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            <SlidersHorizontal className="h-4 w-4" aria-hidden />
+            <span className="max-sm:hidden">{t("jam.studio.settings")}</span>
+          </button>
         )}
       </header>
 
-      <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div ref={scroller} className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {phase === "unsupported" ? (
           <div className="grid min-h-full place-items-center p-8 text-center">
             <p role="alert" className="max-w-sm text-sm leading-relaxed text-text-secondary">
@@ -282,7 +301,7 @@ export function JamStudio({
             </p>
           </div>
         ) : (
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-3 sm:p-6">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-3 pb-10 sm:p-6 sm:pb-12">
             <div className="@container flex min-w-0 flex-col gap-5">
               {micProblem && (
                 <div role="alert" className="flex flex-col items-start gap-3 rounded-[var(--radius-card)] bg-danger-soft p-4 text-on-danger-soft">
@@ -411,11 +430,11 @@ export function JamStudio({
                       {phase === "setup" || phase === "boot" ? (
                         <div
                           className={cn(
-                            "jam-howto-you flex h-12 items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current text-xs font-bold",
+                            "jam-howto-you flex h-12 items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current text-[13px] font-bold [&>span]:text-text-secondary",
                             JAM_INSTRUMENT_LOOK[studio.instrument].ink,
                           )}
                         >
-                          {t("jam.studio.yourLane")}
+                          <span>{t("jam.studio.yourLane")}</span>
                         </div>
                       ) : null}
                       {recording && (
@@ -453,7 +472,7 @@ export function JamStudio({
                       style={{ "--jam-l": index } as CSSProperties}
                       className="jam-lane-in flex flex-col gap-1.5 sm:grid sm:grid-cols-[var(--lane-head)_minmax(0,1fr)] sm:items-center sm:gap-3 sm:px-1.5"
                     >
-                      <StudioLaneHead track={track} />
+                      <StudioLaneHead track={track} mine={viewerId !== null && track.authorId === viewerId} />
                       <JamLaneWave
                         instrument={track.instrument}
                         peaks={track.peaks}
@@ -471,56 +490,7 @@ export function JamStudio({
 
               {phase === "setup" && studio.needsCheck && <LatencyCheck studio={studio} />}
 
-              {(phase === "setup" || phase === "boot") && (
-                <section
-                  className="flex min-w-0 flex-col gap-4 rounded-[var(--radius-panel)] bg-surface-1 p-4 ring-1 ring-inset ring-border"
-                  aria-label={t("jam.studio.settings")}
-                >
-                  <h3 className="font-display text-base font-extrabold text-text">{t("jam.studio.settings")}</h3>
-                  <div className="grid gap-4 @lg:grid-cols-2">
-                    <div className="flex min-w-0 flex-col gap-4">
-                      {studio.devices.length > 0 && (
-                        <label className="flex flex-col gap-1.5 text-xs font-semibold text-text-secondary">
-                          {t("jam.studio.input")}
-                          <span className="relative">
-                            <select
-                              value={studio.deviceId ?? ""}
-                              onChange={(event) => void studio.chooseDevice(event.target.value)}
-                              className="h-11 w-full appearance-none truncate rounded-full border border-border bg-surface-2 pl-4 pr-10 text-sm font-semibold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
-                            >
-                              {studio.devices.map((device, index) => (
-                                <option key={device.deviceId || index} value={device.deviceId}>
-                                  {device.label || t("jam.studio.inputUnnamed", { n: index + 1 })}
-                                </option>
-                              ))}
-                            </select>
-                            <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary" aria-hidden />
-                          </span>
-                        </label>
-                      )}
-                      <LevelMeter clock={studio.levelClock} active={studio.mic === "ready"} />
-                    </div>
-                    <div className="flex flex-col divide-y divide-border self-start rounded-[var(--radius-card)] bg-surface-2/60 px-3">
-                      <Switch
-                        checked={studio.countIn.bars > 0}
-                        onCheckedChange={(on) => studio.setCountIn({ ...studio.countIn, bars: on ? 1 : 0 })}
-                        label={t("jam.studio.countIn")}
-                        description={t("jam.studio.countInHint")}
-                      />
-                      <div className="flex flex-col gap-1.5 py-1">
-                        <Switch checked={studio.wantsVideo} onCheckedChange={studio.setWantsVideo} label={t("jam.studio.video")} />
-                        {studio.cameraError && (
-                          <p role="status" className="flex items-center gap-1.5 pb-2 text-xs text-text-tertiary">
-                            <Camera className="h-3.5 w-3.5" aria-hidden />
-                            {t("jam.studio.videoDenied")}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  {!studio.needsCheck && <LatencyCard studio={studio} />}
-                </section>
-              )}
+
 
               {phase === "review" && (
                 <>
@@ -628,7 +598,7 @@ export function JamStudio({
         )}
       </div>
 
-      <footer className={cn("safe-pb relative border-t border-border bg-surface-1 px-3 py-3 sm:px-6", phase === "done" && "hidden")}>
+      <footer className={cn("safe-pb relative border-t border-border bg-surface-1 px-3 py-4 sm:px-6", phase === "done" && "hidden")}>
         {phase === "setup" && (
           <div className="mx-auto flex max-w-md flex-col items-center gap-1.5">
             <button
@@ -645,7 +615,7 @@ export function JamStudio({
               data-jam-record=""
               className="group relative grid h-20 w-20 place-items-center rounded-full bg-surface-0 shadow-[var(--shadow-2)] ring-4 ring-text outline-none transition-[transform,opacity] duration-[var(--duration-fast)] focus-visible:ring-focus-ring enabled:hover:scale-[1.04] enabled:active:scale-[0.95] disabled:opacity-40"
             >
-              {canRecord && <span aria-hidden className="jam-record-ping absolute inset-0 rounded-full ring-2 ring-danger" />}
+              {canRecord && <LevelRing clock={studio.levelClock} />}
               <span aria-hidden className="h-12 w-12 rounded-full bg-danger transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] group-enabled:group-hover:scale-90" />
             </button>
             <p className="text-center text-[13px] font-semibold text-text-secondary [text-wrap:pretty]">
@@ -751,6 +721,54 @@ export function JamStudio({
         )}
       </footer>
 
+      <Dialog open={soundOpen} title={t("jam.studio.settings")} size="md" onClose={() => setSoundOpen(false)}>
+        <DialogBody>
+          <div className="@container flex flex-col gap-4" data-jam-sound-panel="">
+                  <div className="grid gap-4 @lg:grid-cols-2">
+                    <div className="flex min-w-0 flex-col gap-4">
+                      {studio.devices.length > 0 && (
+                        <label className="flex flex-col gap-1.5 text-xs font-semibold text-text-secondary">
+                          {t("jam.studio.input")}
+                          <span className="relative">
+                            <select
+                              value={studio.deviceId ?? ""}
+                              onChange={(event) => void studio.chooseDevice(event.target.value)}
+                              className="h-11 w-full appearance-none truncate rounded-full border border-border bg-surface-2 pl-4 pr-10 text-sm font-semibold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
+                            >
+                              {studio.devices.map((device, index) => (
+                                <option key={device.deviceId || index} value={device.deviceId}>
+                                  {device.label || t("jam.studio.inputUnnamed", { n: index + 1 })}
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary" aria-hidden />
+                          </span>
+                        </label>
+                      )}
+                      <LevelMeter clock={studio.levelClock} active={studio.mic === "ready"} />
+                    </div>
+                    <div className="flex flex-col divide-y divide-border self-start rounded-[var(--radius-card)] bg-surface-2/60 px-3">
+                      <Switch
+                        checked={studio.countIn.bars > 0}
+                        onCheckedChange={(on) => studio.setCountIn({ ...studio.countIn, bars: on ? 1 : 0 })}
+                        label={t("jam.studio.countIn")}
+                        description={t("jam.studio.countInHint")}
+                      />
+                      <div className="flex flex-col gap-1.5 py-1">
+                        <Switch checked={studio.wantsVideo} onCheckedChange={studio.setWantsVideo} label={t("jam.studio.video")} />
+                        {studio.cameraError && (
+                          <p role="status" className="flex items-center gap-1.5 pb-2 text-xs text-text-tertiary">
+                            <Camera className="h-3.5 w-3.5" aria-hidden />
+                            {t("jam.studio.videoDenied")}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  {!studio.needsCheck && <LatencyCard studio={studio} />}
+          </div>
+        </DialogBody>
+      </Dialog>
       <ConfirmDialog
         open={confirmLeave !== null}
         title={confirmLeave === "recording" ? t("jam.studio.leaveRecordingTitle") : t("jam.studio.leaveTitle")}
@@ -773,7 +791,7 @@ export function JamStudio({
 }
 
 /** Who plays a backing lane: their face with the instrument on it. */
-function StudioLaneHead({ track }: { track: JamTrack }) {
+function StudioLaneHead({ track, mine }: { track: JamTrack; mine: boolean }) {
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[track.instrument];
   const Icon = look.icon;
@@ -787,7 +805,7 @@ function StudioLaneHead({ track }: { track: JamTrack }) {
       </span>
       <span className="flex min-w-0 flex-col leading-tight">
         <span className="truncate text-sm font-bold text-text">{t(look.nameKey as MessageKey)}</span>
-        <span className="truncate text-xs text-text-secondary">{track.authorName ?? t("jam.tile.anonymous")}</span>
+        <span className="truncate text-xs text-text-secondary">{mine ? t("jam.lane.you") : (track.authorName ?? t("jam.tile.anonymous"))}</span>
       </span>
     </div>
   );
