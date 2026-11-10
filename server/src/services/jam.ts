@@ -706,6 +706,30 @@ function discardCoverUpload(previous: { id: string; storage_key: string } | unde
   })();
 }
 
+/**
+ * The summary a cover write answers (and the route announces) once its change is
+ * committed. A read that fails here would leave a committed change with no frame
+ * and an error for the caller, so it is tried a few times first: a blip of the
+ * database is the usual reason, and the write is already safe. A song that is
+ * gone (an HttpError) is not retried. If it still fails the caller gets the
+ * error, and its retry of the same call answers and announces (the claim and the
+ * removal are both idempotent).
+ */
+async function summaryAfterCommit(songId: string): Promise<JamSongSummary> {
+  const waits = [150, 400];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await requireSummary(songId);
+    } catch (error) {
+      const wait = waits[attempt];
+      if (error instanceof HttpError || wait === undefined) {
+        throw error;
+      }
+      await new Promise((done) => setTimeout(done, wait));
+    }
+  }
+}
+
 /** A cover tied to this caller already (a retried claim): nothing to do twice. */
 async function coverAlreadySet(songId: string, uploadId: string, userId: string): Promise<boolean> {
   const result = await getPool().query(
@@ -733,7 +757,7 @@ export async function setJamCover(input: {
   uploadId: string;
 }): Promise<{ song: JamSongSummary }> {
   const { song, userId, uploadId } = input;
-  const unchanged = async () => ({ song: await requireSummary(song.id) });
+  const unchanged = async () => ({ song: await summaryAfterCommit(song.id) });
   if (await coverAlreadySet(song.id, uploadId, userId)) {
     return unchanged();
   }
@@ -793,7 +817,7 @@ export async function setJamCover(input: {
     client.release();
   }
   discardCoverUpload(previous);
-  return { song: await requireSummary(song.id) };
+  return { song: await summaryAfterCommit(song.id) };
 }
 
 /** Take the picture off a song. A song that has none answers as it is. */
@@ -826,7 +850,7 @@ export async function removeJamCover(song: JamSongRow): Promise<{ song: JamSongS
     client.release();
   }
   discardCoverUpload(previous);
-  return { song: await requireSummary(song.id) };
+  return { song: await summaryAfterCommit(song.id) };
 }
 
 /**

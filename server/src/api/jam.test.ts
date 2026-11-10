@@ -1807,6 +1807,33 @@ describeDb("jam channels", () => {
     expect((await getPool().query(`SELECT 1 FROM jam_song_covers`)).rowCount).toBe(0);
   });
 
+  it("a blip of the database after the commit does not lose the announcement: the summary read is tried again", async () => {
+    const song = await songId(bob);
+    const id = await coverUpload(bob, song);
+    takeFrames();
+    const pool = getPool();
+    const real = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+    let failed = 0;
+    const spy = vi.spyOn(pool, "query").mockImplementation(((...args: unknown[]) => {
+      const text = typeof args[0] === "string" ? args[0] : "";
+      // The summary select, once: the first read after the claim committed.
+      if (failed === 0 && text.includes("LEFT JOIN jam_song_covers") && text.includes("WHERE s.id = $1")) {
+        failed += 1;
+        return Promise.reject(new Error("connection terminated"));
+      }
+      return real(...args);
+    }) as never);
+    try {
+      const set = await setCover(bob, song, id);
+      expect(set.status).toBe(200);
+      expect(failed).toBe(1);
+      expect(set.body.song.coverUrl).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(takeFrames()).toMatchObject([{ type: "jam-song-updated" }]);
+  });
+
   it("an edit of the title keeps the cover and is announced once, with both", async () => {
     const song = await songId(bob, "Antes");
     await setCover(bob, song, await coverUpload(bob, song));
