@@ -13,6 +13,16 @@ import WebKit
 /// (The bundle's own `Content-Security-Policy` header is the apps origin's job and
 /// is covered by `client/e2e/app-frame/`; this server sends none, on purpose: the
 /// claim here is about the HOST, so nothing the page can do may depend on the CSP.)
+///
+/// NO CLOCK DECIDES ANYTHING HERE. The first version had the page navigate itself from a
+/// `setTimeout(1500)` and the test poll for 8 s. On a loaded CI runner the web view (which
+/// is not in a window, so WebKit treats it as not visible) did not run that timer at all
+/// for the whole 8 s, while the same page kept answering messages: the host was never
+/// asked to stop a navigation, so no violation was reported and the test failed for a
+/// reason that is not about the host. Now the test waits for the EVENTS (the server
+/// seeing every probe, the violation callback) and the HOST tells the page to navigate by
+/// a message on the port, which is delivered even when timers are throttled. The only
+/// timeout left is a failsafe that turns a hang into a failure.
 @MainActor
 final class ActivitiesFrameIsolationTests: XCTestCase {
     final class Once: @unchecked Sendable {
@@ -25,6 +35,8 @@ final class ActivitiesFrameIsolationTests: XCTestCase {
         let listener: NWListener
         private let lock = NSLock()
         private var requests: [String] = []
+        private var waiters: [(id: Int, predicate: @Sendable ([String]) -> Bool, continuation: CheckedContinuation<Void, Never>)] = []
+        private var nextWaiter = 0
         var port: UInt16 { listener.port?.rawValue ?? 0 }
         let page: String
 
@@ -46,13 +58,39 @@ final class ActivitiesFrameIsolationTests: XCTestCase {
 
         func seen() -> [String] { lock.lock(); defer { lock.unlock() }; return requests }
 
+        /// Returns when `predicate` holds for the requests seen so far, woken by the
+        /// request that makes it true: no polling and no clock.
+        func waitUntil(_ predicate: @escaping @Sendable ([String]) -> Bool) async {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                lock.lock()
+                if predicate(requests) {
+                    lock.unlock()
+                    continuation.resume()
+                } else {
+                    waiters.append((nextWaiter, predicate, continuation))
+                    nextWaiter += 1
+                    lock.unlock()
+                }
+            }
+        }
+
+        private func record(_ path: String) {
+            lock.lock()
+            requests.append(path)
+            let ready = waiters.filter { $0.predicate(requests) }
+            let ids = Set(ready.map(\.id))
+            waiters.removeAll { ids.contains($0.id) }
+            lock.unlock()
+            for waiter in ready { waiter.continuation.resume() }
+        }
+
         private func handle(_ connection: NWConnection) {
             connection.start(queue: .global())
             connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
                 guard let self, let data, let text = String(data: data, encoding: .utf8),
                       let line = text.split(separator: "\r\n").first else { connection.cancel(); return }
                 let path = line.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
-                self.lock.lock(); self.requests.append(path); self.lock.unlock()
+                self.record(path)
                 let isPage = path.hasPrefix("/app.html")
                 let body = isPage ? self.page : "ok"
                 let type = isPage ? "text/html; charset=utf-8" : "text/plain"
@@ -77,13 +115,18 @@ final class ActivitiesFrameIsolationTests: XCTestCase {
     window.addEventListener("message", function (event) {
       if (event.data && event.data.pqp === "app-port") {
         beacon("port", event.ports.length);
-        event.ports[0].onmessage = function (m) { beacon("hello", m.data && m.data.type); };
+        event.ports[0].onmessage = function (m) {
+          // Last: leave the document the host gave this frame, when the HOST says so.
+          if (m.data && m.data.type === "go") { location.href = "/navigated"; return; }
+          beacon("hello", m.data && m.data.type);
+        };
       }
     });
-    // Last: leave the document the host gave this frame.
-    setTimeout(function () { location.href = "/navigated"; }, 1500);
     </script></body></html>
     """
+
+    /// Every probe the page reports before it is told to navigate.
+    private static let probes = ["handler", "parentdoc", "storage", "cookie", "opener", "toplocation", "port", "hello"]
 
     func testAHostileAppCannotReachTheNativeHandlerItsParentStorageOrAnotherPage() async throws {
         let server = try Server(page: Self.hostile)
@@ -95,19 +138,40 @@ final class ActivitiesFrameIsolationTests: XCTestCase {
             wrapperBase: URL(string: "http://localhost:5173")!
         ))
 
+        let violated = expectation(description: "the host reports that the frame left its document")
         var violation: AppFrameController.Violation?
         var helloReceived = false
-        controller.onViolation = { violation = $0 }
+        controller.onViolation = {
+            violation = $0
+            violated.fulfill()
+        }
         controller.onHello = {
             helloReceived = true
             controller.attachPort()
             // What the host says first, as the bridge would.
             controller.post(#"{"type":"hello","platformApi":1}"#)
         }
-        controller.load(helloTimeout: 20)
+        controller.load(helloTimeout: 600)
 
-        // Let the page run its probes and its final navigation.
-        for _ in 0..<80 where violation == nil { try await Task.sleep(for: .milliseconds(100)) }
+        // 1. Wait for the EVENT: the server has seen every probe, the handshake and the
+        //    host's hello reaching the page. A failsafe turns a hang into a failure.
+        let probesSeen = expectation(description: "the page reported every probe")
+        let keys = Self.probes
+        let waiter = Task {
+            await server.waitUntil { seen in
+                keys.allSatisfy { key in seen.contains { $0.hasPrefix("/report?\(key)=") } }
+            }
+            probesSeen.fulfill()
+        }
+        await fulfillment(of: [probesSeen], timeout: 60)
+        waiter.cancel()
+        XCTAssertNil(violation, "nothing the page did before it was told to navigate may remove it")
+
+        // 2. The host tells the page to leave its document. The message arrives even when
+        //    the web view throttles timers; the navigation reaches the host's policy, which
+        //    cancels it and removes the frame.
+        controller.post(#"{"type":"go"}"#)
+        await fulfillment(of: [violated], timeout: 60)
 
         let seen = server.seen()
         XCTAssertTrue(helloReceived, "an exact hello from the frame's own window is answered")
@@ -122,6 +186,8 @@ final class ActivitiesFrameIsolationTests: XCTestCase {
         XCTAssertEqual(report("cookie"), "threw", "no cookies")
         XCTAssertEqual(report("opener"), "blocked", "no popups")
         XCTAssertEqual(report("port"), "1", "the handshake transfers exactly one port")
+        // The policy decision precedes any request, so a cancelled navigation never leaves
+        // the device; the violation above is raised from that very decision.
         XCTAssertFalse(seen.contains { $0.hasPrefix("/navigated") }, "a navigation of the frame never reaches the network")
         XCTAssertFalse(seen.contains { $0.hasPrefix("/top-navigated") }, "the app cannot navigate the wrapper")
         XCTAssertFalse(seen.contains { $0.hasPrefix("/popup") }, "no window was opened")
