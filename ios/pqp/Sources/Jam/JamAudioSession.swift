@@ -82,7 +82,9 @@ final class JamAudioSession {
         // Somebody else's `.playback` session (a video, a voice note) is theirs:
         // sharing it is fine, releasing it under them is not, so only a session
         // THIS song changed is one it gives back.
-        let alreadyPlayback = driver.category == .playback
+        // The exception: a `.playback` left behind by this song's own release
+        // (its old category could not be put back yet) is ours, not theirs.
+        let alreadyPlayback = driver.category == .playback && !pendingRestore
         if !alreadyPlayback {
             do {
                 let before = (driver.category, driver.mode, driver.categoryOptions)
@@ -96,6 +98,9 @@ final class JamAudioSession {
         do {
             try driver.setActive(true, options: [])
             if !alreadyPlayback { weChangedTheSession = true }
+            // Held again: the next release deactivates it AND retries the
+            // category, in that order, rather than only restoring.
+            if pendingRestore { weChangedTheSession = true }
             ownsLockScreen = true
         } catch {
             // The song still plays through whatever route there is, but the
@@ -113,6 +118,8 @@ final class JamAudioSession {
     func deactivate() -> JamSessionRelease {
         ownsLockScreen = false
         if pendingRestore, !weChangedTheSession {
+            // Released earlier, only the category is left to put back (the
+            // session is not active: nothing of ours to deactivate).
             restorePreviousCategory()
             return pendingRestore ? .stillActive : .released
         }
