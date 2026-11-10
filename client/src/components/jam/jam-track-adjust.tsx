@@ -83,11 +83,13 @@ export function TrackAdjust({
 
   // Leaving with unsaved edits puts what is stored back in the engine.
   const latest = useRef({ dirty, track });
+  /** A save landed: what the engine plays IS what is stored now, so closing restores nothing. */
+  const committed = useRef(false);
   latest.current = { dirty, track };
   useEffect(
     () => () => {
       const { dirty: unsaved, track: stored } = latest.current;
-      if (unsaved) {
+      if (unsaved && !committed.current) {
         engine?.player.updateStem(stored.id, {
           offsetMs: stored.offsetMs,
           trimStartMs: stored.trimStartMs,
@@ -110,6 +112,7 @@ export function TrackAdjust({
     setFailed(false);
     try {
       await onSave(patch);
+      committed.current = true;
       setSaved(true);
       onDone();
     } catch {

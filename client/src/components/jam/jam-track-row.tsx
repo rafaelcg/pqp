@@ -200,7 +200,7 @@ export function JamTrackRow({
                 value={Math.round(lane.volume * 100)}
                 onValueChange={(value) => onLane({ volume: value / 100 })}
                 aria-label={t("jam.lane.volume", { name })}
-                className="mx-1 min-w-0 flex-1 max-sm:hidden"
+                className="mx-1 min-w-0 flex-1 max-sm:w-24 max-sm:flex-none"
               />
             </>
           )}
