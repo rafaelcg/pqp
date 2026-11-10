@@ -85,14 +85,17 @@ the next one is the first again.
 
 ### Timeline
 
-`durationMs` is the stored audio's full length. The track plays
-`audio[trimStartMs, durationMs - trimEndMs]` and that slice starts at `offsetMs`
-on the song timeline (`offsetMs` may be negative). Trims are applied at play
-time and never touch the bytes. `gain` is a linear multiplier, 0 to 2. `peaks`
+`durationMs` is the stored audio's full length. `offsetMs` is the song time of
+the stored file's FIRST sample (it may be negative: a take recorded with a
+count-in has its count-in in the file, before the song's zero). The track plays
+`audio[trimStartMs, durationMs - trimEndMs]`: a trim hides audio and never moves
+it, so the track is heard from `offsetMs + trimStartMs` to
+`offsetMs + durationMs - trimEndMs`. Trims are applied at play time and never
+touch the bytes. `gain` is a linear multiplier, 0 to 2. `peaks`
 is up to 400 numbers in 0..1 across the whole recording, for a waveform with no
 audio downloaded. The server stores what the recorder sends, bounded and clamped,
-and never decodes audio. The song's `mixDurationMs` is the latest end of an
-`inMix` track minus the earliest start. Full definitions: the header of `jam.ts`.
+and never decodes audio. The song's `mixDurationMs` is the latest heard end of an
+`inMix` track minus the earliest heard start (computed on read, nothing stores it). Full definitions: the header of `jam.ts`.
 
 ### The preview on a song summary
 

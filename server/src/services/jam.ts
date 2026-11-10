@@ -244,8 +244,11 @@ const SUMMARY_SELECT = `
       SELECT COUNT(*)::int AS track_count,
              COALESCE(array_agg(DISTINCT t.instrument), '{}') AS instruments,
              COUNT(DISTINCT t.author_id)::int AS contributor_count,
-             MIN(t.offset_ms) FILTER (WHERE t.in_mix) AS mix_start,
-             MAX(t.offset_ms + t.duration_ms - t.trim_start_ms - t.trim_end_ms)
+             -- Earliest to latest HEARD sample. offset_ms is the song time of the
+             -- stored file's first sample and a trim hides audio without moving
+             -- it (header of packages/shared/src/jam.ts).
+             MIN(t.offset_ms + t.trim_start_ms) FILTER (WHERE t.in_mix) AS mix_start,
+             MAX(t.offset_ms + t.duration_ms - t.trim_end_ms)
                FILTER (WHERE t.in_mix) AS mix_end,
              BOOL_OR(t.video_key IS NOT NULL) AS has_video
         FROM jam_tracks t
