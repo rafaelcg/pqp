@@ -510,4 +510,39 @@ class BridgeHostTest {
         advanceUntilIdle()
         assertEquals(2, people.calls)
     }
+
+    @Test
+    fun `a person who left the room is forgotten, and described again if they come back`() = runTest {
+        val people = FakePeople(names = mapOf(USER_A to "Ana", USER_B to "Beto"))
+        val r = started(rig(people = people))
+        assertEquals(2, people.calls)
+        val onlyA = snapshot().copy(participants = snapshot().participants.take(1))
+        r.transport.handlers!!.onSession(onlyA)
+        advanceUntilIdle()
+        assertEquals("the one who stayed was not asked again", 2, people.calls)
+        r.transport.handlers!!.onSession(snapshot())
+        advanceUntilIdle()
+        assertEquals("the one who came back is", 3, people.calls)
+    }
+
+    @Test
+    fun `a roster of many people is looked up a few at a time`() = runTest {
+        var running = 0
+        var peak = 0
+        val people = object : ActivityPeople {
+            override suspend fun describe(userId: String): ActivityPeople.Person? {
+                running += 1
+                peak = maxOf(peak, running)
+                kotlinx.coroutines.delay(10)
+                running -= 1
+                return ActivityPeople.Person(userId, null)
+            }
+        }
+        val crowd = snapshot().copy(
+            participants = (0 until 40).map { SeatParticipant("seat%016d".format(it), "user-$it", "player", false, "present", null) },
+        )
+        started(rig(people = people, snapshot = crowd))
+        assertTrue("at most six lookups at once (peak $peak)", peak in 1..6)
+    }
 }
+

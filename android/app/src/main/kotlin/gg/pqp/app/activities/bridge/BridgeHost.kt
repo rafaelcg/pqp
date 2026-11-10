@@ -10,6 +10,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -101,6 +103,9 @@ class BridgeHost(
     private var rosterReady: Deferred<Unit>? = null
     private val described = HashMap<String, ActivityPeople.Person>()
     private val handlerJobs = HashSet<Job>()
+
+    /** A roster of hundreds costs a few lookups at a time (the web host's six), never all of them at once. */
+    private val lookups = Semaphore(LOOKUP_CONCURRENCY)
     private var online = true
     private var endedReason: ActivityEndReason? = null
     private var theme: Map<String, String> = emptyMap()
@@ -242,7 +247,8 @@ class BridgeHost(
 
     private suspend fun build(seat: SeatParticipant): BridgeParticipant? {
         // a person is described once per screen: a roster that changes by one seat costs one lookup, not all of them
-        val person = described[seat.userId] ?: describeSafely(seat.userId)?.also { described[seat.userId] = it }
+        val person = described[seat.userId]
+            ?: lookups.withPermit { describeSafely(seat.userId) }?.also { described[seat.userId] = it }
         if (!SEAT_ID.matches(seat.seatId)) return null
         return BridgeParticipant(
             seatId = seat.seatId,
@@ -567,6 +573,7 @@ class BridgeHost(
         /** The biggest legal message is a 16 KB state patch; this leaves room for its envelope and for escaping. */
         const val MESSAGE_MAX_CHARS = 64 * 1024
         private const val MAX_IN_FLIGHT = 32
+        private const val LOOKUP_CONCURRENCY = 6
         private const val ID_SEARCH_CHARS = 200
         private val ID_IN_PREFIX = Regex(""""id"\s*:\s*"([^"\\]{1,32})"""")
         private const val FLOOD_RATE_PER_SECOND = 100

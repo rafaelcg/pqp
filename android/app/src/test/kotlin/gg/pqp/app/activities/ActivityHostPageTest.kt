@@ -74,6 +74,15 @@ class ActivityHostPageTest {
     }
 
     @Test
+    fun `when the session is over the page closes the app's port and takes the frame out`() {
+        val html = page()
+        val remove = html.substringAfter("""if (data === "${ActivityHostPage.CONTROL_REMOVE}") {""").substringBefore("return;")
+        assertTrue("the app's port is closed", remove.contains("appPort.close()"))
+        assertTrue("and no longer listened to", remove.contains("appPort.onmessage = null"))
+        assertTrue("and the frame is removed from the page", remove.contains("removeChild(iframe)"))
+    }
+
+    @Test
     fun `a string put in the page cannot leave its literal`() {
         val nasty = "\"; alert(1); //</script><img src=x onerror=1> \n\\"
         val literal = ActivityHostPage.js(nasty)
