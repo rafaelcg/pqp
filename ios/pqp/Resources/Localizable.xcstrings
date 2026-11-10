@@ -661,6 +661,16 @@
         }
       }
     },
+    "Look for more" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Procurar mais"
+          }
+        }
+      }
+    },
     "Mute, deafen and volume per person." : {
       "localizations" : {
         "pt-BR" : {

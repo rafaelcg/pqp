@@ -169,12 +169,29 @@ struct JamWallView: View {
             Text("No song matches this filter right now.")
                 .font(Typography.callout)
                 .foregroundStyle(Palette.paperMuted)
+            if model.state.nextCursor != nil, !model.isLoadingMore {
+                Button {
+                    Task { await model.loadMore() }
+                } label: {
+                    Text("Look for more")
+                        .font(JamFont.text(14, .semibold))
+                        .foregroundStyle(Palette.paperSubtle)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 44)
+                        .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 8)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 60)
-        // Nothing on this page matches, but a later one might: keep reading
-        // until something does or the wall runs out.
-        .task(id: model.state.songs.count) { await model.loadMore() }
+        // Nothing on the pages loaded matches, but a later one might: read on
+        // for a couple of pages (bounded, so a filter with no match anywhere
+        // is not a download of the whole channel), then leave it to the button.
+        .task(id: model.state.songs.count) {
+            if model.state.songs.count < JamLimits.pageSize * 3 { await model.loadMore() }
+        }
     }
 
     // MARK: Tiles
