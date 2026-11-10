@@ -104,6 +104,10 @@ class JamWallRulesTest {
         assertEquals(JamTileSize.Wide, JamMosaic.desiredSize(1, plain.copy(trackCount = 3), hasVideo = false))
         assertEquals(JamTileSize.Small, JamMosaic.desiredSize(2, plain.copy(trackCount = 3), hasVideo = false))
         assertEquals(JamTileSize.Small, JamMosaic.desiredSize(3, plain, hasVideo = false))
+        // A song with nothing recorded never takes the hero's place, the first or not.
+        val empty = song(trackCount = 0)
+        assertEquals(JamTileSize.Small, JamMosaic.desiredSize(0, empty, hasVideo = false))
+        assertEquals(JamTileSize.Small, JamMosaic.desiredSize(1, empty, hasVideo = true))
     }
 
     @Test
@@ -147,6 +151,14 @@ class JamWallRulesTest {
         // After the hero (rows 0 and 1), the rest start on row 2: two small, then two small.
         assertEquals(listOf(2, 3), bands.drop(1).map { it.row })
         assertEquals(songs.map { it.id }, bands.flatMap { it.tiles }.map { it.song.id })
+    }
+
+    @Test
+    fun `empty songs do not take the hero from the first song with something on it`() {
+        val songs = listOf(song("e1", trackCount = 0), song("e2", trackCount = 0), song("a", instruments = listOf(JamInstrument.Guitar)))
+        val bands = JamBands.build(songs, hasVideo = { false })
+        assertEquals(listOf(listOf("e1", "e2"), listOf("a")), bands.map { band -> band.tiles.map { it.song.id } })
+        assertEquals(2, bands[1].rows)
     }
 
     // --- the list a wall holds, and a live frame ---

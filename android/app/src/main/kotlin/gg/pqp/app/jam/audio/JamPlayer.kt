@@ -244,7 +244,9 @@ class JamPlayer(
                 var seek = -1L
                 var play: Boolean
                 synchronized(lock) {
-                    while (!released && !wantPlay && pendingSeek < 0) lock.wait()
+                    // Idle only when there is nothing to do AND the sink is already paused: a pause request
+                    // while running must reach the sink below, not be waited out here.
+                    while (!released && !wantPlay && pendingSeek < 0 && !running) lock.wait()
                     if (released) return
                     seek = pendingSeek
                     pendingSeek = -1

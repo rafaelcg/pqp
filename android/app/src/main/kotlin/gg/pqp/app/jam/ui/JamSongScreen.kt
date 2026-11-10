@@ -90,6 +90,7 @@ import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
@@ -283,6 +284,8 @@ fun JamSongScreen(
             link = link,
             onCopy = {
                 copyLink(context, link)
+                // The sheet gives way so the confirmation is not hidden under it.
+                recordSheet = false
                 scope.launch { snackbars.showSnackbar(copiedText) }
             },
             onShare = { shareLink(context, link) },
@@ -989,25 +992,28 @@ private fun TransportBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Spacing.md),
             ) {
-                val enabled = ui.preparing || canPlay || ui.playing
+                val playLabel = stringResource(if (ui.playing) R.string.jam_pause else R.string.jam_play)
+                val preparingLabel = stringResource(R.string.jam_preparing)
                 Box(
                     Modifier
                         .size(56.dp)
                         .clip(CircleShape)
                         .background(if (canPlay || ui.playing) colors.primary else colors.surfaceContainerHigh)
                         .clickable(enabled = canPlay || ui.playing, onClick = onToggle)
-                        .semantics { contentDescription = "" }
+                        .clearAndSetSemantics {
+                            contentDescription = if (ui.preparing) preparingLabel else playLabel
+                            role = androidx.compose.ui.semantics.Role.Button
+                        }
                         .testTag("jam.play"),
                     contentAlignment = Alignment.Center,
                 ) {
-                    val playLabel = stringResource(if (ui.playing) R.string.jam_pause else R.string.jam_play)
                     if (ui.preparing) {
                         CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.5.dp, color = colors.onSurfaceVariant)
                     } else {
                         Crossfade(targetState = ui.playing, label = "play") { playing ->
                             Icon(
                                 imageVector = if (playing) PqpIcons.Pause else PqpIcons.Play,
-                                contentDescription = playLabel,
+                                contentDescription = null,
                                 tint = if (canPlay || playing) colors.onPrimary else colors.onSurfaceVariant,
                                 modifier = Modifier.size(26.dp),
                             )
@@ -1020,6 +1026,8 @@ private fun TransportBar(
                         style = MaterialTheme.typography.titleSmall,
                         fontFamily = FontFamily.Monospace,
                         color = colors.onSurface,
+                        softWrap = false,
+                        maxLines = 1,
                         modifier = Modifier.clearAndSetSemantics { },
                     )
                     val hint = when {
@@ -1033,10 +1041,18 @@ private fun TransportBar(
                     }
                 }
                 // Where the real record button will go: honest about where recording is, never dead.
-                OutlinedButton(onClick = onRecord, modifier = Modifier.testTag("jam.record")) {
-                    Icon(PqpIcons.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.jam_record), maxLines = 1)
+                val recordLabel = stringResource(R.string.jam_record)
+                if (LocalDensity.current.fontScale >= 1.4f) {
+                    // Big type: the label would squeeze the clock, so the button is its glyph, still named for TalkBack.
+                    androidx.compose.material3.OutlinedIconButton(onClick = onRecord, modifier = Modifier.testTag("jam.record")) {
+                        Icon(PqpIcons.Mic, contentDescription = recordLabel)
+                    }
+                } else {
+                    OutlinedButton(onClick = onRecord, modifier = Modifier.testTag("jam.record")) {
+                        Icon(PqpIcons.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(recordLabel, maxLines = 1)
+                    }
                 }
             }
         }

@@ -115,6 +115,8 @@ object JamMosaic {
      * left in its row.
      */
     fun desiredSize(index: Int, song: JamSongSummary, hasVideo: Boolean): JamTileSize = when {
+        // A song nobody has recorded on has nothing to show big: it never takes the hero's place or a wide tile.
+        song.trackCount == 0 -> JamTileSize.Small
         index == 0 -> JamTileSize.Hero
         hasVideo || song.trackCount >= 4 -> JamTileSize.Wide
         song.trackCount >= 3 && index % 2 == 1 -> JamTileSize.Wide
@@ -196,7 +198,11 @@ object JamBands {
      * and every band is independent: a list item per band, no overlap, no hole.
      */
     fun build(songs: List<JamSongSummary>, hasVideo: (JamSongSummary) -> Boolean, columns: Int = 2): List<JamBand> {
-        val sizes = songs.mapIndexed { index, song -> JamMosaic.desiredSize(index, song, hasVideo(song)) }
+        // The hero is the first song that has something on it: empty songs are small and do not count in the rhythm.
+        var rank = 0
+        val sizes = songs.map { song ->
+            if (song.trackCount == 0) JamTileSize.Small else JamMosaic.desiredSize(rank++, song, hasVideo(song))
+        }
         val cells = JamMosaic.layout(sizes, columns)
         return cells
             .map { JamBandTile(songs[it.index], it) }

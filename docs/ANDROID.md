@@ -3696,3 +3696,213 @@ because that screen has the server and version, status, notifications, the voice
 connection check, blocked people, your data and sign out, and no microphone or
 camera settings. It also shows while a call is still joining, which is when the
 connection check on that screen is most wanted.
+
+## Jam
+
+The phone half of **jam** (`docs/JAM.md`, `docs/JAM_ENGINE.md`): see it, hear
+it, react to it. A `jam` channel holds songs; a song is a pile of stems, one per
+person; the phone plays the in-mix stems together. **Recording and adding a
+track are not here**: where the web says "Gravar por cima" the song screen
+opens a calm sheet saying recording is on the computer for now, with the song's
+link to copy or share, in the place the real record button will take
+(`JamPermissions.CAN_RECORD_HERE` is the seam). Code is `app/.../jam/`; iOS drew
+the same scope (`docs/IOS.md`), and where a choice was arbitrary (the tile
+sizes, "falta voz", the unread rule, the audition) Android follows it so the two
+phones agree.
+
+### Invisible without the flag
+
+A jam channel is drawn only where `GET /api/jam/config?serverId=` says
+`enabled` (`drawable(channel, includeJam)` in `ChannelListRules.kt`). A server
+with no jam channel asks nothing. One with jam channels asks the config once
+per visit and, only when it is on, one first page per jam channel for the row's
+count; flag off, the list is exactly what it was and no song is read.
+`ChannelListRulesTest` and `JamWallViewModelTest` pin both halves. The row has
+its own glyph (lucide `music`), the song count where a voice room keeps its head
+count (`50+` on a full page: the list has no total), and a bold name and the
+edge tick when somebody else made or touched a song since this device last
+opened the wall (the server has no per-person cursor for jam yet; the cursor is
+a per-device `SharedPreferences` value, `JamSeenStore`).
+
+### The engine, and why it is not several players
+
+One `AudioTrack` fed by `JamMixer`, our own sum. Several `MediaPlayer` or
+`ExoPlayer` instances "started at the same time" do not line up: each has its
+own codec, buffering and clock, start-up differs by tens of milliseconds and
+varies run to run, and nothing ties their drift together, which is the one
+thing a jam cannot have. The mixer has one clock by construction: output frame
+`f` is the sum of every stem's sample at `f`, so the relative position of two
+stems is whatever `JamAlignment` says and nothing can move it, and a seek or a
+pause cannot de-sync anything because the next buffer is just rendered from the
+new frame. It is pure Kotlin (a stem is a `PcmSource`: an array in tests, a
+memory-mapped file in the app, so eight ten-minute stems cost page cache and not
+heap), so it is tested on the JVM against known impulses.
+
+- **Decode** (`JamDecoder`): `MediaExtractor` + `MediaCodec`, the platform's own
+  decoder for every format the server accepts, to mono 16-bit at 48 kHz in the
+  cache directory, two decodes at a time, cancellable. A stem that cannot be
+  decoded is a `JamStemStatus.Unplayable` row ("Essa não toca no teu celular")
+  and the rest of the mix plays.
+- **Resample** (`JamResampler`): a stem not at 48 kHz is brought there offline
+  with a windowed sinc (Blackman-Harris, 16 taps each side, the cutoff pulled
+  to the destination's Nyquist when the rate goes down) and **no delay**: output
+  `j` is the source at exactly `j * src / dst`. A streaming resampler's group
+  delay is what put the iOS engine's 44.1 kHz impulse 17 frames late.
+- **Place** (`JamAlignment`): `audio[trimStart, length - trimEnd]` starts at
+  `offsetMs`; the transport's zero is the earliest start of any stem, so a
+  negative `offsetMs` (a count-in) is not cut off. Trims count from the decoded
+  file's real ends, as the contract says.
+- **Output** (`JamPlayer`): one audio thread writing non-blocking, every sink
+  call on that thread, a 1024-frame buffer, about 130 ms of track buffer. The
+  position the playhead and the video follow is the sink's PRESENTED frame
+  (`AudioTrack.getTimestamp`, interpolated), what is heard.
+- **Levels** ramp across a buffer (a mute is not a click); the mix is identity
+  below 0.9 and a smooth tanh ceiling above it.
+
+### Alignment, measured
+
+`JamMixerTest` renders real stems (impulses at known file positions) through the
+real mixer and reads where each lands in the output, against the hand-computed
+contract. No hardware.
+
+| Case | Expected frame (48 kHz) | Measured |
+|---|---|---|
+| B, offset -250 ms (count-in): first and last sample | 0, 5999 | 0, 5999 |
+| A, offset 0: first and last sample | 12000, 23999 | 12000, 23999 |
+| C, offset 100 ms, 200 ms off the head, 300 ms off the tail: first played / last played | 16800, 52799 | 16800, 52799 |
+| C, the frames just outside both trims | absent | absent |
+| a stem 837 ms late | 52176 | 52176 |
+| a stem 37 ms behind another | 1776 apart | 1776 apart |
+| start in the middle of the song | same frames from there | identical |
+| render block of 1, 7, 333, 1000, 4096 frames | no change | identical |
+| 44.1 kHz stem, impulse at 0.5 s | 24000 | 24000 |
+| 44.1 kHz stem with offset and head trim | 12000 | 12000 |
+| 1 kHz tone, 44.1 to 48 kHz, worst error | | 1 of 10000 |
+| 30 kHz at 96 kHz brought to 48 kHz, aliased energy | | 0 |
+| one stem at unity | sample for sample | identical |
+
+`JamResamplerTest` also holds 8, 16, 22.05, 32, 44.1, 88.2 and 96 kHz impulses
+to half a sample. `JamPlayerTransportTest` drives the thread against a sink
+that plays instantly: play renders in order from the start, a seek restarts
+rendering at the new frame, a pause stops writing, pauses the sink and holds the
+position, the end is reported once.
+
+### What the platform's decoders do to time, measured
+
+`JamCodecAlignmentTest` (instrumented; `assets/jam/make-fixtures.sh` makes the
+files) decodes one second with a 10 ms 3 kHz burst at exactly 0.5 s, encoded
+every way the server accepts (plus WAV), through the real `JamDecoder`, and finds
+the burst by cross-correlation. Pixel 10 Pro emulator, Android 17 (API 37.1),
+2026-11-10. Lag is mix frames after where it was recorded (48 per ms).
+
+| File | Lag | Decoded length (of 48000) |
+|---|---|---|
+| WAV 16-bit, 48 kHz and 44.1 kHz | 0 | 48000 |
+| FLAC, 48 kHz and 44.1 kHz (what the web engine uploads) | 0 | 48000 |
+| Opus in Ogg and in WebM | 0 | 48648 |
+| MP3 (LAME header), 48 kHz and 44.1 kHz | 0 (the 576-frame delay is removed by the platform) | 48000 |
+| AAC in M4A (edit list), 48 kHz and 44.1 kHz | 0 (the 1024 is removed by the platform) | 48128 and 49041 |
+| AAC in **fragmented** MP4 (Safari's MediaRecorder) | **1024 frames, 21.3 ms late** | 49152 |
+
+Opus and AAC keep a few milliseconds of padding at the tail, which only matters
+to `trimEndMs` (measured back from the decoded end; 13.5 ms for Opus, 2.7 ms for
+AAC). The fragmented-MP4 case is the one place the platform leaves the encoder's
+priming in the head: the container declares no encoder delay, so the decoder
+cannot know. `JamDecoder` drops the 1024 frames itself, and only for AAC with no
+declared delay (`UNDECLARED_AAC_PRIMING`); with the delay declared the platform
+already removed it and doing it again would move the stem the other way. After
+the fix every format above measures 0. Unlike iOS, MP3 is exact here and WebM
+opens.
+
+### The song screen
+
+A header the wall's tile grows into (a shared element: the song is state of
+`JamScreen`, not a route, because both ends of a shared transition have to sit
+under one `SharedTransitionLayout` and so the wall keeps its pages and scroll
+position underneath), every in-mix stem as a row with its waveform under one
+playhead (tap or drag any waveform or the bar above the transport to scrub),
+per-track mute, solo and volume (local to the phone, never sent), the competing
+takes you can hear in place of the mix's and vote on, the in-mix switch for the
+song's author or a moderator, and delete where the contract allows it
+(`JamPermissions`). Video stems are muted ExoPlayers with their audio track
+disabled (no decoder, no audio focus) and locked to the audio clock: a drift
+under 45 ms is left alone, up to 350 ms is eased out with a 4 % speed change, past
+that a seek (`JamVideoPlan`); at most four play, and before its slice starts a
+video waits on its first frame. File time is `song - offset + trimStart`, one
+`offsetMs` for picture and sound, as on the web.
+
+### Audio focus, calls and the background
+
+The rule is the voice notes' (`VoiceNotes`): a song never starts while a call
+is live, a call that connects under a playing song pauses it (not stops it), and
+otherwise it asks for `AUDIOFOCUS_GAIN` as `USAGE_MEDIA` / `CONTENT_TYPE_MUSIC`.
+Loss pauses and gives focus back, a transient loss pauses and resumes on gain
+unless a call is live by then, "may duck" drops the level to 25 % instead of
+pausing, and the headphones coming out (`ACTION_AUDIO_BECOMING_NOISY`) pauses.
+The decisions are `JamFocusPolicy`, pure and tested. **Leaving the app pauses**:
+there is no foreground service or media session, so a song is never left playing
+to nobody with no controls in reach; lock-screen and notification controls (iOS
+has them) are the follow-up, and want `media3-session` over a `SimpleBasePlayer`
+wrapping `JamPlayer` and a `mediaPlayback` foreground service. Closing the song
+screen frees the codecs, the mapped files and the speaker; a rotation does not.
+
+### Live
+
+`JamFrame.decode` has a real branch for each of the seven frames
+(`WireProtocolTest` names them in its required floor and `JamContractTest`
+holds them against `JAM_FRAME_TYPES`, because they are not in
+`chatServerMessageSchema` yet). The wall applies them by id, idempotently (a
+change reaches the writer's own socket too), with the frames that arrive while a
+page is being read applied on top of the answer, a new song settling in on a
+spring with a lime ring and a "nova" mark, and the order following the bump. An
+open song applies them to its tracks and reloads the engine only when a stem
+came, went or moved (a vote, a label or a gain tweak is not a reload).
+Tiles read each song's detail lazily for the waveform, the names and the poster
+frame (`MediaMetadataRetriever` on the first in-mix video, two at a time):
+three requests at most, queued, and a tile that leaves the screen before its turn
+is dropped. The wall's view model owns the channel's slot on the socket
+(`join-channel`) for as long as the screen is up.
+
+A song's own link (`/app/server/<sid>/channel/<jamId>/song/<id>`, what "Copiar
+link" and the record sheet hand out) opens the wall with the song on top
+(`DeepLinkTarget.JamSong`, and an App Links filter beside the forum post's).
+
+### Motion, type and accessibility
+
+Tiles settle in on a spring, staggered; a tile expands into the song; waveforms
+draw in; a press leans into the tile; a vote pops; play, pause and vote give a
+haptic. All of it is skipped under "remove animations" (`rememberReduceMotion`).
+From a 1.5x font scale the wall is one column and the filter chips scroll; from
+1.4x the record button is its glyph, still named. Every control has a
+TalkBack label and the transport's bar is adjustable (`setProgress`). Light and
+dark follow the app. Strings are in `values` and `values-pt-rBR` (tu, no em
+dashes; `LocalizationTest` holds both).
+
+### What is verified, and what is not
+
+Unit tests: the contract and the seven frames, the tile rules and the mosaic, the
+song rules and the live reducer, the alignment, the resampler, the transport, the
+focus and video rules, the wall's view model and the row's flag rule. On an
+emulator (Pixel 10 Pro profile, Android 17, local API, MinIO, FLAC, Opus, AAC,
+MP3 and a broken stem, an MP4 video): the row, the wall (hero, wide,
+small, poster, waveform tiles), filters, a song opening, play with the playhead
+and the video counter moving together, scrub, mute, solo, volume, a vote
+(confirmed on the server), auditioning a take, the record sheet, a song
+arriving live, a broken stem, pt-BR, dark, a 2.0 font scale, the song link,
+pause on leaving the app, and the flag off. **Not verified, needs a real phone**:
+
+- audio routing: the speaker, a wired headset, and the headphones-out pause;
+- Bluetooth: its output latency and whether the video still meets what is heard
+  (the clock is the presented frame, which includes the sink's reported latency,
+  but a Bluetooth stack reports it badly);
+- real output latency and the video's lock to it;
+- a call starting mid-song (the song must pause and not resume under the call),
+  and a song refusing to start under a live call;
+- another app taking focus (a navigation prompt: pause and resume; a music app:
+  pause for good);
+- the app going to the background and coming back mid-song, and the screen
+  locking;
+- the underrun behaviour of the audio thread on a busy low-end phone, and decode
+  time and memory for a ten-minute, eight-stem song;
+- AAC and Opus decoders on other vendors' codec builds (the table above is one
+  Google image).

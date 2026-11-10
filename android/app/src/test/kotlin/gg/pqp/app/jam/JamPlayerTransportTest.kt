@@ -120,6 +120,11 @@ class JamPlayerTransportTest {
         Thread.sleep(80)
         assertEquals("nothing written while paused", atPause, sink.leftChannel().size)
         assertFalse(player.playing.value)
+        // The sink itself was paused (an AudioTrack left "started" underruns in silence and keeps a clock running).
+        assertFalse("sink paused", sink.started)
+        val heldAt = player.positionMs()
+        Thread.sleep(60)
+        assertEquals("the position holds while paused", heldAt, player.positionMs(), 1e-6)
         player.play()
         waitFor { sink.leftChannel().size > atPause + 2_000 }
         // Contiguous: the only impulse is still the first sample.

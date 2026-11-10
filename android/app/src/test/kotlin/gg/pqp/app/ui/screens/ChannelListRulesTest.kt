@@ -295,8 +295,9 @@ class ChannelListRulesTest {
         assertEquals(off, sectionsOf(all.filter { it.type != "jam" }, textTitle = "Texto", voiceTitle = "Voz"))
 
         val on = sectionsOf(all, textTitle = "Texto", voiceTitle = "Voz", includeJam = true)
-        assertEquals(listOf("general", "jam"), channelsInCategory(on, TEXT_SECTION).map { it.id })
-        assertEquals(listOf("lobby"), channelsInCategory(on, VOICE_SECTION).map { it.id })
+        // The old list puts a type with no rank of its own last, after voice (the shared fixture says so for every client).
+        assertEquals(listOf("general"), channelsInCategory(on, TEXT_SECTION).map { it.id })
+        assertEquals(listOf("general", "lobby", "jam"), on.flatMap { it.channels }.map { it.id })
 
         val mixed = sectionsOf(all, mixed = true, includeJam = true)
         assertEquals(listOf("general", "jam", "lobby"), mixed.single().channels.map { it.id })

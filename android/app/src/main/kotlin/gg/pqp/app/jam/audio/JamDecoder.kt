@@ -58,6 +58,11 @@ object JamDecoder {
             var float = false
             var delay = format.intOrZero(MediaFormat.KEY_ENCODER_DELAY)
             var written = 0L
+            // AAC in a container that declares no encoder delay (fragmented MP4, which is what Safari's
+            // MediaRecorder writes) comes out of the platform decoder with the encoder's 1024 frames of
+            // priming still at the head: measured 21.3 ms late on Android 17. With the delay declared (an M4A
+            // with an edit list) the platform removes it itself, so only the undeclared case is compensated.
+            var priming = if (mime == "audio/mp4a-latm" && delay == 0) UNDECLARED_AAC_PRIMING else 0
 
             val codec = try {
                 MediaCodec.createDecoderByType(mime)
@@ -104,8 +109,11 @@ object JamDecoder {
                                     val frames = info.size / ((if (float) 4 else 2) * channels)
                                     if (bytes.size < frames * 2) bytes = ByteArray(frames * 2)
                                     monoLittleEndian(buffer, frames, channels, float, bytes)
-                                    sink.write(bytes, 0, frames * 2)
-                                    written += frames
+                                    // The AAC priming the container did not declare: see [UNDECLARED_AAC_PRIMING].
+                                    val dropped = minOf(frames, priming)
+                                    priming -= dropped
+                                    sink.write(bytes, dropped * 2, (frames - dropped) * 2)
+                                    written += frames - dropped
                                 }
                                 if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
                                 codec.releaseOutputBuffer(out, false)
@@ -187,4 +195,7 @@ object JamDecoder {
         if (containsKey(key)) runCatching { getInteger(key) }.getOrDefault(0) else 0
 
     private const val TIMEOUT_US = 10_000L
+
+    /** AAC-LC's encoder delay, in frames at the source rate. */
+    internal const val UNDECLARED_AAC_PRIMING = 1024
 }

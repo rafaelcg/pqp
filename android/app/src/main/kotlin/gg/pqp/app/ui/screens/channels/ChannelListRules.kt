@@ -251,6 +251,9 @@ data class ChannelSection(
 const val TEXT_SECTION = "text"
 const val VOICE_SECTION = "voice"
 
+/** The old list's last group: a channel type with no rank of its own (jam). No heading. */
+const val OTHER_SECTION = "other"
+
 /** Key of the mixed list's loose channels: above the first category, no heading. */
 const val LOOSE_SECTION = "loose"
 
@@ -314,7 +317,7 @@ fun sectionsOf(
         categories()
         return sections
     }
-    val text = loose.filter { it.isText || it.isForum || it.isJam }
+    val text = loose.filter { it.isText || it.isForum }
     val voice = loose.filter { it.isVoice }
     if (text.isNotEmpty()) {
         sections += ChannelSection(TEXT_SECTION, textTitle, TEXT_SECTION.takeIf { textTitle.isNotBlank() }, text)
@@ -323,6 +326,10 @@ fun sectionsOf(
     if (voice.isNotEmpty()) {
         sections += ChannelSection(VOICE_SECTION, voiceTitle, VOICE_SECTION.takeIf { voiceTitle.isNotBlank() }, voice)
     }
+    // A type with no rank of its own (jam) sorts last in the old list, after text and voice, the same
+    // on every client (`channel-layout-cases.json`). No heading, so it never folds.
+    val other = loose.filter { it.isJam }
+    if (other.isNotEmpty()) sections += ChannelSection(OTHER_SECTION, "", null, other)
     return sections
 }
 

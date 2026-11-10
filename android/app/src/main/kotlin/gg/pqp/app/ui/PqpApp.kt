@@ -1183,6 +1183,21 @@ private suspend fun navigateToPush(
             nav.navigate(ForumPostRoute(target.serverId, target.forumId, target.postId, forum?.name.orEmpty()))
         }
 
+        // A jam song's own link: the channel list under it so back lands on the server, then the wall
+        // with the song open. A server where jam is off still reads (the flag gates writes, not reads).
+        is DeepLinkTarget.JamSong -> {
+            val name = serverName(target.serverId)
+            nav.navigate(ChannelsRoute(target.serverId, name))
+            val jam = try {
+                session.api.channels(target.serverId)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }?.firstOrNull { it.id == target.channelId }
+            nav.navigate(JamRoute(target.serverId, target.channelId, jam?.name.orEmpty(), name, target.songId))
+        }
+
         is DeepLinkTarget.Server ->
             nav.navigate(ChannelsRoute(target.serverId, serverName(target.serverId)))
 

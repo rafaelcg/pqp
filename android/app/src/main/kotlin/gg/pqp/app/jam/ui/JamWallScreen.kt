@@ -4,6 +4,8 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -192,6 +194,7 @@ private fun FilterStrip(selected: JamWallFilter, onSelect: (JamWallFilter) -> Un
     Row(
         Modifier
             .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
             .padding(horizontal = Spacing.gutter, vertical = Spacing.sm)
             .semantics { contentDescription = label },
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
@@ -228,16 +231,19 @@ private fun Mosaic(
     onOpenSong: (JamSongSummary) -> Unit,
 ) {
     val visible = state.visible
-    val bands: List<JamBand> = remember(visible, state.previews) {
-        JamBands.build(visible, hasVideo = { song -> state.anyPreview(song)?.hasVideo == true })
-    }
     val fontScale = LocalDensity.current.fontScale
+    // Big type is a single column: two tiles side by side leave a title nowhere to go.
+    val columns = if (fontScale >= LARGE_TYPE) 1 else 2
+    val bands: List<JamBand> = remember(visible, state.previews, columns) {
+        JamBands.build(visible, hasVideo = { song -> state.anyPreview(song)?.hasVideo == true }, columns = columns)
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val gutter = Spacing.gutter
-        val unitWidth: Dp = (maxWidth - gutter * 2 - Gap) / 2
+        val unitWidth: Dp = (maxWidth - gutter * 2 - Gap * (columns - 1)) / columns
         // Type that scales makes a tile that must grow with it, or a long title has nowhere to go.
-        val unit: Dp = unitWidth * max(1f, fontScale).let { 1f + (it - 1f) * 0.55f } * 0.92f
+        val grow = max(1f, fontScale).let { 1f + (it - 1f) * 0.55f }
+        val unit: Dp = if (columns == 1) unitWidth * 0.42f * grow else unitWidth * 0.92f * grow
 
         LazyColumn(
             state = listState,
@@ -300,7 +306,7 @@ private fun Mosaic(
                         )
                     }
                     // A lone small tile at the very end keeps its own width.
-                    if (band.tiles.size == 1 && band.tiles.first().cell.columns == 1) {
+                    if (columns > 1 && band.tiles.size == 1 && band.tiles.first().cell.columns == 1) {
                         Spacer(Modifier.weight(1f))
                     }
                 }
@@ -313,6 +319,9 @@ private fun Mosaic(
 }
 
 private const val FRESH_MS = 6000L
+
+/** From this font scale up the wall is one column. */
+private const val LARGE_TYPE = 1.5f
 
 @Composable
 private fun Footer(state: JamWallUiState, onRetry: () -> Unit) {

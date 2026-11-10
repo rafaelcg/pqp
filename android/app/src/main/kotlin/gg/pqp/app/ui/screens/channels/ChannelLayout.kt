@@ -102,7 +102,7 @@ data class ChannelLayoutPayload(
 
 /** Old split order for loose channels: text and forums, voice, watch party. */
 fun legacyTypeRank(type: String): Int = when (type) {
-    "text", "forum", "jam" -> 0
+    "text", "forum" -> 0
     "voice" -> 1
     else -> 2
 }

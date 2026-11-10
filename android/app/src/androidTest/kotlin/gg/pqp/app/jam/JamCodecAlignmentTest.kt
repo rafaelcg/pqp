@@ -142,7 +142,7 @@ class JamCodecAlignmentTest {
     private companion object {
         const val TAG = "JamCodec"
 
-        /** What `docs/ANDROID.md` allows a lossy decode to be off by before it is handled: 2 ms. */
-        const val TOLERANCE_FRAMES = 96
+        /** Measured 0 on every format on Android 17 (emulator); two frames of slack for a different decoder build. */
+        const val TOLERANCE_FRAMES = 2
     }
 }
