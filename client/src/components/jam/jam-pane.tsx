@@ -75,6 +75,11 @@ export interface JamPaneProps {
 }
 
 const FILTERS: readonly JamWallFilter[] = ["all", "missing", "ready"];
+/**
+ * The "Tão te chamando" strip above the wall. Off: with a handful of songs it
+ * repeats what the tiles already say ("Falta guitarra") and crowds the page.
+ */
+const SHOW_CALLS_STRIP: boolean = false;
 
 type StudioState =
   /** `chosen`: the person picked the instrument (a "falta baixo" call, a missing lane), so it is not re-guessed. */
@@ -556,7 +561,7 @@ export function JamPane({
 
           {empty && <JamEmptyWall canCreate={canCreate} onRecord={beginSong} />}
 
-          {!loading && !failed && !empty && canCreate && calls.length > 0 && filter !== "ready" && (
+          {SHOW_CALLS_STRIP && !loading && !failed && !empty && canCreate && calls.length > 0 && filter !== "ready" && (
             <section aria-labelledby="jam-calls-title" className="mb-5 rounded-[var(--radius-panel)] bg-surface-1/60 px-3 pb-3 pt-2.5 ring-1 ring-inset ring-border" data-jam-calls="">
               <h2 id="jam-calls-title" className="mb-2 flex items-center gap-2 font-display text-base font-extrabold text-text">
                 <span aria-hidden className="relative flex h-2.5 w-2.5">

@@ -417,12 +417,12 @@ export function JamStudio({
               )}
 
               {studio.camera && (phase === "setup" || recording) && (
-                <div className="relative aspect-video max-h-56 overflow-hidden rounded-[var(--radius-card)] bg-surface-1">
+                <div className="relative mx-auto aspect-video w-full max-w-[min(42rem,80vh)] overflow-hidden rounded-[var(--radius-card)] bg-surface-1">
                   <video ref={stageVideo} autoPlay muted playsInline aria-label={t("jam.studio.camera")} className="h-full w-full -scale-x-100 object-cover" />
                 </div>
               )}
               {studio.takeVideoUrl && (reviewing || phase === "done") && (
-                <div className="relative aspect-video max-h-56 overflow-hidden rounded-[var(--radius-card)] bg-surface-1">
+                <div className="relative mx-auto aspect-video w-full max-w-[min(42rem,80vh)] overflow-hidden rounded-[var(--radius-card)] bg-surface-1">
                   <video ref={takeVideo} src={studio.takeVideoUrl} muted playsInline aria-label={t("jam.studio.camera")} className="h-full w-full object-cover" />
                 </div>
               )}
