@@ -85,10 +85,15 @@ final class JamAudioSession {
         // The exception: a `.playback` left behind by this song's own release
         // (its old category could not be put back yet) is ours, not theirs.
         let alreadyPlayback = driver.category == .playback && !pendingRestore
+        // What THIS call changed, so a failed activation undoes exactly that
+        // and never a category somebody else has set since.
+        var changedHere: (category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions)?
+        let hadPrevious = previous != nil
         if !alreadyPlayback {
             do {
                 let before = (driver.category, driver.mode, driver.categoryOptions)
                 try driver.setCategory(.playback, mode: .default, options: [])
+                changedHere = before
                 // Remembered, but NOT yet a claim: holding the session means
                 // having activated it, which is decided below.
                 if previous == nil { previous = before }
@@ -108,7 +113,14 @@ final class JamAudioSession {
             // and nothing was activated, so nothing is held: only the category
             // this call changed is put back.
             ownsLockScreen = false
-            if !alreadyPlayback { restorePreviousCategory() }
+            if let changedHere, driver.category == .playback {
+                do {
+                    try driver.setCategory(changedHere.category, mode: changedHere.mode, options: changedHere.options)
+                    if !hadPrevious { previous = nil }
+                } catch {
+                    if !hadPrevious { pendingRestore = true }
+                }
+            }
         }
         return true
     }
