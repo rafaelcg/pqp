@@ -774,17 +774,28 @@ export interface AddTrackInput {
  *     `UPDATE ... WHERE claimed_at IS NULL` that must touch every row it was
  *     given, or two racing claims cannot both win) and the track inserted.
  */
+/** Internal: this request's claim was already made by an earlier request. */
+class ClaimAlreadyMade extends Error {}
+
 export async function addJamTrack(
   input: AddTrackInput,
 ): Promise<{ track: JamTrack; song: JamSongSummary; created: boolean }> {
   const { song, userId, request } = input;
 
-  const retry = await findClaimedTrack(request.audioUploadId, userId, song.id);
+  // The answer for a claim that already made its track: the same track, 200.
+  // Asked at every point a retry can find out it is one (below), because the
+  // first claim can commit at any moment between two of them.
+  const alreadyClaimed = async () => {
+    const id = await findClaimedTrack(request.audioUploadId, userId, song.id);
+    const existing = id ? await getJamTrack(id) : null;
+    return existing
+      ? { track: existing, song: await requireSummary(song.id), created: false as const }
+      : null;
+  };
+
+  const retry = await alreadyClaimed();
   if (retry) {
-    const track = await getJamTrack(retry);
-    if (track) {
-      return { track, song: await requireSummary(song.id), created: false };
-    }
+    return retry;
   }
 
   // Refused before any HEAD when the caller plainly may not add this
@@ -796,6 +807,13 @@ export async function addJamTrack(
     ? await findOwnUpload(request.videoUploadId, song, userId, "video")
     : null;
   if (!audio || (request.videoUploadId && !video)) {
+    // Not found because the FIRST claim of this very upload committed between
+    // the probe above and this lookup (the lookup only sees unclaimed rows):
+    // that is a retry, and its answer is the track, not a 404.
+    const raced = await alreadyClaimed();
+    if (raced) {
+      return raced;
+    }
     throw new HttpError(404, JAM_ERRORS.uploadUnknown);
   }
   const [audioBytes, videoBytes] = await Promise.all([
@@ -818,6 +836,19 @@ export async function addJamTrack(
     const current = locked.rows[0];
     if (!current) {
       throw new HttpError(404, JAM_NOT_FOUND);
+    }
+    // A retry that waited on the song lock behind the claim it duplicates: the
+    // track exists now. Asked FIRST, before the join mode and the limits, which
+    // describe a track that is not there yet (the song may have been closed,
+    // or this very track may have been the person's last allowed one, and
+    // neither refuses a request that has nothing left to add).
+    const duplicate = await client.query(
+      `SELECT 1 FROM jam_tracks
+        WHERE audio_upload_id = $1 AND author_id = $2 AND song_id = $3 AND deleted_at IS NULL`,
+      [request.audioUploadId, userId, song.id],
+    );
+    if ((duplicate.rowCount ?? 0) > 0) {
+      throw new ClaimAlreadyMade();
     }
     // The state the insert lands in, not the state the request was routed on:
     // the author may have closed the song while the files uploaded.
@@ -884,17 +915,17 @@ export async function addJamTrack(
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
-    // Two retries of one claim raced: the second either hit the unique index
-    // or found the upload already claimed (the first committed while it waited
-    // for the song lock). Either way the first's track is the answer.
+    // Two requests for one claim raced: the second saw the first's track after
+    // waiting on the song lock, hit the unique index, or found the upload
+    // already claimed. Either way the first's track is the answer.
     const lostTheRace =
+      error instanceof ClaimAlreadyMade ||
       (error as { code?: string }).code === "23505" ||
       (error instanceof HttpError && error.message === JAM_ERRORS.uploadUnknown);
     if (lostTheRace) {
-      const existing = await findClaimedTrack(request.audioUploadId, userId, song.id);
-      const track = existing ? await getJamTrack(existing) : null;
-      if (track) {
-        return { track, song: await requireSummary(song.id), created: false };
+      const raced = await alreadyClaimed();
+      if (raced) {
+        return raced;
       }
     }
     throw error;
