@@ -101,7 +101,7 @@ export function JamTransport({
       {!scrubber ? (
         <div className="flex min-w-0 flex-1 flex-col leading-tight">
           <span className="text-sm font-semibold tabular-nums text-text">
-            {formatClock(reading.positionMs)}
+            {formatClock(Math.min(reading.positionMs, length))}
             <span className="text-text-secondary"> / {formatClock(length)}</span>
           </span>
           {caption && <span className="truncate text-[13px] font-semibold text-text-secondary">{caption}</span>}
@@ -120,7 +120,7 @@ export function JamTransport({
         />
         <span className="flex items-center justify-between gap-2 text-xs tabular-nums text-text-secondary">
           <span className={cn(lg && "text-sm font-semibold text-text")}>
-            {formatClock(reading.positionMs)}
+            {formatClock(Math.min(reading.positionMs, length))}
             <span className="text-text-tertiary"> / {formatClock(length)}</span>
           </span>
           {caption && <span className="truncate font-semibold text-text-tertiary">{caption}</span>}

@@ -99,6 +99,12 @@ export function TrackAdjust({
     [engine],
   );
 
+  // Opened below the lanes: brought into view with its buttons, not left under the dock.
+  const box = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    box.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, []);
+
   async function save() {
     setBusy(true);
     setFailed(false);
@@ -115,31 +121,21 @@ export function TrackAdjust({
 
   return (
     <div
+      ref={box}
       className="jam-drop-in flex flex-col gap-3 rounded-[var(--radius-card)] bg-surface-2 p-3.5 ring-1 ring-inset ring-border"
       data-jam-adjust={track.id}
+      onKeyDown={(event) => {
+        // Escape closes the editor (putting back what is stored), never the song under it.
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          if (dirty) {
+            hear(editsFromTrack(track));
+          }
+          onDone();
+        }
+      }}
     >
-      <div inert={busy} aria-busy={busy} className={busy ? "opacity-60" : undefined}>
-        <JamClipEditor
-          instrument={track.instrument}
-          peaks={track.peaks}
-          source={source}
-          edits={edits}
-          band={band}
-          clock={clock}
-          onTrimStart={(ms) => hear(withTrimStart(recorded, edits, ms))}
-          onTrimEnd={(ms) => hear(withTrimEnd(recorded, edits, ms))}
-          onNudge={(ms) => hear(withNudge(edits, ms))}
-          onGain={(gain) => hear(withGain(edits, gain))}
-          onReset={() => hear(editsFromTrack(track))}
-          edited={dirty}
-        />
-      </div>
-      {failed && (
-        <p role="alert" className="rounded-[var(--radius-control)] bg-danger-soft px-2.5 py-2 text-xs text-on-danger-soft">
-          {t("jam.error.other")}
-        </p>
-      )}
-      <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
+      <div className="flex items-center justify-end gap-2 border-b border-border pb-3">
         <Button
           variant="ghost"
           size="sm"
@@ -163,6 +159,27 @@ export function TrackAdjust({
           {t("jam.take.adjustSave")}
         </Button>
       </div>
+      <div inert={busy} aria-busy={busy} className={busy ? "opacity-60" : undefined}>
+        <JamClipEditor
+          instrument={track.instrument}
+          peaks={track.peaks}
+          source={source}
+          edits={edits}
+          band={band}
+          clock={clock}
+          onTrimStart={(ms) => hear(withTrimStart(recorded, edits, ms))}
+          onTrimEnd={(ms) => hear(withTrimEnd(recorded, edits, ms))}
+          onNudge={(ms) => hear(withNudge(edits, ms))}
+          onGain={(gain) => hear(withGain(edits, gain))}
+          onReset={() => hear(editsFromTrack(track))}
+          edited={dirty}
+        />
+      </div>
+      {failed && (
+        <p role="alert" className="rounded-[var(--radius-control)] bg-danger-soft px-2.5 py-2 text-xs text-on-danger-soft">
+          {t("jam.error.other")}
+        </p>
+      )}
     </div>
   );
 }

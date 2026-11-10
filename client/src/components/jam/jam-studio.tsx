@@ -236,7 +236,7 @@ export function JamStudio({
       return;
     }
     const posted = studio.posted;
-    const timer = window.setTimeout(() => onPosted(posted), 3600);
+    const timer = window.setTimeout(() => onPosted(posted), 6500);
     return () => window.clearTimeout(timer);
   }, [phase, studio.posted, onPosted]);
 
@@ -279,7 +279,7 @@ export function JamStudio({
           aria-hidden
           className={cn(
             "grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-card)] text-on-inst max-sm:hidden",
-            coverGradient(song ? song.instruments : [studio.instrument]),
+            coverGradient([studio.instrument]),
           )}
         >
           {(() => {

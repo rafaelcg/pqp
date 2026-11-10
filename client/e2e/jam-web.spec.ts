@@ -538,11 +538,11 @@ test("using a take swaps the mix, a posted take can be adjusted, and the wall sa
   await own.getByRole("button", { name: "Later" }).click();
   await own.getByRole("button", { name: "Later" }).click();
   await own.locator("[data-jam-clip-body]").focus();
-  await guest.keyboard.press("ArrowRight"); // +5 ms
+  await guest.keyboard.press("ArrowRight"); // +10 ms
   await own.locator("[data-jam-adjust-save]").click();
   await expect
     .poll(async () => (await tracksOf(songId)).find((t) => t.id === second.id)?.offsetMs)
-    .toBe(second.offsetMs + 25);
+    .toBe(second.offsetMs + 30);
   await host.context().close();
   await guest.context().close();
 });

@@ -47,7 +47,7 @@ export function JamHowToHero({ className, big = false }: { className?: string; b
             </div>
           );
         })}
-        <div style={{ "--jam-l": LANES.length } as CSSProperties} className="jam-howto-lane flex items-center gap-2.5">
+        <div style={{ "--jam-l": LANES.length } as CSSProperties} className="jam-howto-lane relative z-20 flex items-center gap-2.5">
           <span
             className={cn(
               "grid shrink-0 place-items-center rounded-full border-2 border-dashed border-accent text-accent",

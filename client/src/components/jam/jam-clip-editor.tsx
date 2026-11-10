@@ -166,7 +166,7 @@ export function JamClipEditor({
 
   function keys(grip: Grip, event: KeyboardEvent<HTMLElement>) {
     const big = event.shiftKey;
-    const step = grip === "body" ? (big ? 50 : 5) : big ? 500 : 50;
+    const step = grip === "body" ? (big ? 50 : 10) : big ? 500 : 50;
     const sign = event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : event.key === "ArrowRight" || event.key === "ArrowUp" ? 1 : 0;
     if (sign === 0 && event.key !== "Home") {
       return;
