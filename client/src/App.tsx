@@ -11804,7 +11804,14 @@ function MainAppContent({
           isMuted={voiceState.isMuted}
           inputMode={voiceState.inputMode}
           isTransmitting={voiceState.isTransmitting}
-          listenOnly={!voiceState.canSpeak}
+          listenOnly={
+            !voiceState.canSpeak || Boolean(voiceState.micUnavailableReason)
+          }
+          listenOnlyReason={
+            voiceState.canSpeak
+              ? (voiceState.micUnavailableReason ?? undefined)
+              : undefined
+          }
           audienceLocked={voiceState.speakReason === "audience"}
           peerQualities={voiceState.remotePeers.flatMap((peer) =>
             peer.quality ? [peer.quality] : [],
