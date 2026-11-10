@@ -837,30 +837,33 @@ export async function addJamTrack(
     if (!current) {
       throw new HttpError(404, JAM_NOT_FOUND);
     }
-    // A retry that waited on the song lock behind the claim it duplicates: the
-    // track exists now. Asked FIRST, before the join mode and the limits, which
-    // describe a track that is not there yet (the song may have been closed,
-    // or this very track may have been the person's last allowed one, and
-    // neither refuses a request that has nothing left to add).
-    const duplicate = await client.query(
-      `SELECT 1 FROM jam_tracks
-        WHERE audio_upload_id = $1 AND author_id = $2 AND song_id = $3 AND deleted_at IS NULL`,
-      [request.audioUploadId, userId, song.id],
+    // One query for the duplicate probe and the counts, so the lock is held for
+    // one round trip, not two. A retry that waited on the song lock behind the
+    // claim it duplicates finds that track here: it is answered with it BEFORE
+    // the join mode and the limits are looked at, which describe a track that
+    // is not there yet (the song may have been closed, or this very track may
+    // have been the person's last allowed one, and neither refuses a request
+    // that has nothing left to add).
+    const counts = await client.query<{
+      total: number;
+      mine: number;
+      same: number;
+      duplicate: number;
+    }>(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE author_id = $2)::int AS mine,
+              COUNT(*) FILTER (WHERE instrument = $3)::int AS same,
+              COUNT(*) FILTER (WHERE audio_upload_id = $4 AND author_id = $2)::int AS duplicate
+         FROM jam_tracks WHERE song_id = $1 AND deleted_at IS NULL`,
+      [song.id, userId, request.instrument, request.audioUploadId],
     );
-    if ((duplicate.rowCount ?? 0) > 0) {
+    if (counts.rows[0]!.duplicate > 0) {
       throw new ClaimAlreadyMade();
     }
     // The state the insert lands in, not the state the request was routed on:
     // the author may have closed the song while the files uploaded.
     assertMayAdd(current, userId, input.canPost, request.instrument);
 
-    const counts = await client.query<{ total: number; mine: number; same: number }>(
-      `SELECT COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE author_id = $2)::int AS mine,
-              COUNT(*) FILTER (WHERE instrument = $3)::int AS same
-         FROM jam_tracks WHERE song_id = $1 AND deleted_at IS NULL`,
-      [song.id, userId, request.instrument],
-    );
     const count = counts.rows[0]!;
     if (count.total >= JAM_MAX_TRACKS_PER_SONG) {
       throw new HttpError(409, JAM_ERRORS.songFull);
@@ -926,6 +929,11 @@ export async function addJamTrack(
       const raced = await alreadyClaimed();
       if (raced) {
         return raced;
+      }
+      // The first claim's track was deleted in the meantime: nothing to answer
+      // with, and the upload is spent. Never an internal error.
+      if (error instanceof ClaimAlreadyMade) {
+        throw new HttpError(404, JAM_ERRORS.uploadUnknown);
       }
     }
     throw error;
