@@ -83,19 +83,18 @@ describe("jam contract", () => {
     expect(channelTypeSchema.options).toContain("jam");
   });
 
-  it("every frame is relayable to a channel, and none is in the chat union yet", () => {
+  it("every frame is relayable to a channel and is in the chat union", () => {
     // Relayable is the half that is easy to forget: without it the cluster
     // relay drops a song added on the sibling instance on the floor.
     for (const type of JAM_FRAME_TYPES) {
       expect(CHAT_SERVER_MESSAGE_TYPES, type).toContain(type);
       expect(isChatServerMessage({ type }), type).toBe(true);
     }
-    // The union every client is typed against does not carry them (same
-    // arrangement as the voice note frames), so no client test starts asking
-    // for a branch before a client handles them.
+    // The union every client is typed against carries them since the web
+    // client handles them (`client/src/lib/jam-frames.ts`).
     const frame = { type: "jam-song-deleted", channelId: ID2, songId: ID };
     expect(jamFrameSchema.safeParse(frame).success).toBe(true);
-    expect(chatServerMessageSchema.safeParse(frame).success).toBe(false);
+    expect(chatServerMessageSchema.safeParse(frame).success).toBe(true);
   });
 
   it("parses every frame", () => {

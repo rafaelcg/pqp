@@ -22,6 +22,7 @@ import {
   MessagesSquare,
   Mic,
   MicOff,
+  Music2,
   PanelLeftOpen,
   Pencil,
   Phone,
@@ -90,6 +91,7 @@ import {
   ChannelIcon,
   channelIconIsPrivateLock,
 } from "@/components/layout/channel-icon";
+import type { JamSidebarRow } from "@/hooks/use-jam-sidebar";
 import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
 import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
 import { useVoiceConfig } from "@/hooks/use-voice-config";
@@ -446,6 +448,14 @@ interface ChannelListProps {
    * Fórum. Off, the "+" is the plain one-click text channel it always was.
    */
   forumCreateEnabled?: boolean;
+  /**
+   * The runtime flag `jam_channels` is on for this server (`useJamConfig`):
+   * the add menus offer a Jam, once per server. Off, nothing is offered and an
+   * existing Jam row still opens.
+   */
+  jamCreateEnabled?: boolean;
+  /** Per Jam channel: song count and whether anything is new (`useJamSidebar`). */
+  jamSidebar?: Record<string, JamSidebarRow>;
   onRenameChannel: (channel: Channel) => void;
   onOpenChannelSettings: (
     channel: Channel,
@@ -615,6 +625,8 @@ export const ChannelList = memo(function ChannelList({
   onSetScreenVolume,
   onCreateChannel,
   forumCreateEnabled = false,
+  jamCreateEnabled = false,
+  jamSidebar,
   onRenameChannel,
   onOpenChannelSettings,
   onDeleteChannel,
@@ -689,6 +701,12 @@ export const ChannelList = memo(function ChannelList({
       (c) => isTextGroupChannelType(c.type) && !c.parentId && !favoriteIdSet.has(c.id),
     ),
   );
+  // A Jam is an app, not a text channel: its row sits in an Apps section of
+  // its own in the classic list (in the mixed list it is an ordinary row).
+  const topLevelJam = sortByPosition(
+    listed.filter((c) => c.type === "jam" && !c.parentId && !favoriteIdSet.has(c.id)),
+  );
+  const jamOffered = jamCreateEnabled && canManage && !channels.some((c) => c.type === "jam");
   const topLevelVoice = sortByPosition(
     listed.filter(
       (c) =>
@@ -1722,6 +1740,7 @@ export const ChannelList = memo(function ChannelList({
           canManage={canManage}
           canManageRoles={canManageRoles}
           icon={<ChannelIcon channel={channel} />}
+          jam={channel.type === "jam" ? jamSidebar?.[channel.id] : undefined}
           sessionHint={upcomingSessionStartsAtByChannel[channel.id]}
           liveState={liveStateFor(channel)}
           isDragging={draggedId === channel.id}
@@ -1961,6 +1980,18 @@ export const ChannelList = memo(function ChannelList({
             },
           ]
         : []),
+      ...(jamOffered
+        ? [
+            {
+              id: "create-jam",
+              label: t("chrome.addJam"),
+              detail: t("jam.add.detail"),
+              icon: Music2,
+              trailing: <BetaTag />,
+              onSelect: () => onCreateChannel("jam", false, categoryId),
+            },
+          ]
+        : []),
       { id: "sep-private", label: "", separator: true },
       {
         id: "create-private",
@@ -2159,6 +2190,23 @@ export const ChannelList = memo(function ChannelList({
         {viewLayout.categories
           .filter((entry) => canManage || entry.children.length > 0)
           .map((entry) => renderMixedCategory(entry))}
+        {jamOffered && (
+          <button
+            type="button"
+            data-create-jam=""
+            onClick={() => onCreateChannel("jam", false)}
+            className="mt-1 flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-sm text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            <Music2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="flex min-w-0 flex-col items-start leading-tight">
+              <span className="flex items-center gap-1.5">
+                {t("chrome.addJam")}
+                <BetaTag />
+              </span>
+              <span className="text-[11px] text-text-tertiary">{t("jam.add.detail")}</span>
+            </span>
+          </button>
+        )}
         {canManage && (
           <CreateCategoryRow
             onCreate={() => onCreateChannel("category", false)}
@@ -2595,12 +2643,15 @@ export const ChannelList = memo(function ChannelList({
               onAdd={() => onCreateChannel("text", false)}
               onAddPrivate={() => onCreateChannel("text", true)}
               addMenu={
-                forumCreateEnabled
+                forumCreateEnabled || jamOffered
                   ? textSectionAddMenu({
                       textLabel: t("chrome.createTextChannel"),
-                      forumLabel: t("chrome.createForum"),
+                      forumLabel: forumCreateEnabled ? t("chrome.createForum") : undefined,
                       onText: () => onCreateChannel("text", false),
-                      onForum: () => onCreateChannel("forum", false),
+                      onForum: forumCreateEnabled ? () => onCreateChannel("forum", false) : undefined,
+                      jamLabel: jamOffered ? t("chrome.addJam") : undefined,
+                      jamDetail: jamOffered ? t("jam.add.detail") : undefined,
+                      onJam: jamOffered ? () => onCreateChannel("jam", false) : undefined,
                     })
                   : undefined
               }
@@ -2666,6 +2717,17 @@ export const ChannelList = memo(function ChannelList({
                 renderRow(channel, topLevelVoice),
               )}
             </ChannelSection>
+            )}
+
+            {topLevelJam.length > 0 && (
+              <div className="mb-4" data-jam-section="">
+                <div className="mb-1 flex min-h-6 items-center px-2">
+                  <span className="pl-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
+                    {t("jam.sidebar.apps")}
+                  </span>
+                </div>
+                {topLevelJam.map((channel) => renderRow(channel, topLevelJam))}
+              </div>
             )}
 
             {(categories.length > 0 || canManage) && (
@@ -3018,22 +3080,43 @@ export function textSectionAddMenu({
   forumLabel,
   onText,
   onForum,
+  jamLabel,
+  jamDetail,
+  onJam,
 }: {
   textLabel: string;
-  forumLabel: string;
+  forumLabel?: string;
   onText: () => void;
-  onForum: () => void;
+  onForum?: () => void;
+  /** A Jam, offered once per server while `jam_channels` is on. */
+  jamLabel?: string;
+  /** One line under "Jam": what it is, for somebody who has never seen one. */
+  jamDetail?: string;
+  onJam?: () => void;
 }): ContextMenuItemDef[] {
-  return [
+  const items: ContextMenuItemDef[] = [
     { id: "create-text", label: textLabel, icon: Hash, onSelect: onText },
-    {
+  ];
+  if (forumLabel && onForum) {
+    items.push({
       id: "create-forum",
       label: forumLabel,
       icon: MessagesSquare,
       trailing: <BetaTag />,
       onSelect: onForum,
-    },
-  ];
+    });
+  }
+  if (jamLabel && onJam) {
+    items.push({
+      id: "create-jam",
+      label: jamLabel,
+      detail: jamDetail,
+      icon: Music2,
+      trailing: <BetaTag />,
+      onSelect: onJam,
+    });
+  }
+  return items;
 }
 
 interface SectionFold {
@@ -3626,6 +3709,7 @@ function ChannelRow({
   onDragOverRow,
   onDrop,
   sessionHint,
+  jam,
 }: {
   channel: Channel;
   selected: boolean;
@@ -3669,6 +3753,12 @@ function ChannelRow({
   onDrop: () => void;
   /** Upcoming/live session start time for a voice channel's sidebar hint (VITE_WATCH_PARTY_SCHEDULE only). */
   sessionHint?: string;
+  /**
+   * Present only for a Jam channel. A Jam never carries a message, so its
+   * "unread" is a new song or track since the person last opened it, and its
+   * second line is the song count.
+   */
+  jam?: JamSidebarRow;
 }) {
   const { t, locale } = useTranslation();
   const notifications = useChannelNotificationLevel(channel);
@@ -3813,7 +3903,7 @@ function ChannelRow({
   );
 
   const muted = notifications.level === "none";
-  const hasUnread = !selected && unread.count > 0;
+  const hasUnread = !selected && (jam ? jam.news : unread.count > 0);
   const hasDraft = useHasDraft(channel.id) && !selected;
   // A muted channel keeps counting for the read cursor, but nothing about it
   // should pull the eye — that is the whole point of muting it.
@@ -3927,7 +4017,21 @@ function ChannelRow({
       ) : (
         icon
       )}
-      {watchParty ? (
+      {jam ? (
+        <span className="flex min-w-0 flex-1 flex-col" data-jam-row="">
+          <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
+            {channel.name}
+          </span>
+          {jam.loaded && (
+            <span className="truncate text-[10px] text-paper-muted">
+              {t("jam.row.songs", {
+                count: jam.songCount,
+                countLabel: jam.more ? `${jam.songCount}+` : String(jam.songCount),
+              })}
+            </span>
+          )}
+        </span>
+      ) : watchParty ? (
         <span className="flex min-w-0 flex-1 flex-col">
           <span
             className={cn(
@@ -3968,7 +4072,9 @@ function ChannelRow({
       {channel.isPrivate && (
         <span className="sr-only">{t("chrome.privateChannel")}</span>
       )}
-      {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
+      {hasUnread && !muted && (
+        <span className="sr-only">{jam ? t("jam.row.news") : t("chrome.unreadSr")}</span>
+      )}
       {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
       <span className="ml-auto flex shrink-0 items-center gap-1">
         {/* The shortcut is announced through the row's `title` and its

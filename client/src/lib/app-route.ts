@@ -21,6 +21,8 @@ import {
  *                                       → …and highlight that message
  *   /app/server/<sid>/channel/<forumId>/post/<postId>
  *                                       → …the forum, with that post open
+ *   /app/server/<sid>/channel/<jamId>/song/<songId>
+ *                                       → …the Jam, with that song open
  *   /app/server/<sid>/bau               → { kind: "home", serverId, postId: null }
  *   /app/server/<sid>/bau/<postId>      → { kind: "home", serverId, postId }
  *   /app/dm                             → { kind: "conversation", channelId: null }
@@ -47,6 +49,12 @@ export type AppRouteTarget =
        * forum because the forum is what the sidebar and the back button know.
        */
       postId: string | null;
+      /**
+       * A Jam song open on its wall (`channelId` is the jam channel), the same
+       * shape as the forum's post. A song is not a channel; it is addressed
+       * through the Jam because the Jam is what the sidebar knows.
+       */
+      songId: string | null;
     }
   | {
       kind: "conversation";
@@ -122,6 +130,10 @@ export function parseAppRoute(pathname: string): AppRouteTarget | null {
         channelId && deeper === "post" && third
           ? decodeURIComponent(third)
           : null,
+      songId:
+        channelId && deeper === "song" && third
+          ? decodeURIComponent(third)
+          : null,
     };
   }
 
@@ -168,6 +180,19 @@ export function forumPostRoutePath(
   postId: string,
 ): string {
   return `${channelRoutePath(serverId, forumId)}/post/${encodeURIComponent(postId)}`;
+}
+
+/**
+ * A Jam song's shareable address: the Jam, with the song open on its wall.
+ * What the address bar shows while a song is open, so a refresh or a pasted
+ * link lands on the same song. The phones build the same path.
+ */
+export function jamSongRoutePath(
+  serverId: string,
+  jamId: string,
+  songId: string,
+): string {
+  return `${channelRoutePath(serverId, jamId)}/song/${encodeURIComponent(songId)}`;
 }
 
 /** Inverse of {@link parseAppRoute} for the Baú case. */
@@ -288,6 +313,9 @@ export function signedOutRedirectPath(pathname: string): string {
   }
   if (target.channelId && target.postId) {
     return forumPostRoutePath(target.serverId, target.channelId, target.postId);
+  }
+  if (target.channelId && target.songId) {
+    return jamSongRoutePath(target.serverId, target.channelId, target.songId);
   }
   return target.channelId && target.messageId
     ? messageRoutePath(target.serverId, target.channelId, target.messageId)

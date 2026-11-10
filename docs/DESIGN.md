@@ -54,6 +54,8 @@ The role set, as defined today:
 | Status | `danger`, `warning`, `success`, and `on-danger` for a count drawn on the danger fill (an unread badge) |
 | Soft | `accent-soft`, `danger-soft`, `danger-soft-hover`, `warning-soft`, `success-soft`, and an `on-` for each fill |
 | Code | `code-bg`, `code-text` |
+| Media | `on-media`, `on-media-muted`, `media-scrim` (a caption drawn over a picture: dark in every theme, like the picture) |
+| Jam instruments | `inst-bass`, `inst-other`, `inst-drums`, `inst-vocals`, `inst-keys`, `inst-guitar`, and `on-inst` (the dark label on any of them). Identities, not chrome: the same fills in light and dark. Told apart by lightness (steps of 0.05 or more) as well as hue, each with its own icon (`lib/jam-instruments.ts`), and measured by the bench |
 | State | `focus-ring`, `ring-offset`, `selection`, `indicator` |
 
 #### The text ladder

@@ -29,6 +29,8 @@ export const FEATURE_HINT_IDS = [
   "composerFormat",
   "channelPin",
   "forum",
+  "jamWall",
+  "jamStudio",
   "shortcuts",
   // Not in the attached queue: the notice is rendered by the composer itself,
   // at the moment somebody records (see `voice-note-transcription-notice.tsx`).
@@ -52,6 +54,8 @@ export const FEATURE_HINT_STORAGE_KEYS = {
   composerFormat: "pqp:feature-hint-composer-format-2026-09",
   channelPin: "pqp:feature-hint-channel-pin-2026-09",
   forum: "pqp:feature-hint-forum-2026-10",
+  jamWall: "pqp:feature-hint-jam-wall-2026-11",
+  jamStudio: "pqp:feature-hint-jam-studio-2026-11",
   shortcuts: "pqp:feature-hint-shortcuts-2026-09",
   voiceNoteTranscription: "pqp:feature-hint-voice-note-transcription-2026-10",
 } as const;
@@ -88,6 +92,13 @@ export const ATTACHED_FEATURE_HINT_ORDER = [
   // both fire for anyone in any call, and share is the older, less
   // discoverable control.
   "music",
+  // The Jam wall's tip is a moment in the screen that owns the control it points
+  // at: like the watch party hints it comes BEFORE the standing tips below,
+  // which are wanted by anyone anywhere in the app and would otherwise hold the
+  // one slot for as long as they stay undismissed. (The studio's own tip is not
+  // in this queue at all: it is drawn inside the studio, `StudioTip`, through the
+  // same store, so a card in the corner can never cover the post button.)
+  "jamWall",
   "composerFormat",
   "channelPin",
   // Beside Novo post, the first time somebody who can post opens a forum
