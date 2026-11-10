@@ -42,7 +42,11 @@ export function InstrumentPicker({
 }) {
   const { t } = useTranslation();
   return (
-    <div role="radiogroup" aria-label={t("jam.studio.instrument")} className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+    <div
+      role="radiogroup"
+      aria-label={t("jam.studio.instrument")}
+      className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] sm:mx-0 sm:grid sm:grid-cols-6 sm:overflow-visible sm:px-0 sm:pb-0"
+    >
       {options.map((instrument) => {
         const look = JAM_INSTRUMENT_LOOK[instrument];
         const Icon = look.icon;
@@ -58,7 +62,7 @@ export function InstrumentPicker({
             data-jam-instrument={instrument}
             onClick={() => onChange(instrument)}
             className={cn(
-              "relative flex h-[5.5rem] flex-col items-center justify-center gap-2 rounded-[var(--radius-panel)] text-sm font-extrabold outline-none transition-[background,color,box-shadow,transform] duration-[var(--duration-base)] ease-[var(--ease-emphasized)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 active:scale-[0.96] disabled:opacity-50",
+              "relative flex h-[4.75rem] w-[4.75rem] shrink-0 flex-col items-center justify-center gap-1.5 rounded-[var(--radius-panel)] text-[13px] font-extrabold sm:h-[5.5rem] sm:w-auto sm:gap-2 sm:text-sm outline-none transition-[background,color,box-shadow,transform] duration-[var(--duration-base)] ease-[var(--ease-emphasized)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 active:scale-[0.96] disabled:opacity-50",
               on
                 ? cn(look.fill, "shadow-[var(--shadow-2)] motion-safe:-translate-y-0.5")
                 : "bg-surface-1 text-text-secondary ring-1 ring-inset ring-border hover:bg-surface-2 hover:text-text",
@@ -147,7 +151,7 @@ export function LevelMeter({ clock, active }: { clock: JamStudio["levelClock"]; 
           style={{ transform: "scaleX(0)" }}
         />
       </div>
-      <span className="min-h-4 text-xs text-text-tertiary" aria-live="polite">
+      <span className="min-h-4 text-xs text-text-secondary" aria-live="polite">
         {verdict ? t(`jam.studio.level.${verdict}` as MessageKey) : ""}
       </span>
     </div>
@@ -321,8 +325,9 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
     <section
       aria-label={t("jam.latency.explain.title")}
       data-jam-latency-check=""
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-card)] bg-surface-2/70 px-3 py-2 ring-1 ring-inset ring-border"
+      className="flex flex-col gap-2 rounded-[var(--radius-card)] bg-surface-2/70 px-3 py-2 ring-1 ring-inset ring-border sm:flex-row sm:items-center sm:gap-3"
     >
+      <span className="flex min-w-0 flex-1 items-center gap-3">
       <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-soft text-on-accent-soft">
         {measuring && <span aria-hidden className="absolute inset-0 rounded-full bg-accent/40 motion-safe:animate-ping" />}
         <Headphones className="relative h-4 w-4" aria-hidden />
@@ -340,10 +345,11 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
           )}
         </p>
       </Tooltip>
+      </span>
       {measuring ? (
         <Loader2 className="h-4 w-4 shrink-0 text-text-secondary motion-safe:animate-spin" aria-hidden />
       ) : (
-        <span className="flex shrink-0 items-center gap-1">
+        <span className="flex shrink-0 items-center gap-1 max-sm:pl-11">
           <button
             type="button"
             onClick={() => void studio.measure("loopback")}

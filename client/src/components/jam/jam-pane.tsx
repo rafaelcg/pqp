@@ -409,10 +409,10 @@ export function JamPane({
                 <Music2 className="h-5 w-5" />
               </span>
               <div className="flex min-w-0 flex-col leading-tight">
-                <h1 className="font-display text-2xl font-extrabold tracking-tight text-text">{t("jam.title")}</h1>
+                <h1 className="font-display text-2xl font-extrabold tracking-[-0.01em] text-text">{t("jam.title")}</h1>
                 {songs.length > 0 && (
                   <p className="truncate text-[13px] font-semibold text-text-tertiary max-sm:hidden" data-jam-wall-count="">
-                    {t("jam.wall.count", { count: songs.length, countLabel: songs.length, people })}
+                    {t("jam.wall.songCount", { count: songs.length, countLabel: songs.length })} · {t("jam.wall.people", { count: people, countLabel: people })}
                   </p>
                 )}
               </div>
@@ -556,7 +556,7 @@ export function JamPane({
           {empty && <JamEmptyWall canCreate={canCreate} onRecord={beginSong} />}
 
           {!loading && !failed && !empty && canCreate && calls.length > 0 && filter !== "ready" && (
-            <section aria-labelledby="jam-calls-title" className="mb-5" data-jam-calls="">
+            <section aria-labelledby="jam-calls-title" className="mb-5 rounded-[var(--radius-panel)] bg-surface-1/60 px-3 pb-3 pt-2.5 ring-1 ring-inset ring-border" data-jam-calls="">
               <h2 id="jam-calls-title" className="mb-2 flex items-center gap-2 font-display text-base font-extrabold text-text">
                 <span aria-hidden className="relative flex h-2.5 w-2.5">
                   <span className="jam-call-ping absolute inset-0 rounded-full bg-accent" />
@@ -564,7 +564,7 @@ export function JamPane({
                 </span>
                 {t("jam.calls.title")}
               </h2>
-              <ul className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 sm:-mx-5 sm:px-5 [scrollbar-width:none]">
+              <ul className="flex gap-2 overflow-x-auto pb-0.5 [scrollbar-width:none]">
                 {calls.flatMap(({ song, instruments }) =>
                   instruments.slice(0, 1).map((instrument) => (
                     <li key={`${song.id}-${instrument}`} className="shrink-0">
@@ -708,7 +708,7 @@ function JamCallCard({
       onClick={onAnswer}
       data-jam-call={`${song.id}:${instrument}`}
       className={cn(
-        "group flex h-[3.75rem] w-[15rem] items-center gap-3 rounded-[var(--radius-panel)] bg-surface-1 p-2 pr-3 text-left outline-none ring-1 ring-inset ring-border",
+        "group flex h-[3.75rem] w-[15rem] cursor-pointer items-center gap-3 rounded-[var(--radius-panel)] bg-surface-2 p-2 pr-3 text-left outline-none ring-1 ring-inset ring-border",
         "transition-[transform,box-shadow,background-color] duration-[var(--duration-base)] ease-[var(--ease-standard)] hover:bg-surface-2 motion-safe:hover:-translate-y-0.5 hover:shadow-[var(--shadow-2)] active:scale-[0.98]",
         "focus-visible:ring-2 focus-visible:ring-focus-ring",
       )}
@@ -746,7 +746,7 @@ function JamEmptyWall({ canCreate, onRecord }: { canCreate: boolean; onRecord: (
     <div className="mx-auto flex min-h-[60vh] w-full max-w-3xl flex-col items-center justify-center gap-7 py-6 text-center" data-jam-empty="">
       <JamHowToHero className="w-full max-w-lg rounded-[var(--radius-panel)] shadow-[var(--shadow-2)] ring-1 ring-inset ring-border" big />
       <div className="flex max-w-xl flex-col gap-2">
-        <h2 className="font-display text-3xl font-extrabold tracking-tight text-text [text-wrap:balance] sm:text-4xl">
+        <h2 className="font-display text-3xl font-extrabold tracking-[-0.01em] text-text [text-wrap:balance] sm:text-4xl">
           {t("jam.wall.empty.title")}
         </h2>
         <p className="text-base leading-relaxed text-text-secondary [text-wrap:pretty]">{t("jam.wall.empty.body")}</p>

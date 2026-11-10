@@ -145,7 +145,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
         data-playing={playing ? "true" : undefined}
         style={{ "--jam-i": Math.min(index, 6), viewTransitionName: selected ? undefined : `jam-cover-${song.id}` } as CSSProperties}
         className={cn(
-          "group relative isolate h-full w-full min-w-0 overflow-hidden rounded-[var(--radius-panel)] bg-surface-1 bg-gradient-to-b to-transparent to-70% text-left outline-none ring-1 ring-inset ring-border",
+          "group relative isolate h-full w-full min-w-0 cursor-pointer overflow-hidden rounded-[var(--radius-panel)] bg-surface-1 bg-gradient-to-b to-transparent to-70% text-left outline-none ring-1 ring-inset ring-border",
           GLOW[main],
           wide ? "grid grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-4" : "flex flex-col",
           big ? "gap-4 p-4" : "gap-3 p-3",
@@ -260,7 +260,11 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
               className={cn(
                 "grid shrink-0 place-items-center rounded-full transition-[transform,background-color] duration-[var(--duration-base)] ease-[var(--ease-emphasized)]",
                 big ? "h-12 w-12" : small ? "h-8 w-8 max-sm:hidden" : "h-8 w-8",
-                playing ? "bg-accent text-on-accent" : "bg-text text-surface-0 group-hover:scale-110",
+                playing
+                  ? "bg-accent text-on-accent"
+                  : big
+                    ? "bg-text text-surface-0 group-hover:scale-110"
+                    : "bg-surface-3 text-text group-hover:scale-110 group-hover:bg-text group-hover:text-surface-0 group-focus-visible:bg-text group-focus-visible:text-surface-0",
               )}
             >
               {playing ? <Equalizer /> : <Play className={cn("ml-0.5", big ? "h-5 w-5" : "h-3.5 w-3.5")} fill="currentColor" />}

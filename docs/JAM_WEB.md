@@ -29,16 +29,18 @@ song is the hero (2 by 2), then a fixed rhythm of small, wide (2 by 1) and tall
 (1 by 2) tiles. A size follows the position and nothing else, so a tile never
 changes size under a finger when somebody else's song moves.
 
-A tile is drawn from the song SUMMARY alone (the preview fields of `docs/JAM.md`):
-its cover is a gradient through the colours of the instruments on it
-(`coverGradient` in `components/jam/jam-art.tsx`), the loudest stem's
-`previewPeaks` run across it as a mirrored waveform, the band strip shows one dot
-per instrument with the `missingInstruments` dashed, the `contributors`' faces sit
-by the title, and what it needs (`songNeed`: "Falta voz" in the voice's colour,
-"Qualquer um entra", "Pronta") is a chip. Only a tile with `hasVideo` reads its
-detail, once it comes near the screen, for the video's address; its first frame
-then replaces the gradient (and plays muted under the pointer). The open song's
-tile dances while it plays. Filters are Tudo, Falta alguém (everything somebody
+A tile is drawn from the song SUMMARY alone (the preview fields of `docs/JAM.md`).
+Its picture is the song itself: one band per instrument on it, stacked like the
+song's lanes, each in its instrument's colour with the loudest stem's
+`previewPeaks` running through it (contrast-stretched by `stretchBars` so a song
+that is loud throughout still shows a shape), and a dashed band for each of the
+`missingInstruments`. A riff is one band, a full song four. The `contributors`'
+faces sit by the title, and what it needs is one line ("+ Falta voz" in the
+voice's colour, "Qualquer um entra", "Pronta"). Only a tile with `hasVideo` reads
+its detail, once it comes near the screen, for the video's address; a frame from
+it then takes the picture's place (and plays muted under the pointer). The open
+song's tile dances while it plays, and opening a tile morphs its picture into the
+panel's cover (a View Transition where the browser has one). Filters are Tudo, Falta alguém (everything somebody
 could still add to) and Prontas.
 
 **Tão te chamando.** Above the tiles, one card per instrument a `wanted` song is
@@ -72,8 +74,8 @@ route.
 
 All in-mix tracks play through the one engine (`lib/jam-session.ts`, shared with
 the studio so a take is placed against the backing on one clock). The panel is a
-cover (the tile's art, big), a transport that stays in reach while the lanes
-scroll, and **the band**: one lane per track as a clip on the song's ONE timeline,
+header (a small cover, the title, the people), and **the band**, whose sticky
+header holds play and pause right over the lanes: one lane per track as a clip on the song's ONE timeline,
 a ruler to click to jump, and ONE playhead across every lane. A lane has its
 person, instrument, mute, solo and volume (the listener's own mix, never sent);
 competing takes (more than one for an instrument) carry votes and an "Ouvir no
@@ -125,13 +127,15 @@ with a tap button; it never changed the song or the placement of a take (the
 engine places a take by the clock, not the beat), so a first-time player was
 asked a number that did nothing for them. The engine still takes any `countIn`.
 
-- **First use on a pair of devices**: a suggestion under the band, never a gate:
-  "Quer cravar o tempo?" with "Medir agora" (7 s, by the microphone), "Bater no
-  ritmo" and "Agora não", and the why behind a link. The red button records either
+- **First use on a pair of devices**: one line in the dock above the record
+  button, never a gate: "Quer cravar o tempo?" with "Medir agora" (7 s, by the
+  microphone), tap-along, and "Agora não"; the why is its tooltip. The red button records either
   way; pressing it with the check pending is the skip (the browser's estimate is
   used and the skip is remembered for that pair of devices). The engine stores a
   measurement per device pair, so nobody meets the suggestion twice; afterwards
-  the latency chip and "Calibrar" in "Teu som" remain.
+  the latency chip and "Calibrar" in "Teu som" (the header button: input, level,
+  count-in, video, delay) remain. The record button's ring follows the microphone
+  level before and during a take.
 - **Recording**: count-in (one bar), a live clip growing on the same timeline as
   the others with a red edge where it is being written (`lib/jam-live.ts`: a drawn
   bar never changes), the band's lanes showing where they are, the level meter.

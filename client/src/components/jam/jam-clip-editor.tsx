@@ -19,8 +19,7 @@ import {
   type ClipWindow,
 } from "@/lib/jam-clip";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
-import { audibleMs, type TakeEdits } from "@/lib/jam-take-edit";
-import { formatClock } from "@/lib/jam-wall";
+import type { TakeEdits } from "@/lib/jam-take-edit";
 import { cn } from "@/lib/utils";
 import { MirrorBars } from "./jam-art";
 
@@ -193,7 +192,23 @@ export function JamClipEditor({
   return (
     <div className={cn("flex flex-col gap-3", className)} data-jam-clip-editor="">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs leading-snug text-text-secondary [text-wrap:pretty]">{t("jam.clip.hint")}</p>
+        <div className="flex min-w-0 flex-col gap-1">
+          <p className="text-[13px] leading-snug text-text [text-wrap:pretty]">{t("jam.clip.hint")}</p>
+          <p aria-hidden="true" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-secondary">
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-4 rounded-full bg-text-tertiary/70" />
+              {t("jam.clip.band")}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className={cn("h-2 w-4 rounded-full", look.fill)} />
+              {t("jam.clip.yourTake")}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-3 w-px bg-accent" />
+              {t("jam.clip.songStart")}
+            </span>
+          </p>
+        </div>
         <RadioGroup<"whole" | "close">
           label={t("jam.clip.zoom")}
           variant="segmented"
@@ -216,18 +231,11 @@ export function JamClipEditor({
         {/* the band, on its own row right above the take: the beat to line up with */}
         <div aria-hidden="true" className="absolute inset-x-0 top-0 h-12 border-b border-border bg-surface-1/60">
           <MirrorBars bars={bandBars} className="absolute inset-x-0 inset-y-2 px-px" barClassName="bg-text-tertiary/70" />
-          <span className="absolute right-2 top-1 rounded-[var(--radius-tick)] bg-surface-0/80 px-1 text-[11px] font-semibold text-text-secondary">
-            {t("jam.clip.band")}
-          </span>
         </div>
 
         {/* where the song starts: the line a first note lines up with */}
         {view.startMs < 0 && view.endMs > 0 && (
-          <span aria-hidden="true" className="absolute inset-y-0 w-px bg-accent" style={{ left: at(0) }}>
-            <span className="absolute left-3 top-1 whitespace-nowrap rounded-[var(--radius-tick)] bg-surface-0/80 px-1 text-[11px] font-bold text-accent">
-              {t("jam.clip.songStart")}
-            </span>
-          </span>
+          <span aria-hidden="true" className="absolute inset-y-0 w-px bg-accent" style={{ left: at(0) }} />
         )}
 
         {/* the take: its whole reach, the cut parts shaded */}
@@ -322,14 +330,7 @@ export function JamClipEditor({
             <ChevronLeft className="h-4 w-4" aria-hidden />
             {t("jam.review.nudgeEarlier")}
           </button>
-          <span
-            className={cn(
-              "flex min-w-[6.5rem] items-center justify-center gap-1.5 text-center text-xs font-semibold tabular-nums",
-              edits.nudgeMs === 0 ? "text-text-secondary" : "text-text",
-            )}
-            aria-live="polite"
-          >
-            {edits.nudgeMs === 0 && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-success" />}
+          <span className="min-w-[6.5rem] text-center text-xs font-semibold tabular-nums text-text-secondary" aria-live="polite">
             {nudgeWords}
           </span>
           <button
@@ -365,8 +366,7 @@ export function JamClipEditor({
         </div>
       </div>
 
-      <div className="flex min-h-8 items-center justify-between gap-2 text-xs text-text-secondary">
-        <span className="tabular-nums">{t("jam.clip.length", { time: formatClock(audibleMs(source, edits)) })}</span>
+      <div className="flex min-h-8 items-center justify-end gap-2 text-xs text-text-secondary">
         {onReset && edited && (
           <Button variant="ghost" size="sm" className="gap-1.5 text-text" onClick={onReset} data-jam-clip-reset="">
             <RotateCcw className="h-3.5 w-3.5" aria-hidden />

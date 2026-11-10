@@ -99,10 +99,10 @@ export function JamTransport({
         {label && <span className="text-sm font-extrabold">{label}</span>}
       </button>
       {!scrubber ? (
-        <div className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
+        <div className="flex min-w-0 flex-1 flex-col leading-tight">
           <span className="text-sm font-semibold tabular-nums text-text">
             {formatClock(reading.positionMs)}
-            <span className="text-text-tertiary"> / {formatClock(length)}</span>
+            <span className="text-text-secondary"> / {formatClock(length)}</span>
           </span>
           {caption && <span className="truncate text-[13px] font-semibold text-text-secondary">{caption}</span>}
         </div>

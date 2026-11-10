@@ -1,5 +1,5 @@
 import type { JamTrack } from "@pqp/shared";
-import { CirclePlus, Ear, Headphones, MoreHorizontal, SlidersHorizontal, ThumbsUp, Trash2, Volume2, VolumeX, CircleMinus } from "lucide-react";
+import { CirclePlus, Ear, MoreHorizontal, SlidersHorizontal, ThumbsUp, Trash2, Volume2, VolumeX, CircleMinus } from "lucide-react";
 import { useEffect, useRef, type CSSProperties } from "react";
 import { Menu } from "@/components/ui/menu";
 import { Slider } from "@/components/ui/slider";
@@ -189,7 +189,7 @@ export function JamTrackRow({
                   data-jam-solo=""
                   className={cn(LANE_BUTTON, lane.solo && "bg-accent text-on-accent hover:bg-accent hover:text-on-accent")}
                 >
-                  <Headphones className="h-4 w-4" aria-hidden />
+                  <span aria-hidden className="text-[13px] font-extrabold">S</span>
                 </button>
               </Tooltip>
               <Slider

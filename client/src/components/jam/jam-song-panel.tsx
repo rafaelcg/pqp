@@ -199,7 +199,7 @@ export function JamSongPanel({
         </button>
         <SongCover song={song} playing={playing} />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
-          <h2 className="font-display text-2xl font-extrabold leading-[1.05] tracking-tight text-text [text-wrap:balance] sm:text-3xl">
+          <h2 className="font-display text-2xl font-extrabold leading-[1.05] tracking-[-0.01em] text-text [text-wrap:balance] sm:text-3xl">
             {song.title}
           </h2>
           <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-text-secondary">
@@ -563,9 +563,7 @@ export function Playhead({ clock, timeline }: { clock: JamClock; timeline: { sta
       aria-hidden="true"
       className="pointer-events-none absolute inset-y-0 left-[calc(var(--lane-head)+1.125rem)] right-1.5 max-sm:hidden"
     >
-      <div ref={line} className="absolute inset-y-0 left-0 w-0.5 -translate-x-1/2 rounded-full bg-text shadow-[var(--shadow-2)]">
-        <span className="absolute -left-[5px] top-0 h-3 w-3 rounded-full bg-text" />
-      </div>
+      <div ref={line} className="absolute bottom-0 left-0 top-6 w-0.5 -translate-x-1/2 rounded-full bg-text shadow-[var(--shadow-2)]" />
     </div>
   );
 }
@@ -609,7 +607,7 @@ function MissingLane({
           onClick={onRecord}
           data-jam-slot-record={instrument}
           aria-label={t(`jam.song.recordAs.${instrument}` as MessageKey)}
-          className="group flex h-14 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-dashed border-border-strong text-[13px] font-semibold text-text-secondary outline-none transition-[background-color,border-color,color] duration-[var(--duration-base)] hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="group flex h-14 w-full cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-dashed border-border-strong text-[13px] font-semibold text-text-secondary outline-none transition-[background-color,border-color,color] duration-[var(--duration-base)] hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           <Mic className="h-4 w-4 transition-transform duration-[var(--duration-base)] motion-safe:group-hover:scale-110" aria-hidden />
           {t("jam.song.slotHint", { instrument: t(look.nameKey as MessageKey).toLowerCase() })}

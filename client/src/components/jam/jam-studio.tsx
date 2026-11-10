@@ -161,8 +161,8 @@ export function JamStudio({
     endMs: recording
       ? liveTimelineEndMs(backingEnd, studio.elapsedMs)
       : phase === "setup" || phase === "boot"
-        ? Math.max(backingEnd, 8000)
-        : Math.max(backingEnd, takeEnd, 1000),
+        ? liveTimelineEndMs(backingEnd, 0)
+        : Math.max(liveTimelineEndMs(backingEnd, 0), takeEnd),
   };
   const takePeaks = useMemo(() => (studio.take ? computePeaks([studio.take.samples]) : []), [studio.take]);
   const band = useMemo(() => bandOf(backing, null), [backing]);
@@ -370,7 +370,7 @@ export function JamStudio({
               {/* what the screen is asking right now, in one line */}
               {phase !== "boot" && (
                 <div className="flex flex-col gap-1" data-jam-stage-title="">
-                  <h3 className="font-display text-2xl font-extrabold tracking-tight text-text [text-wrap:balance] sm:text-3xl">
+                  <h3 className="font-display text-2xl font-extrabold tracking-[-0.01em] text-text [text-wrap:balance] sm:text-3xl">
                     {phase === "setup"
                       ? t("jam.studio.stage.setup")
                       : recording
@@ -431,7 +431,7 @@ export function JamStudio({
                     {t("jam.studio.playError")}
                   </p>
                 )}
-                <div className="relative [--lane-head:11rem]">
+                <div className="relative [--lane-head:12.5rem]">
                 <Ruler timeline={timeline} onSeek={(fraction) => !recording && studio.engine?.player.seek(fraction * (timeline.endMs - timeline.startMs))} />
                 <ul className="flex flex-col gap-1.5" aria-label={t("jam.song.tracks")}>
                   <li
@@ -460,7 +460,7 @@ export function JamStudio({
                       {phase === "setup" || phase === "boot" ? (
                         <div
                           className={cn(
-                            "jam-howto-you flex h-12 items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current text-[13px] font-bold [&>span]:text-text-secondary",
+                            "jam-howto-you flex h-12 items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current text-[13px] font-bold",
                             JAM_INSTRUMENT_LOOK[studio.instrument].ink,
                           )}
                         >
@@ -543,12 +543,7 @@ export function JamStudio({
                     <div data-jam-edit="" data-open={editing ? "true" : "false"} className="flex flex-col gap-3">
                       {editing ? (
                         <div className="jam-drop-in flex flex-col gap-3 rounded-[var(--radius-panel)] bg-surface-1 p-4 ring-1 ring-inset ring-border">
-                          <div className="flex items-center justify-between gap-2">
-                            <h4 className="text-sm font-extrabold text-text">{t("jam.review.editTitle")}</h4>
-                            <Button variant="secondary" size="sm" className="rounded-full px-4" onClick={() => setEditing(false)} data-jam-edit-close="">
-                              {t("jam.review.editDone")}
-                            </Button>
-                          </div>
+                          <h4 className="text-sm font-extrabold text-text">{t("jam.review.editTitle")}</h4>
                           <JamClipEditor
                             instrument={studio.instrument}
                             peaks={takePeaks}
@@ -572,7 +567,7 @@ export function JamStudio({
                     </div>
                   )}
                   {studio.take?.videoError && (
-                    <p role="status" className="text-xs text-text-tertiary">
+                    <p role="status" className="text-xs text-text-secondary">
                       {t("jam.review.videoLost")}
                     </p>
                   )}
@@ -765,7 +760,7 @@ export function JamStudio({
                       <div className="flex flex-col gap-1.5 py-1">
                         <Switch checked={studio.wantsVideo} onCheckedChange={studio.setWantsVideo} label={t("jam.studio.video")} />
                         {studio.cameraError && (
-                          <p role="status" className="flex items-center gap-1.5 pb-2 text-xs text-text-tertiary">
+                          <p role="status" className="flex items-center gap-1.5 pb-2 text-xs text-text-secondary">
                             <Camera className="h-3.5 w-3.5" aria-hidden />
                             {t("jam.studio.videoDenied")}
                           </p>

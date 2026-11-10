@@ -124,7 +124,7 @@ export function JamLaneWave({
         <div
           ref={played}
           aria-hidden
-          className={cn("pointer-events-none absolute inset-0 opacity-55", look.fill)}
+          className={cn("pointer-events-none absolute inset-0 opacity-70", look.fill)}
           style={{ clipPath: "inset(0 0 0 0)" }}
         />
       </div>
