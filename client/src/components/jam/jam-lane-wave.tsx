@@ -91,21 +91,24 @@ export function JamLaneWave({
     });
   }, [clock, span.startMs, span.endMs]);
 
+  // The lane is the song's whole width, a dark track; the take is a block of its
+  // instrument's colour sitting where it plays (a clip, the way every multitrack
+  // draws one), so a late entrance or an early end is seen at a glance.
   return (
     <div
       className={cn(
-        "relative h-12 overflow-hidden rounded-[var(--radius-control)] transition-opacity duration-[var(--duration-base)]",
-        look.fill,
+        "relative h-12 overflow-hidden rounded-[var(--radius-control)] bg-surface-0/60 transition-opacity duration-[var(--duration-base)]",
         dimmed && "opacity-35",
         className,
       )}
     >
       <div
-        ref={spanRef}
-        className="absolute inset-y-1.5"
-        style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%` }}
+        className={cn("absolute inset-y-0 overflow-hidden rounded-[var(--radius-control)]", look.fill)}
+        style={{ left: `${left * 100}%`, width: `${Math.max(0.5, (right - left) * 100)}%` }}
       >
-        <JamBars bars={bars} className="h-full" barClassName="bg-on-inst" animate={animate} />
+        <div ref={spanRef} className="absolute inset-x-1 inset-y-1.5">
+          <JamBars bars={bars} className="h-full" barClassName="bg-on-inst" animate={animate} />
+        </div>
         {/* The bars are drawn once, at full strength; what is still to be played is
             the lane's own colour laid back over them, so a lane costs one bar tree. */}
         <div

@@ -449,6 +449,46 @@ test("leaving a live recording asks first, and keeps recording when told to", as
   await guest.context().close();
 });
 
+test("'Gravar por cima' while the song plays silences it, and the studio's own play and pause work", async ({ browser }) => {
+  const seeded = await seed();
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const songId = await makeSong(HOST, seeded.jamId, "Tocando");
+  await addTrackApi(HOST, songId, "guitar");
+  await addTrackApi(HOST, songId, "drums", 98);
+  const guest = await openAs(browser, GUEST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}`);
+
+  // the song plays in its panel
+  const songPlay = guest.locator("[data-jam-song] [data-jam-play]");
+  await expect(songPlay).toBeEnabled({ timeout: 20_000 });
+  if ((await songPlay.getAttribute("data-state")) !== "playing") {
+    await songPlay.click();
+  }
+  await expect(songPlay).toHaveAttribute("data-state", "playing", { timeout: 10_000 });
+
+  // "Gravar por cima" while it plays: the studio opens silent (it used to keep
+  // playing behind the studio, with the only pause button out of reach)
+  await guest.locator("[data-jam-record-over]").click();
+  const studio = guest.locator("[data-jam-studio]");
+  await expect(studio).toBeVisible();
+  const bandPlay = studio.locator("[data-jam-play]");
+  await expect(bandPlay).toBeVisible({ timeout: 20_000 });
+  await expect(bandPlay).toHaveAttribute("data-state", "paused");
+  await guest.waitForTimeout(800);
+  await expect(bandPlay, "nothing starts playing by itself under the studio").toHaveAttribute("data-state", "paused");
+
+  // the studio's own transport: play, then pause, each a click
+  await bandPlay.click();
+  await expect(bandPlay).toHaveAttribute("data-state", "playing", { timeout: 10_000 });
+  await bandPlay.click();
+  await expect(bandPlay).toHaveAttribute("data-state", "paused");
+
+  // and leaving the studio leaves the song quiet, with its own play ready
+  await guest.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(studio).toHaveCount(0);
+  await expect(songPlay).toHaveAttribute("data-state", "paused");
+  await guest.context().close();
+});
+
 test("using a take swaps the mix, a posted take can be adjusted, and the wall says what it should", async ({ browser }) => {
   const seeded = await seed();
   test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
@@ -469,16 +509,22 @@ test("using a take swaps the mix, a posted take can be adjusted, and the wall sa
 
   // ---- the guest adjusts their own take after posting -----------------------------
   const guest = await openAs(browser, GUEST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}`);
+  const open = guest.locator(`[data-jam-adjust-open="${second.id}"]`);
+  await expect(open).toBeVisible({ timeout: 20_000 });
+  await expect(guest.locator(`[data-jam-adjust-open="${first.id}"]`)).toHaveCount(0); // not somebody else's
+  await open.click();
   const own = guest.locator(`[data-jam-adjust="${second.id}"]`);
-  await expect(own).toBeVisible({ timeout: 20_000 });
-  await expect(guest.locator(`[data-jam-adjust="${first.id}"]`)).toHaveCount(0); // not somebody else's
-  await own.locator("summary").click();
+  await expect(own).toBeVisible();
+  // the clip itself: the band is drawn behind it, and its middle is a slider for the keyboard too
+  await expect(own.locator("[data-jam-clip-editor]")).toBeVisible();
   await own.getByRole("button", { name: "Later" }).click();
   await own.getByRole("button", { name: "Later" }).click();
+  await own.locator("[data-jam-clip-body]").focus();
+  await guest.keyboard.press("ArrowRight"); // +5 ms
   await own.locator("[data-jam-adjust-save]").click();
   await expect
     .poll(async () => (await tracksOf(songId)).find((t) => t.id === second.id)?.offsetMs)
-    .toBe(second.offsetMs + 10);
+    .toBe(second.offsetMs + 25);
   await host.context().close();
   await guest.context().close();
 });

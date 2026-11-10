@@ -2191,19 +2191,21 @@ export const ChannelList = memo(function ChannelList({
           .filter((entry) => canManage || entry.children.length > 0)
           .map((entry) => renderMixedCategory(entry))}
         {jamOffered && (
+          // The same row as "Criar categoria" under it: one line, the icon on it,
+          // the beta pill at the end. What a Jam is, for a screen reader, is the
+          // row's description; the menus draw it as their one-line detail.
           <button
             type="button"
             data-create-jam=""
             onClick={() => onCreateChannel("jam", false)}
-            className="mt-1 flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-sm text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            aria-describedby="create-jam-detail"
+            className="mt-2 flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-sm text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <Music2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span className="flex min-w-0 flex-col items-start leading-tight">
-              <span className="flex items-center gap-1.5">
-                {t("chrome.addJam")}
-                <BetaTag />
-              </span>
-              <span className="text-[11px] text-text-tertiary">{t("jam.add.detail")}</span>
+            <span className="min-w-0 flex-1 truncate">{t("chrome.createJam")}</span>
+            <BetaTag />
+            <span id="create-jam-detail" className="sr-only">
+              {t("jam.add.detail")}
             </span>
           </button>
         )}
@@ -2649,7 +2651,7 @@ export const ChannelList = memo(function ChannelList({
                       forumLabel: forumCreateEnabled ? t("chrome.createForum") : undefined,
                       onText: () => onCreateChannel("text", false),
                       onForum: forumCreateEnabled ? () => onCreateChannel("forum", false) : undefined,
-                      jamLabel: jamOffered ? t("chrome.addJam") : undefined,
+                      jamLabel: jamOffered ? t("chrome.createJam") : undefined,
                       jamDetail: jamOffered ? t("jam.add.detail") : undefined,
                       onJam: jamOffered ? () => onCreateChannel("jam", false) : undefined,
                     })

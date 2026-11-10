@@ -79,18 +79,19 @@ describe("ordering and tile sizes", () => {
     expect(sorted.map((s) => s.id)).toEqual(["c", "a", "b"]);
   });
 
-  it("makes the first song the hero, one in four wide, the rest small", () => {
-    const songs = Array.from({ length: 9 }, (_, i) => song({ id: `s${i}` }));
+  it("makes the first song the hero, then a fixed rhythm of small, wide and tall", () => {
+    const songs = Array.from({ length: 10 }, (_, i) => song({ id: `s${i}` }));
     expect(planTiles(songs).map((t) => t.size)).toEqual([
       "hero",
       "small",
       "small",
       "wide",
       "small",
+      "tall",
+      "small",
       "small",
       "small",
       "wide",
-      "small",
     ]);
   });
 

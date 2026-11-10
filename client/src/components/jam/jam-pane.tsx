@@ -1,14 +1,14 @@
-import type { Channel, JamInstrument } from "@pqp/shared";
-import { CirclePause, CircleHelp, Menu as MenuIcon, Mic, Music2, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { Channel, JamInstrument, JamSongSummary } from "@pqp/shared";
+import { CirclePause, CircleHelp, Headphones, Menu as MenuIcon, Mic, Music2, RefreshCw, Send } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Button } from "@/components/ui/button";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useJamConfig } from "@/hooks/use-jam-config";
 import type { NewSongDraft } from "@/hooks/use-jam-studio";
-import { useTranslation } from "@/lib/i18n";
-import { JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
 import { setJamHintContext } from "@/lib/jam-hint-context";
 import { pickInstrument } from "@/lib/jam-record";
 import { rememberJamSeen } from "@/lib/jam-seen";
@@ -27,12 +27,14 @@ import {
   filterSongs,
   latestActivity,
   planTiles,
+  songNeed,
   type JamWallFilter,
   type JamWallSection,
 } from "@/lib/jam-wall";
 import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
 import { cn } from "@/lib/utils";
 import "./jam.css";
+import { coverGradient } from "./jam-art";
 import { JamHowToDialog, JamHowToHero } from "./jam-howto";
 import { JamSongPanel } from "./jam-song-panel";
 import { JamStartSheet, type JamStartResult } from "./jam-start-sheet";
@@ -74,7 +76,8 @@ export interface JamPaneProps {
 const FILTERS: readonly JamWallFilter[] = ["all", "missing", "ready"];
 
 type StudioState =
-  | { mode: "over"; songId: string; instrument: JamInstrument }
+  /** `chosen`: the person picked the instrument (a "falta baixo" call, a missing lane), so it is not re-guessed. */
+  | { mode: "over"; songId: string; instrument: JamInstrument; chosen?: boolean }
   | { mode: "new"; draft: NewSongDraft; instrument: JamInstrument };
 
 export function JamPane({
@@ -111,6 +114,8 @@ export function JamPane({
   const [howToOpen, setHowToOpen] = useState(false);
   const [freshTrackId, setFreshTrackId] = useState<string | null>(null);
   const [entrance, setEntrance] = useState(true);
+  /** The open song is playing: its tile dances. */
+  const [openPlaying, setOpenPlaying] = useState(false);
   const [freshSongs, setFreshSongs] = useState<ReadonlySet<string>>(new Set());
   const [announcement, setAnnouncement] = useState("");
   const wallHint = useFeatureHintEnabled("jamWall");
@@ -290,6 +295,31 @@ export function JamPane({
     setStartOpen(true);
   }
 
+  /** "Falta voz em In Bloom": the song opens behind, the studio over it, on that instrument. One click. */
+  function answerCall(songId: string, instrument: JamInstrument) {
+    setFreshTrackId(null);
+    setOpenSongId(songId);
+    void loadJamDetail(channelId, songId);
+    setStudio({ mode: "over", songId, instrument, chosen: true });
+  }
+
+  const calls = useMemo(
+    () =>
+      songs
+        .filter((song) => song.joinMode === "wanted" && songNeed(song).kind === "missing")
+        .slice(0, 6)
+        .map((song) => {
+          const need = songNeed(song);
+          return { song, instruments: need.kind === "missing" ? need.instruments : [] };
+        }),
+    [songs],
+  );
+  const people = useMemo(() => {
+    const ids = new Set<string>();
+    for (const song of songs) for (const one of song.contributors) ids.add(one.id);
+    return ids.size;
+  }, [songs]);
+
   function onStart(result: JamStartResult) {
     setStartOpen(false);
     setStudio({ mode: "new", draft: result.draft, instrument: result.instrument });
@@ -337,12 +367,25 @@ export function JamPane({
           >
             <MenuIcon className="h-5 w-5" aria-hidden />
           </button>
-          <h1 className="order-2 flex items-center gap-2 font-display text-2xl font-extrabold text-text">
-            <span aria-hidden className="grid h-8 w-8 place-items-center rounded-[10px] bg-inst-guitar text-on-inst">
-              <Music2 className="h-[18px] w-[18px]" />
+          <div className="order-2 flex min-w-0 items-center gap-2.5">
+            <span
+              aria-hidden
+              className={cn(
+                "grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-card)] text-on-inst shadow-[var(--shadow-2)]",
+                coverGradient(["guitar", "bass", "vocals"]),
+              )}
+            >
+              <Music2 className="h-5 w-5" />
             </span>
-            {t("jam.title")}
-          </h1>
+            <div className="flex min-w-0 flex-col leading-tight">
+              <h1 className="font-display text-2xl font-extrabold tracking-tight text-text">{t("jam.title")}</h1>
+              {songs.length > 0 && (
+                <p className="truncate text-xs font-semibold text-text-tertiary max-sm:hidden" data-jam-wall-count="">
+                  {t("jam.wall.count", { count: songs.length, countLabel: songs.length, people })}
+                </p>
+              )}
+            </div>
+          </div>
           <div className="order-3 ml-auto flex items-center gap-1 md:order-4">
             <Tooltip label={t("jam.wall.howItWorks")}>
               <button
@@ -448,13 +491,13 @@ export function JamPane({
             <ul
               aria-busy="true"
               aria-label={t("jam.wall.loading")}
-              className="grid grid-cols-2 gap-2.5 [grid-auto-rows:9.5rem] md:grid-cols-3 xl:grid-cols-4"
+              className="grid grid-cols-2 gap-3 [grid-auto-rows:10.5rem] md:grid-cols-3 xl:grid-cols-4"
             >
               {[0, 1, 2, 3, 4].map((one) => (
                 <li
                   key={one}
                   className={cn(
-                    "animate-pulse rounded-[var(--radius-card)] bg-surface-2",
+                    "rounded-[var(--radius-panel)] bg-surface-2 motion-safe:animate-pulse",
                     one === 0 && "col-span-2 row-span-2",
                   )}
                 />
@@ -474,20 +517,27 @@ export function JamPane({
             </div>
           )}
 
-          {empty && (
-            <div className="mx-auto flex min-h-[50vh] max-w-md flex-col items-center justify-center gap-5 text-center" data-jam-empty="">
-              <JamHowToHero className="w-full rounded-[var(--radius-panel)]" />
-              <div className="flex flex-col gap-1.5">
-                <h2 className="font-display text-2xl font-extrabold text-text [text-wrap:balance]">{t("jam.wall.empty.title")}</h2>
-                <p className="text-sm leading-relaxed text-text-secondary [text-wrap:pretty]">{t("jam.wall.empty.body")}</p>
-              </div>
-              {canCreate ? (
-                <Button className="h-12 gap-2 rounded-full px-6 text-base font-bold" onClick={beginSong} data-jam-empty-record="">
-                  <Mic className="h-5 w-5" aria-hidden />
-                  {t("jam.wall.empty.cta")}
-                </Button>
-              ) : null}
-            </div>
+          {empty && <JamEmptyWall canCreate={canCreate} onRecord={beginSong} />}
+
+          {!loading && !failed && !empty && canCreate && calls.length > 0 && filter !== "ready" && (
+            <section aria-labelledby="jam-calls-title" className="mb-5" data-jam-calls="">
+              <h2 id="jam-calls-title" className="mb-2 flex items-center gap-2 font-display text-base font-extrabold text-text">
+                <span aria-hidden className="relative flex h-2.5 w-2.5">
+                  <span className="jam-call-ping absolute inset-0 rounded-full bg-accent" />
+                  <span className="relative h-2.5 w-2.5 rounded-full bg-accent" />
+                </span>
+                {t("jam.calls.title")}
+              </h2>
+              <ul className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 sm:-mx-5 sm:px-5 [scrollbar-width:none]">
+                {calls.flatMap(({ song, instruments }) =>
+                  instruments.slice(0, 2).map((instrument) => (
+                    <li key={`${song.id}-${instrument}`} className="shrink-0">
+                      <JamCallCard song={song} instrument={instrument} onAnswer={() => answerCall(song.id, instrument)} />
+                    </li>
+                  )),
+                )}
+              </ul>
+            </section>
           )}
 
           {!loading && !failed && !empty &&
@@ -500,8 +550,8 @@ export function JamPane({
                 ) : (
                   <ul
                     className={cn(
-                      "grid grid-cols-2 gap-2.5 [grid-auto-flow:dense] [grid-auto-rows:9.5rem] md:grid-cols-3",
-                      !panelOpen && "xl:grid-cols-4",
+                      "grid grid-cols-2 gap-3 [grid-auto-flow:dense] [grid-auto-rows:10.5rem]",
+                      panelOpen ? "2xl:grid-cols-3" : "md:grid-cols-3 xl:grid-cols-4",
                     )}
                   >
                     {plan.map((tile, index) => (
@@ -514,6 +564,7 @@ export function JamPane({
                         entrance={entrance}
                         fresh={freshSongs.has(tile.song.id)}
                         selected={tile.song.id === openSongId}
+                        playing={tile.song.id === openSongId && openPlaying}
                         onNear={() => loadJamDetailLazy(channelId, tile.song.id)}
                         onOpen={() => {
                           setFreshTrackId(null);
@@ -540,7 +591,7 @@ export function JamPane({
 
       {openSong && (
         <div
-          className="absolute inset-0 z-20 bg-surface-1 lg:static lg:z-auto lg:w-[26rem] lg:shrink-0 lg:border-l lg:border-border"
+          className="jam-panel-in absolute inset-0 z-20 bg-surface-1 lg:static lg:z-auto lg:w-[min(42rem,60%)] lg:shrink-0 lg:border-l lg:border-border"
           data-jam-song-panel=""
           inert={studio !== null}
         >
@@ -556,8 +607,12 @@ export function JamPane({
             enabled={config.enabled}
             uploads={config.uploads}
             freshTrackId={freshTrackId}
-            onRecord={(instrument) => setStudio({ mode: "over", songId: openSong.id, instrument })}
-            onClose={() => setOpenSongId(null)}
+            onRecord={(instrument, chosen) => setStudio({ mode: "over", songId: openSong.id, instrument, chosen })}
+            onPlayingChange={setOpenPlaying}
+            onClose={() => {
+              setOpenPlaying(false);
+              setOpenSongId(null);
+            }}
           />
         </div>
       )}
@@ -577,7 +632,7 @@ export function JamPane({
               : JAM_INSTRUMENT_ORDER
           }
           initialInstrument={
-            studio.mode === "over" && studioSong && studioDetail
+            studio.mode === "over" && !studio.chosen && studioSong && studioDetail
               ? (pickInstrument(studioSong, studioDetail.viewer.addableInstruments, []) ?? studio.instrument)
               : studio.instrument
           }
@@ -593,6 +648,103 @@ export function JamPane({
 
       <JamStartSheet open={startOpen} onClose={() => setStartOpen(false)} onStart={onStart} />
       <JamHowToDialog open={howToOpen} onClose={() => setHowToOpen(false)} />
+    </div>
+  );
+}
+
+/**
+ * "Falta voz em In Bloom": a song asking for an instrument, as a card in that
+ * instrument's colour. One click opens the studio on it, the song already
+ * loaded behind.
+ */
+function JamCallCard({
+  song,
+  instrument,
+  onAnswer,
+}: {
+  song: JamSongSummary;
+  instrument: JamInstrument;
+  onAnswer: () => void;
+}) {
+  const { t } = useTranslation();
+  const look = JAM_INSTRUMENT_LOOK[instrument];
+  const Icon = look.icon;
+  return (
+    <button
+      type="button"
+      onClick={onAnswer}
+      data-jam-call={`${song.id}:${instrument}`}
+      className={cn(
+        "group flex h-16 w-[15.5rem] items-center gap-3 rounded-[var(--radius-panel)] p-2 pr-3 text-left outline-none",
+        "transition-[transform,box-shadow] duration-[var(--duration-base)] ease-[var(--ease-standard)] motion-safe:hover:-translate-y-0.5 hover:shadow-[var(--shadow-2)] active:scale-[0.98]",
+        "focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0",
+        look.fill,
+      )}
+    >
+      <span className="relative grid h-12 w-12 shrink-0 place-items-center rounded-[var(--radius-card)] bg-on-inst">
+        <Icon className={cn("h-5 w-5", look.ink)} aria-hidden />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col leading-tight">
+        <span className="truncate text-sm font-extrabold first-letter:uppercase">{t(look.missingKey as MessageKey)}</span>
+        <span className="truncate text-xs font-semibold text-on-inst/75">{t("jam.calls.in", { title: song.title })}</span>
+      </span>
+      <span
+        aria-hidden
+        className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-on-inst text-on-media transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-safe:group-hover:scale-110"
+      >
+        <Mic className="h-4 w-4" />
+      </span>
+    </button>
+  );
+}
+
+/**
+ * The first visit: no songs yet. The picture of what a Jam is (lanes stacking
+ * up), the one button, and three steps in plain words.
+ */
+function JamEmptyWall({ canCreate, onRecord }: { canCreate: boolean; onRecord: () => void }) {
+  const { t } = useTranslation();
+  const steps = [
+    { icon: Headphones, title: t("jam.howto.one.title"), body: t("jam.howto.one.body") },
+    { icon: Mic, title: t("jam.howto.two.title"), body: t("jam.howto.two.body") },
+    { icon: Send, title: t("jam.howto.three.title"), body: t("jam.howto.three.body") },
+  ];
+  return (
+    <div className="mx-auto flex min-h-[60vh] w-full max-w-3xl flex-col items-center justify-center gap-7 py-6 text-center" data-jam-empty="">
+      <JamHowToHero className="w-full max-w-lg rounded-[var(--radius-panel)] shadow-[var(--shadow-2)] ring-1 ring-inset ring-border" big />
+      <div className="flex max-w-xl flex-col gap-2">
+        <h2 className="font-display text-3xl font-extrabold tracking-tight text-text [text-wrap:balance] sm:text-4xl">
+          {t("jam.wall.empty.title")}
+        </h2>
+        <p className="text-base leading-relaxed text-text-secondary [text-wrap:pretty]">{t("jam.wall.empty.body")}</p>
+      </div>
+      {canCreate ? (
+        <Button className="h-14 gap-2.5 rounded-full px-8 text-base font-bold shadow-[var(--shadow-2)]" onClick={onRecord} data-jam-empty-record="">
+          <Mic className="h-5 w-5" aria-hidden />
+          {t("jam.wall.empty.cta")}
+        </Button>
+      ) : null}
+      <ol className="grid w-full gap-3 text-left sm:grid-cols-3">
+        {steps.map((step, index) => {
+          const Icon = step.icon;
+          return (
+            <li
+              key={step.title}
+              style={{ "--jam-i": index + 3 } as CSSProperties}
+              className="jam-tile-in flex flex-col gap-2 rounded-[var(--radius-panel)] bg-surface-1 p-4 ring-1 ring-inset ring-border"
+            >
+              <span className="flex items-center gap-2">
+                <span className="grid h-8 w-8 place-items-center rounded-full bg-accent-soft text-on-accent-soft">
+                  <Icon className="h-4 w-4" aria-hidden />
+                </span>
+                <span className="font-display text-sm font-extrabold tabular-nums text-text-tertiary">{index + 1}</span>
+              </span>
+              <h3 className="text-sm font-bold text-text">{step.title}</h3>
+              <p className="text-sm leading-snug text-text-secondary [text-wrap:pretty]">{step.body}</p>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }

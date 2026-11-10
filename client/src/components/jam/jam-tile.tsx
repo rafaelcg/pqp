@@ -1,32 +1,32 @@
 import type { JamSongSummary } from "@pqp/shared";
-import { Lock, Plus } from "lucide-react";
+import { Lock, Mic, Play, Video } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "@/lib/i18n";
 import type { JamDetail } from "@/lib/jam-state";
-import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { useJamStoreEpoch } from "@/lib/jam-store";
 import {
   JAM_TILE_SPAN,
   barsFromPeaks,
+  formatClock,
   seededBars,
   songNeed,
-  tileInstrument,
   type JamTileSize,
 } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
-import { JamBars, useBarCount } from "./jam-bars";
+import { useBarCount } from "./jam-bars";
 import { useNeedLabel } from "./jam-need";
+import { BandStrip, ContributorStack, coverGradient, Equalizer, MirrorBars, NeedChip } from "./jam-art";
 
 /**
- * One song on the wall. A song with a video shows the video's first frame; one
- * without is a flat tile in its main instrument's colour drawing its waveform
- * from `peaks`. The tile says the title, who is on it and what it needs, and
- * nothing else: the song itself is one tap away.
+ * One song on the wall, drawn from the song summary alone: the cover is a
+ * gradient through the colours of the instruments on it, the loudest stem's
+ * waveform (`previewPeaks`) runs across it, the band strip says who is in and
+ * who is missing, and the faces of the people on it sit by the title. "Falta
+ * voz" is the loudest thing on a tile that is asking for somebody.
  *
- * What the list read does not carry (the peaks, whether there is a video, the
- * names of everybody on it) comes from the song's detail when the wall has read
- * it, and the tile is complete without it: stand-in bars, the author and a
- * count.
+ * Only a song WITH a video reads its detail (for the video's address), and only
+ * once the tile comes near the screen; every other tile is complete from the
+ * list read.
  */
 
 export interface JamTileProps {
@@ -39,50 +39,33 @@ export interface JamTileProps {
   /** Played the staggered entrance (the wall's first paint). */
   entrance?: boolean;
   selected?: boolean;
-  /** The tile came near the screen: the wall reads what the tile draws from. */
+  /** The open song, and it is playing: the tile dances. */
+  playing?: boolean;
+  /** A tile with a video came near the screen: the wall reads its detail for the address. */
   onNear?: () => void;
   onOpen: () => void;
 }
 
-function whoLine(
-  song: JamSongSummary,
-  detail: JamDetail | undefined,
-  t: ReturnType<typeof useTranslation>["t"],
-): string {
-  const gone = t("jam.tile.anonymous");
-  if (detail) {
-    const names: string[] = [];
-    for (const track of detail.tracks) {
-      const name = track.authorName ?? gone;
-      if (!names.includes(name)) {
-        names.push(name);
-      }
-    }
-    if (names.length > 0) {
-      const shown = names.slice(0, 3).join(", ");
-      return names.length > 3 ? t("jam.tile.whoMore", { name: shown, count: names.length - 3 }) : shown;
-    }
-  }
-  const author = song.authorName ?? gone;
-  const others = Math.max(0, song.contributorCount - 1);
-  return others > 0 ? t("jam.tile.whoMore", { name: author, count: others }) : author;
+function names(song: JamSongSummary, anonymous: string): string {
+  const people = song.contributors.length > 0 ? song.contributors.map((one) => one.name ?? anonymous) : [song.authorName ?? anonymous];
+  return people.join(", ");
 }
 
-export function JamTile({ song, size, detail, index, fresh, entrance, selected, onNear, onOpen }: JamTileProps) {
+export function JamTile({ song, size, detail, index, fresh, entrance, selected, playing, onNear, onOpen }: JamTileProps) {
   const { t } = useTranslation();
   const needLabel = useNeedLabel();
   const need = songNeed(song);
-  const instrument = tileInstrument(song);
-  const look = JAM_INSTRUMENT_LOOK[instrument];
-  const big = size !== "small";
+  const missing = need.kind === "missing" ? need.instruments : song.missingInstruments;
+  const big = size === "hero";
+  const wide = size === "wide";
 
-  // Near the screen, once: the detail read and the video's first frame wait for it.
+  // Near the screen, once: only a tile with a video has anything to read.
   const tileRef = useRef<HTMLLIElement | null>(null);
   const [near, setNear] = useState(false);
   const storeEpoch = useJamStoreEpoch();
   useEffect(() => {
     const element = tileRef.current;
-    if (!element || near) {
+    if (!element || near || !song.hasVideo) {
       return;
     }
     if (typeof IntersectionObserver === "undefined") {
@@ -100,7 +83,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [near]);
+  }, [near, song.hasVideo]);
   useEffect(() => {
     if (near) {
       onNear?.();
@@ -109,111 +92,179 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
   }, [near, storeEpoch]);
 
   const videoTrack = detail?.tracks.find((track) => track.videoUrl && track.inMix) ?? detail?.tracks.find((track) => track.videoUrl);
-  const hasVideo = Boolean(videoTrack?.videoUrl);
-  const showVideo = hasVideo && near;
-  const peaks = useMemo(() => {
-    const loud = detail?.tracks.find((track) => track.inMix && track.peaks.length > 0);
-    return loud?.peaks ?? [];
-  }, [detail]);
+  const videoUrl = near ? (videoTrack?.videoUrl ?? null) : null;
+  const [posterReady, setPosterReady] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  const [waveRef, count] = useBarCount(size === "small" ? 6 : 7, 90);
+  const [waveRef, count] = useBarCount(big ? 9 : 7, 72);
   const bars = useMemo(
-    () => (count === 0 ? [] : peaks.length > 0 ? barsFromPeaks(peaks, count) : seededBars(song.id, count)),
-    [count, peaks, song.id],
+    () =>
+      count === 0
+        ? []
+        : song.previewPeaks.length > 0
+          ? barsFromPeaks(song.previewPeaks, count)
+          : seededBars(song.id, count),
+    [count, song.previewPeaks, song.id],
   );
 
-  const who = whoLine(song, detail, t);
+  const who = names(song, t("jam.tile.anonymous"));
   const needText = needLabel(need);
   const subtitle = song.artist ?? t("jam.original");
-  const label = `${song.title}, ${who}, ${needText}${song.joinMode === "closed" ? `, ${t("jam.tile.closed")}` : ""}`;
+  const label = `${song.title}, ${subtitle}, ${who}, ${needText}${song.joinMode === "closed" ? `, ${t("jam.tile.closed")}` : ""}`;
+  const onVideo = Boolean(videoUrl) && posterReady;
+  const ink = onVideo ? "text-on-media" : "text-on-inst";
+  const ink2 = onVideo ? "text-on-media-muted" : "text-on-inst/75";
 
   return (
     <li ref={tileRef} className={cn("flex min-w-0", JAM_TILE_SPAN[size])}>
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-label={label}
-      aria-current={selected ? "true" : undefined}
-      data-jam-tile={song.id}
-      data-jam-tile-size={size}
-      style={{ "--jam-i": Math.min(index, 10) } as CSSProperties}
-      className={cn(
-        "group relative flex h-full w-full min-w-0 flex-col justify-between overflow-hidden rounded-[var(--radius-card)] p-3.5 text-left outline-none transition-[transform,box-shadow] duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 active:scale-[0.98] motion-safe:hover:-translate-y-0.5",
-        hasVideo ? "bg-surface-2 text-on-media" : look.fill,
-        selected && "ring-2 ring-accent ring-offset-2 ring-offset-surface-0",
-        entrance && "jam-tile-in",
-        fresh && "jam-tile-arrive",
-      )}
-    >
-      {showVideo && videoTrack?.videoUrl && (
-        <>
-          <video
-            src={`${videoTrack.videoUrl}#t=0.5`}
-            muted
-            playsInline
-            preload="metadata"
-            aria-hidden="true"
-            tabIndex={-1}
-            className="absolute inset-0 h-full w-full object-cover"
+      <button
+        type="button"
+        onClick={onOpen}
+        onPointerEnter={() => {
+          if (videoRef.current && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+            void videoRef.current.play().catch(() => undefined);
+          }
+        }}
+        onPointerLeave={() => videoRef.current?.pause()}
+        aria-label={label}
+        aria-current={selected ? "true" : undefined}
+        data-jam-tile={song.id}
+        data-jam-tile-size={size}
+        data-playing={playing ? "true" : undefined}
+        style={{ "--jam-i": Math.min(index, 10) } as CSSProperties}
+        className={cn(
+          "group relative isolate h-full w-full min-w-0 overflow-hidden rounded-[var(--radius-panel)] text-left outline-none",
+          // A wide tile is two columns: the words on the left, the waveform on the right.
+          wide ? "grid grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] grid-rows-[auto_1fr_auto] gap-x-4" : "flex flex-col justify-between",
+          "transition-[transform,box-shadow] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+          "focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0",
+          "active:scale-[0.98] motion-safe:hover:-translate-y-1 hover:shadow-[var(--shadow-2)]",
+          big ? "p-5" : "p-3.5",
+          coverGradient(song.instruments),
+          ink,
+          selected && "ring-2 ring-text ring-offset-2 ring-offset-surface-0",
+          entrance && "jam-tile-in",
+          fresh && "jam-tile-arrive",
+        )}
+      >
+        {videoUrl && (
+          <>
+            <video
+              ref={videoRef}
+              src={`${videoUrl}#t=0.5`}
+              muted
+              loop
+              playsInline
+              preload="metadata"
+              aria-hidden="true"
+              tabIndex={-1}
+              onLoadedData={() => setPosterReady(true)}
+              className={cn(
+                "absolute inset-0 -z-10 h-full w-full object-cover transition-opacity duration-[var(--duration-slow)]",
+                posterReady ? "opacity-100" : "opacity-0",
+              )}
+            />
+            <span
+              aria-hidden="true"
+              className={cn(
+                "absolute inset-0 -z-10 bg-gradient-to-t from-media-scrim via-media-scrim/40 to-media-scrim/0 transition-opacity duration-[var(--duration-slow)]",
+                posterReady ? "opacity-100" : "opacity-0",
+              )}
+            />
+          </>
+        )}
+
+        {/* top: who is in the band, and how long it is */}
+        <span className={cn("flex min-w-0 items-start justify-between gap-2", wide && "col-start-1 row-start-1")}>
+          <BandStrip instruments={song.instruments} missing={missing} size={big ? "md" : "sm"} />
+          <span className="flex shrink-0 items-center gap-1.5">
+            {playing && (
+              <span className="flex h-6 items-center gap-1 rounded-full bg-on-inst px-2 text-inst-guitar">
+                <Equalizer />
+              </span>
+            )}
+            {song.hasVideo && (
+              <span className="grid h-6 w-6 place-items-center rounded-full bg-on-inst text-on-media" aria-hidden="true">
+                <Video className="h-3.5 w-3.5" />
+              </span>
+            )}
+            {song.joinMode === "closed" && (
+              <span className="grid h-6 w-6 place-items-center rounded-full bg-on-inst text-on-media" aria-hidden="true">
+                <Lock className="h-3 w-3" data-jam-tile-closed="" />
+              </span>
+            )}
+            {big && (song.mixDurationMs ?? 0) > 0 && (
+              <span className="flex h-6 items-center rounded-full bg-on-inst px-2 text-[11px] font-bold tabular-nums text-on-media">
+                {formatClock(song.mixDurationMs ?? 0)}
+              </span>
+            )}
+          </span>
+        </span>
+
+        {/* the waveform, in its own band of the cover so it never runs under the title */}
+        <span
+          ref={waveRef}
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none relative block min-h-0 flex-1 transition-opacity duration-[var(--duration-slow)]",
+            big ? "my-4" : wide ? "col-start-2 row-span-3 row-start-1 my-1" : "my-2",
+            onVideo && "opacity-0",
+          )}
+        >
+          <MirrorBars
+            bars={bars}
+            className={cn("absolute inset-0", playing && "jam-wave-live")}
+            barClassName="bg-on-inst/80"
+            animate={entrance || fresh}
           />
+        </span>
+
+        {/* bottom: the title, the people, the call */}
+        <span className={cn("flex min-w-0 flex-col", big ? "gap-2" : "gap-1.5", wide && "col-start-1 row-start-3")}>
+          <span
+            className={cn(
+              "font-display font-extrabold leading-[1.05] tracking-tight [text-wrap:balance]",
+              big ? "line-clamp-2 text-4xl" : size === "small" ? "line-clamp-1 text-base" : "line-clamp-2 text-xl",
+            )}
+          >
+            {song.title}
+          </span>
+          {size !== "small" && (
+            <span className={cn("flex min-w-0 items-center gap-2 text-xs font-semibold", ink2)}>
+              <ContributorStack
+                people={song.contributors}
+                total={song.contributorCount}
+                size={big ? "md" : "sm"}
+                ringClassName={onVideo ? "ring-media-scrim" : "ring-on-inst/30"}
+              />
+              <span className="truncate">{`${subtitle} · ${who}`}</span>
+            </span>
+          )}
+          <span className="flex min-w-0 items-center justify-between gap-2">
+            <NeedChip need={need} />
+            {/* the play disc: the tile opens the song and it starts playing */}
+            <span
+              aria-hidden="true"
+              className={cn(
+                "grid shrink-0 place-items-center rounded-full bg-on-inst text-on-media shadow-[var(--shadow-2)] transition-[transform,opacity] duration-[var(--duration-base)] ease-[var(--ease-emphasized)]",
+                big ? "h-12 w-12" : "h-9 w-9",
+                playing
+                  ? "opacity-100"
+                  : "opacity-0 motion-safe:translate-y-1 group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 [@media(hover:none)]:opacity-100",
+              )}
+            >
+              {playing ? <Equalizer className="text-inst-guitar" /> : <Play className={cn("ml-0.5", big ? "h-5 w-5" : "h-4 w-4")} fill="currentColor" />}
+            </span>
+          </span>
+        </span>
+
+        {fresh && (
           <span
             aria-hidden="true"
-            className="absolute inset-0 bg-gradient-to-t from-media-scrim/95 via-media-scrim/60 to-media-scrim/10"
+            className="jam-arrive-ring pointer-events-none absolute inset-0 rounded-[var(--radius-panel)] ring-2 ring-accent"
           />
-        </>
-      )}
-
-      {!hasVideo && (
-        <div
-          ref={waveRef}
-          className={cn("relative w-full", size === "hero" ? "max-h-44 min-h-16 flex-1" : big ? "h-16" : "h-9")}
-        >
-          <JamBars bars={bars} className="h-full" barClassName="bg-on-inst" animate={entrance || fresh} />
-        </div>
-      )}
-      {hasVideo && <span className="relative" />}
-
-      <span className="relative mt-2 flex min-w-0 flex-col gap-1">
-        <span
-          className={cn(
-            "font-display font-extrabold leading-tight [text-wrap:balance]",
-            size === "hero" ? "line-clamp-2 text-3xl" : big ? "line-clamp-2 text-xl" : "line-clamp-2 text-base",
-          )}
-        >
-          {song.title}
-        </span>
-        <span
-          className={cn(
-            "flex min-w-0 items-center gap-2 text-xs font-semibold",
-            hasVideo ? "text-on-media-muted" : "text-on-inst",
-          )}
-        >
-          <span className="flex shrink-0 items-center gap-0.5" aria-hidden="true">
-            {song.joinMode === "closed" && <Lock className="h-3.5 w-3.5" data-jam-tile-closed="" />}
-            {song.instruments.slice(0, 4).map((one) => {
-              const Icon = JAM_INSTRUMENT_LOOK[one].icon;
-              return <Icon key={one} className="h-3.5 w-3.5" />;
-            })}
-          </span>
-          <span className="truncate">{size === "small" ? who : `${subtitle} · ${who}`}</span>
-        </span>
-        <span
-          className={cn(
-            "mt-0.5 inline-flex w-fit max-w-full items-center rounded-full bg-surface-0 px-2.5 py-0.5 text-[11px] font-bold text-text",
-            need.kind === "missing" && "ring-1 ring-inset ring-text/25",
-          )}
-        >
-          <span className="truncate">{needText}</span>
-        </span>
-      </span>
-
-      {fresh && (
-        <span
-          aria-hidden="true"
-          className="jam-arrive-ring pointer-events-none absolute inset-0 rounded-[var(--radius-card)] ring-2 ring-accent"
-        />
-      )}
-    </button>
+        )}
+      </button>
     </li>
   );
 }
@@ -233,23 +284,24 @@ export function JamInviteTile({
   const { t } = useTranslation();
   return (
     <li className="flex min-w-0">
-    <button
-      type="button"
-      onClick={onRecord}
-      disabled={disabled}
-      data-jam-invite=""
-      style={{ "--jam-i": Math.min(index, 10) } as CSSProperties}
-      className={cn(
-        "group flex h-full w-full min-w-0 flex-col items-center justify-center gap-2 rounded-[var(--radius-card)] border border-dashed border-border-strong p-3.5 text-center text-text-secondary outline-none transition-[transform,background,color] duration-[var(--duration-fast)] hover:bg-surface-1 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50",
-        entrance && "jam-tile-in",
-      )}
-    >
-      <span className="grid h-10 w-10 place-items-center rounded-full bg-surface-2 transition-transform duration-[var(--duration-base)] motion-safe:group-hover:scale-110">
-        <Plus className="h-5 w-5" aria-hidden="true" />
-      </span>
-      <span className="text-sm font-semibold">{t("jam.tile.invite")}</span>
-      <span className="text-xs text-text-tertiary">{t("jam.tile.inviteHint")}</span>
-    </button>
+      <button
+        type="button"
+        onClick={onRecord}
+        disabled={disabled}
+        data-jam-invite=""
+        style={{ "--jam-i": Math.min(index, 10) } as CSSProperties}
+        className={cn(
+          "group flex h-full w-full min-w-0 flex-col items-center justify-center gap-2.5 rounded-[var(--radius-panel)] border-2 border-dashed border-border-strong p-3.5 text-center text-text-secondary outline-none transition-[transform,background,color,border-color] duration-[var(--duration-base)] hover:border-accent hover:bg-surface-1 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50",
+          entrance && "jam-tile-in",
+        )}
+      >
+        <span className="relative grid h-12 w-12 place-items-center rounded-full bg-accent text-on-accent transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-safe:group-hover:scale-110">
+          <span aria-hidden="true" className="jam-invite-ping absolute inset-0 rounded-full ring-2 ring-accent" />
+          <Mic className="relative h-5 w-5" aria-hidden="true" />
+        </span>
+        <span className="font-display text-base font-extrabold text-text">{t("jam.tile.invite")}</span>
+        <span className="text-xs text-text-tertiary">{t("jam.tile.inviteHint")}</span>
+      </button>
     </li>
   );
 }

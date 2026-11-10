@@ -70,32 +70,36 @@ export function sortByActivity(songs: readonly JamSongSummary[]): JamSongSummary
   });
 }
 
-export type JamTileSize = "hero" | "wide" | "small";
+export type JamTileSize = "hero" | "wide" | "tall" | "small";
 
 export interface JamTilePlan {
   song: JamSongSummary;
   size: JamTileSize;
 }
 
+/** After the hero, the sizes repeat in this rhythm (a Windows Phone start screen, not a list). */
+const RHYTHM: readonly JamTileSize[] = ["small", "small", "wide", "small", "tall", "small"];
+
 /**
- * How big each tile is. The most active song is the hero (2 by 2), one in
- * every four after it is wide (2 by 1) and the rest are small. A fixed rhythm
- * on purpose: a tile that changed size when somebody else's song moved would
- * make the wall jump under a finger, so a size follows the position and
- * nothing else. With one song the hero stands alone; with a handful the grid
- * (`grid-auto-flow: dense`) fills the gaps the spans leave.
+ * How big each tile is. The most active song is the hero (2 by 2); after it
+ * the sizes follow a fixed rhythm of small, wide (2 by 1) and tall (1 by 2)
+ * tiles. A fixed rhythm on purpose: a tile that changed size when somebody
+ * else's song moved would make the wall jump under a finger, so a size follows
+ * the position and nothing else. With one song the hero stands alone; with a
+ * handful the grid (`grid-auto-flow: dense`) fills the gaps the spans leave.
  */
 export function planTiles(songs: readonly JamSongSummary[]): JamTilePlan[] {
   return songs.map((song, index) => ({
     song,
-    size: index === 0 ? "hero" : index % 4 === 3 ? "wide" : "small",
+    size: index === 0 ? "hero" : RHYTHM[(index - 1) % RHYTHM.length]!,
   }));
 }
 
-/** Tailwind span classes per size; the grid is 2 columns, 3 from md, 4 from lg. */
+/** Tailwind span classes per size; the grid is 2 columns, 3 from md, 4 from xl. */
 export const JAM_TILE_SPAN: Record<JamTileSize, string> = {
   hero: "col-span-2 row-span-2",
   wide: "col-span-2",
+  tall: "row-span-2",
   small: "",
 };
 

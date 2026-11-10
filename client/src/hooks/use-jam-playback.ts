@@ -137,7 +137,9 @@ export function useJamPlayback(
         // on this hook does not start by itself.
         const autoplayNow = wantAutoplay.current;
         wantAutoplay.current = false;
-        if (autoplayNow && engine.context.state === "running") {
+        // Not under the studio: "Gravar por cima" pressed before the stems were in
+        // must not have the song start by itself behind the recording screen.
+        if (autoplayNow && engine.context.state === "running" && !isJamStudioOpen()) {
           void engine.player.play(0);
         }
       }

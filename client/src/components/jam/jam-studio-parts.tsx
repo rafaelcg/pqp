@@ -1,19 +1,16 @@
 import type { JamInstrument } from "@pqp/shared";
 import {
   Check,
-  ChevronLeft,
   ChevronRight,
   Headphones,
   Loader2,
   Mic,
-  RotateCcw,
   Sparkles,
   Volume2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
 import { featureHintEligible, rememberFeatureHint } from "@/lib/feature-hints";
 import type { JamStudio } from "@/hooks/use-jam-studio";
@@ -22,8 +19,6 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { judgeLevel, levelBar, type JamLevelVerdict, type SilenceClock } from "@/lib/jam-level";
 import { createLiveBars } from "@/lib/jam-live";
-import { audibleMs, MIN_AUDIBLE_MS, NUDGE_LIMIT_MS, signedSeconds, type TakeEdits } from "@/lib/jam-take-edit";
-import { formatClock } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
 import { JamBars, useBarCount } from "./jam-bars";
 
@@ -47,11 +42,12 @@ export function InstrumentPicker({
 }) {
   const { t } = useTranslation();
   return (
-    <div role="radiogroup" aria-label={t("jam.studio.instrument")} className="flex flex-wrap gap-1.5">
+    <div role="radiogroup" aria-label={t("jam.studio.instrument")} className="flex flex-wrap gap-2">
       {options.map((instrument) => {
         const look = JAM_INSTRUMENT_LOOK[instrument];
         const Icon = look.icon;
         const on = instrument === value;
+        const asked = wanted.includes(instrument);
         return (
           <button
             key={instrument}
@@ -62,13 +58,24 @@ export function InstrumentPicker({
             data-jam-instrument={instrument}
             onClick={() => onChange(instrument)}
             className={cn(
-              "flex h-11 items-center gap-2 rounded-full px-4 text-sm font-bold outline-none transition-[background,color,box-shadow,transform] duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 active:scale-[0.96] disabled:opacity-50",
-              on ? look.fill : "bg-surface-2 text-text-secondary hover:bg-border hover:text-text",
-              !on && wanted.includes(instrument) && "ring-1 ring-inset ring-accent",
+              "relative flex h-12 items-center gap-2.5 rounded-full pl-1.5 pr-4 text-sm font-extrabold outline-none transition-[background,color,box-shadow,transform] duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 active:scale-[0.96] disabled:opacity-50",
+              on ? cn(look.fill, "shadow-[var(--shadow-2)]") : "bg-surface-1 text-text-secondary ring-1 ring-inset ring-border hover:bg-surface-2 hover:text-text",
             )}
           >
-            <Icon className="h-4 w-4" aria-hidden />
+            <span className={cn("grid h-9 w-9 place-items-center rounded-full", on ? "bg-on-inst" : look.fill)}>
+              <Icon className={cn("h-4 w-4", on && look.ink)} aria-hidden />
+            </span>
             {t(look.nameKey as MessageKey)}
+            {asked && (
+              <span
+                className={cn(
+                  "rounded-full px-1.5 py-px text-[10px] font-bold uppercase tracking-wide",
+                  on ? "bg-on-inst text-on-media" : "bg-accent-soft text-on-accent-soft",
+                )}
+              >
+                {t("jam.studio.wanted")}
+              </span>
+            )}
           </button>
         );
       })}
@@ -476,37 +483,18 @@ export function LiveLane({
       role="img"
       aria-label={label}
       data-jam-live-lane=""
-      className={cn("relative h-12 overflow-hidden rounded-[var(--radius-control)] ring-2 ring-danger", look.fill)}
+      className="relative h-12 overflow-hidden rounded-[var(--radius-control)] bg-surface-0/60 ring-2 ring-inset ring-danger"
     >
-      <div className="absolute inset-y-1.5 left-0" style={{ width: `${Math.min(100, (elapsedMs / timelineEndMs) * 100)}%` }}>
-        <JamBars bars={bars} className="h-full justify-start" barClassName="bg-on-inst" minPercent={10} />
+      {/* the take grows as a clip from song time 0, with a red edge where it is being written */}
+      <div
+        className={cn("absolute inset-y-0 left-0 overflow-hidden rounded-[var(--radius-control)]", look.fill)}
+        style={{ width: `${Math.min(100, (elapsedMs / timelineEndMs) * 100)}%` }}
+      >
+        <div className="absolute inset-y-1.5 left-1 right-1.5">
+          <JamBars bars={bars} className="h-full justify-start" barClassName="bg-on-inst" minPercent={10} />
+        </div>
+        <span aria-hidden className="jam-rec-dot absolute inset-y-0 right-0 w-1 bg-danger" />
       </div>
-    </div>
-  );
-}
-
-export function StudioLaneLabel({
-  instrument,
-  title,
-  sub,
-  recording,
-}: {
-  instrument: JamInstrument;
-  title: string;
-  sub: string;
-  recording?: boolean;
-}) {
-  const look = JAM_INSTRUMENT_LOOK[instrument];
-  const Icon = look.icon;
-  return (
-    <div className="flex w-32 shrink-0 items-center gap-2 max-sm:w-24">
-      <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-full", look.fill)}>
-        <Icon className="h-4 w-4" aria-hidden />
-      </span>
-      <span className="flex min-w-0 flex-col leading-tight">
-        <span className="truncate text-sm font-bold text-text">{title}</span>
-        <span className={cn("truncate text-xs", recording ? "font-semibold text-danger" : "text-text-secondary")}>{sub}</span>
-      </span>
     </div>
   );
 }
@@ -542,144 +530,6 @@ export function Countdown({ beat, total, beatMs }: { beat: number; total: number
         {beat}/{total}
       </span>
     </div>
-  );
-}
-
-/* ------------------------------------------------------------- review editor */
-
-export function Field({ label, value, children }: { label: string; value: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline justify-between gap-2 text-xs">
-        <span className="font-semibold text-text-secondary">{label}</span>
-        <span className="tabular-nums text-text-tertiary">{value}</span>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-export interface EditFieldsProps {
-  /** The recording's own timing: its length, and the head a trim may not go below. */
-  take: { trimStartMs: number; durationMs: number };
-  edits: TakeEdits;
-  onTrimStart: (ms: number) => void;
-  onTrimEnd: (ms: number) => void;
-  onNudge: (ms: number) => void;
-  onGain: (gain: number) => void;
-}
-
-/** Trim the start and the end, nudge the timing, change the volume. */
-export function EditFields({ take, edits, onTrimStart, onTrimEnd, onNudge, onGain }: EditFieldsProps) {
-  const { t } = useTranslation();
-  const startMax = Math.max(take.trimStartMs, take.durationMs - edits.trimEndMs - MIN_AUDIBLE_MS);
-  const endMax = Math.max(0, take.durationMs - edits.trimStartMs - MIN_AUDIBLE_MS);
-  return (
-    <>
-      <Field label={t("jam.review.trimStart")} value={signedSeconds(edits.trimStartMs - take.trimStartMs)}>
-        <Slider
-          variant="volume"
-          min={take.trimStartMs}
-          max={Math.round(startMax)}
-          step={10}
-          value={Math.round(edits.trimStartMs)}
-          onValueChange={onTrimStart}
-          aria-label={t("jam.review.trimStart")}
-        />
-      </Field>
-      <Field label={t("jam.review.trimEnd")} value={signedSeconds(-edits.trimEndMs)}>
-        <Slider
-          variant="volume"
-          min={0}
-          max={Math.round(endMax)}
-          step={10}
-          value={Math.round(edits.trimEndMs)}
-          onValueChange={onTrimEnd}
-          aria-label={t("jam.review.trimEnd")}
-        />
-      </Field>
-      <Field label={t("jam.review.nudge")} value={t("jam.review.nudgeValue", { ms: `${edits.nudgeMs > 0 ? "+" : ""}${edits.nudgeMs}` })}>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            aria-label={t("jam.review.nudgeEarlier")}
-            onClick={() => onNudge(edits.nudgeMs - 5)}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text outline-none hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            <ChevronLeft className="h-4 w-4" aria-hidden />
-          </button>
-          <Slider
-            variant="volume"
-            min={-NUDGE_LIMIT_MS}
-            max={NUDGE_LIMIT_MS}
-            step={1}
-            value={edits.nudgeMs}
-            onValueChange={onNudge}
-            aria-label={t("jam.review.nudge")}
-          />
-          <button
-            type="button"
-            aria-label={t("jam.review.nudgeLater")}
-            onClick={() => onNudge(edits.nudgeMs + 5)}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text outline-none hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            <ChevronRight className="h-4 w-4" aria-hidden />
-          </button>
-        </div>
-      </Field>
-      <Field label={t("jam.review.volume")} value={`${Math.round(edits.gain * 100)}%`}>
-        <Slider
-          variant="volume"
-          min={0}
-          max={200}
-          step={1}
-          value={Math.round(edits.gain * 100)}
-          onValueChange={(value) => onGain(value / 100)}
-          aria-label={t("jam.review.volume")}
-        />
-      </Field>
-    </>
-  );
-}
-
-/** Trim, nudge and volume. Everything here is optional: posting needs none of it. */
-export function ReviewEditor({ studio }: { studio: JamStudio }) {
-  const { t } = useTranslation();
-  const take = studio.take;
-  const edits = studio.edits;
-  if (!take || !edits) {
-    return null;
-  }
-  return (
-    <details
-      className="group rounded-[var(--radius-card)] bg-surface-1 ring-1 ring-inset ring-border"
-      data-jam-edit=""
-    >
-      <summary className="flex h-12 cursor-pointer list-none items-center justify-between gap-2 rounded-[var(--radius-card)] px-4 text-sm font-semibold text-text-secondary outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
-        <span>{t("jam.review.edit")}</span>
-        <ChevronRight className="h-4 w-4 transition-transform duration-[var(--duration-base)] group-open:rotate-90" aria-hidden />
-      </summary>
-      <div className="grid gap-4 px-4 pb-4 @lg:grid-cols-2">
-        <p className="text-xs leading-snug text-text-tertiary @lg:col-span-2">{t("jam.review.auto")}</p>
-        <EditFields
-          take={take}
-          edits={edits}
-          onTrimStart={studio.setTrimStart}
-          onTrimEnd={studio.setTrimEnd}
-          onNudge={studio.setNudge}
-          onGain={studio.setGain}
-        />
-        <div className="flex items-center justify-between gap-2 @lg:col-span-2">
-          <span className="text-xs tabular-nums text-text-tertiary">
-            {formatClock(audibleMs(take, edits))}
-          </span>
-          <Button variant="ghost" size="sm" className="gap-1.5" onClick={studio.resetEdits} disabled={!studio.edited}>
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-            {t("jam.review.reset")}
-          </Button>
-        </div>
-      </div>
-    </details>
   );
 }
 

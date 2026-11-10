@@ -257,6 +257,11 @@ export function useJamStudio(args: UseJamStudioArgs) {
           return;
         }
         engineRef.current = live;
+        // The engine is shared with the song panel, which may be playing the song
+        // right now ("Gravar por cima" pressed mid-song). The panel sits inert
+        // behind the studio, so its pause button cannot be reached: the studio
+        // starts silent, and its own play button is the one that plays the band.
+        live.player.stop();
         setEngine(live);
         setPhase((before) => (before === "boot" ? "setup" : before));
         void syncJamStems(live, backingRef.current);
