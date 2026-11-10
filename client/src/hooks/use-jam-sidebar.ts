@@ -1,7 +1,7 @@
 import type { Channel } from "@pqp/shared";
 import { useEffect, useMemo } from "react";
 import { jamSeenAt, useJamSeenVersion } from "@/lib/jam-seen";
-import { loadJamChannel, readJamChannel, useJamStoreVersion } from "@/lib/jam-store";
+import { loadJamChannel, readJamChannel, useJamStoreEpoch, useJamStoreVersion } from "@/lib/jam-store";
 import { jamHasNews, latestActivity } from "@/lib/jam-wall";
 
 /**
@@ -31,6 +31,8 @@ export function useJamSidebar(channels: readonly Pick<Channel, "id" | "type">[])
     .filter((channel) => channel.type === "jam")
     .map((channel) => channel.id)
     .join(",");
+  // Another account emptied the store: ask again for these channels.
+  const storeEpoch = useJamStoreEpoch();
 
   useEffect(() => {
     if (!ids) {
@@ -56,7 +58,7 @@ export function useJamSidebar(channels: readonly Pick<Channel, "id" | "type">[])
       document.removeEventListener("visibilitychange", onFocus);
       window.clearInterval(timer);
     };
-  }, [ids]);
+  }, [ids, storeEpoch]);
 
   const storeVersion = useJamStoreVersion();
   const seenVersion = useJamSeenVersion();

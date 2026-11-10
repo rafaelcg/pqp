@@ -149,3 +149,15 @@ export function jamErrorKind(error: unknown): JamErrorKind {
   }
   return "network";
 }
+
+/**
+ * A write that failed without the server saying no: no answer at all, or a server
+ * error. The thing may have been made and the reply lost, so a screen reads again
+ * before it lets anybody retry a create (a refusal, a 4xx, is a plain no).
+ */
+export function jamOutcomeUnknown(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    return error.status === 0 || error.status >= 500;
+  }
+  return true;
+}

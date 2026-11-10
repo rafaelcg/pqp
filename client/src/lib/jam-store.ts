@@ -71,7 +71,8 @@ interface JournalEntry<T> {
 const songJournal = new Map<string, Map<string, JournalEntry<JamSongSummary>>>();
 const trackJournal = new Map<string, Map<string, JournalEntry<JamTrack>>>();
 let seq = 0;
-let readsOut = 0;
+/** Reads in flight per channel: only these channels keep a journal. */
+const readsOut = new Map<string, number>();
 
 function journalFor<T>(
   all: Map<string, Map<string, JournalEntry<T>>>,
@@ -86,7 +87,7 @@ function journalFor<T>(
 }
 
 function record(channelId: string, frame: JamFrame): void {
-  if (readsOut === 0) {
+  if (!readsOut.get(channelId)) {
     return;
   }
   seq += 1;
@@ -115,8 +116,8 @@ function record(channelId: string, frame: JamFrame): void {
 }
 
 /** Starts a read: what changed from here on is what the answer must not undo. */
-function beginRead(): number {
-  readsOut += 1;
+function beginRead(channelId: string): number {
+  readsOut.set(channelId, (readsOut.get(channelId) ?? 0) + 1);
   return seq;
 }
 
@@ -130,12 +131,15 @@ function changesSince(channelId: string, since: number): ReadChanges {
   return { songs: pick(songJournal), tracks: pick(trackJournal) };
 }
 
-function endRead(): void {
-  readsOut = Math.max(0, readsOut - 1);
-  if (readsOut === 0) {
-    songJournal.clear();
-    trackJournal.clear();
+function endRead(channelId: string): void {
+  const left = (readsOut.get(channelId) ?? 0) - 1;
+  if (left > 0) {
+    readsOut.set(channelId, left);
+    return;
   }
+  readsOut.delete(channelId);
+  songJournal.delete(channelId);
+  trackJournal.delete(channelId);
 }
 
 function refused(error: unknown): boolean {
@@ -169,14 +173,22 @@ function wire(): void {
   });
 }
 
-/** Tell the store which account it is holding for; another account empties it. */
+/**
+ * Tell the store which account it is holding for; another account empties it.
+ *
+ * Safe to call while rendering, and meant to be: the app calls it in its render
+ * body, so the screens under it never paint what the previous account held (an
+ * effect would run after that paint) and a load they start already belongs to
+ * the new account. The listeners are told after the render, and `useJamStoreEpoch`
+ * moves, which is what makes a mounted wall ask again.
+ */
 export function setJamViewer(userId: string | null): void {
   if (userId === viewer) {
     return;
   }
   viewer = userId;
   resetJamStoreForTests();
-  emit();
+  queueMicrotask(emit);
 }
 
 /** Read the first page of a channel's songs. Quiet when it already holds some, unless forced. */
@@ -193,7 +205,7 @@ export function loadJamChannel(channelId: string, options: { force?: boolean } =
   if (held.status === "idle" || held.status === "error") {
     write(channelId, { ...held, status: "loading" });
   }
-  const since = beginRead();
+  const since = beginRead(channelId);
   const mine = epoch;
   const run = fetchJamSongs(channelId, { sort: "activity", limit: PAGE })
     .then((page) => {
@@ -217,8 +229,11 @@ export function loadJamChannel(channelId: string, options: { force?: boolean } =
       write(channelId, { ...now, status: now.songs.length > 0 ? "ready" : "error" });
     })
     .finally(() => {
-      endRead();
-      loads.delete(channelId);
+      endRead(channelId);
+      // Not a newer load's entry: the store may have been emptied meanwhile.
+      if (loads.get(channelId) === run) {
+        loads.delete(channelId);
+      }
     });
   loads.set(channelId, run);
   return run;
@@ -284,7 +299,7 @@ export function loadJamDetail(
   if (pending) {
     return pending;
   }
-  const since = beginRead();
+  const since = beginRead(channelId);
   const mine = epoch;
   const run = fetchJamSong(songId)
     .then((response) => {
@@ -303,8 +318,10 @@ export function loadJamDetail(
       return null;
     })
     .finally(() => {
-      endRead();
-      detailLoads.delete(songId);
+      endRead(channelId);
+      if (detailLoads.get(songId) === run) {
+        detailLoads.delete(songId);
+      }
     });
   detailLoads.set(songId, run);
   return run;
@@ -348,6 +365,20 @@ export function useJamStoreVersion(): number {
   );
 }
 
+/** Moves when the store is emptied for another account: a screen that asked before must ask again. */
+export function useJamStoreEpoch(): number {
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    () => epoch,
+    () => 0,
+  );
+}
+
 /**
  * A channel's state for a screen. Opening a wall asks again even when something
  * is held (stale-while-revalidate): what was held paints at once, and the answer
@@ -365,11 +396,12 @@ export function useJamChannel(channelId: string | null): JamChannelState {
     () => (channelId ? read(channelId) : EMPTY_JAM_CHANNEL),
     () => EMPTY_JAM_CHANNEL,
   );
+  const storeEpoch = useJamStoreEpoch();
   useEffect(() => {
     if (channelId) {
       void loadJamChannel(channelId, { force: true });
     }
-  }, [channelId]);
+  }, [channelId, storeEpoch]);
   return state;
 }
 
@@ -381,6 +413,6 @@ export function resetJamStoreForTests(): void {
   songJournal.clear();
   trackJournal.clear();
   seq = 0;
-  readsOut = 0;
+  readsOut.clear();
   epoch += 1;
 }

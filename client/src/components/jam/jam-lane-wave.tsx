@@ -87,7 +87,7 @@ export function JamLaneWave({
       }
       const length = Math.max(1, span.endMs - span.startMs);
       const progress = Math.min(1, Math.max(0, (positionMs - span.startMs) / length));
-      element.style.clipPath = `inset(0 ${(1 - progress) * 100}% 0 0)`;
+      element.style.clipPath = `inset(0 0 0 ${progress * 100}%)`;
     });
   }, [clock, span.startMs, span.endMs]);
 
@@ -105,14 +105,15 @@ export function JamLaneWave({
         className="absolute inset-y-1.5"
         style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%` }}
       >
-        <JamBars bars={bars} className="h-full" barClassName="bg-on-inst/45" animate={animate} />
+        <JamBars bars={bars} className="h-full" barClassName="bg-on-inst" animate={animate} />
+        {/* The bars are drawn once, at full strength; what is still to be played is
+            the lane's own colour laid back over them, so a lane costs one bar tree. */}
         <div
           ref={played}
-          className="absolute inset-0"
-          style={{ clipPath: "inset(0 100% 0 0)" }}
-        >
-          <JamBars bars={bars} className="h-full" barClassName="bg-on-inst" />
-        </div>
+          aria-hidden
+          className={cn("pointer-events-none absolute inset-0 opacity-55", look.fill)}
+          style={{ clipPath: "inset(0 0 0 0)" }}
+        />
       </div>
     </div>
   );

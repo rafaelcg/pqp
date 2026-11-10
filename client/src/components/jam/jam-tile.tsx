@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { useTranslation } from "@/lib/i18n";
 import type { JamDetail } from "@/lib/jam-state";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
+import { useJamStoreEpoch } from "@/lib/jam-store";
 import {
   JAM_TILE_SPAN,
   barsFromPeaks,
@@ -78,6 +79,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
   // Near the screen, once: the detail read and the video's first frame wait for it.
   const tileRef = useRef<HTMLLIElement | null>(null);
   const [near, setNear] = useState(false);
+  const storeEpoch = useJamStoreEpoch();
   useEffect(() => {
     const element = tileRef.current;
     if (!element || near) {
@@ -103,8 +105,8 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
     if (near) {
       onNear?.();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when it comes near
-  }, [near]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- when it comes near, and again after the store was emptied for another account
+  }, [near, storeEpoch]);
 
   const videoTrack = detail?.tracks.find((track) => track.videoUrl && track.inMix) ?? detail?.tracks.find((track) => track.videoUrl);
   const hasVideo = Boolean(videoTrack?.videoUrl);

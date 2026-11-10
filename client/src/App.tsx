@@ -133,6 +133,7 @@ import { ChannelIcon } from "@/components/layout/channel-icon";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
 import { dispatchJamFrame, dispatchJamReconnected } from "@/lib/jam-frames";
 import { JamPane } from "@/components/jam/jam-pane";
+import { jamOutcomeUnknown } from "@/lib/jam-api";
 import { setJamViewer } from "@/lib/jam-store";
 import { useJamHintContext } from "@/lib/jam-hint-context";
 import { useJamConfig } from "@/hooks/use-jam-config";
@@ -7134,6 +7135,12 @@ function MainAppContent({
       setAppError(null);
       await selectChannel(channel.id);
     } catch (error) {
+      if (jamOutcomeUnknown(error)) {
+        // No answer is not "no": the server may have made the channel and the reply
+        // got lost. Read the list again so a retry meets the channel that exists
+        // instead of making a second one.
+        refreshChannelListRef.current(selectedServerId);
+      }
       setAppError(
         error instanceof ApiError && error.message === "jam_channels_off"
           ? translateMessage("jam.error.off")
@@ -8627,9 +8634,10 @@ function MainAppContent({
   // (with the song counts) what the Jam row in the sidebar says.
   const jamConfig = useJamConfig(selectedServerId);
   // What the Jam store holds belongs to this account: another one empties it.
-  useEffect(() => {
-    setJamViewer(user?.id ?? null);
-  }, [user?.id]);
+  // Done while rendering, before any screen below reads the store (an effect
+  // would run after the first paint of the new account over the old one's data,
+  // and after a child's first load had begun); it is idempotent per account.
+  setJamViewer(user?.id ?? null);
   const jamSidebar = useJamSidebar(channels);
   const jamHintContext = useJamHintContext();
   // Opening a forum by any route (the list, a link, the card) is the "O fórum

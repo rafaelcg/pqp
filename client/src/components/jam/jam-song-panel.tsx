@@ -15,8 +15,15 @@ import {
 } from "@/lib/jam-api";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cannotRecordReason, pickInstrument } from "@/lib/jam-record";
-import { takesToTakeOut } from "@/lib/jam-mix";
-import { applyJamVote, applyJamWrite, loadJamChannel, loadJamDetail } from "@/lib/jam-store";
+import { oneAtATime, switchTakeIn } from "@/lib/jam-mix";
+import {
+  applyJamVote,
+  applyJamWrite,
+  loadJamChannel,
+  loadJamDetail,
+  readJamChannel,
+  useJamStoreEpoch,
+} from "@/lib/jam-store";
 import type { JamDetail } from "@/lib/jam-state";
 import { competingInstruments, orderTracks, songNeed, songTimeline } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
@@ -68,14 +75,17 @@ export function JamSongPanel({
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<JamTrack | null>(null);
   const [confirmSong, setConfirmSong] = useState(false);
+  const serial = useRef(oneAtATime()).current;
+  const storeEpoch = useJamStoreEpoch();
 
   // The detail: read when the panel opens, and again when a join-mode change
   // made what the viewer may add out of date.
   useEffect(() => {
     // Asked again every time the panel opens, even when something is held: the
-    // answer is what says this account may still see the song.
+    // answer is what says this account may still see the song. And again when the
+    // store was emptied for another account (`storeEpoch`).
     void loadJamDetail(channelId, song.id, { force: true });
-  }, [channelId, song.id]);
+  }, [channelId, song.id, storeEpoch]);
   useEffect(() => {
     if (detail?.viewerStale) {
       void loadJamDetail(channelId, song.id);
@@ -239,33 +249,32 @@ export function JamSongPanel({
                     })
                   }
                   onSwitchMix={() =>
-                    void guard(async () => {
-                      const put = async (id: string, inMix: boolean) => {
-                        const answer = await updateJamTrack(id, { inMix });
-                        applyJamWrite(channelId, {
-                          type: "jam-track-updated",
-                          channelId,
-                          song: answer.song,
-                          track: answer.track,
-                        });
-                      };
-                      if (track.inMix) {
-                        await put(track.id, false);
-                        return;
-                      }
-                      // "Usar este take" is a swap: this one in, then the others of its
-                      // instrument out. Two writes, in that order, so a failure between
-                      // them leaves both playing (told) and never a silent instrument.
-                      await put(track.id, true);
-                      for (const otherId of takesToTakeOut(tracks, track.id)) {
-                        try {
-                          await put(otherId, false);
-                        } catch {
-                          setError(t("jam.error.swapPartial"));
+                    // One mix change at a time, and "use this take" is a swap (see jam-mix).
+                    void serial(() =>
+                      guard(async () => {
+                        const put = async (id: string, inMix: boolean) => {
+                          const answer = await updateJamTrack(id, { inMix });
+                          applyJamWrite(channelId, {
+                            type: "jam-track-updated",
+                            channelId,
+                            song: answer.song,
+                            track: answer.track,
+                          });
+                        };
+                        if (track.inMix) {
+                          await put(track.id, false);
                           return;
                         }
-                      }
-                    })
+                        const outcome = await switchTakeIn(
+                          track.id,
+                          put,
+                          () => readJamChannel(channelId).details[song.id]?.tracks ?? tracks,
+                        );
+                        if (outcome === "partial") {
+                          setError(t("jam.error.swapPartial"));
+                        }
+                      }),
+                    )
                   }
                   adjust={
                     isMine && enabled
@@ -388,8 +397,15 @@ export function JamSongPanel({
           if (!track) return;
           void guard(async () => {
             await deleteJamTrack(track.id);
-            await loadJamDetail(channelId, song.id, { force: true });
-            await loadJamChannel(channelId, { force: true });
+            // Deleted is deleted: the lane goes at once, and the refreshes below are
+            // best effort (their failing must not make a done delete look undone).
+            applyJamWrite(channelId, { type: "jam-track-deleted", channelId, song, trackId: track.id });
+            try {
+              await loadJamDetail(channelId, song.id, { force: true });
+              await loadJamChannel(channelId, { force: true });
+            } catch {
+              // The next frame or open reads again.
+            }
           });
         }}
       />
