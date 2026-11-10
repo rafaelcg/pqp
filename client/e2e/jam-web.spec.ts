@@ -819,6 +819,7 @@ test("the camera is on the setup step, one tap from recording with video, and th
   const seeded = await seed(HOST_B, GUEST_B);
   test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
   const songId = await makeSong(HOST_B, seeded.jamId, "Com vídeo");
+  await addTrackApi(HOST_B, songId, "guitar"); // on the wall once it has a take
   const guest = await openAs(browser, GUEST_B, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}`);
   await guest.locator("[data-jam-record-over]").click();
   await expect(guest.locator('[data-jam-studio][data-phase="setup"]')).toBeVisible({ timeout: 20_000 });
@@ -851,8 +852,9 @@ test("the camera is on the setup step, one tap from recording with video, and th
   await expect(guest.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
 
   const detail = await call<{ tracks: { authorId: string; videoUrl: string | null }[] }>(HOST_B, "GET", `/api/jam-songs/${songId}`);
-  expect(detail.tracks).toHaveLength(1);
-  expect(detail.tracks[0]!.videoUrl, "the posted take has a video").toBeTruthy();
+  // the host's own take (through the API, no video) and the guest's, which has one
+  expect(detail.tracks).toHaveLength(2);
+  expect(detail.tracks.filter((track) => track.videoUrl), "the posted take has a video").toHaveLength(1);
   await guest.context().close();
 });
 

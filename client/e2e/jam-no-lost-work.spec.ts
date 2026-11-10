@@ -636,4 +636,23 @@ test("8: choosing Voz with the camera on records a vocals take, never a guitar o
     expect(detail.tracks.map((track) => track.instrument), `video ${video}`).toEqual(["vocals"]);
     await host.context().close();
   }
+
+  // over a song, where the studio picks the instrument for the person (the one
+  // the song is missing) and the song's detail arrives after the studio opens
+  const song = await liveSong(seeded, "Por cima");
+  const guest = await openAs(browser, seeded.guest, `${seeded.jamPath}/song/${song}`);
+  await guest.locator("[data-jam-record-over]").click();
+  await expect(guest.locator('[data-jam-studio][data-phase="setup"]')).toBeVisible({ timeout: 20_000 });
+  await guest.locator('[data-jam-instrument="vocals"]').click();
+  await guest.getByRole("switch", { name: /Record video too/ }).click();
+  await expect(guest.locator("[data-jam-studio] video[aria-label]").first()).toBeVisible({ timeout: 15_000 });
+  await expect(guest.locator('[data-jam-instrument="vocals"]')).toHaveAttribute("aria-checked", "true");
+  await skipTheLatencyCheck(guest);
+  await recordAndStop(guest, 3);
+  await expect(guest.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
+  await guest.locator("[data-jam-post]").click();
+  await expect(guest.locator("[data-jam-done]")).toBeVisible({ timeout: 90_000 });
+  const over = await call<{ tracks: { instrument: string }[] }>(seeded.host, "GET", `/api/jam-songs/${song}`);
+  expect(over.tracks.map((track) => track.instrument).sort()).toEqual(["guitar", "vocals"]);
+  await guest.context().close();
 });
