@@ -180,6 +180,19 @@ describe("posting a take", () => {
     expect(d.addTrack).toHaveBeenCalledOnce();
   });
 
+  it("joins a second call made while the first is running: one ticket, one claim", async () => {
+    const d = deps();
+    const t = take();
+    const state = startJamPost(t);
+    const [a, b] = await Promise.all([
+      postTake({ songId, instrument: "bass", take: t, state, deps: d }),
+      postTake({ songId, instrument: "bass", take: t, state, deps: d }),
+    ]);
+    expect(a).toBe(b);
+    expect(d.createUpload).toHaveBeenCalledOnce();
+    expect(d.addTrack).toHaveBeenCalledOnce();
+  });
+
   it("can drop the video and post the sound alone", async () => {
     const d = deps();
     const t = take(true);

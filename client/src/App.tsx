@@ -133,6 +133,7 @@ import { ChannelIcon } from "@/components/layout/channel-icon";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
 import { dispatchJamFrame, dispatchJamReconnected } from "@/lib/jam-frames";
 import { JamPane } from "@/components/jam/jam-pane";
+import { setJamViewer } from "@/lib/jam-store";
 import { useJamHintContext } from "@/lib/jam-hint-context";
 import { useJamConfig } from "@/hooks/use-jam-config";
 import { useJamSidebar } from "@/hooks/use-jam-sidebar";
@@ -8626,6 +8627,10 @@ function MainAppContent({
   // `jam_channels` for this server: whether the add menus offer a Jam, and
   // (with the song counts) what the Jam row in the sidebar says.
   const jamConfig = useJamConfig(selectedServerId);
+  // What the Jam store holds belongs to this account: another one empties it.
+  useEffect(() => {
+    setJamViewer(user?.id ?? null);
+  }, [user?.id]);
   const jamSidebar = useJamSidebar(channels);
   const jamHintContext = useJamHintContext();
   // Opening a forum by any route (the list, a link, the card) is the "O fórum

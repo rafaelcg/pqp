@@ -300,6 +300,7 @@ export function JamStudio({
                       <LiveLane
                         instrument={studio.instrument}
                         peaks={studio.livePeaks}
+                        version={studio.livePeaksVersion}
                         timelineEndMs={timeline.endMs}
                         elapsedMs={studio.elapsedMs}
                         label={t("jam.lane.recording")}
@@ -339,15 +340,15 @@ export function JamStudio({
                     playing={transport === "playing"}
                     loading={false}
                     durationMs={durationMs}
-                    onToggle={() => {
-                      if (!studio.engine) return;
-                      void studio.engine.context.resume();
-                      if (studio.engine.player.state === "playing") studio.engine.player.pause();
-                      else void studio.engine.player.play();
-                    }}
+                    onToggle={() => void studio.togglePlay()}
                     onSeek={(ms) => studio.engine?.player.seek(ms)}
                     title={t("jam.review.title")}
                   />
+                  {studio.playError && (
+                    <p role="alert" className="rounded-[var(--radius-control)] bg-danger-soft px-3 py-2 text-sm text-on-danger-soft">
+                      {t("jam.studio.playError")}
+                    </p>
+                  )}
                   <ReviewEditor studio={studio} />
                   {studio.take && (
                     <p data-jam-take-latency="" className="text-xs tabular-nums text-text-tertiary">

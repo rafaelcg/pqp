@@ -7655,5 +7655,7 @@
   "jam.latency.manual.clear": "Voltar ao medido",
   "jam.latency.manual.hint": "Se os teus takes sempre saem adiantados, aumenta. Se saem atrasados, diminui. Fica guardado pra esse fone e esse microfone.",
   "jam.latency.keep": "Manter {ms} ms",
-  "jam.review.latencyUsed": "Corrigido em {ms} ms ({method}, confiança {confidence})."
+  "jam.review.latencyUsed": "Corrigido em {ms} ms ({method}, confiança {confidence}).",
+  "jam.studio.playError": "Não deu pra tocar. Aperta o play de novo.",
+  "jam.wall.songError": "Não deu pra abrir essa música."
 }

@@ -7655,5 +7655,7 @@
   "jam.latency.manual.clear": "Back to measured",
   "jam.latency.manual.hint": "If your takes always land early, raise it. If they land late, lower it. It is kept for this headset and this microphone.",
   "jam.latency.keep": "Keep {ms} ms",
-  "jam.review.latencyUsed": "Corrected by {ms} ms ({method}, confidence {confidence})."
+  "jam.review.latencyUsed": "Corrected by {ms} ms ({method}, confidence {confidence}).",
+  "jam.studio.playError": "Could not play. Press play again.",
+  "jam.wall.songError": "Could not open that song."
 }

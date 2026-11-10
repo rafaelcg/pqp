@@ -43,7 +43,6 @@ export function JamStartSheet({
   const [joinMode, setJoinMode] = useState<JamJoinMode>("open");
   const [wanted, setWanted] = useState<JamInstrument[]>([]);
   const [touched, setTouched] = useState(false);
-  const [nonce] = useState(newNonce);
 
   const cleanTitle = title.replace(/\s+/g, " ").trim();
   const titleMissing = cleanTitle.length === 0;
@@ -65,7 +64,9 @@ export function JamStartSheet({
         artist: cleanArtist === "" ? null : cleanArtist,
         joinMode,
         wantedInstruments: joinMode === "wanted" ? wanted : [],
-        nonce,
+        // One per draft: a retried create of THIS song lands on one song, and a
+        // song started later from the same sheet is a different one.
+        nonce: newNonce(),
       },
       instrument: joinMode === "wanted" ? mine : "guitar",
     });

@@ -5,6 +5,7 @@ import {
   prepareStemUpload,
   tapTempo,
   type JamEngine,
+  type JamInput,
   type JamTake,
   type LatencyResult,
   type LatencyStatus,
@@ -113,7 +114,16 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const [cameraError, setCameraError] = useState(false);
   const [beat, setBeat] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
-  const [livePeaks, setLivePeaks] = useState<number[]>([]);
+  // The live waveform appends a peak every 80 ms for up to ten minutes: a list
+  // copied on every append is quadratic, so it is one array pushed to, with a
+  // version the lane reads to know it grew.
+  const livePeaksRef = useRef<number[]>([]);
+  const [livePeaksVersion, setLivePeaksVersion] = useState(0);
+  const resetPeaks = useCallback(() => {
+    livePeaksRef.current = [];
+    setLivePeaksVersion((before) => before + 1);
+  }, []);
+  const [playError, setPlayError] = useState(false);
   const [take, setTake] = useState<JamTake | null>(null);
   const [edits, setEdits] = useState<TakeEdits | null>(null);
   const [takeVideoUrl, setTakeVideoUrl] = useState<string | null>(null);
@@ -137,6 +147,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const backingRef = useRef(backing);
   backingRef.current = backing;
 
+  /** True from teardown until the next boot: a late answer is not wanted. */
+  const torn = useRef(false);
+
   const refreshLatency = useCallback(async (live: JamEngine) => {
     try {
       const status = await live.latency();
@@ -150,8 +163,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const openMic = useCallback(
     async (live: JamEngine, wanted?: string | null) => {
       setMic("opening");
+      let opened: JamInput;
       try {
-        await live.openInput(wanted ? { deviceId: wanted } : {});
+        opened = await live.openInput(wanted ? { deviceId: wanted } : {});
       } catch (failure) {
         const name = (failure as { name?: string } | null)?.name;
         setMic(
@@ -161,6 +175,16 @@ export function useJamStudio(args: UseJamStudioArgs) {
               ? "none"
               : "error",
         );
+        return;
+      }
+      // The studio went away while the browser was asking: nobody is left to close
+      // what has just opened, so it is closed here (only if it is still the one
+      // the engine holds, so a newer open is never closed under its owner).
+      if (torn.current) {
+        if (live.input === opened) {
+          opened.close();
+          live.input = null;
+        }
         return;
       }
       const input = live.input;
@@ -193,6 +217,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const engineRef = useRef<JamEngine | null>(null);
   useEffect(() => {
     let cancelled = false;
+    torn.current = false;
     const supported =
       typeof AudioWorkletNode !== "undefined" &&
       typeof navigator !== "undefined" &&
@@ -227,12 +252,17 @@ export function useJamStudio(args: UseJamStudioArgs) {
     })();
     return () => {
       cancelled = true;
+      torn.current = true;
       detach?.();
     };
   }, [openMic]);
 
   // The backing follows the song while the studio is open (a track arrives).
-  const backingSignature = backing.map((track) => `${track.id}:${track.inMix}`).join(",");
+  const backingSignature = backing
+    .map((track) =>
+      [track.id, track.inMix, track.audioUrl.split("?")[0], track.offsetMs, track.trimStartMs, track.trimEndMs].join(":"),
+    )
+    .join(",");
   useEffect(() => {
     if (engine) {
       void syncJamStems(engine, backingRef.current);
@@ -263,7 +293,8 @@ export function useJamStudio(args: UseJamStudioArgs) {
         const value = bucket;
         bucket = 0;
         bucketSince = now;
-        setLivePeaks((before) => [...before, Math.min(1, value)]);
+        livePeaksRef.current.push(Math.min(1, value));
+        setLivePeaksVersion((before) => before + 1);
       }
     }, 30);
     return () => window.clearInterval(timer);
@@ -361,14 +392,14 @@ export function useJamStudio(args: UseJamStudioArgs) {
         beatSec: 60 / countIn.bpm,
         total: bars * BEATS_PER_BAR,
       };
-      setLivePeaks([]);
+      resetPeaks();
       setElapsedMs(0);
       setBeat(0);
       setPhase("countdown");
     } catch {
       setStartError("start");
     }
-  }, [engine, mic, countIn, wantsVideo]);
+  }, [engine, mic, countIn, wantsVideo, resetPeaks]);
 
   const stopRecording = useCallback(async () => {
     const live = engine;
@@ -390,7 +421,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
       setPhase("review");
       // Hear it with the band straight away: stopping was the gesture.
       window.setTimeout(() => {
-        void live.player.play(0);
+        live.player.play(0).catch(() => setPlayError(true));
       }, 380);
     } catch {
       setStartError("stop");
@@ -410,12 +441,12 @@ export function useJamStudio(args: UseJamStudioArgs) {
     setTakeVideoUrl(null);
     setTake(null);
     setEdits(null);
-    setLivePeaks([]);
+    resetPeaks();
     setElapsedMs(0);
     job.current = null;
     setPostError(null);
     setPhase("setup");
-  }, [engine]);
+  }, [engine, resetPeaks]);
 
   const cancelRecording = useCallback(async () => {
     const running = handle.current;
@@ -423,10 +454,10 @@ export function useJamStudio(args: UseJamStudioArgs) {
     if (running) {
       await running.cancel().catch(() => undefined);
     }
-    setLivePeaks([]);
+    resetPeaks();
     setElapsedMs(0);
     setPhase("setup");
-  }, []);
+  }, [resetPeaks]);
 
   /** Edit the take on screen: the engine hears it at once, nothing is re-rendered. */
   const edit = useCallback(
@@ -454,10 +485,12 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const setGain = useCallback((gain: number) => edit((e) => withGain(e, gain)), [edit]);
   const resetEdits = useCallback(() => edit((_, t) => asRecorded(t)), [edit]);
 
+  const posting = useRef(false);
   const post = useCallback(async () => {
-    if (!take || !edits || phaseRef.current === "done") {
+    if (!take || !edits || phaseRef.current === "done" || posting.current) {
       return;
     }
+    posting.current = true;
     setPostError(null);
     setPhase("posting");
     setProgress({ stage: "uploading", fraction: 0 });
@@ -516,6 +549,8 @@ export function useJamStudio(args: UseJamStudioArgs) {
       setPhase("done");
     } catch (failure) {
       setPostError(jamErrorKind(failure));
+    } finally {
+      posting.current = false;
     }
   }, [take, edits, songId, draft, channelId, instrument]);
 
@@ -548,6 +583,24 @@ export function useJamStudio(args: UseJamStudioArgs) {
     },
     [engine, mic, refreshLatency],
   );
+
+  /** Play or pause what is being reviewed; a refusal is said, not swallowed. */
+  const togglePlay = useCallback(async () => {
+    if (!engine) {
+      return;
+    }
+    setPlayError(false);
+    try {
+      await engine.context.resume();
+      if (engine.player.state === "playing") {
+        engine.player.pause();
+      } else {
+        await engine.player.play();
+      }
+    } catch {
+      setPlayError(true);
+    }
+  }, [engine]);
 
   const skipCheck = useCallback(() => setCheck("skipped"), []);
   const recheck = useCallback(() => {
@@ -665,7 +718,10 @@ export function useJamStudio(args: UseJamStudioArgs) {
     beat,
     beats: grid.current?.total ?? 0,
     elapsedMs,
-    livePeaks,
+    livePeaks: livePeaksRef.current,
+    livePeaksVersion,
+    playError,
+    togglePlay,
     take,
     edits,
     edited: take && edits ? isEdited(take, edits) : false,

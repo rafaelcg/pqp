@@ -200,3 +200,61 @@ describe("reads and local writes", () => {
     expect(next.songs.map((s) => s.id)).toEqual(["p1", "old"]);
   });
 });
+
+describe("a read answers with a snapshot, and frames are newer", () => {
+  it("keeps a song that arrived live while the first page was out", () => {
+    const live = song({ id: "live", updatedAt: "2026-11-09T14:00:00.000Z" });
+    const held = ready({ songs: [live] });
+    const page = { songs: [song({ id: "a", updatedAt: "2026-11-09T12:00:00.000Z" })], nextCursor: null };
+    const next = mergeFirstPage(held, page, { songs: new Map([["live", live]]), tracks: new Map() });
+    expect(next.songs.map((s) => s.id)).toEqual(["live", "a"]);
+  });
+
+  it("does not bring back a song deleted live while the page was out", () => {
+    const page = { songs: [song({ id: "gone" }), song({ id: "a", updatedAt: "2026-11-09T09:00:00.000Z" })], nextCursor: null };
+    const next = mergeFirstPage(ready(), page, { songs: new Map([["gone", null]]), tracks: new Map() });
+    expect(next.songs.map((s) => s.id)).toEqual(["a"]);
+  });
+
+  it("prefers the live version of a song the page also has", () => {
+    const stale = song({ id: "a", title: "old", updatedAt: "2026-11-09T09:00:00.000Z" });
+    const live = song({ id: "a", title: "new", updatedAt: "2026-11-09T13:00:00.000Z" });
+    const next = mergeFirstPage(ready({ songs: [live] }), { songs: [stale], nextCursor: null }, {
+      songs: new Map([["a", live]]),
+      tracks: new Map(),
+    });
+    expect(next.songs.map((s) => s.title)).toEqual(["new"]);
+  });
+
+  it("keeps a track added live while the detail was out, and the live version of one changed", () => {
+    const s = song({ id: "a" });
+    const stale = track({ id: "t1", songId: "a", inMix: true });
+    const changed = { ...stale, inMix: false };
+    const added = track({ id: "t2", songId: "a" });
+    const next = withDetail(
+      ready({ songs: [s] }),
+      { song: s, tracks: [stale], viewer },
+      { songs: new Map(), tracks: new Map([["t1", changed], ["t2", added]]) },
+    );
+    const tracks = next.details.a?.tracks ?? [];
+    expect(tracks.map((t) => t.id).sort()).toEqual(["t1", "t2"]);
+    expect(tracks.find((t) => t.id === "t1")?.inMix).toBe(false);
+  });
+
+  it("drops a track deleted live while the detail was out", () => {
+    const s = song({ id: "a" });
+    const next = withDetail(
+      ready({ songs: [s] }),
+      { song: s, tracks: [track({ id: "t1", songId: "a" })], viewer },
+      { songs: new Map(), tracks: new Map([["t1", null]]) },
+    );
+    expect(next.details.a?.tracks).toEqual([]);
+  });
+
+  it("drops a song deleted live while its detail was out", () => {
+    const s = song({ id: "a" });
+    const next = withDetail(ready({ songs: [s] }), { song: s, tracks: [], viewer }, { songs: new Map([["a", null]]), tracks: new Map() });
+    expect(next.songs).toEqual([]);
+    expect(next.details).toEqual({});
+  });
+});

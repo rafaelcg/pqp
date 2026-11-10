@@ -1,6 +1,6 @@
 import type { JamSongSummary } from "@pqp/shared";
 import { Plus } from "lucide-react";
-import { useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "@/lib/i18n";
 import type { JamDetail } from "@/lib/jam-state";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
@@ -38,6 +38,8 @@ export interface JamTileProps {
   /** Played the staggered entrance (the wall's first paint). */
   entrance?: boolean;
   selected?: boolean;
+  /** The tile came near the screen: the wall reads what the tile draws from. */
+  onNear?: () => void;
   onOpen: () => void;
 }
 
@@ -65,7 +67,7 @@ function whoLine(
   return others > 0 ? t("jam.tile.whoMore", { name: author, count: others }) : author;
 }
 
-export function JamTile({ song, size, detail, index, fresh, entrance, selected, onOpen }: JamTileProps) {
+export function JamTile({ song, size, detail, index, fresh, entrance, selected, onNear, onOpen }: JamTileProps) {
   const { t } = useTranslation();
   const needLabel = useNeedLabel();
   const need = songNeed(song);
@@ -73,8 +75,40 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
   const look = JAM_INSTRUMENT_LOOK[instrument];
   const big = size !== "small";
 
+  // Near the screen, once: the detail read and the video's first frame wait for it.
+  const tileRef = useRef<HTMLLIElement | null>(null);
+  const [near, setNear] = useState(false);
+  useEffect(() => {
+    const element = tileRef.current;
+    if (!element || near) {
+      return;
+    }
+    if (typeof IntersectionObserver === "undefined") {
+      setNear(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setNear(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "240px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [near]);
+  useEffect(() => {
+    if (near) {
+      onNear?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when it comes near
+  }, [near]);
+
   const videoTrack = detail?.tracks.find((track) => track.videoUrl && track.inMix) ?? detail?.tracks.find((track) => track.videoUrl);
   const hasVideo = Boolean(videoTrack?.videoUrl);
+  const showVideo = hasVideo && near;
   const peaks = useMemo(() => {
     const loud = detail?.tracks.find((track) => track.inMix && track.peaks.length > 0);
     return loud?.peaks ?? [];
@@ -92,7 +126,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
   const label = `${song.title}, ${who}, ${needText}`;
 
   return (
-    <li className={cn("flex min-w-0", JAM_TILE_SPAN[size])}>
+    <li ref={tileRef} className={cn("flex min-w-0", JAM_TILE_SPAN[size])}>
     <button
       type="button"
       onClick={onOpen}
@@ -109,7 +143,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
         fresh && "jam-tile-arrive",
       )}
     >
-      {hasVideo && videoTrack?.videoUrl && (
+      {showVideo && videoTrack?.videoUrl && (
         <>
           <video
             src={`${videoTrack.videoUrl}#t=0.5`}

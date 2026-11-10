@@ -21,6 +21,7 @@
  * this spec skips with that reason.
  */
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { E2E_ADMIN_TOKEN } from "../playwright.config";
 import { FAKE_MIC_WAV } from "../playwright.jam.config";
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
@@ -97,12 +98,21 @@ async function seed(): Promise<Seeded> {
   });
   const { invite } = await call<{ invite: { code: string } }>(HOST, "POST", `/api/servers/${server.id}/invites`, {});
   await call(GUEST, "POST", `/api/invites/${invite.code}/join`);
+  // The operator turns Jam on for THIS server only, the way the dashboard does
+  // (a per-server override of `jam_channels`). It is off everywhere else, which
+  // keeps every other spec's add menus exactly as they were.
+  const flip = await fetch(`${API}/api/admin/flag-overrides`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${E2E_ADMIN_TOKEN}` },
+    body: JSON.stringify({ key: "jam_channels", serverId: server.id, enabled: true }),
+  });
+  expect(flip.status).toBe(200);
   const { channel } = await call<{ channel: { id: string } }>(HOST, "POST", `/api/servers/${server.id}/channels`, {
     name: "jam",
     type: "jam",
   });
   const config = await call<{ enabled: boolean; uploads: boolean }>(HOST, "GET", `/api/jam/config?serverId=${server.id}`);
-  expect(config.enabled, "the suite's server runs with JAM_CHANNELS=true").toBe(true);
+  expect(config.enabled, "the per-server override turned it on").toBe(true);
   return { serverId: server.id, jamId: channel.id, uploads: config.uploads };
 }
 

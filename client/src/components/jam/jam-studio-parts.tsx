@@ -382,12 +382,15 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
 export function LiveLane({
   instrument,
   peaks,
+  version,
   timelineEndMs,
   elapsedMs,
   label,
 }: {
   instrument: JamInstrument;
   peaks: readonly number[];
+  /** Bumps whenever `peaks` (one array, pushed to) grew. */
+  version: number;
   timelineEndMs: number;
   elapsedMs: number;
   label: string;
@@ -395,7 +398,8 @@ export function LiveLane({
   const look = JAM_INSTRUMENT_LOOK[instrument];
   const [ref, count] = useBarCount(5, 400);
   const slotMs = count > 0 ? timelineEndMs / count : 0;
-  const bars = useMemo(() => liveBars(peaks, slotMs), [peaks, slotMs]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` is the change signal for the mutable list
+  const bars = useMemo(() => liveBars(peaks, slotMs), [peaks, version, slotMs]);
   return (
     <div
       ref={ref}

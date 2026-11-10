@@ -215,9 +215,6 @@ export default defineConfig({
         // two together are the whole contract; a third webServer on a third
         // port would prove nothing extra and double the suite's boot time.
         COMMUNITIES_ENABLED: "true",
-        // Jam channels (`e2e/jam-web.spec.ts`), same reasoning as the two above:
-        // the flag's default is off, and a spec cannot restart the shared server.
-        JAM_CHANNELS: "true",
         // Baú, same reasoning. Both halves on so `community-home.spec.ts` can
         // exercise the VIP lock; the flag-off API is pinned in
         // `server/src/services/community-home.test.ts`, and the flag-off

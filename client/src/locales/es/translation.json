@@ -7727,5 +7727,7 @@
   "jam.latency.manual.clear": "Volver a lo medido",
   "jam.latency.manual.hint": "Si tus tomas siempre salen adelantadas, súbelo. Si salen atrasadas, bájalo. Queda guardado para estos audífonos y este micrófono.",
   "jam.latency.keep": "Mantener {ms} ms",
-  "jam.review.latencyUsed": "Corregido en {ms} ms ({method}, confianza {confidence})."
+  "jam.review.latencyUsed": "Corregido en {ms} ms ({method}, confianza {confidence}).",
+  "jam.studio.playError": "No se pudo reproducir. Aprieta play de nuevo.",
+  "jam.wall.songError": "No se pudo abrir esa canción."
 }

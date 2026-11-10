@@ -41,6 +41,8 @@ export interface JamPostState {
   audio: JamPostPart;
   video: JamPostPart | null;
   result: JamTrackWithSong | null;
+  /** The try that is running. A second call joins it instead of starting another. */
+  running?: Promise<JamTrackWithSong> | null;
 }
 
 export interface JamPostTake {
@@ -127,12 +129,27 @@ export interface PostTakeArgs {
  * One try. Throws what failed (the caller shows it and offers the retry);
  * calling it again with the same `state` continues.
  */
-export async function postTake(args: PostTakeArgs): Promise<JamTrackWithSong> {
+export function postTake(args: PostTakeArgs): Promise<JamTrackWithSong> {
+  const { state } = args;
+  if (state.result) {
+    return Promise.resolve(state.result);
+  }
+  // Two tries at once would each ask for a ticket and claim a different upload id
+  // for the same take: the second joins the first, and a failed try is retried
+  // only after it has finished failing.
+  if (state.running) {
+    return state.running;
+  }
+  const run = runPost(args).finally(() => {
+    state.running = null;
+  });
+  state.running = run;
+  return run;
+}
+
+async function runPost(args: PostTakeArgs): Promise<JamTrackWithSong> {
   const { songId, instrument, take, state, onProgress, signal } = args;
   const deps = args.deps ?? DEFAULT_DEPS;
-  if (state.result) {
-    return state.result;
-  }
   const parts = [state.audio, ...(state.video ? [state.video] : [])];
   const total = parts.reduce((sum, part) => sum + part.blob.size, 0) || 1;
   const loadedBy = new Map<JamPostPart, number>(
@@ -200,6 +217,10 @@ export function putWithProgress(
   signal?: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("aborted", "AbortError"));
+      return;
+    }
     const request = new XMLHttpRequest();
     request.open("PUT", url);
     request.setRequestHeader("Content-Type", contentType);
@@ -210,13 +231,7 @@ export function putWithProgress(
         : reject(new Error(`upload failed: ${request.status}`));
     request.onerror = () => reject(new Error("upload failed: network"));
     request.onabort = () => reject(new DOMException("aborted", "AbortError"));
-    if (signal) {
-      if (signal.aborted) {
-        request.abort();
-        return;
-      }
-      signal.addEventListener("abort", () => request.abort(), { once: true });
-    }
+    signal?.addEventListener("abort", () => request.abort(), { once: true });
     request.send(blob);
   });
 }

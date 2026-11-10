@@ -17,6 +17,7 @@ import { fetchJamSong } from "@/lib/jam-api";
 import {
   loadJamChannel,
   loadJamDetail,
+  loadJamDetailLazy,
   loadMoreJamSongs,
   putJamSongOnWall,
   useJamChannel,
@@ -91,12 +92,16 @@ export function JamPane({
   const [filter, setFilter] = useState<JamWallFilter>("all");
   const [openSongId, setOpenSongIdState] = useState<string | null>(routeSongId);
   const [songGone, setSongGone] = useState(false);
+  /** The song could not be read for a reason that may pass (network, server). */
+  const [songError, setSongError] = useState(false);
+  const [songTry, setSongTry] = useState(0);
   const routeChange = useRef(onRouteSongChange);
   routeChange.current = onRouteSongChange;
   /** Open or close a song, and say so to the address bar. */
   function setOpenSongId(songId: string | null) {
     setOpenSongIdState(songId);
     setSongGone(false);
+    setSongError(false);
     routeChange.current?.(songId);
   }
   const [studio, setStudio] = useState<StudioState | null>(null);
@@ -109,7 +114,8 @@ export function JamPane({
   const wallHint = useFeatureHintEnabled("jamWall");
 
   const songs = state.songs;
-  const canCreate = canPost && config.enabled;
+  // Starting a song needs somewhere to put its first track.
+  const canCreate = canPost && config.enabled && config.uploads;
 
   // The wall is on screen: the first-run queue may point at it, and the sidebar
   // dot is spent for everything up to now.
@@ -133,6 +139,7 @@ export function JamPane({
     }
     setOpenSongIdState(routeSongId);
     setSongGone(false);
+    setSongError(false);
   }, [routeSongId]); // eslint-disable-line react-hooks/exhaustive-deps -- follows the address only
 
   // Another channel, another wall.
@@ -186,28 +193,8 @@ export function JamPane({
   const shown = sections[0]!.songs;
   const plan = useMemo(() => planTiles(shown), [shown]);
 
-  // Peaks, videos and who is on each song come from the detail; read the first
-  // dozen a few at a time so the wall fills in without a burst of requests.
-  const wantDetail = plan
-    .slice(0, 12)
-    .map((tile) => tile.song.id)
-    .filter((id) => !state.details[id])
-    .join(",");
-  useEffect(() => {
-    if (!wantDetail) {
-      return;
-    }
-    let cancelled = false;
-    const ids = wantDetail.split(",");
-    void (async () => {
-      for (let i = 0; i < ids.length && !cancelled; i += 3) {
-        await Promise.all(ids.slice(i, i + 3).map((id) => loadJamDetail(channelId, id)));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [channelId, wantDetail]);
+  // Peaks, videos and who is on each song come from the detail, which a tile
+  // asks for when it comes near the screen (`onNear`, three at a time).
 
   const openSong = openSongId ? songs.find((song) => song.id === openSongId) ?? null : null;
   const openDetail = openSong ? state.details[openSong.id] : undefined;
@@ -237,16 +224,24 @@ export function JamPane({
           setSongGone(true);
         }
       },
-      () => {
-        if (!cancelled) {
+      (failure: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        // Only the server saying "no such song for you" is gone; a dropped
+        // connection or a 500 is a failure to try again.
+        const status = (failure as { status?: unknown } | null)?.status;
+        if (status === 404 || status === 403) {
           setSongGone(true);
+        } else {
+          setSongError(true);
         }
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [openSongId, openSong, state.status, channelId]);
+  }, [openSongId, openSong, state.status, channelId, songTry]);
 
   const studioSong = studio?.mode === "over" ? (songs.find((song) => song.id === studio.songId) ?? null) : null;
   const studioDetail = studio?.mode === "over" ? state.details[studio.songId] : undefined;
@@ -357,6 +352,25 @@ export function JamPane({
             </Button>
           </p>
         )}
+        {songError && (
+          <p
+            role="alert"
+            data-jam-song-error=""
+            className="mx-3 mt-3 flex items-center justify-between gap-3 rounded-[var(--radius-card)] bg-danger-soft px-3.5 py-3 text-sm text-on-danger-soft sm:mx-5"
+          >
+            {t("jam.wall.songError")}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setSongError(false);
+                setSongTry((before) => before + 1);
+              }}
+            >
+              {t("jam.wall.retry")}
+            </Button>
+          </p>
+        )}
         {config.loaded && !config.enabled && (
           <p
             role="status"
@@ -448,6 +462,7 @@ export function JamPane({
                         entrance={entrance}
                         fresh={freshSongs.has(tile.song.id)}
                         selected={tile.song.id === openSongId}
+                        onNear={() => loadJamDetailLazy(channelId, tile.song.id)}
                         onOpen={() => {
                           setFreshTrackId(null);
                           setOpenSongId(tile.song.id);

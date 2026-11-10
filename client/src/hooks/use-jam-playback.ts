@@ -69,8 +69,6 @@ export function useJamPlayback(
   );
   const tracksRef = useRef(heard);
   tracksRef.current = heard;
-  const lanesRef = useRef(lanes);
-  lanesRef.current = lanes;
   const wantAutoplay = useRef(options.autoplay === true);
   const loadedOnce = useRef(false);
 
@@ -98,6 +96,16 @@ export function useJamPlayback(
   }, [songId]);
 
   const { clock, transport, durationMs } = useEngineClock(engine);
+
+  // A different song starts from nothing: not ready, nothing heard yet, the
+  // listener's mix of the last song forgotten, autoplay owed again.
+  useEffect(() => {
+    loadedOnce.current = false;
+    setStatus("loading");
+    setStemStatus({});
+    setLanes({});
+    setAudition(null);
+  }, [songId]);
 
   // Load what is in the mix, and again when a track arrives, leaves or moves.
   const signature = mixSignature(heard);

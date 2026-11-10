@@ -71,7 +71,14 @@ export function JamSongPanel({
   // The detail: read when the panel opens, and again when a join-mode change
   // made what the viewer may add out of date.
   useEffect(() => {
-    void loadJamDetail(channelId, song.id);
+    // Asked again every time the panel opens, even when something is held: the
+    // answer is what says this account may still see the song.
+    void loadJamDetail(channelId, song.id, { force: true });
+  }, [channelId, song.id]);
+  useEffect(() => {
+    if (detail?.viewerStale) {
+      void loadJamDetail(channelId, song.id);
+    }
   }, [channelId, song.id, detail?.viewerStale]);
 
   const viewer = detail?.viewer;
@@ -382,7 +389,7 @@ function JamVideoTile({
         src={track.videoUrl ?? undefined}
         muted
         playsInline
-        preload="auto"
+        preload="metadata"
         aria-label={label}
         className={cn("h-full w-full object-cover transition-opacity duration-[var(--duration-base)]", muted && "opacity-30")}
       />

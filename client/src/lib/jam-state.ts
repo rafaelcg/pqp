@@ -146,16 +146,58 @@ export function applyJamFrame(state: JamChannelState, frame: JamFrame): JamChann
   }
 }
 
+/**
+ * What a frame or a local write changed WHILE a read was in flight, latest value
+ * per id (`null` means deleted). A read is a snapshot taken at some moment on the
+ * server; a frame that arrives before the answer is newer than the snapshot, so
+ * the answer must never overwrite it, and must never be read as proof that a
+ * row it does not mention was deleted.
+ */
+export interface ReadChanges {
+  songs: ReadonlyMap<string, JamSongSummary | null>;
+  tracks: ReadonlyMap<string, JamTrack | null>;
+}
+
+export const NO_CHANGES: ReadChanges = { songs: new Map(), tracks: new Map() };
+
 /** A song read by id becomes a detail (and refreshes the summary on the wall). */
-export function withDetail(state: JamChannelState, response: JamSongDetailResponse): JamChannelState {
-  const known = state.songs.some((one) => one.id === response.song.id);
+export function withDetail(
+  state: JamChannelState,
+  response: JamSongDetailResponse,
+  changes: ReadChanges = NO_CHANGES,
+): JamChannelState {
+  const songId = response.song.id;
+  const songChange = changes.songs.get(songId);
+  if (songChange === null) {
+    // Deleted while the read was out.
+    const { [songId]: _gone, ...details } = state.details;
+    return { ...state, songs: state.songs.filter((one) => one.id !== songId), details };
+  }
+  const summary = songChange ?? response.song;
+  const known = state.songs.some((one) => one.id === songId);
+  // The answer's tracks, with what happened since: a track changed live keeps its
+  // live value, a track deleted live is gone, a track added live is kept.
+  const held = new Map((state.details[songId]?.tracks ?? []).map((track) => [track.id, track]));
+  const merged = new Map<string, JamTrack>();
+  for (const track of response.tracks) {
+    const change = changes.tracks.get(track.id);
+    if (change === null) {
+      continue;
+    }
+    merged.set(track.id, change ?? held.get(track.id) ?? track);
+  }
+  for (const [trackId, change] of changes.tracks) {
+    if (change && change.songId === songId && !merged.has(trackId)) {
+      merged.set(trackId, change);
+    }
+  }
   return {
     ...state,
-    songs: known ? state.songs.map((one) => (one.id === response.song.id ? response.song : one)) : state.songs,
+    songs: known ? state.songs.map((one) => (one.id === songId ? summary : one)) : state.songs,
     details: {
       ...state.details,
-      [response.song.id]: {
-        tracks: response.tracks,
+      [songId]: {
+        tracks: [...merged.values()],
         viewer: response.viewer,
         viewerStale: false,
       },
@@ -202,14 +244,28 @@ export function withVote(
 export function mergeFirstPage(
   state: JamChannelState,
   page: { songs: JamSongSummary[]; nextCursor: string | null },
+  changes: ReadChanges = NO_CHANGES,
 ): JamChannelState {
   const fresh = new Set(page.songs.map((song) => song.id));
   const oldestOnPage = page.songs.length > 0 ? page.songs[page.songs.length - 1]!.updatedAt : null;
-  const kept =
-    page.nextCursor === null || oldestOnPage === null
-      ? []
-      : state.songs.filter((song) => !fresh.has(song.id) && song.updatedAt < oldestOnPage);
-  const songs = sortByActivity([...page.songs, ...kept]);
+  const fromPage = page.songs.flatMap((song) => {
+    const change = changes.songs.get(song.id);
+    if (change === null) {
+      return []; // deleted live while the read was out
+    }
+    return [change ?? song]; // a live change is newer than the page's snapshot
+  });
+  const kept = state.songs.filter((song) => {
+    if (fresh.has(song.id)) {
+      return false;
+    }
+    // Something that happened while the read was out is newer than the page.
+    if (changes.songs.get(song.id)) {
+      return true;
+    }
+    return page.nextCursor !== null && oldestOnPage !== null && song.updatedAt < oldestOnPage;
+  });
+  const songs = sortByActivity([...fromPage, ...kept]);
   const alive = new Set(songs.map((song) => song.id));
   const details = Object.fromEntries(
     Object.entries(state.details).filter(([songId]) => alive.has(songId)),
