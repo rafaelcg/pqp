@@ -116,6 +116,9 @@ class JamWallViewModel(
     private var started = false
     private var readJob: Job? = null
 
+    /** The page request in flight, so a refresh can cancel it (its answer would be for a wall that is gone). */
+    private var pageJob: Job? = null
+
     // Previews: queued, and at most [PREVIEW_WORKERS] in flight, so a fast scroll
     // over twenty tiles is three requests, not twenty.
     private val queue = ArrayDeque<String>()
@@ -167,10 +170,15 @@ class JamWallViewModel(
 
     fun load() {
         readJob?.cancel()
+        // A page asked for before this refresh is for a wall that is about to be replaced: drop it now, and its
+        // "loading" with it, or the next page would wait on an answer nobody will use.
+        pageJob?.cancel()
+        pageJob = null
         generation += 1
         val request = generation
         _state.update {
-            if (it.wall.isEmpty) it.copy(phase = JamWallUiState.Phase.Loading) else it.copy(refreshing = true)
+            val reset = it.copy(loadingMore = false, loadMoreFailed = false, chaseStopped = false)
+            if (it.wall.isEmpty) reset.copy(phase = JamWallUiState.Phase.Loading) else reset.copy(refreshing = true)
         }
         reading = true
         buffered.clear()
@@ -225,7 +233,7 @@ class JamWallViewModel(
         if (current.loadingMore) return
         val request = generation
         _state.update { it.copy(loadingMore = true, loadMoreFailed = false, chaseStopped = false) }
-        viewModelScope.launch {
+        pageJob = viewModelScope.launch {
             try {
                 val page = backend.songs(channelId, cursor = cursor)
                 if (request != generation || _state.value.wall.nextCursor != cursor) {

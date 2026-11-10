@@ -246,6 +246,36 @@ class JamWallViewModelTest {
     }
 
     @Test
+    fun `a refresh while a page is in flight drops that page and its loading, and paging works after it`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val backend = FakeBackend().apply {
+            pages += JamSongListResponse(listOf(aSong("a")), "c1")
+        }
+        val model = model(backend)
+        model.start()
+        advanceUntilIdle()
+        // Page two is out (held), then the person pulls to refresh.
+        backend.pageGate += gate
+        model.loadMore()
+        runCurrent()
+        assertTrue(model.state.value.loadingMore)
+        backend.pages += JamSongListResponse(listOf(aSong("a2")), "c9")
+        model.refresh()
+        runCurrent()
+        // Not waiting on an answer nobody will use.
+        assertFalse(model.state.value.loadingMore)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        // The stale page is not appended to the new wall, and the next page can be asked for.
+        assertEquals(listOf("a2"), model.state.value.wall.songs.map { it.id })
+        assertEquals("c9", model.state.value.wall.nextCursor)
+        backend.pages += JamSongListResponse(listOf(aSong("c")), null)
+        model.loadMore()
+        advanceUntilIdle()
+        assertEquals(listOf("a2", "c"), model.state.value.wall.songs.map { it.id })
+    }
+
+    @Test
     fun `the automatic search under a filter nothing passes stops after a few pages and the person decides`() = runTest {
         val backend = FakeBackend().apply {
             repeat(8) { pages += JamSongListResponse(listOf(aSong("open$it")), if (it < 7) "c$it" else null) }
