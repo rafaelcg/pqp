@@ -10,6 +10,8 @@ import {
   createJamSongSchema,
   createJamUploadSchema,
   JAM_AUDIO_MAX_BYTES,
+  JAM_COVER_CONTENT_TYPES,
+  JAM_COVER_MAX_BYTES,
   JAM_FRAME_TYPES,
   JAM_INSTRUMENTS,
   JAM_PEAKS_MAX,
@@ -20,6 +22,7 @@ import {
   jamTrackPlayedMs,
   jamTrackSchema,
   listJamSongsQuerySchema,
+  setJamCoverSchema,
   updateJamSongSchema,
   updateJamTrackSchema,
   type JamSongSummary,
@@ -50,6 +53,7 @@ const SONG: JamSongSummary = {
   hasVideo: true,
   contributors: [{ id: ID2, name: "Alice", avatarUrl: null }],
   missingInstruments: ["bass", "drums"],
+  coverUrl: null,
 };
 
 const TRACK: JamTrack = {
@@ -141,6 +145,18 @@ describe("jam contract", () => {
     ).toEqual(["other"]);
   });
 
+  it("the cover is additive: a summary from before it parses with none, a newer one carries it, a phone's decoder can skip it", () => {
+    const { coverUrl: _cover, ...older } = SONG;
+    expect(jamSongSummarySchema.parse(older).coverUrl).toBeNull();
+    const withCover = { ...SONG, coverUrl: "https://bucket.example/jam/s/c.jpg?X-Amz-Signature=a" };
+    expect(jamSongSummarySchema.parse(withCover).coverUrl).toBe(withCover.coverUrl);
+    // The frames that carry a song carry the cover through, unchanged.
+    const frame = jamFrameSchema.parse({ type: "jam-song-updated", channelId: ID2, song: withCover });
+    expect(frame.type === "jam-song-updated" && frame.song.coverUrl).toBe(withCover.coverUrl);
+    // It is null, not absent, once the server knows about covers: a cover REMOVED is a null.
+    expect(jamSongSummarySchema.parse({ ...SONG, coverUrl: null }).coverUrl).toBeNull();
+  });
+
   it("does the timeline arithmetic the header states", () => {
     expect(jamTrackPlayedMs(TRACK)).toBe(60_850);
     expect(jamTrackEndMs(TRACK)).toBe(60_600);
@@ -197,9 +213,36 @@ describe("jam requests", () => {
       createJamUploadSchema.safeParse({ kind: "video", contentType: "audio/webm", byteSize: 5 })
         .success,
     ).toBe(false);
+    // A cover is a picture: the three types every browser and phone draws, nothing else.
+    for (const contentType of JAM_COVER_CONTENT_TYPES) {
+      expect(
+        createJamUploadSchema.safeParse({ kind: "cover", contentType, byteSize: 5 }).success,
+        contentType,
+      ).toBe(true);
+    }
+    for (const contentType of ["image/gif", "image/svg+xml", "image/heic", "audio/webm", "video/mp4"]) {
+      expect(
+        createJamUploadSchema.safeParse({ kind: "cover", contentType, byteSize: 5 }).success,
+        contentType,
+      ).toBe(false);
+    }
+    expect(
+      createJamUploadSchema.safeParse({ kind: "audio", contentType: "image/png", byteSize: 5 }).success,
+    ).toBe(false);
+    expect(createJamUploadSchema.safeParse({ kind: "cover", contentType: "image/png", byteSize: 0 }).success).toBe(false);
+    // A cover is far smaller than any recording.
+    expect(JAM_COVER_MAX_BYTES).toBeLessThan(JAM_AUDIO_MAX_BYTES);
     // The size ceilings are enforced where the object store is asked, so a
     // deployment can set a lower one; the constants are the contract.
     expect(JAM_VIDEO_MAX_BYTES).toBeGreaterThan(JAM_AUDIO_MAX_BYTES);
+  });
+
+  it("claiming a cover names an upload, and only that", () => {
+    expect(setJamCoverSchema.safeParse({ uploadId: ID }).success).toBe(true);
+    expect(setJamCoverSchema.safeParse({}).success).toBe(false);
+    expect(setJamCoverSchema.safeParse({ uploadId: "not-a-uuid" }).success).toBe(false);
+    // The song patch does not carry a cover: it is its own write, with its own gate.
+    expect(updateJamSongSchema.safeParse({ coverUrl: "https://x" }).success).toBe(false);
   });
 
   it("a track needs sane numbers, and the trims must leave something to play", () => {

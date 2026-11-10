@@ -7,7 +7,7 @@ import { jamSongSummarySchema, type JamSongSummary, type JamTrack } from "@pqp/s
  * summary is not parsed (the schema checks them as uuids).
  */
 const JAM_SUMMARY_DEFAULTS = jamSongSummarySchema
-  .pick({ previewPeaks: true, hasVideo: true, contributors: true, missingInstruments: true })
+  .pick({ previewPeaks: true, hasVideo: true, coverUrl: true, contributors: true, missingInstruments: true })
   .parse({});
 
 /** Plain song and track values for the jam tests. Not shipped: only a test imports this. */

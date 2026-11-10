@@ -7,6 +7,7 @@ import {
   JAM_MAX_TRACKS_PER_SONG,
   listJamSongsQuerySchema,
   Permission,
+  setJamCoverSchema,
   updateJamSongSchema,
   updateJamTrackSchema,
   type JamSongDetailResponse,
@@ -31,6 +32,8 @@ import {
   listJamTracks,
   listVotedTrackIds,
   mintJamUpload,
+  removeJamCover,
+  setJamCover,
   setJamVote,
   updateJamSong,
   updateJamTrack,
@@ -53,7 +56,8 @@ import { announceJam } from "../ws/chat.js";
  * a song or track in it, a channel that is not a jam: one answer, no oracle),
  * then 403 `jam_channels_off` for a write while the runtime flag is off for the
  * server, then the permission, then the body. Reads never look at the flag.
- * Three removals do not either (delete a song, delete a track, unvote): a
+ * Four removals do not either (delete a song, delete a track, unvote, remove a
+ * cover): a
  * switched-off feature is frozen, not a place content or moderation gets
  * stuck.
  *
@@ -279,12 +283,62 @@ export function registerJamRoutes(router: Router): void {
     const { song, channel } = await requireSong(songId!, user.id);
     requireOn(channel.server_id);
     await assertNotTimedOut(user.id, channel.id);
-    const { canPost } = await permsOf(channel, user.id);
-    // Somebody who could not add any track gets no signed URL either, so a
-    // closed song costs the bucket nothing.
-    assertMayAddAny(song, user.id, canPost);
+    const perms = await permsOf(channel, user.id);
     const request = createJamUploadSchema.parse(await readJsonBody(req));
+    if (request.kind === "cover") {
+      // A picture for the song, not a track: the rule of editing it.
+      if (!isSongAuthor(song, user.id) && !perms.isModerator) {
+        throw new HttpError(403, "You cannot edit this song");
+      }
+    } else {
+      // Somebody who could not add any track gets no signed URL either, so a
+      // closed song costs the bucket nothing.
+      assertMayAddAny(song, user.id, perms.canPost);
+    }
     return new Created(await mintJamUpload({ song, uploaderId: user.id, request }));
+  });
+
+  // ----------------------------------------------------------------- cover
+
+  // Step 3 of a cover: claim the upload as the song's picture. The same people
+  // as the edit of a title, and the same gates.
+  router.put("/api/jam-songs/:songId/cover", async ({ req, user }, { songId }) => {
+    const { song, channel } = await requireSong(songId!, user.id);
+    requireOn(channel.server_id);
+    await assertNotTimedOut(user.id, channel.id);
+    const perms = await permsOf(channel, user.id);
+    if (!isSongAuthor(song, user.id) && !perms.isModerator) {
+      throw new HttpError(403, "You cannot edit this song");
+    }
+    const { uploadId } = setJamCoverSchema.parse(await readJsonBody(req));
+    const result = await setJamCover({
+      song,
+      userId: user.id,
+      uploadId,
+      late: (summary) => announceJam({ type: "jam-song-updated", channelId: channel.id, song: summary }),
+    });
+    // Announced even for a retried claim: a frame is applied by id and is
+    // idempotent, and the retry may be the first call whose summary read failed
+    // after the commit, so no other viewer has heard of the change yet.
+    announceJam({ type: "jam-song-updated", channelId: channel.id, song: result.song });
+    return { song: result.song };
+  });
+
+  // Take the picture off. Allowed while the flag is off: a picture somebody
+  // should not see stays removable in a paused feature.
+  router.delete("/api/jam-songs/:songId/cover", async ({ user }, { songId }) => {
+    const { song, channel } = await requireSong(songId!, user.id);
+    await assertNotTimedOut(user.id, channel.id);
+    const perms = await permsOf(channel, user.id);
+    if (!isSongAuthor(song, user.id) && !perms.isModerator) {
+      throw new HttpError(403, "You cannot edit this song");
+    }
+    const result = await removeJamCover(song, (summary) =>
+      announceJam({ type: "jam-song-updated", channelId: channel.id, song: summary }),
+    );
+    // Same reasoning as the claim: announcing a removal that already happened is harmless.
+    announceJam({ type: "jam-song-updated", channelId: channel.id, song: result.song });
+    return { song: result.song };
   });
 
   // ---------------------------------------------------------------- tracks

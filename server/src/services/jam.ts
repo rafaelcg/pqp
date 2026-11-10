@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
   JAM_AUDIO_CONTENT_TYPES,
   JAM_AUDIO_MAX_BYTES,
+  JAM_COVER_CONTENT_TYPES,
+  JAM_COVER_MAX_BYTES,
   JAM_ERRORS,
   JAM_INSTRUMENTS,
   JAM_MAX_TRACKS_PER_AUTHOR,
@@ -31,8 +33,10 @@ import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
 import { sharedRateLimit } from "../lib/cluster-rate-limit.js";
 import { HttpError } from "../lib/http.js";
+import { sniffImage } from "../lib/image-info.js";
 import {
   deleteObject,
+  getObjectPrefix,
   headObject,
   isStorageConfigured,
   presignGet,
@@ -64,6 +68,8 @@ const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 const ORPHAN_GRACE = "1 hour";
 /** A deleted track's objects are kept this long before the sweep deletes them. */
 const PURGE_GRACE = "1 day";
+/** How much of a cover's start is read to check it is the picture it says it is. */
+const COVER_SNIFF_BYTES = 256 * 1024;
 /** Rows per sweep pass. */
 const SWEEP_BATCH = 100;
 
@@ -86,6 +92,9 @@ const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
   "audio/mpeg": ".mp3",
   "video/webm": ".webm",
   "video/mp4": ".mp4",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
 };
 
 type Db = Pick<PoolClient, "query">;
@@ -198,6 +207,8 @@ interface SongSummaryRow extends JamSongRow {
   mix_start: number | null;
   mix_end: number | null;
   has_video: boolean | null;
+  /** The object key of the song's cover, when it has one. */
+  cover_key: string | null;
   preview_peaks: number[] | null;
   contributors: Array<{ id: string; name: string | null; avatarUrl: string | null }> | null;
   created_cursor: string;
@@ -216,6 +227,7 @@ const SUMMARY_SELECT = `
          u.avatar_url AS author_avatar_url,
          agg.track_count, agg.instruments, agg.contributor_count,
          agg.mix_start, agg.mix_end, agg.has_video,
+         cover.storage_key AS cover_key,
          prev.preview_peaks, contrib.contributors,
          -- The keyset cursor carries the timestamps at full microsecond
          -- precision: a JS Date keeps milliseconds, and two songs written in
@@ -226,6 +238,8 @@ const SUMMARY_SELECT = `
     FROM jam_songs s
     LEFT JOIN users u ON u.id = s.author_id
     LEFT JOIN server_members sm ON sm.server_id = s.server_id AND sm.user_id = s.author_id
+    LEFT JOIN jam_song_covers sc ON sc.song_id = s.id
+    LEFT JOIN jam_uploads cover ON cover.id = sc.upload_id
     LEFT JOIN LATERAL (
       SELECT COUNT(*)::int AS track_count,
              COALESCE(array_agg(DISTINCT t.instrument), '{}') AS instruments,
@@ -312,6 +326,7 @@ function mapSong(row: SongSummaryRow): JamSongSummary {
         : Math.max(0, row.mix_end - row.mix_start),
     previewPeaks: row.preview_peaks ? reducePeaks(row.preview_peaks) : [],
     hasVideo: row.has_video === true,
+    coverUrl: row.cover_key ? signedUrl(row.cover_key, attachmentUrlTtlSeconds()) || null : null,
     contributors: (row.contributors ?? []).map((one) => ({
       id: one.id,
       name: one.name,
@@ -659,6 +674,219 @@ export async function updateJamSong(
   return (await requireSummary(song.id));
 }
 
+// ------------------------------------------------------------------ cover
+
+/**
+ * Drop the object of a cover nothing points at any more, then its ledger row.
+ * Best effort and never awaited by a request: the write that stopped pointing
+ * at it has already committed, and a bucket that does not answer must not undo
+ * it. The sweep (`sweepJamMedia`) is the backstop for a delete that failed.
+ * The row goes only while no song names it, so a late retry can never remove
+ * the object of a cover somebody has since set.
+ */
+function discardCoverUpload(previous: { id: string; storage_key: string } | undefined): void {
+  if (!previous || !isStorageConfigured()) {
+    return;
+  }
+  void (async () => {
+    try {
+      await deleteObject(previous.storage_key);
+      await getPool().query(
+        `DELETE FROM jam_uploads u
+          WHERE u.id = $1 AND u.kind = 'cover'
+            AND NOT EXISTS (SELECT 1 FROM jam_song_covers c WHERE c.upload_id = u.id)`,
+        [previous.id],
+      );
+    } catch (error) {
+      console.error(
+        `[jam] could not delete the old cover ${previous.storage_key}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  })();
+}
+
+/**
+ * The summary a cover write answers (and the route announces) once its change is
+ * committed. A read that fails here would leave a committed change with no frame
+ * and an error for the caller, so it is tried a few times first: a blip of the
+ * database is the usual reason, and the write is already safe. A song that is
+ * gone (an HttpError) is not retried. If it still fails the caller gets the
+ * error, and its retry of the same call answers and announces (the claim and the
+ * removal are both idempotent).
+ */
+async function summaryAfterCommit(
+  songId: string,
+  late?: (song: JamSongSummary) => void,
+): Promise<JamSongSummary> {
+  const waits = [150, 400];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await requireSummary(songId);
+    } catch (error) {
+      const wait = waits[attempt];
+      if (error instanceof HttpError || wait === undefined) {
+        // The change is committed and the caller is about to get an error: the
+        // room is told as soon as the song can be read, so no viewer stays stale
+        // because the caller never retried.
+        if (!(error instanceof HttpError) && late) {
+          announceLate(songId, late);
+        }
+        throw error;
+      }
+      await new Promise((done) => setTimeout(done, wait));
+    }
+  }
+}
+
+/** How often, and how many times, a summary that could not be read after a commit is tried in the background. */
+const LATE_RETRY_MS = 1000;
+const LATE_RETRIES = 60;
+
+function announceLate(songId: string, announce: (song: JamSongSummary) => void): void {
+  void (async () => {
+    for (let attempt = 0; attempt < LATE_RETRIES; attempt += 1) {
+      await new Promise((done) => setTimeout(done, LATE_RETRY_MS));
+      try {
+        announce(await requireSummary(songId));
+        return;
+      } catch (error) {
+        if (error instanceof HttpError) {
+          return; // the song is gone: nothing to tell
+        }
+      }
+    }
+  })();
+}
+
+/** A cover tied to this caller already (a retried claim): nothing to do twice. */
+async function coverAlreadySet(songId: string, uploadId: string, userId: string): Promise<boolean> {
+  const result = await getPool().query(
+    `SELECT 1 FROM jam_song_covers c JOIN jam_uploads u ON u.id = c.upload_id
+      WHERE c.song_id = $1 AND c.upload_id = $2 AND u.uploader_id = $3`,
+    [songId, uploadId, userId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Make an upload of kind `cover` the song's picture. A retry of a claim that
+ * already made it answers the same song (the route announces it again: frames
+ * are idempotent, and the first call may have failed after the commit).
+ *
+ * Order, like adding a track: the upload row is found and HEAD-and-sniff
+ * verified off any transaction, then one transaction locks the song, claims the
+ * upload (an `UPDATE ... WHERE claimed_at IS NULL` that must touch its row, so
+ * two racing claims cannot both win) and points the cover row at it. The
+ * object the cover stopped being is deleted after the commit.
+ */
+export async function setJamCover(input: {
+  song: JamSongRow;
+  userId: string;
+  uploadId: string;
+  /** Called with the summary if it could only be read after this call gave up (see `summaryAfterCommit`). */
+  late?: (song: JamSongSummary) => void;
+}): Promise<{ song: JamSongSummary }> {
+  const { song, userId, uploadId, late } = input;
+  const unchanged = async () => ({ song: await summaryAfterCommit(song.id, late) });
+  if (await coverAlreadySet(song.id, uploadId, userId)) {
+    return unchanged();
+  }
+  const upload = await findOwnUpload(uploadId, song, userId, "cover");
+  if (!upload) {
+    if (await coverAlreadySet(song.id, uploadId, userId)) {
+      return unchanged();
+    }
+    throw new HttpError(404, JAM_ERRORS.uploadUnknown);
+  }
+  if ((await verifyUpload(upload)) === null) {
+    throw new HttpError(422, JAM_ERRORS.uploadNotVerified);
+  }
+
+  const client = await getPool().connect();
+  let previous: { id: string; storage_key: string } | undefined;
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query(
+      `SELECT 1 FROM jam_songs WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+      [song.id],
+    );
+    if ((locked.rowCount ?? 0) === 0) {
+      throw new HttpError(404, JAM_NOT_FOUND);
+    }
+    const claimed = await client.query(
+      `UPDATE jam_uploads SET claimed_at = NOW()
+        WHERE id = $1 AND claimed_at IS NULL AND swept_at IS NULL AND uploader_id = $2`,
+      [upload.id, userId],
+    );
+    if ((claimed.rowCount ?? 0) !== 1) {
+      throw new HttpError(404, JAM_ERRORS.uploadUnknown);
+    }
+    const before = await client.query<{ id: string; storage_key: string }>(
+      `SELECT u.id, u.storage_key FROM jam_song_covers c JOIN jam_uploads u ON u.id = c.upload_id
+        WHERE c.song_id = $1`,
+      [song.id],
+    );
+    previous = before.rows[0];
+    await client.query(
+      `INSERT INTO jam_song_covers (song_id, upload_id) VALUES ($1, $2)
+       ON CONFLICT (song_id) DO UPDATE SET upload_id = EXCLUDED.upload_id, updated_at = NOW()`,
+      [song.id, upload.id],
+    );
+    await client.query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [song.id]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    // Two claims of one upload raced and the other one won: that is the answer.
+    if (error instanceof HttpError && error.message === JAM_ERRORS.uploadUnknown) {
+      if (await coverAlreadySet(song.id, uploadId, userId)) {
+        return unchanged();
+      }
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+  discardCoverUpload(previous);
+  return { song: await summaryAfterCommit(song.id, late) };
+}
+
+/** Take the picture off a song. A song that has none answers as it is. */
+export async function removeJamCover(
+  song: JamSongRow,
+  late?: (song: JamSongSummary) => void,
+): Promise<{ song: JamSongSummary }> {
+  const client = await getPool().connect();
+  let previous: { id: string; storage_key: string } | undefined;
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query(
+      `SELECT 1 FROM jam_songs WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+      [song.id],
+    );
+    if ((locked.rowCount ?? 0) === 0) {
+      throw new HttpError(404, JAM_NOT_FOUND);
+    }
+    const removed = await client.query<{ id: string; storage_key: string }>(
+      `WITH gone AS (DELETE FROM jam_song_covers WHERE song_id = $1 RETURNING upload_id)
+       SELECT u.id, u.storage_key FROM gone JOIN jam_uploads u ON u.id = gone.upload_id`,
+      [song.id],
+    );
+    previous = removed.rows[0];
+    if (previous) {
+      await client.query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [song.id]);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  discardCoverUpload(previous);
+  return { song: await summaryAfterCommit(song.id, late) };
+}
+
 /**
  * Soft-delete a song and every live track in it, in one statement pair. The
  * objects are deleted by the sweep a day later (`sweepJamMedia`), which is
@@ -730,7 +958,14 @@ function storageKeyFor(serverId: string, songId: string, contentType: string): s
 
 /** The ceiling for a kind. */
 export function jamMaxBytes(kind: JamUploadKind): number {
-  return kind === "audio" ? JAM_AUDIO_MAX_BYTES : JAM_VIDEO_MAX_BYTES;
+  switch (kind) {
+    case "audio":
+      return JAM_AUDIO_MAX_BYTES;
+    case "video":
+      return JAM_VIDEO_MAX_BYTES;
+    default:
+      return JAM_COVER_MAX_BYTES;
+  }
 }
 
 /**
@@ -832,6 +1067,25 @@ async function verifyUpload(row: UploadRow): Promise<number | null> {
   }
   if (head.contentType !== row.content_type) {
     return null;
+  }
+  // A HEAD only reports what the uploader CLAIMED. A cover is shown in other
+  // people's pages, so its first bytes must also be the picture type that was
+  // signed (audio and video are not looked into, like everywhere in the
+  // product, `docs/CONTENT_SAFETY.md`).
+  if (row.kind === "cover") {
+    try {
+      const prefix = await getObjectPrefix(row.storage_key, COVER_SNIFF_BYTES);
+      const sniffed = prefix ? sniffImage(prefix) : null;
+      if (!sniffed || sniffed.type !== row.content_type) {
+        return null;
+      }
+    } catch (error) {
+      console.error(
+        `[jam] could not read ${row.storage_key}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return null;
+    }
   }
   return head.contentLength;
 }
@@ -1256,6 +1510,41 @@ export async function sweepJamMedia(): Promise<number> {
     await getPool().query(`UPDATE jam_tracks SET media_purged_at = NOW() WHERE id = $1`, [row.id]);
     done += 1;
   }
+
+  // Covers: the picture a song stopped showing (replaced, or removed while the
+  // immediate delete failed), then the picture of a deleted song after the
+  // same day's grace a deleted track's media gets. Object first, ledger row
+  // after, so a failed delete leaves the row for the next pass; the row is
+  // removed only while no song names it.
+  const strayCovers = await getPool().query<{ id: string; storage_key: string }>(
+    `SELECT u.id, u.storage_key FROM jam_uploads u
+      WHERE u.kind = 'cover' AND u.claimed_at IS NOT NULL
+        AND u.claimed_at < NOW() - INTERVAL '${ORPHAN_GRACE}'
+        AND NOT EXISTS (SELECT 1 FROM jam_song_covers c WHERE c.upload_id = u.id)
+      ORDER BY u.claimed_at LIMIT ${SWEEP_BATCH}`,
+  );
+  const goneCovers = await getPool().query<{ id: string; storage_key: string }>(
+    `SELECT u.id, u.storage_key
+       FROM jam_song_covers c
+       JOIN jam_songs s ON s.id = c.song_id
+       JOIN jam_uploads u ON u.id = c.upload_id
+      WHERE s.deleted_at IS NOT NULL AND s.deleted_at < NOW() - INTERVAL '${PURGE_GRACE}'
+      ORDER BY s.deleted_at LIMIT ${SWEEP_BATCH}`,
+  );
+  for (const row of [...strayCovers.rows, ...goneCovers.rows]) {
+    try {
+      await deleteObject(row.storage_key);
+    } catch (error) {
+      console.error(
+        `[jam] could not delete cover ${row.storage_key}:`,
+        error instanceof Error ? error.message : error,
+      );
+      continue;
+    }
+    // A deleted song's cover row goes with its ledger row (ON DELETE CASCADE).
+    await getPool().query(`DELETE FROM jam_uploads WHERE id = $1 AND kind = 'cover'`, [row.id]);
+    done += 1;
+  }
   return done;
 }
 
@@ -1263,4 +1552,5 @@ export async function sweepJamMedia(): Promise<number> {
 export const JAM_ALLOWED_TYPES = {
   audio: JAM_AUDIO_CONTENT_TYPES,
   video: JAM_VIDEO_CONTENT_TYPES,
+  cover: JAM_COVER_CONTENT_TYPES,
 } as const;

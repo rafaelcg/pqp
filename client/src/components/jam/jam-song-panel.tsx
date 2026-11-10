@@ -1,5 +1,5 @@
 import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
-import { ArrowLeft, Lock, LockOpen, Mic, MoreHorizontal, Trash2, X } from "lucide-react";
+import { ArrowLeft, Camera, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -28,10 +28,12 @@ import {
   useJamStoreEpoch,
 } from "@/lib/jam-store";
 import type { JamDetail } from "@/lib/jam-state";
-import { barsFromPeaks, competingInstruments, formatClock, orderTracks, seededBars, songNeed, songTimeline } from "@/lib/jam-wall";
+import { competingInstruments, formatClock, orderTracks, songNeed, songTimeline } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
-import { ContributorStack, coverGradient, Equalizer, MirrorBars } from "./jam-art";
+import { ContributorStack, Equalizer } from "./jam-art";
 import { useBarCount } from "./jam-bars";
+import { JamCoverPhoto, SongArt, useJamCover, type JamCoverState } from "./jam-cover";
+import { JamEditSheet } from "./jam-edit-sheet";
 import { TrackAdjust } from "./jam-track-adjust";
 import { JamTrackRow } from "./jam-track-row";
 import { JamTransport } from "./jam-transport";
@@ -87,6 +89,9 @@ export function JamSongPanel({
   const [pendingDelete, setPendingDelete] = useState<JamTrack | null>(null);
   const [confirmSong, setConfirmSong] = useState(false);
   const [adjustingId, setAdjustingId] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const cover = useJamCover(song.coverUrl);
+  const covered = cover.src !== null && cover.status !== "failed";
   const serial = useRef(oneAtATime()).current;
   const storeEpoch = useJamStoreEpoch();
   // What an answer writes into the store carries the identity epoch of the render
@@ -124,6 +129,8 @@ export function JamSongPanel({
   const addable = viewer?.addableInstruments ?? [];
   const reason = cannotRecordReason({ enabled, uploads, addable, joinMode: song.joinMode });
   const canManage = viewer ? viewer.isAuthor || viewer.canModerate : false;
+  // The server's own rule for editing a song (its author or a moderator, and the flag on).
+  const canEdit = canManage && enabled;
   const first = pickInstrument(song, addable, mine);
   const missingSlots =
     need.kind === "missing" ? need.instruments.filter((instrument) => !tracks.some((one) => one.instrument === instrument)) : [];
@@ -163,6 +170,7 @@ export function JamSongPanel({
   const songMenu: ContextMenuItemDef[] =
     canManage && enabled
       ? [
+          { id: "edit", label: t("jam.edit.open"), icon: Pencil, onSelect: () => setEditing(true) },
           {
             id: "join",
             label: song.joinMode === "closed" ? t("jam.song.reopen") : t("jam.song.finish"),
@@ -188,7 +196,14 @@ export function JamSongPanel({
 
   return (
     <section aria-label={song.title} data-jam-song={song.id} className="flex h-full min-h-0 flex-col bg-surface-1">
-      <header className="flex items-start gap-2 border-b border-border px-2 py-3 sm:gap-3 sm:px-4">
+      <header className="relative isolate flex items-start gap-2 overflow-hidden border-b border-border px-2 py-3 sm:gap-3 sm:px-4">
+        {covered && (
+          // The cover's own colours, blurred far past reading, behind the words.
+          <span aria-hidden="true" data-jam-header-wash="" className="jam-header-wash pointer-events-none absolute inset-0 -z-10">
+            <JamCoverPhoto cover={cover} eager className="scale-125 blur-2xl saturate-150 data-[ready=true]:opacity-60" />
+            <span className="absolute inset-0 bg-gradient-to-b from-surface-1/10 via-surface-1/55 to-surface-1" />
+          </span>
+        )}
         <button
           type="button"
           onClick={onClose}
@@ -197,7 +212,7 @@ export function JamSongPanel({
         >
           <ArrowLeft className="h-5 w-5" aria-hidden />
         </button>
-        <SongCover song={song} playing={playing} />
+        <SongCover song={song} cover={cover} playing={playing} onEdit={canEdit ? () => setEditing(true) : undefined} />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
           <h2 className="font-display text-2xl font-extrabold leading-[1.05] tracking-[-0.01em] text-text [text-wrap:balance] sm:text-3xl">
             {song.title}
@@ -210,6 +225,17 @@ export function JamSongPanel({
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {canEdit && (
+              <button
+                type="button"
+                data-jam-edit-open=""
+                onClick={() => setEditing(true)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-full bg-surface-2 px-3.5 text-xs font-bold text-text outline-none ring-1 ring-border sm:h-8 transition-[background-color,transform] duration-[var(--duration-fast)] hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96]"
+              >
+                <Pencil className="h-3.5 w-3.5" aria-hidden />
+                {t("jam.edit.open")}
+              </button>
+            )}
             {song.joinMode === "closed" && (
               <span data-jam-closed-line="" className="flex items-center gap-1 text-xs text-text-secondary">
                 <Lock className="h-3 w-3 shrink-0" aria-hidden />
@@ -415,6 +441,15 @@ export function JamSongPanel({
         )}
       </footer>
 
+      {canEdit && (
+        <JamEditSheet
+          open={editing}
+          song={song}
+          onClose={() => setEditing(false)}
+          onSong={(next) => writeFrame({ type: "jam-song-updated", channelId, song: next })}
+          onDenied={() => void loadJamDetail(channelId, song.id, { force: true })}
+        />
+      )}
       <ConfirmDialog
         open={pendingDelete !== null}
         title={t("jam.take.deleteTitle")}
@@ -475,36 +510,58 @@ export function bandOf(tracks: readonly JamTrack[], exceptId: string | null): Ba
 }
 
 /**
- * The song's cover, small: the tile's art (the gradient of its band and the
- * loudest stem's waveform), so the panel reads as the tile that was opened.
- * Its view-transition name pairs it with that tile.
+ * The song's cover: its photo when it has one, otherwise the tile's art (the
+ * gradient of its band and the loudest stem's waveform), so the panel reads as
+ * the tile that was opened. Its view-transition name pairs it with that tile.
+ * For the people who may edit the song the picture is itself the way in: a
+ * solid pill rises on hover and focus (and is always there on a phone, which has
+ * no hover), the same photo button the edit sheet's tile has.
  */
-function SongCover({ song, playing }: { song: JamSongSummary; playing: boolean }) {
-  const [ref, count] = useBarCount(5, 24);
-  const bars = useMemo(
-    () => (count === 0 ? [] : song.previewPeaks.length > 0 ? barsFromPeaks(song.previewPeaks, count) : seededBars(song.id, count)),
-    [count, song.previewPeaks, song.id],
-  );
+function SongCover({
+  song,
+  cover,
+  playing,
+  onEdit,
+}: {
+  song: JamSongSummary;
+  cover: JamCoverState;
+  playing: boolean;
+  onEdit?: () => void;
+}) {
+  const { t } = useTranslation();
+  const covered = cover.src !== null && cover.status !== "failed";
   return (
     <div
-      className={cn(
-        "relative isolate flex h-[4.5rem] w-[4.5rem] shrink-0 flex-col justify-between overflow-hidden rounded-[var(--radius-card)] p-2 text-on-inst shadow-[var(--shadow-2)] sm:h-24 sm:w-24 sm:p-2.5",
-        coverGradient(song.instruments),
-      )}
+      className="group relative isolate h-[5.5rem] w-[5.5rem] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-surface-2 shadow-[var(--shadow-2)] sm:h-40 sm:w-40"
       style={{ viewTransitionName: `jam-cover-${song.id}` } as CSSProperties}
       data-jam-cover=""
-      aria-hidden="true"
+      data-jam-cover-photo-on={covered ? "true" : undefined}
     >
-      <div ref={ref} className="relative min-h-0 flex-1">
-        <MirrorBars bars={bars} className="absolute inset-0 gap-[2px]" barClassName="bg-on-inst/75" />
+      <div aria-hidden="true" className="absolute inset-0">
+        {covered ? <JamCoverPhoto cover={cover} eager /> : <SongArt song={song} />}
       </div>
-      <div className="flex items-center justify-between">
-        {playing && (
-          <span className="ml-auto flex h-5 items-center rounded-full bg-on-inst px-1.5 text-accent">
-            <Equalizer className="h-3" />
+      {playing && (
+        <span aria-hidden="true" className="absolute bottom-1.5 left-1.5 flex h-5 items-center rounded-full bg-media-scrim/85 px-1.5 text-on-media">
+          <Equalizer className="h-3" />
+        </span>
+      )}
+      {onEdit && (
+        <button
+          type="button"
+          onClick={onEdit}
+          data-jam-cover-edit=""
+          aria-label={covered ? t("jam.edit.changePhoto") : t("jam.edit.addPhoto")}
+          className="absolute inset-0 rounded-[inherit] text-on-media outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          <span
+            aria-hidden="true"
+            className="absolute inset-x-0 top-1/2 mx-auto flex h-9 w-max -translate-y-1/2 items-center gap-1.5 rounded-full bg-media-scrim/80 px-3 text-xs font-bold opacity-0 backdrop-blur-sm transition-opacity duration-[var(--duration-base)] group-hover:opacity-100 group-focus-within:opacity-100 max-sm:hidden"
+          >
+            <Camera className="h-4 w-4 shrink-0" strokeWidth={2.25} />
+            <span className="max-sm:hidden">{covered ? t("jam.edit.changePhoto") : t("jam.edit.addPhoto")}</span>
           </span>
-        )}
-      </div>
+        </button>
+      )}
     </div>
   );
 }

@@ -629,7 +629,7 @@ describe("jam_channels against the jam config", () => {
     );
   });
 
-  it("every write route asks the flag, and only the three removals do not", () => {
+  it("every write route asks the flag, and only the four removals do not", () => {
     const routes = readFileSync(path.join(serverSrc, "api/jam-routes.ts"), "utf8");
     // Every handler registration, cut at the next one.
     const handlers = routes
@@ -649,6 +649,8 @@ describe("jam_channels against the jam config", () => {
     expect(ungated.sort()).toEqual(
       [
         "delete /api/jam-songs/:songId",
+        // A picture somebody should not see stays removable while the feature is paused.
+        "delete /api/jam-songs/:songId/cover",
         "delete /api/jam-tracks/:trackId",
         "delete /api/jam-tracks/:trackId/vote",
         "put /api/jam-tracks/:trackId/vote",
