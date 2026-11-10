@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSilentTake, SILENT_PEAK, takePeak } from "./jam-take-silence";
+import { blockPeaks, isSilentTake, SILENT_BLOCK_MS, SILENT_PEAK, silentIn, takePeak } from "./jam-take-silence";
 
 const SR = 48_000;
 
@@ -42,6 +42,36 @@ describe("a take that is silent from start to finish", () => {
     const tail = take(4, (index) => (index > 3 * SR ? 0.5 : 0));
     expect(isSilentTake(tail, { trimStartMs: 0, trimEndMs: 1000 })).toBe(true);
     expect(isSilentTake(tail, { trimStartMs: 4000, trimEndMs: 0 })).toBe(true);
+  });
+
+  it("answers an edit from the reduction alone, at the edited volume", () => {
+    // Loud only between 2 s and 2.2 s.
+    const x = take(5, (index) => (index > 2 * SR && index < 2.2 * SR ? 0.4 : 0));
+    const blocks = blockPeaks(x.samples, SR);
+    expect(blocks.length).toBe(Math.ceil((5 * 1000) / SILENT_BLOCK_MS));
+    const all = { fromMs: 0, toMs: 5000 };
+    expect(silentIn(blocks, all)).toBe(false);
+    // trimmed past the note on either side
+    expect(silentIn(blocks, { fromMs: 2300, toMs: 5000 })).toBe(true);
+    expect(silentIn(blocks, { fromMs: 0, toMs: 1900 })).toBe(true);
+    // turned all the way down, or down under the threshold, it is silent as it would be heard
+    expect(silentIn(blocks, all, 0)).toBe(true);
+    expect(silentIn(blocks, all, 0.02)).toBe(true);
+    expect(silentIn(blocks, all, 0.1)).toBe(false);
+    expect(silentIn(blocks, all, 2)).toBe(false);
+    // nothing left to hear
+    expect(silentIn(blocks, { fromMs: 3000, toMs: 3000 })).toBe(true);
+  });
+
+  it("agrees with the direct measurement, and a block that straddles a trim counts whole", () => {
+    const x = take(3, (index) => (index > 1.99 * SR && index < 2.01 * SR ? 0.5 : 0));
+    const blocks = blockPeaks(x.samples, SR);
+    for (const trimStartMs of [0, 1000, 1990, 2000, 2010, 2500]) {
+      const direct = isSilentTake(x, { trimStartMs, trimEndMs: 0 });
+      const reduced = silentIn(blocks, { fromMs: trimStartMs, toMs: 3000 });
+      // never says silent when the direct measurement hears something
+      expect(!direct || reduced, `trim ${trimStartMs}`).toBe(true);
+    }
   });
 
   it("measures only the asked stretch", () => {

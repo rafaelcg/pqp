@@ -298,7 +298,12 @@ announce never fails the write.
   (same job, same minute, rows only, `FOR UPDATE SKIP LOCKED`) deletes a song
   with no live track whose `updated_at` is over 24 hours old. Deleting the last
   track as the song's author or a moderator deletes the song too (frame
-  `jam-song-deleted`); a guest's last take leaves the author's song empty.
+  `jam-song-deleted`); a guest's last take leaves the author's song empty, and
+  the room is told with `jam-song-deleted` too (a `jam-track-deleted` would carry
+  the summary the list now hides). The studio cleans up a song it made and never
+  filled with `DELETE /api/jam-songs/:id?ifEmpty=true`, which is 409
+  `jam_song_not_empty` when a take is in it, so a claim that committed without
+  its answer is never deleted.
 - Deleting a channel, a server or an account deletes the objects: the keys sit
   only on rows those deletes cascade, so they are read first (`jam-keys.ts`) and
   deleted after the commit, like attachments and soundboard clips. A person's

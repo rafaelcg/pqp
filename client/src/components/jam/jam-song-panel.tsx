@@ -482,19 +482,14 @@ export function JamSongPanel({
         onClose={() => setPendingDelete(null)}
         onConfirm={() => {
           const track = pendingDelete;
-          const withSong = deletesSong;
           setPendingDelete(null);
           if (!track) return;
           if (adjustingId === track.id) setAdjustingId(null);
           void guard(async () => {
             await deleteJamTrack(track.id);
-            if (withSong) {
-              // The server took the song with its last take: it is gone from the wall too.
-              writeFrame({ type: "jam-song-deleted", channelId, songId: song.id });
-              onClose();
-              void loadJamChannel(channelId, { force: true }).catch(() => undefined);
-              return;
-            }
+            // When it was the song's last take the server took the song with it (if nobody
+            // added one meanwhile): the reads below are what say which it was, so a take that
+            // arrived in between is never taken for a deleted song.
             // Deleted is deleted: the lane goes at once, and the refreshes below are
             // best effort (their failing must not make a done delete look undone).
             writeFrame({ type: "jam-track-deleted", channelId, song, trackId: track.id });

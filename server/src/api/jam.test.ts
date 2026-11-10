@@ -1350,19 +1350,20 @@ describeDb("jam channels", () => {
     stubs.frames.length = 0;
     expect((await call(bob, "DELETE", `/api/jam-tracks/${track}`)).status).toBe(204);
     const frames = takeFrames();
-    expect(frames).toHaveLength(1);
-    expect(frames[0]).toMatchObject({ type: "jam-track-deleted", trackId: track, channelId: jamId });
-    expect((frames[0] as Extract<JamFrame, { type: "jam-track-deleted" }>).song.trackCount).toBe(0);
+    // The song is left with no take and is its author's alone: the room is told
+    // it is gone, not handed its summary (`jam-track-deleted` carries one).
+    expect(frames).toEqual([{ type: "jam-song-deleted", channelId: jamId, songId: song }]);
     expect((await call(bob, "DELETE", `/api/jam-tracks/${track}`)).status).toBe(404);
     expect((await detail(alice, song)).tracks).toEqual([]);
     // Soft: the object is still there until the sweep a day later.
     expect([...objects.keys()]).toEqual(keysBefore);
 
-    // Somebody else's last take leaves the author's song empty: nobody but the
-    // author sees it, and the room's frame says the song has no track left.
+    // With another take still there, a delete is the ordinary frame, with the summary.
     const second = await trackId(carol, song, "keys");
     await trackId(alice, song, "drums");
+    stubs.frames.length = 0;
     expect((await call(alice, "DELETE", `/api/jam-tracks/${second}`)).status).toBe(204);
+    expect(takeFrames()).toMatchObject([{ type: "jam-track-deleted", trackId: second, song: { trackCount: 1 } }]);
     const third = await trackId(carol, song, "keys");
     expect((await call(mod, "DELETE", `/api/jam-tracks/${third}`)).status).toBe(204);
     expect((await detail(alice, song)).tracks).toHaveLength(1);
@@ -1402,15 +1403,36 @@ describeDb("jam channels", () => {
     const theirs = await trackId(bob, guest, "keys");
     stubs.frames.length = 0;
     expect((await call(bob, "DELETE", `/api/jam-tracks/${theirs}`)).status).toBe(204);
-    const frames = takeFrames();
-    expect(frames).toHaveLength(1);
-    expect((frames[0] as Extract<JamFrame, { type: "jam-track-deleted" }>).song.trackCount).toBe(0);
+    expect(takeFrames()).toEqual([{ type: "jam-song-deleted", channelId: jamId, songId: guest }]);
     const ids = async (as: Actor) =>
       jamSongListResponseSchema
         .parse((await call(as, "GET", `/api/channels/${jamId}/jam-songs`)).body)
         .songs.map((s) => s.id);
     expect(await ids(alice)).toContain(guest);
     expect(await ids(carol)).not.toContain(guest);
+  });
+
+  it("a song the studio made and never filled is deleted with ?ifEmpty=true, and never when a take is in it", async () => {
+    const empty = await songId(bob, "Nunca enchida");
+    stubs.frames.length = 0;
+    expect((await call(bob, "DELETE", `/api/jam-songs/${empty}?ifEmpty=true`)).status).toBe(204);
+    expect(takeFrames()).toEqual([{ type: "jam-song-deleted", channelId: jamId, songId: empty }]);
+    expect((await call(bob, "GET", `/api/jam-songs/${empty}`)).status).toBe(404);
+
+    // A claim that committed without its answer reaching the page: the take is there,
+    // so the cleanup is refused and nothing is deleted.
+    const filled = await songId(bob, "Enchida");
+    await trackId(bob, filled, "guitar");
+    stubs.frames.length = 0;
+    const refused = await call(bob, "DELETE", `/api/jam-songs/${filled}?ifEmpty=true`);
+    expect(refused.status).toBe(409);
+    expect((refused.body as { error?: string }).error).toBe("jam_song_not_empty");
+    expect(takeFrames()).toEqual([]);
+    expect((await detail(bob, filled)).tracks).toHaveLength(1);
+    // The same permission rule as any delete.
+    expect((await call(carol, "DELETE", `/api/jam-songs/${filled}?ifEmpty=true`)).status).toBe(403);
+    // Without the flag it is the delete it always was.
+    expect((await call(bob, "DELETE", `/api/jam-songs/${filled}`)).status).toBe(204);
   });
 
   it("the sweep deletes a song that stayed with no track for a day, and nothing that has a track, is fresh or was deleted", async () => {

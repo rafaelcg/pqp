@@ -9,9 +9,20 @@
  * microphone's own noise floor on a live input does not stay under it for a
  * whole take), so nothing that is merely soft is flagged. The count-in and any
  * trimmed head or tail are not measured: the clicks leak into a microphone and
- * would make a silent take look alive.
+ * would make a silent take look alive. The take's edited volume counts: a take
+ * turned all the way down, or down to under the threshold, is silent as it would
+ * be heard.
+ *
+ * ONE PASS OVER THE SAMPLES, THEN CHEAP. A take near the ten-minute ceiling has
+ * tens of millions of samples, and the editor changes trims and volume many times
+ * a second, so the samples are reduced once to the loudest value of each 50 ms
+ * (`blockPeaks`) and every later question (`silentIn`) reads those few thousand
+ * numbers. A block that straddles a trim counts whole, which can only make a
+ * take look less silent, never flag one that is not.
  */
 export const SILENT_PEAK = 0.01;
+/** The length each value of `blockPeaks` covers. */
+export const SILENT_BLOCK_MS = 50;
 
 /** The loudest absolute sample between two times in a take, stopping early past `ceiling`. */
 export function takePeak(
@@ -36,7 +47,49 @@ export function takePeak(
   return peak;
 }
 
-/** The played part of the take (`trimStartMs` to the end minus `trimEndMs`) never rises above a flat line. */
+/** The loudest absolute sample of each `blockMs` of the take, in order. One pass. */
+export function blockPeaks(samples: Float32Array, sampleRate: number, blockMs = SILENT_BLOCK_MS): Float32Array {
+  const size = Math.max(1, Math.round((blockMs / 1000) * sampleRate));
+  const out = new Float32Array(Math.ceil(samples.length / size));
+  for (let block = 0; block < out.length; block += 1) {
+    const end = Math.min(samples.length, (block + 1) * size);
+    let peak = 0;
+    for (let index = block * size; index < end; index += 1) {
+      const value = Math.abs(samples[index]!);
+      if (value > peak) {
+        peak = value;
+      }
+    }
+    out[block] = peak;
+  }
+  return out;
+}
+
+/**
+ * The played part (`fromMs` to `toMs`), at this volume (`gain`, 1 as recorded),
+ * never rises above a flat line. `blocks` are `blockPeaks` of the take.
+ */
+export function silentIn(
+  blocks: Float32Array,
+  range: { fromMs: number; toMs: number },
+  gain = 1,
+  blockMs = SILENT_BLOCK_MS,
+): boolean {
+  if (range.toMs <= range.fromMs || gain <= 0) {
+    return true;
+  }
+  const first = Math.max(0, Math.floor(range.fromMs / blockMs));
+  const last = Math.min(blocks.length, Math.ceil(range.toMs / blockMs));
+  let peak = 0;
+  for (let block = first; block < last; block += 1) {
+    if (blocks[block]! > peak) {
+      peak = blocks[block]!;
+    }
+  }
+  return peak * gain < SILENT_PEAK;
+}
+
+/** The same question straight from the samples (one pass over the played part), for a take that is asked about once. */
 export function isSilentTake(
   take: { samples: Float32Array; sampleRate: number; durationMs: number },
   trim: { trimStartMs: number; trimEndMs: number },

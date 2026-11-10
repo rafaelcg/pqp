@@ -283,14 +283,16 @@ export function registerJamRoutes(router: Router): void {
 
   // Delete a song and its tracks: its author or a moderator. Allowed while
   // the flag is off.
-  router.delete("/api/jam-songs/:songId", async ({ user }, { songId }) => {
+  // `?ifEmpty=true` (the studio cleaning up a song it made and never filled):
+  // refused with 409 `jam_song_not_empty` when a take is in it.
+  router.delete("/api/jam-songs/:songId", async ({ url, user }, { songId }) => {
     const { song, channel } = await requireSong(songId!, user.id);
     await assertNotTimedOut(user.id, channel.id);
     const perms = await permsOf(channel, user.id);
     if (!isSongAuthor(song, user.id) && !perms.isModerator) {
       throw new HttpError(403, "You cannot delete this song");
     }
-    if (await deleteJamSong(song.id)) {
+    if (await deleteJamSong(song.id, { onlyIfEmpty: url.searchParams.get("ifEmpty") === "true" })) {
       announceJam({ type: "jam-song-deleted", channelId: channel.id, songId: song.id });
     }
     return new NoContent();
@@ -437,11 +439,14 @@ export function registerJamRoutes(router: Router): void {
     // The last track of a song takes the song with it, when the person is the
     // song's author or a moderator: an empty song is a tile that plays nothing.
     // Somebody else's last take (an open song) leaves the author's song empty,
-    // which only the author sees.
+    // which only the author sees: the room is told the song is gone (a
+    // `jam-track-deleted` would carry the now author-only summary to everybody,
+    // and the phones, which have no such rule, would keep an empty tile), and the
+    // author's own wall reads the song again the next time it asks.
     const gone = await deleteJamTrack(track, {
       dropEmptySong: track.song_author_id === user.id || perms.isModerator,
     });
-    if (gone?.songDeleted) {
+    if (gone?.songDeleted || gone?.song?.trackCount === 0) {
       announceJam({ type: "jam-song-deleted", channelId: channel.id, songId: track.song_id });
     } else if (gone?.song) {
       announceJam({

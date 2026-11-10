@@ -300,6 +300,40 @@ test("1: a first take that is sent shows the song to everybody at once; deleting
   await guest.context().close();
 });
 
+test("1: leaving the studio after the first upload failed deletes the empty song it made", async ({ browser }) => {
+  const seeded = await seed();
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const host = await openAs(browser, seeded.host, seeded.jamPath);
+  await host.route(
+    (url) => url.pathname.includes("/jam/"),
+    (route) => (route.request().method() === "PUT" ? route.abort("connectionreset") : route.continue()),
+  );
+  await expect(host.locator("[data-jam-empty]")).toBeVisible({ timeout: 20_000 });
+  await host.locator("[data-jam-empty-record]").click();
+  await host.locator("[data-jam-start-title]").fill("Nao saiu");
+  await host.locator("[data-jam-start-go]").click();
+  await expect(host.locator('[data-jam-studio][data-phase="setup"]')).toBeVisible({ timeout: 20_000 });
+  await skipTheLatencyCheck(host);
+  await recordAndStop(host, 3);
+  await expect(host.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
+  await host.locator("[data-jam-post]").click();
+  await expect(host.locator("[data-jam-retry]")).toBeVisible({ timeout: 20_000 });
+  // the song exists, empty, while the take waits
+  expect((await call<{ songs: unknown[] }>(seeded.host, "GET", `/api/channels/${seeded.jamId}/jam-songs`)).songs).toHaveLength(1);
+  await host.locator("[data-jam-discard]").click();
+  await host
+    .getByRole("dialog")
+    .filter({ hasText: "Discard this take?" })
+    .getByRole("button", { name: "Discard", exact: true })
+    .click();
+  await expect(host.locator("[data-jam-studio]")).toHaveCount(0);
+  await expect
+    .poll(async () => (await call<{ songs: unknown[] }>(seeded.host, "GET", `/api/channels/${seeded.jamId}/jam-songs`)).songs.length)
+    .toBe(0);
+  await expect(host.locator("[data-jam-tile]")).toHaveCount(0);
+  await host.context().close();
+});
+
 test("2: the browser asks before leaving only while a take is recorded and unsent, or going up", async ({ browser }) => {
   const seeded = await seed();
   test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");

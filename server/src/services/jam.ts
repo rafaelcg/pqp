@@ -906,11 +906,30 @@ export async function removeJamCover(
  * objects are deleted by the sweep a day later (`sweepJamMedia`), which is
  * also the window in which a mistaken delete could be recovered by hand.
  * Returns false when the song was already gone.
+ *
+ * `onlyIfEmpty`: the studio of a song it made asks for the song to go when the
+ * person leaves with nothing sent. The song row is locked and its tracks looked
+ * at in the same transaction, so a claim that committed without its answer
+ * reaching the page (and a take added by anybody else) is never deleted: 409
+ * `jam_song_not_empty` and nothing changes.
  */
-export async function deleteJamSong(songId: string): Promise<boolean> {
+export async function deleteJamSong(
+  songId: string,
+  options: { onlyIfEmpty?: boolean } = {},
+): Promise<boolean> {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    if (options.onlyIfEmpty) {
+      await client.query(`SELECT 1 FROM jam_songs WHERE id = $1 FOR UPDATE`, [songId]);
+      const held = await client.query(
+        `SELECT 1 FROM jam_tracks WHERE song_id = $1 AND deleted_at IS NULL LIMIT 1`,
+        [songId],
+      );
+      if ((held.rowCount ?? 0) > 0) {
+        throw new HttpError(409, JAM_ERRORS.songNotEmpty);
+      }
+    }
     const song = await client.query(
       `UPDATE jam_songs SET deleted_at = NOW(), updated_at = NOW()
         WHERE id = $1 AND deleted_at IS NULL`,

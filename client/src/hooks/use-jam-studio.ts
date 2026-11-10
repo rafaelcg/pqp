@@ -12,7 +12,7 @@ import {
   type RecordingHandle,
 } from "@/lib/jam";
 import { createJamSong, deleteJamSong, jamErrorKind, updateJamTrack, type JamErrorKind } from "@/lib/jam-api";
-import { isSilentTake } from "@/lib/jam-take-silence";
+import { blockPeaks, isSilentTake, silentIn } from "@/lib/jam-take-silence";
 import { forgetCheckSkipped, isCheckSkipped, rememberCheckSkipped } from "@/lib/jam-latency-skip";
 import { replaceInMix, takeToReplace } from "@/lib/jam-mix";
 import { createLevelMeter, type JamLevelMeter } from "@/lib/jam-level";
@@ -673,6 +673,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
         onProgress: setProgress,
         signal: postAbort.current.signal,
       });
+      // The take is on the song from here on, whatever the optional steps below do or
+      // however soon the studio closes: its song is never cleaned up as empty.
+      postedRef.current = true;
       putJamTrackInSong(channelId, answer.song, answer.track, asked);
       // A new take of an instrument the poster already has in the mix replaces it
       // when they said so (the default): the new one in, then the old one out. The
@@ -879,8 +882,14 @@ export function useJamStudio(args: UseJamStudioArgs) {
       const abandoned = createdSongId.current;
       if (abandoned && !postedRef.current) {
         createdSongId.current = null;
-        void deleteJamSong(abandoned).catch(() => undefined);
-        applyJamWrite(channelRef.current, { type: "jam-song-deleted", channelId: channelRef.current, songId: abandoned });
+        // Only while the song is still empty, decided by the server in one step: a claim
+        // that committed without its answer reaching this page keeps its song (409), and
+        // the wall is told only when the song really went.
+        const channel = channelRef.current;
+        void deleteJamSong(abandoned, { ifEmpty: true }).then(
+          () => applyJamWrite(channel, { type: "jam-song-deleted", channelId: channel, songId: abandoned }),
+          () => undefined,
+        );
       }
       const running = handle.current;
       handle.current = null;
@@ -918,7 +927,15 @@ export function useJamStudio(args: UseJamStudioArgs) {
   );
 
   /** The part of the take that would be heard is a flat line: worth a word before it is sent. */
-  const silent = useMemo(() => (take && edits ? isSilentTake(take, edits) : false), [take, edits]);
+  // The samples are reduced once per take; an edit (a trim, the volume) only reads the reduction.
+  const takeBlocks = useMemo(() => (take ? blockPeaks(take.samples, take.sampleRate) : null), [take]);
+  const silent = useMemo(
+    () =>
+      take && edits && takeBlocks
+        ? silentIn(takeBlocks, { fromMs: edits.trimStartMs, toMs: take.durationMs - edits.trimEndMs }, edits.gain)
+        : false,
+    [take, edits, takeBlocks],
+  );
 
   const needsCheck =
     mic === "ready" &&
