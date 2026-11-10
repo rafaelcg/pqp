@@ -52,7 +52,7 @@ export function JamBars({
       {bars.map((height, index) => (
         <span
           key={index}
-          className={cn("min-w-0 flex-1 rounded-full", barClassName, animate && "jam-bar-in")}
+          className={cn("min-w-0 max-w-[4px] flex-1 rounded-full", barClassName, animate && "jam-bar-in")}
           style={
             {
               height: `${Math.max(minPercent, Math.round(height * 100))}%`,

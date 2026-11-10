@@ -69,7 +69,7 @@ export function InstrumentPicker({
             {asked && (
               <span
                 className={cn(
-                  "rounded-full px-1.5 py-px text-[10px] font-bold uppercase tracking-wide",
+                  "rounded-full px-1.5 py-px text-[11px] font-bold",
                   on ? "bg-on-inst text-on-media" : "bg-accent-soft text-on-accent-soft",
                 )}
               >
@@ -174,7 +174,7 @@ export function LatencyChip({ studio }: { studio: JamStudio }) {
   if (!current || !Number.isFinite(current.roundTripMs)) {
     return null;
   }
-  const ms = Math.round(current.roundTripMs * 10) / 10;
+  const ms = Math.round(current.roundTripMs);
   const text = t("jam.latency.chipTitle", {
     ms,
     method: words.method(current.method),
@@ -187,7 +187,7 @@ export function LatencyChip({ studio }: { studio: JamStudio }) {
         data-method={current.method}
         data-confidence={current.confidence}
         tabIndex={0}
-        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-2.5 text-xs font-semibold tabular-nums text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-2.5 text-xs font-semibold tabular-nums text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:hidden"
       >
         <Headphones className="h-3.5 w-3.5" aria-hidden />
         {t("jam.latency.chip", { ms })}
@@ -195,7 +195,7 @@ export function LatencyChip({ studio }: { studio: JamStudio }) {
           aria-hidden
           className={cn(
             "h-1.5 w-1.5 rounded-full",
-            current.confidence === "high" ? "bg-success" : current.confidence === "medium" ? "bg-warning" : "bg-danger",
+            current.confidence === "high" ? "bg-success" : "bg-warning",
           )}
         />
       </span>
@@ -320,22 +320,32 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
   const current = Math.round(studio.latency?.current.roundTripMs ?? 0);
   const hasMeasure = studio.latency !== null && studio.latency.current.method !== "estimate";
   const failed = studio.check === "failed";
+  const [why, setWhy] = useState(false);
   return (
     <section
       aria-label={t("jam.latency.explain.title")}
       data-jam-latency-check=""
-      className="flex flex-col gap-4 rounded-[var(--radius-panel)] bg-surface-1 p-5 ring-1 ring-inset ring-border"
+      className="flex flex-col gap-4 rounded-[var(--radius-panel)] bg-surface-1 p-5 ring-1 ring-inset ring-border sm:p-6"
     >
-      <div className="flex items-start gap-4">
-        <span className="relative mt-1 grid h-12 w-12 shrink-0 place-items-center rounded-full bg-accent-soft text-on-accent-soft">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+        <span className="relative grid h-12 w-12 shrink-0 place-items-center rounded-full bg-accent-soft text-on-accent-soft">
           {measuring && (
             <span aria-hidden className="absolute inset-0 rounded-full bg-accent/40 motion-safe:animate-ping" />
           )}
           <Headphones className="relative h-5 w-5" aria-hidden />
         </span>
         <div className="flex min-w-0 flex-col gap-1">
-          <h3 className="font-display text-xl font-extrabold leading-tight text-text">{t("jam.latency.explain.title")}</h3>
-          <p className="text-sm leading-relaxed text-text-secondary [text-wrap:pretty]">{t("jam.latency.explain.body")}</p>
+          <h3 className="font-display text-2xl font-extrabold leading-tight text-text">{t("jam.latency.explain.title")}</h3>
+          <p className="text-[15px] leading-snug text-text-secondary [text-wrap:pretty]">{t("jam.latency.explain.short")}</p>
+          <button
+            type="button"
+            onClick={() => setWhy((open) => !open)}
+            aria-expanded={why}
+            className="mt-0.5 flex h-8 items-center gap-1 self-start rounded-[var(--radius-control)] text-[13px] font-semibold text-text-secondary underline decoration-border-strong underline-offset-4 outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            {t("jam.latency.explain.why")}
+          </button>
+          {why && <p className="text-[13px] leading-relaxed text-text-secondary [text-wrap:pretty]">{t("jam.latency.explain.body")}</p>}
         </div>
       </div>
 
@@ -345,30 +355,25 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
           {studio.checkMethod === "tap-along" ? t("jam.latency.measuring.tap") : t("jam.latency.measuring.mic")}
         </div>
       ) : (
-        <div className="grid gap-2 @lg:grid-cols-2">
+        <div className="flex flex-col gap-2">
           <button
             type="button"
             onClick={() => void studio.measure("loopback")}
             data-jam-measure="loopback"
-            className="flex flex-col gap-1 rounded-[var(--radius-card)] bg-accent p-3.5 text-left text-on-accent outline-none transition-[background,transform] duration-[var(--duration-fast)] hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 active:scale-[0.98]"
+            className="flex h-14 items-center justify-center gap-2.5 rounded-full bg-accent px-6 text-base font-extrabold text-on-accent shadow-[var(--shadow-2)] outline-none transition-transform duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 motion-safe:hover:scale-[1.01] active:scale-[0.98]"
           >
-            <span className="flex items-center gap-2 text-sm font-bold">
-              <Mic className="h-4 w-4" aria-hidden />
-              {t("jam.latency.measure.mic")}
-            </span>
-            <span className="text-xs leading-snug opacity-80">{t("jam.latency.measure.micHint")}</span>
+            <Mic className="h-5 w-5" aria-hidden />
+            {t("jam.latency.measure.mic")}
           </button>
+          <p className="text-center text-xs leading-snug text-text-secondary">{t("jam.latency.measure.micHint")}</p>
           <button
             type="button"
             onClick={() => void studio.measure("tap-along")}
             data-jam-measure="tap-along"
-            className="flex flex-col gap-1 rounded-[var(--radius-card)] bg-surface-2 p-3.5 text-left text-text outline-none transition-[background,transform] duration-[var(--duration-fast)] hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 active:scale-[0.98]"
+            className="mt-1 flex h-12 items-center justify-center gap-2 rounded-full px-5 text-sm font-bold text-text outline-none ring-1 ring-inset ring-border-strong transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
-            <span className="flex items-center gap-2 text-sm font-bold">
-              <Volume2 className="h-4 w-4" aria-hidden />
-              {t("jam.latency.measure.tap")}
-            </span>
-            <span className="text-xs leading-snug text-text-secondary">{t("jam.latency.measure.tapHint")}</span>
+            <Volume2 className="h-4 w-4" aria-hidden />
+            {t("jam.latency.measure.tap")}
           </button>
         </div>
       )}
@@ -380,17 +385,17 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
       )}
 
       {!measuring && (
-        <div className="flex flex-col gap-1 border-t border-border pt-3">
+        <div className="flex flex-col items-center gap-0.5">
           <button
             type="button"
             onClick={studio.skipCheck}
             data-jam-skip-check=""
-            className="h-11 self-start rounded-[var(--radius-control)] px-1 text-sm font-semibold text-text-secondary underline decoration-border-strong underline-offset-4 outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="h-10 rounded-full px-4 text-sm font-semibold text-text-secondary outline-none transition-colors hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             {hasMeasure ? t("jam.latency.keep", { ms: current }) : t("jam.latency.skip")}
           </button>
           {!hasMeasure && (
-            <p className="text-xs leading-snug text-text-tertiary [text-wrap:pretty]">
+            <p className="text-center text-xs leading-snug text-text-tertiary [text-wrap:pretty]">
               {t("jam.latency.skipNote", { ms: estimate })}
             </p>
           )}
@@ -572,4 +577,28 @@ export function DoneOverlay({
       </div>
     </div>
   );
+}
+
+/**
+ * The stop button's ring while recording: it swells with what the microphone
+ * hears, so the level is read where the eye already is. Written straight to
+ * the element; under reduced motion it stays a still ring.
+ */
+export function LevelRing({ clock }: { clock: JamStudio["levelClock"] }) {
+  const ring = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
+    let shown = 0;
+    return clock.subscribe((peak) => {
+      shown = Math.max(peak, shown * 0.85);
+      const element = ring.current;
+      if (element) {
+        element.style.transform = `scale(${1 + Math.min(1, levelBar(shown)) * 0.32})`;
+        element.style.opacity = String(0.25 + Math.min(1, levelBar(shown)) * 0.5);
+      }
+    });
+  }, [clock]);
+  return <span ref={ring} aria-hidden className="pointer-events-none absolute -inset-1.5 rounded-full bg-danger/50" style={{ opacity: 0.25 }} />;
 }

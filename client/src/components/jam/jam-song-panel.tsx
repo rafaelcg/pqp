@@ -30,9 +30,8 @@ import {
 import type { JamDetail } from "@/lib/jam-state";
 import { barsFromPeaks, competingInstruments, formatClock, orderTracks, seededBars, songNeed, songTimeline } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
-import { BandStrip, ContributorStack, coverGradient, MirrorBars, NeedChip } from "./jam-art";
+import { BandStrip, ContributorStack, coverGradient, Equalizer, MirrorBars, NeedChip } from "./jam-art";
 import { useBarCount } from "./jam-bars";
-import { formatList } from "./jam-need";
 import { TrackAdjust } from "./jam-track-adjust";
 import { JamTrackRow } from "./jam-track-row";
 import { JamTransport } from "./jam-transport";
@@ -78,7 +77,7 @@ export function JamSongPanel({
   freshTrackId,
   autoplay = true,
 }: JamSongPanelProps) {
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
   const tracks = useMemo(() => orderTracks(detail?.tracks ?? []), [detail?.tracks]);
   const playback = useJamPlayback(song.id, tracks, {
     autoplay,
@@ -120,7 +119,6 @@ export function JamSongPanel({
   const viewer = detail?.viewer;
   const competing = useMemo(() => competingInstruments(tracks), [tracks]);
   const timeline = useMemo(() => songTimeline(tracks), [tracks]);
-  const videoTracks = tracks.filter((track) => track.inMix && track.videoUrl);
   const need = songNeed(song);
   const mine = tracks.filter((track) => viewerId !== null && track.authorId === viewerId);
   const addable = viewer?.addableInstruments ?? [];
@@ -190,7 +188,7 @@ export function JamSongPanel({
 
   return (
     <section aria-label={song.title} data-jam-song={song.id} className="flex h-full min-h-0 flex-col bg-surface-1">
-      <header className="flex items-center gap-1 px-2 pt-2 sm:px-3">
+      <header className="flex items-start gap-2 border-b border-border px-2 py-3 sm:gap-3 sm:px-4">
         <button
           type="button"
           onClick={onClose}
@@ -199,7 +197,27 @@ export function JamSongPanel({
         >
           <ArrowLeft className="h-5 w-5" aria-hidden />
         </button>
-        <span className="flex-1" />
+        <SongCover song={song} missing={missingSlots} playing={playing} />
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
+          <h2 className="font-display text-2xl font-extrabold leading-[1.05] tracking-tight text-text [text-wrap:balance] sm:text-3xl">
+            {song.title}
+          </h2>
+          <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-text-secondary">
+            <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-surface-1" />
+            <span className="truncate">
+              {song.artist ?? t("jam.original")} · {t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <NeedChip need={need} tone="panel" />
+            {song.joinMode === "closed" && (
+              <span data-jam-closed-line="" className="flex items-center gap-1 text-xs text-text-secondary">
+                <Lock className="h-3 w-3 shrink-0" aria-hidden />
+                {t("jam.song.closedLine")}
+              </span>
+            )}
+          </div>
+        </div>
         {songMenu.length > 0 && (
           <Menu items={songMenu} align="end">
             <button
@@ -223,67 +241,16 @@ export function JamSongPanel({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 sm:px-5">
-        <SongCover song={song} missing={missingSlots} playing={playing} />
-
-        <div className="mt-4 flex flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <NeedChip need={need} tone="panel" />
-            {song.joinMode === "closed" && (
-              <span data-jam-closed-line="" className="flex items-center gap-1 text-xs text-text-secondary">
-                <Lock className="h-3 w-3 shrink-0" aria-hidden />
-                {t("jam.song.closedLine")}
-              </span>
-            )}
-            {song.joinMode === "wanted" && song.wantedInstruments.length > 0 && (
-              <span data-jam-wanted-line="" className="text-xs text-text-secondary">
-                {t("jam.song.wantedLine", {
-                  list: formatList(
-                    song.wantedInstruments.map((one) => t(JAM_INSTRUMENT_LOOK[one].nameKey as MessageKey).toLowerCase()),
-                    locale,
-                  ),
-                })}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-4 rounded-[var(--radius-panel)] bg-surface-2/50 p-3 ring-1 ring-inset ring-border">
-          <JamTransport
-            clock={playback.clock}
-            playing={playing}
-            loading={!detail || playback.status === "loading"}
-            durationMs={durationMs}
-            onToggle={playback.toggle}
-            onSeek={playback.seek}
-            title={song.title}
-            size="lg"
-            caption={detail ? t("jam.song.bandCount", { count: inMixCount, countLabel: inMixCount }) : undefined}
-          />
-        </div>
-
-        {videoTracks.length > 0 && (
-          <ul
-            className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3"
-            aria-label={t("jam.song.videos")}
-          >
-            {videoTracks.map((track) => (
-              <JamVideoTile
-                key={track.id}
-                track={track}
-                attach={playback.attachVideo}
-                label={`${t(JAM_INSTRUMENT_LOOK[track.instrument].nameKey as MessageKey)}, ${track.authorName ?? t("jam.tile.anonymous")}`}
-                muted={playback.lanes[track.id]?.muted ?? false}
-              />
-            ))}
-          </ul>
-        )}
-
-        <section className="mt-6" aria-labelledby={`band-${song.id}`}>
-          <div className="mb-2 flex items-baseline justify-between gap-3">
+        <section className="mt-4" aria-labelledby={`band-${song.id}`}>
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <h3 id={`band-${song.id}`} className="font-display text-lg font-extrabold text-text">
               {t("jam.song.band")}
             </h3>
-            <span className="text-xs font-semibold tabular-nums text-text-tertiary">{formatClock(durationMs)}</span>
+            {detail && (
+              <span className="text-xs font-semibold text-text-tertiary">
+                {t("jam.song.bandCount", { count: inMixCount, countLabel: inMixCount })}
+              </span>
+            )}
           </div>
 
           {!detail ? (
@@ -321,6 +288,7 @@ export function JamSongPanel({
                       adjusting={adjustingId === track.id}
                       onAdjust={() => setAdjustingId(track.id)}
                       onSeek={seekFraction}
+                      attachVideo={track.inMix && track.videoUrl ? playback.attachVideo : undefined}
                       onLane={(patch) => playback.setLane(track.id, patch)}
                       onVote={() =>
                         void guard(async () => {
@@ -412,22 +380,29 @@ export function JamSongPanel({
         )}
       </div>
 
-      <footer className="safe-pb flex flex-col gap-2 border-t border-border bg-surface-1 px-3 py-3 sm:px-5">
+      {/* the dock: play and pause always in reach, and the one thing to do */}
+      <footer className="safe-pb flex flex-col gap-3 border-t border-border bg-surface-1 px-3 py-3 sm:px-5">
+        <JamTransport
+          clock={playback.clock}
+          playing={playing}
+          loading={!detail || playback.status === "loading"}
+          durationMs={durationMs}
+          onToggle={playback.toggle}
+          onSeek={playback.seek}
+          title={song.title}
+        />
         {reason === null && first ? (
-          <>
-            <button
-              type="button"
-              data-jam-record-over=""
-              onClick={() => onRecord(first, need.kind === "missing")}
-              className="group relative flex h-14 w-full items-center justify-center gap-2.5 overflow-hidden rounded-full bg-accent text-base font-extrabold text-on-accent shadow-[var(--shadow-2)] outline-none transition-[background,transform] duration-[var(--duration-fast)] hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 active:scale-[0.98]"
-            >
-              <span className="grid h-8 w-8 place-items-center rounded-full bg-on-accent text-accent transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-safe:group-hover:scale-110">
-                <Mic className="h-4 w-4" aria-hidden />
-              </span>
-              {recordLabel}
-            </button>
-            <p className="text-center text-xs leading-snug text-text-tertiary [text-wrap:pretty]">{t("jam.song.recordHint")}</p>
-          </>
+          <button
+            type="button"
+            data-jam-record-over=""
+            onClick={() => onRecord(first, need.kind === "missing")}
+            className="group relative flex h-14 w-full items-center justify-center gap-2.5 overflow-hidden rounded-full bg-accent text-base font-extrabold text-on-accent shadow-[var(--shadow-2)] outline-none transition-[transform,box-shadow] duration-[var(--duration-fast)] hover:shadow-[var(--shadow-3)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 motion-safe:hover:scale-[1.01] active:scale-[0.98]"
+          >
+            <span className="grid h-8 w-8 place-items-center rounded-full bg-on-accent text-accent transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-safe:group-hover:scale-110">
+              <Mic className="h-4 w-4" aria-hidden />
+            </span>
+            {recordLabel}
+          </button>
         ) : (
           reason !== null &&
           detail && (
@@ -497,10 +472,13 @@ export function bandOf(tracks: readonly JamTrack[], exceptId: string | null): Ba
     }));
 }
 
-/** The song's cover, big: the gradient of its band, its waveform, its title and its people. */
+/**
+ * The song's cover, small: the tile's art (the gradient of its band and the
+ * loudest stem's waveform), so the panel reads as the tile that was opened.
+ * Its view-transition name pairs it with that tile.
+ */
 function SongCover({ song, missing, playing }: { song: JamSongSummary; missing: readonly JamInstrument[]; playing: boolean }) {
-  const { t } = useTranslation();
-  const [ref, count] = useBarCount(9, 72);
+  const [ref, count] = useBarCount(5, 24);
   const bars = useMemo(
     () => (count === 0 ? [] : song.previewPeaks.length > 0 ? barsFromPeaks(song.previewPeaks, count) : seededBars(song.id, count)),
     [count, song.previewPeaks, song.id],
@@ -508,30 +486,23 @@ function SongCover({ song, missing, playing }: { song: JamSongSummary; missing: 
   return (
     <div
       className={cn(
-        "relative isolate flex min-h-52 flex-col overflow-hidden rounded-[var(--radius-panel)] p-5 text-on-inst shadow-[var(--shadow-2)]",
+        "relative isolate flex h-[4.5rem] w-[4.5rem] shrink-0 flex-col justify-between overflow-hidden rounded-[var(--radius-card)] p-2 text-on-inst shadow-[var(--shadow-2)] sm:h-24 sm:w-24 sm:p-2.5",
         coverGradient(song.instruments),
       )}
+      style={{ viewTransitionName: `jam-cover-${song.id}` } as CSSProperties}
       data-jam-cover=""
+      aria-hidden="true"
     >
-      <div className="flex items-start justify-between gap-2">
-        <BandStrip instruments={song.instruments} missing={missing} />
-        {(song.mixDurationMs ?? 0) > 0 && (
-          <span className="flex h-7 items-center rounded-full bg-on-inst px-2.5 text-xs font-bold tabular-nums text-on-media">
-            {formatClock(song.mixDurationMs ?? 0)}
+      <div ref={ref} className="relative min-h-0 flex-1">
+        <MirrorBars bars={bars} className="absolute inset-0 gap-[2px]" barClassName="bg-on-inst/75" />
+      </div>
+      <div className="flex items-center justify-between">
+        <BandStrip instruments={song.instruments} missing={missing} size="sm" className="max-sm:hidden" />
+        {playing && (
+          <span className="ml-auto flex h-5 items-center rounded-full bg-on-inst px-1.5 text-accent">
+            <Equalizer className="h-3" />
           </span>
         )}
-      </div>
-      <div ref={ref} aria-hidden="true" className="pointer-events-none relative my-4 min-h-14 flex-1">
-        <MirrorBars bars={bars} className={cn("absolute inset-0", playing && "jam-wave-live")} barClassName="bg-on-inst/75" />
-      </div>
-      <div className="flex min-w-0 flex-col gap-2">
-        <h2 className="font-display text-4xl font-extrabold leading-[1.02] tracking-tight [text-wrap:balance] sm:text-5xl">{song.title}</h2>
-        <div className="flex min-w-0 items-center gap-2.5 text-sm font-semibold text-on-inst/80">
-          <ContributorStack people={song.contributors} total={song.contributorCount} size="md" ringClassName="ring-on-inst/25" />
-          <span className="truncate">
-            {song.artist ?? t("jam.original")} · {t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}
-          </span>
-        </div>
       </div>
     </div>
   );
@@ -647,48 +618,6 @@ function MissingLane({
           <span className="text-xs font-bold">{t(look.missingKey as MessageKey)}</span>
         )}
       </div>
-    </li>
-  );
-}
-
-/** A track's video, a muted <video> the engine keeps on the audio clock. */
-function JamVideoTile({
-  track,
-  attach,
-  label,
-  muted,
-}: {
-  track: JamTrack;
-  attach: (trackId: string, element: HTMLVideoElement) => () => void;
-  label: string;
-  muted: boolean;
-}) {
-  const ref = useRef<HTMLVideoElement | null>(null);
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) {
-      return;
-    }
-    return attach(track.id, element);
-  }, [attach, track.id]);
-  const look = JAM_INSTRUMENT_LOOK[track.instrument];
-  return (
-    <li className="relative aspect-video overflow-hidden rounded-[var(--radius-card)] bg-surface-0 ring-1 ring-inset ring-border">
-      <video
-        ref={ref}
-        src={track.videoUrl ?? undefined}
-        muted
-        playsInline
-        preload="metadata"
-        aria-label={label}
-        className={cn("h-full w-full object-cover transition-opacity duration-[var(--duration-base)]", muted && "opacity-30")}
-      />
-      <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-full bg-media-scrim/85 py-0.5 pl-0.5 pr-2.5 text-[11px] font-semibold text-on-media">
-        <span className={cn("grid h-5 w-5 place-items-center rounded-full", look.fill)}>
-          <look.icon className="h-3 w-3" aria-hidden />
-        </span>
-        {label}
-      </span>
     </li>
   );
 }

@@ -1,5 +1,5 @@
 import type { JamInstrument, JamContributor } from "@pqp/shared";
-import { Check, Plus, Users } from "lucide-react";
+import { Check, Music2, Plus, Users, type LucideIcon } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -50,6 +50,27 @@ const RING: Record<JamInstrument, string> = {
   other: "ring-inst-other",
 };
 export const INST_RING = RING;
+
+/**
+ * The Jam's mark at icon size: the header's little band-coloured tile, drawn in
+ * the box a menu row gives an icon (`h-3.5 w-3.5`), so the "Criar Jam" row keeps
+ * its siblings' geometry and still looks like the thing it makes. Typed as a
+ * lucide icon because that is the slot it fills.
+ */
+function JamGlyphComponent({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "inline-grid shrink-0 place-items-center rounded-[var(--radius-tick)] bg-gradient-to-br from-inst-guitar via-inst-bass to-inst-vocals text-on-inst",
+        className,
+      )}
+    >
+      <Music2 className="h-[70%] w-[70%]" strokeWidth={2.75} />
+    </span>
+  );
+}
+export const JamGlyph = JamGlyphComponent as unknown as LucideIcon;
 
 /** The instruments on a song in the band's order, the colours of its cover. */
 export function bandOrder(instruments: readonly JamInstrument[]): JamInstrument[] {
@@ -216,7 +237,7 @@ export function NeedChip({
     return (
       <span
         data-jam-need="missing"
-        className={cn(base, tone === "cover" ? cn("bg-on-inst", look.ink) : cn(look.fill), className)}
+        className={cn(base, look.fill, className)}
       >
         <Plus className="h-3.5 w-3.5 shrink-0" strokeWidth={3} aria-hidden="true" />
         <span className="truncate first-letter:uppercase">{label}</span>
@@ -227,7 +248,7 @@ export function NeedChip({
     return (
       <span
         data-jam-need="open"
-        className={cn(base, tone === "cover" ? "bg-on-inst text-on-media" : "bg-accent-soft text-on-accent-soft", className)}
+        className={cn(base, tone === "cover" ? "bg-on-inst text-on-media ring-1 ring-inset ring-on-media/15" : "bg-accent-soft text-on-accent-soft", className)}
       >
         <Users className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <span className="truncate first-letter:uppercase">{label}</span>
@@ -239,7 +260,7 @@ export function NeedChip({
       data-jam-need={need.kind}
       className={cn(
         base,
-        tone === "cover" ? "bg-on-inst text-on-media" : "bg-surface-2 text-text-secondary",
+        tone === "cover" ? "bg-on-inst text-on-media ring-1 ring-inset ring-on-media/15" : "bg-surface-2 text-text-secondary",
         className,
       )}
     >

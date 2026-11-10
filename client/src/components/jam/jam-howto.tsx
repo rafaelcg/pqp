@@ -63,13 +63,13 @@ export function JamHowToHero({ className, big = false }: { className?: string; b
             )}
           >
             <Mic className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">{t("jam.howto.you")}</span>
+            <span className="relative z-20 truncate rounded-[var(--radius-tick)] bg-surface-0 px-1">{t("jam.howto.you")}</span>
           </div>
         </div>
         {/* one playhead for every lane: it is one song */}
         <span
           className={cn(
-            "pointer-events-none absolute inset-y-0 right-0 [container-type:inline-size]",
+            "pointer-events-none absolute inset-y-0 right-0 z-10 [container-type:inline-size]",
             big ? "left-[2.625rem]" : "left-[2.375rem]",
           )}
         >

@@ -61,7 +61,7 @@ export function JamLaneWave({
   const span = laneSpan(timing);
   const left = Math.min(1, Math.max(0, (span.startMs - timeline.startMs) / total));
   const right = Math.min(1, Math.max(left, (span.endMs - timeline.startMs) / total));
-  const [spanRef, count] = useBarCount(5);
+  const [spanRef, count] = useBarCount(4);
   const played = useRef<HTMLDivElement | null>(null);
 
   const bars = useMemo(() => {

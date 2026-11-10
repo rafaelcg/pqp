@@ -1,6 +1,6 @@
 import type { JamTrack } from "@pqp/shared";
 import { CirclePlus, Ear, Headphones, MoreHorizontal, SlidersHorizontal, ThumbsUp, Trash2, Volume2, VolumeX, CircleMinus } from "lucide-react";
-import type { CSSProperties } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 import { Menu } from "@/components/ui/menu";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -50,6 +50,8 @@ export interface JamTrackRowProps {
   onDelete: () => void;
   onAudition: () => void;
   onSeek: (fraction: number) => void;
+  /** The take has a video in the mix: drawn at the lane head, kept on the audio clock. */
+  attachVideo?: (trackId: string, element: HTMLVideoElement) => () => void;
 }
 
 const LANE_BUTTON =
@@ -80,6 +82,7 @@ export function JamTrackRow({
   onDelete,
   onAudition,
   onSeek,
+  attachVideo,
 }: JamTrackRowProps) {
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[track.instrument];
@@ -113,12 +116,16 @@ export function JamTrackRow({
       <div className="flex min-w-0 items-center justify-between gap-2 sm:flex-col sm:items-stretch sm:justify-start sm:gap-1.5">
         <div className="flex min-w-0 items-center gap-2.5">
           <span className="relative shrink-0">
-            <UserAvatar
-              name={track.authorName ?? t("jam.tile.anonymous")}
-              avatarUrl={track.authorAvatarUrl}
-              rounded="full"
-              className={cn("h-9 w-9", outOfMix && !auditioning && "opacity-60")}
-            />
+            {attachVideo && track.videoUrl ? (
+              <LaneVideo track={track} attach={attachVideo} muted={lane.muted} label={name} />
+            ) : (
+              <UserAvatar
+                name={track.authorName ?? t("jam.tile.anonymous")}
+                avatarUrl={track.authorAvatarUrl}
+                rounded="full"
+                className={cn("h-9 w-9", outOfMix && !auditioning && "opacity-60")}
+              />
+            )}
             <span
               aria-hidden="true"
               className={cn("absolute -bottom-1 -right-1 grid h-[18px] w-[18px] place-items-center rounded-full ring-2 ring-surface-1", look.fill)}
@@ -278,5 +285,42 @@ export function JamTrackRow({
         </div>
       </div>
     </li>
+  );
+}
+
+/** A take's video at its lane head: small, muted, kept on the audio clock by the engine. */
+function LaneVideo({
+  track,
+  attach,
+  muted,
+  label,
+}: {
+  track: JamTrack;
+  attach: (trackId: string, element: HTMLVideoElement) => () => void;
+  muted: boolean;
+  label: string;
+}) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) {
+      return;
+    }
+    return attach(track.id, element);
+  }, [attach, track.id]);
+  return (
+    <video
+      ref={ref}
+      src={track.videoUrl ?? undefined}
+      muted
+      playsInline
+      preload="metadata"
+      aria-label={label}
+      data-jam-lane-video=""
+      className={cn(
+        "h-9 w-16 rounded-[var(--radius-control)] bg-surface-0 object-cover ring-1 ring-inset ring-border transition-opacity duration-[var(--duration-base)]",
+        muted && "opacity-40",
+      )}
+    />
   );
 }

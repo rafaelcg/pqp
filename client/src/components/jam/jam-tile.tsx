@@ -112,8 +112,10 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
   const subtitle = song.artist ?? t("jam.original");
   const label = `${song.title}, ${subtitle}, ${who}, ${needText}${song.joinMode === "closed" ? `, ${t("jam.tile.closed")}` : ""}`;
   const onVideo = Boolean(videoUrl) && posterReady;
-  const ink = onVideo ? "text-on-media" : "text-on-inst";
-  const ink2 = onVideo ? "text-on-media-muted" : "text-on-inst/75";
+  // The words always sit on a dark scrim at the foot of the cover, so a title
+  // reads the same on every tile whatever colours the band painted above it.
+  const ink = "text-on-media";
+  const ink2 = "text-on-media-muted";
 
   return (
     <li ref={tileRef} className={cn("flex min-w-0", JAM_TILE_SPAN[size])}>
@@ -131,7 +133,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
         data-jam-tile={song.id}
         data-jam-tile-size={size}
         data-playing={playing ? "true" : undefined}
-        style={{ "--jam-i": Math.min(index, 10) } as CSSProperties}
+        style={{ "--jam-i": Math.min(index, 10), viewTransitionName: selected ? undefined : `jam-cover-${song.id}` } as CSSProperties}
         className={cn(
           "group relative isolate h-full w-full min-w-0 overflow-hidden rounded-[var(--radius-panel)] text-left outline-none",
           // A wide tile is two columns: the words on the left, the waveform on the right.
@@ -147,6 +149,15 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
           fresh && "jam-tile-arrive",
         )}
       >
+        <span
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute -z-10",
+            wide
+              ? "inset-y-0 left-0 w-[62%] bg-gradient-to-r from-media-scrim/90 via-media-scrim/60 to-media-scrim/0"
+              : "inset-x-0 bottom-0 h-[64%] bg-gradient-to-t from-media-scrim/95 via-media-scrim/60 to-media-scrim/0",
+          )}
+        />
         {videoUrl && (
           <>
             <video
@@ -179,7 +190,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
           <BandStrip instruments={song.instruments} missing={missing} size={big ? "md" : "sm"} />
           <span className="flex shrink-0 items-center gap-1.5">
             {playing && (
-              <span className="flex h-6 items-center gap-1 rounded-full bg-on-inst px-2 text-inst-guitar">
+              <span className="flex h-6 items-center gap-1 rounded-full bg-on-inst px-2 text-accent">
                 <Equalizer />
               </span>
             )}
@@ -213,7 +224,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
         >
           <MirrorBars
             bars={bars}
-            className={cn("absolute inset-0", playing && "jam-wave-live")}
+            className="absolute inset-0"
             barClassName="bg-on-inst/80"
             animate={entrance || fresh}
           />
@@ -224,7 +235,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
           <span
             className={cn(
               "font-display font-extrabold leading-[1.05] tracking-tight [text-wrap:balance]",
-              big ? "line-clamp-2 text-4xl" : size === "small" ? "line-clamp-1 text-base" : "line-clamp-2 text-xl",
+              big ? "line-clamp-2 text-4xl" : size === "small" ? "line-clamp-1 text-lg" : "line-clamp-2 text-[22px]",
             )}
           >
             {song.title}
@@ -235,7 +246,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
                 people={song.contributors}
                 total={song.contributorCount}
                 size={big ? "md" : "sm"}
-                ringClassName={onVideo ? "ring-media-scrim" : "ring-on-inst/30"}
+                ringClassName="ring-media-scrim"
               />
               <span className="truncate">{`${subtitle} · ${who}`}</span>
             </span>
@@ -243,18 +254,23 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
           <span className="flex min-w-0 items-center justify-between gap-2">
             <NeedChip need={need} />
             {/* the play disc: the tile opens the song and it starts playing */}
+            {size !== "small" && (
             <span
               aria-hidden="true"
               className={cn(
-                "grid shrink-0 place-items-center rounded-full bg-on-inst text-on-media shadow-[var(--shadow-2)] transition-[transform,opacity] duration-[var(--duration-base)] ease-[var(--ease-emphasized)]",
+                "grid shrink-0 place-items-center rounded-full shadow-[var(--shadow-2)] transition-[transform,opacity] duration-[var(--duration-base)] ease-[var(--ease-emphasized)]",
                 big ? "h-12 w-12" : "h-9 w-9",
                 playing
-                  ? "opacity-100"
+                  ? "bg-accent text-on-accent opacity-100"
+                  : "bg-on-media text-media-scrim",
+                playing
+                  ? ""
                   : "opacity-0 motion-safe:translate-y-1 group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 [@media(hover:none)]:opacity-100",
               )}
             >
-              {playing ? <Equalizer className="text-inst-guitar" /> : <Play className={cn("ml-0.5", big ? "h-5 w-5" : "h-4 w-4")} fill="currentColor" />}
+              {playing ? <Equalizer /> : <Play className={cn("ml-0.5", big ? "h-5 w-5" : "h-4 w-4")} fill="currentColor" />}
             </span>
+            )}
           </span>
         </span>
 

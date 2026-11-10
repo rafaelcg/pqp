@@ -214,15 +214,12 @@ export function JamClipEditor({
         data-dragging={dragging ?? undefined}
       >
         {/* the band, behind */}
-        <MirrorBars bars={bandBars} className="absolute inset-x-0 inset-y-5 px-px" barClassName="bg-text-tertiary/35" />
-        <span className="absolute left-2 top-1.5 text-[10px] font-bold uppercase tracking-wider text-text-tertiary">
-          {t("jam.clip.band")}
-        </span>
+        <MirrorBars bars={bandBars} className="absolute inset-x-0 inset-y-5 px-px" barClassName="bg-text-tertiary/50" />
 
         {/* where the song starts: the line a first note lines up with */}
         {view.startMs < 0 && view.endMs > 0 && (
           <span aria-hidden="true" className="absolute inset-y-0 w-px bg-accent/70" style={{ left: at(0) }}>
-            <span className="absolute left-1 top-1.5 whitespace-nowrap text-[10px] font-bold text-accent">{t("jam.clip.songStart")}</span>
+            <span className="absolute bottom-1 left-1 whitespace-nowrap text-[11px] font-bold text-accent">{t("jam.clip.songStart")}</span>
           </span>
         )}
 
@@ -313,12 +310,19 @@ export function JamClipEditor({
             aria-label={t("jam.review.nudgeEarlier")}
             onClick={() => onNudge(edits.nudgeMs - 10)}
             data-jam-nudge="earlier"
-            className="flex h-10 items-center gap-1 rounded-full bg-surface-2 px-3 text-xs font-bold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="flex h-10 items-center gap-1 whitespace-nowrap rounded-full bg-surface-2 pl-2 pr-3 text-xs font-bold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <ChevronLeft className="h-4 w-4" aria-hidden />
             {t("jam.review.nudgeEarlier")}
           </button>
-          <span className="min-w-[6.5rem] text-center text-xs font-semibold tabular-nums text-text-secondary" aria-live="polite">
+          <span
+            className={cn(
+              "flex min-w-[6.5rem] items-center justify-center gap-1.5 text-center text-xs font-semibold tabular-nums",
+              edits.nudgeMs === 0 ? "text-text-secondary" : "text-text",
+            )}
+            aria-live="polite"
+          >
+            {edits.nudgeMs === 0 && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-success" />}
             {nudgeWords}
           </span>
           <button
@@ -326,7 +330,7 @@ export function JamClipEditor({
             aria-label={t("jam.review.nudgeLater")}
             onClick={() => onNudge(edits.nudgeMs + 10)}
             data-jam-nudge="later"
-            className="flex h-10 items-center gap-1 rounded-full bg-surface-2 px-3 text-xs font-bold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="flex h-10 items-center gap-1 whitespace-nowrap rounded-full bg-surface-2 pl-3 pr-2 text-xs font-bold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             {t("jam.review.nudgeLater")}
             <ChevronRight className="h-4 w-4" aria-hidden />
@@ -345,14 +349,18 @@ export function JamClipEditor({
             aria-label={t("jam.review.volume")}
             className="min-w-0 flex-1"
           />
-          <span className="w-10 text-right text-xs font-semibold tabular-nums text-text-secondary">{Math.round(edits.gain * 100)}%</span>
+          <span className="w-14 text-right text-xs font-semibold tabular-nums text-text-secondary">
+            {Math.round(edits.gain * 100) === 100
+              ? t("jam.clip.volumeNormal")
+              : `${edits.gain > 1 ? "+" : "-"}${Math.abs(Math.round(edits.gain * 100) - 100)}%`}
+          </span>
         </div>
       </div>
 
-      <div className="flex items-center justify-between gap-2 text-xs text-text-tertiary">
+      <div className="flex min-h-8 items-center justify-between gap-2 text-xs text-text-secondary">
         <span className="tabular-nums">{t("jam.clip.length", { time: formatClock(audibleMs(source, edits)) })}</span>
-        {onReset && (
-          <Button variant="ghost" size="sm" className="gap-1.5" onClick={onReset} disabled={!edited} data-jam-clip-reset="">
+        {onReset && edited && (
+          <Button variant="ghost" size="sm" className="gap-1.5 text-text" onClick={onReset} data-jam-clip-reset="">
             <RotateCcw className="h-3.5 w-3.5" aria-hidden />
             {t("jam.review.reset")}
           </Button>
