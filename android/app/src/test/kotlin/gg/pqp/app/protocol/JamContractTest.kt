@@ -64,8 +64,13 @@ class JamContractTest {
     /** The two models a tile and a track row draw from: every field the server sends is read. */
     @Test
     fun `the summary and the track read every field the server sends`() {
+        // Fields the server sends that this build does not read YET, each one a decision
+        // made in the open: `coverUrl` is a song's cover photo (web first; a phone reads it
+        // when its tile and song screen draw one, and the decoder skips it until then).
+        // Take a name off this list in the change that makes the model read it.
+        val notReadYet = setOf("coverUrl")
         assertEquals(
-            RepoSources.objectKeys(jam, "jamSongSummarySchema").toSet(),
+            RepoSources.objectKeys(jam, "jamSongSummarySchema").toSet() - notReadYet,
             JamSongSummary.serializer().descriptor.elementNames.toSet(),
         )
         assertEquals(
