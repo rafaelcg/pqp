@@ -200,7 +200,7 @@ export function JamSongPanel({
         {covered && (
           // The cover's own colours, blurred far past reading, behind the words.
           <span aria-hidden="true" data-jam-header-wash="" className="jam-header-wash pointer-events-none absolute inset-0 -z-10">
-            <JamCoverPhoto cover={cover} className="scale-125 blur-2xl saturate-150 data-[ready=true]:opacity-60" />
+            <JamCoverPhoto cover={cover} eager className="scale-125 blur-2xl saturate-150 data-[ready=true]:opacity-60" />
             <span className="absolute inset-0 bg-gradient-to-b from-surface-1/10 via-surface-1/55 to-surface-1" />
           </span>
         )}
@@ -539,7 +539,7 @@ function SongCover({
       data-jam-cover-photo-on={covered ? "true" : undefined}
     >
       <div aria-hidden="true" className="absolute inset-0">
-        {covered ? <JamCoverPhoto cover={cover} /> : <SongArt song={song} />}
+        {covered ? <JamCoverPhoto cover={cover} eager /> : <SongArt song={song} />}
       </div>
       {playing && (
         <span aria-hidden="true" className="absolute bottom-1.5 left-1.5 flex h-5 items-center rounded-full bg-media-scrim/85 px-1.5 text-on-media">

@@ -7734,6 +7734,7 @@
   "jam.edit.readyHint": "It only counts once you save.",
   "jam.edit.removedHint": "It only goes away once you save.",
   "jam.edit.photoFailed": "The photo did not go up. Pick it again.",
+  "jam.edit.photoUnreadable": "This browser cannot open that image. Try another one.",
   "jam.edit.photoType": "Pick a JPG, PNG or WebP image.",
   "jam.edit.cropTitle": "Frame the photo",
   "jam.edit.cropHint": "Drag to move it, zoom to fit.",

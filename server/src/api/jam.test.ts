@@ -1671,14 +1671,14 @@ describeDb("jam channels", () => {
     // Nothing above set a cover.
     expect((await detail(bob, song)).song.coverUrl).toBeNull();
 
-    // A real JPEG is accepted; a retry of the claim is the same answer and no second frame.
+    // A real JPEG is accepted; a retry of the claim is the same answer, announced again (a frame is idempotent).
     const good = await coverUpload(bob, song, { contentType: "image/jpeg", bytes: jpegBytes() });
     expect((await setCover(bob, song, good)).status).toBe(200);
     takeFrames();
     const retried = await setCover(bob, song, good);
     expect(retried.status).toBe(200);
     expect(retried.body.song.coverUrl).toBeTruthy();
-    expect(takeFrames()).toHaveLength(0);
+    expect(takeFrames()).toMatchObject([{ type: "jam-song-updated" }]);
   });
 
   it("replacing a cover deletes the old object and its ledger row; removing deletes the last one", async () => {
@@ -1708,9 +1708,9 @@ describeDb("jam channels", () => {
     expect(takeFrames()).toMatchObject([{ type: "jam-song-updated" }]);
     await settled(() => objects.size === 0);
     expect((await getPool().query(`SELECT 1 FROM jam_song_covers`)).rowCount).toBe(0);
-    // Nothing left to remove: 200, no frame.
+    // Nothing left to remove: 200, and the same frame again (a retry whose first answer was lost still tells the room).
     expect((await removeCover(bob, song)).status).toBe(200);
-    expect(takeFrames()).toHaveLength(0);
+    expect(takeFrames()).toMatchObject([{ type: "jam-song-updated" }]);
   });
 
   it("off refuses a ticket and a set for a cover, never a read, and lets the removal through", async () => {

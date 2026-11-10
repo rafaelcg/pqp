@@ -73,6 +73,8 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
   const [artist, setArtist] = useState(song.artist ?? "");
   const [cover, setCover] = useState<JamCoverChoice>({ kind: "keep" });
   const [preview, setPreview] = useState<string | null>(null);
+  /** The framed picture while it goes up: it becomes the preview only if the upload lands. */
+  const [pending, setPending] = useState<string | null>(null);
   const [upload, setUpload] = useState<Upload>({ status: "idle" });
   const [cropping, setCropping] = useState<File | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -85,6 +87,11 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
       if (before && before !== next) URL.revokeObjectURL(before);
       return next;
     });
+  const replacePending = (next: string | null) =>
+    setPending((before) => {
+      if (before && before !== next) URL.revokeObjectURL(before);
+      return next;
+    });
 
   // Every time the sheet opens it starts from the song as it is now.
   useEffect(() => {
@@ -93,6 +100,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
       setArtist(song.artist ?? "");
       setCover({ kind: "keep" });
       replacePreview(null);
+      replacePending(null);
       setUpload({ status: "idle" });
       setCropping(null);
       setNote(null);
@@ -101,6 +109,9 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
       setTouched(false);
     } else {
       abort.current?.abort();
+      // Closed: nothing keeps the picked picture's local address alive.
+      replacePreview(null);
+      replacePending(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- a fresh start per opening, not per keystroke of the song under it
   }, [open]);
@@ -108,6 +119,10 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
     () => () => {
       abort.current?.abort();
       setPreview((before) => {
+        if (before) URL.revokeObjectURL(before);
+        return null;
+      });
+      setPending((before) => {
         if (before) URL.revokeObjectURL(before);
         return null;
       });
@@ -146,20 +161,24 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
         // The framed picture is on the tile before its first byte is sent.
         onPreview: (url) => {
           if (controller.signal.aborted) URL.revokeObjectURL(url);
-          else replacePreview(url);
+          else replacePending(url);
         },
         onProgress: (fraction) => setUpload({ status: "uploading", fraction }),
       });
       if (controller.signal.aborted) return;
+      // The picture that went up is the preview now; the one it replaces is let go.
+      replacePreview(done.previewUrl);
+      setPending(null);
       setCover({ kind: "new", uploadId: done.uploadId });
       setUpload({ status: "idle" });
       setNote(t("jam.edit.readyHint"));
     } catch (failure) {
       if (controller.signal.aborted) return;
-      replacePreview(null);
+      // A failed replacement leaves the photo that was already chosen where it was.
+      replacePending(null);
       const message =
         failure instanceof JamCoverError
-          ? t(failure.kind === "tooLarge" ? "jam.error.tooLarge" : "jam.edit.photoType")
+          ? t(failure.kind === "tooLarge" ? "jam.error.tooLarge" : "jam.edit.photoUnreadable")
           : failure instanceof ApiError
             ? t(`jam.error.${jamErrorKind(failure)}` as MessageKey)
             : t("jam.edit.photoFailed");
@@ -170,6 +189,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
   function removePhoto() {
     abort.current?.abort();
     replacePreview(null);
+    replacePending(null);
     setUpload({ status: "idle" });
     setCover({ kind: "remove" });
     setNote(song.coverUrl !== null ? t("jam.edit.removedHint") : null);
@@ -249,7 +269,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
                 title={cleanSongTitle(title) ?? song.title}
                 artist={artist.replace(/\s+/g, " ").trim() || null}
                 cover={cover}
-                preview={preview}
+                preview={pending ?? preview}
                 upload={upload}
                 dragging={dragging}
                 onPick={() => fileInput.current?.click()}
@@ -425,7 +445,7 @@ function PreviewTile({
           className={cn("jam-cover-pop absolute inset-0 h-full w-full object-cover transition-[filter] duration-[var(--duration-slow)]", uploading && "brightness-[0.55]")}
         />
       ) : showCurrent ? (
-        <JamCoverPhoto cover={current} />
+        <JamCoverPhoto cover={current} eager />
       ) : (
         <SongArt song={song} />
       )}

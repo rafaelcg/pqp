@@ -239,8 +239,9 @@ Setting a cover is an edit, so it is gated by the flag, the timeout gate and the
 author-or-moderator rule exactly like `PATCH /api/jam-songs/:songId`. Removing it
 is not gated by the flag (a picture somebody should not see must stay removable
 while the feature is paused): the fourth removal beside deleting a song, deleting
-a track and taking a vote back. Both announce `jam-song-updated`, only when
-something changed, so a retried claim is the same answer with no second frame.
+a track and taking a vote back. Both announce `jam-song-updated`, and a retried
+call announces again: a frame is applied by id and is idempotent, and the retry
+may be the first call whose summary read failed after the commit.
 
 Cleanup. Replacing or removing a cover deletes the old object and its ledger row
 after the commit, best effort and never awaited by the request. The sweep is the

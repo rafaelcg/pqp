@@ -312,9 +312,10 @@ export function registerJamRoutes(router: Router): void {
     }
     const { uploadId } = setJamCoverSchema.parse(await readJsonBody(req));
     const result = await setJamCover({ song, userId: user.id, uploadId });
-    if (result.changed) {
-      announceJam({ type: "jam-song-updated", channelId: channel.id, song: result.song });
-    }
+    // Announced even for a retried claim: a frame is applied by id and is
+    // idempotent, and the retry may be the first call whose summary read failed
+    // after the commit, so no other viewer has heard of the change yet.
+    announceJam({ type: "jam-song-updated", channelId: channel.id, song: result.song });
     return { song: result.song };
   });
 
@@ -328,9 +329,8 @@ export function registerJamRoutes(router: Router): void {
       throw new HttpError(403, "You cannot edit this song");
     }
     const result = await removeJamCover(song);
-    if (result.changed) {
-      announceJam({ type: "jam-song-updated", channelId: channel.id, song: result.song });
-    }
+    // Same reasoning as the claim: announcing a removal that already happened is harmless.
+    announceJam({ type: "jam-song-updated", channelId: channel.id, song: result.song });
     return { song: result.song };
   });
 

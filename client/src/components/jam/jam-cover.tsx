@@ -99,10 +99,13 @@ export function JamCoverPhoto({
   cover,
   className,
   style,
+  eager = false,
 }: {
   cover: JamCoverState;
   className?: string;
   style?: CSSProperties;
+  /** The panel and the edit sheet need it now; a wall of tiles lets the browser load what comes near. */
+  eager?: boolean;
 }) {
   if (cover.src === null || cover.status === "failed") {
     return null;
@@ -113,6 +116,7 @@ export function JamCoverPhoto({
       alt=""
       draggable={false}
       decoding="async"
+      loading={eager ? "eager" : "lazy"}
       onLoad={cover.onLoad}
       onError={cover.onError}
       data-jam-cover-photo=""

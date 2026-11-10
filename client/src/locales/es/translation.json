@@ -7806,6 +7806,7 @@
   "jam.edit.readyHint": "Solo vale después de guardar.",
   "jam.edit.removedHint": "Solo se quita después de guardar.",
   "jam.edit.photoFailed": "La foto no se subió. Elígela de nuevo.",
+  "jam.edit.photoUnreadable": "Este navegador no puede abrir esa imagen. Prueba con otra.",
   "jam.edit.photoType": "Elige una imagen JPG, PNG o WebP.",
   "jam.edit.cropTitle": "Encuadrar la foto",
   "jam.edit.cropHint": "Arrastra para mover y haz zoom para encajar.",

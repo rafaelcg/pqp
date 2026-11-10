@@ -717,8 +717,9 @@ async function coverAlreadySet(songId: string, uploadId: string, userId: string)
 }
 
 /**
- * Make an upload of kind `cover` the song's picture. `changed: false` is a
- * retry of a claim that already made it (the same answer, no second frame).
+ * Make an upload of kind `cover` the song's picture. A retry of a claim that
+ * already made it answers the same song (the route announces it again: frames
+ * are idempotent, and the first call may have failed after the commit).
  *
  * Order, like adding a track: the upload row is found and HEAD-and-sniff
  * verified off any transaction, then one transaction locks the song, claims the
@@ -730,9 +731,9 @@ export async function setJamCover(input: {
   song: JamSongRow;
   userId: string;
   uploadId: string;
-}): Promise<{ song: JamSongSummary; changed: boolean }> {
+}): Promise<{ song: JamSongSummary }> {
   const { song, userId, uploadId } = input;
-  const unchanged = async () => ({ song: await requireSummary(song.id), changed: false });
+  const unchanged = async () => ({ song: await requireSummary(song.id) });
   if (await coverAlreadySet(song.id, uploadId, userId)) {
     return unchanged();
   }
@@ -792,13 +793,11 @@ export async function setJamCover(input: {
     client.release();
   }
   discardCoverUpload(previous);
-  return { song: await requireSummary(song.id), changed: true };
+  return { song: await requireSummary(song.id) };
 }
 
-/** Take the picture off a song. `changed: false` when it had none. */
-export async function removeJamCover(
-  song: JamSongRow,
-): Promise<{ song: JamSongSummary; changed: boolean }> {
+/** Take the picture off a song. A song that has none answers as it is. */
+export async function removeJamCover(song: JamSongRow): Promise<{ song: JamSongSummary }> {
   const client = await getPool().connect();
   let previous: { id: string; storage_key: string } | undefined;
   try {
@@ -827,7 +826,7 @@ export async function removeJamCover(
     client.release();
   }
   discardCoverUpload(previous);
-  return { song: await requireSummary(song.id), changed: previous !== undefined };
+  return { song: await requireSummary(song.id) };
 }
 
 /**
