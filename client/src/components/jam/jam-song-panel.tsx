@@ -30,7 +30,7 @@ import {
 import type { JamDetail } from "@/lib/jam-state";
 import { barsFromPeaks, competingInstruments, formatClock, orderTracks, seededBars, songNeed, songTimeline } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
-import { BandStrip, ContributorStack, coverGradient, Equalizer, MirrorBars, NeedChip } from "./jam-art";
+import { BandStrip, ContributorStack, coverGradient, Equalizer, MirrorBars } from "./jam-art";
 import { useBarCount } from "./jam-bars";
 import { TrackAdjust } from "./jam-track-adjust";
 import { JamTrackRow } from "./jam-track-row";
@@ -197,19 +197,19 @@ export function JamSongPanel({
         >
           <ArrowLeft className="h-5 w-5" aria-hidden />
         </button>
-        <SongCover song={song} missing={missingSlots} playing={playing} />
+        <SongCover song={song} playing={playing} />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
           <h2 className="font-display text-2xl font-extrabold leading-[1.05] tracking-tight text-text [text-wrap:balance] sm:text-3xl">
             {song.title}
           </h2>
           <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-text-secondary">
-            <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-surface-1" />
+            <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-border-strong" />
             <span className="truncate">
               {song.artist ?? t("jam.original")} · {t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <NeedChip need={need} tone="panel" />
+            <BandStrip instruments={song.instruments} missing={missingSlots} size="sm" />
             {song.joinMode === "closed" && (
               <span data-jam-closed-line="" className="flex items-center gap-1 text-xs text-text-secondary">
                 <Lock className="h-3 w-3 shrink-0" aria-hidden />
@@ -477,7 +477,7 @@ export function bandOf(tracks: readonly JamTrack[], exceptId: string | null): Ba
  * loudest stem's waveform), so the panel reads as the tile that was opened.
  * Its view-transition name pairs it with that tile.
  */
-function SongCover({ song, missing, playing }: { song: JamSongSummary; missing: readonly JamInstrument[]; playing: boolean }) {
+function SongCover({ song, playing }: { song: JamSongSummary; playing: boolean }) {
   const [ref, count] = useBarCount(5, 24);
   const bars = useMemo(
     () => (count === 0 ? [] : song.previewPeaks.length > 0 ? barsFromPeaks(song.previewPeaks, count) : seededBars(song.id, count)),
@@ -497,7 +497,6 @@ function SongCover({ song, missing, playing }: { song: JamSongSummary; missing: 
         <MirrorBars bars={bars} className="absolute inset-0 gap-[2px]" barClassName="bg-on-inst/75" />
       </div>
       <div className="flex items-center justify-between">
-        <BandStrip instruments={song.instruments} missing={missing} size="sm" className="max-sm:hidden" />
         {playing && (
           <span className="ml-auto flex h-5 items-center rounded-full bg-on-inst px-1.5 text-accent">
             <Equalizer className="h-3" />
@@ -600,24 +599,25 @@ function MissingLane({
           <span className="truncate text-xs text-text-secondary">{t("jam.song.looking", { name: who })}</span>
         </span>
       </div>
-      <div className={cn("flex h-14 items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current", look.ink)}>
-        {canRecord ? (
-          <button
-            type="button"
-            onClick={onRecord}
-            data-jam-slot-record={instrument}
-            className={cn(
-              "flex h-9 items-center gap-1.5 rounded-full px-4 text-xs font-extrabold outline-none transition-transform duration-[var(--duration-fast)] hover:scale-[1.04] focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.97]",
-              look.fill,
-            )}
-          >
-            <Mic className="h-3.5 w-3.5" aria-hidden />
-            {t(`jam.song.recordAs.${instrument}` as MessageKey)}
-          </button>
-        ) : (
-          <span className="text-xs font-bold">{t(look.missingKey as MessageKey)}</span>
-        )}
-      </div>
+      {/* the empty lane is itself the button: where the part goes is where you press */}
+      {canRecord ? (
+        <button
+          type="button"
+          onClick={onRecord}
+          data-jam-slot-record={instrument}
+          className={cn(
+            "group flex h-14 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-dashed border-current text-sm font-bold outline-none transition-[background-color,border-color,color] duration-[var(--duration-base)] hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft focus-visible:ring-2 focus-visible:ring-focus-ring",
+            look.ink,
+          )}
+        >
+          <Mic className="h-4 w-4 transition-transform duration-[var(--duration-base)] motion-safe:group-hover:scale-110" aria-hidden />
+          {t(`jam.song.recordAs.${instrument}` as MessageKey)}
+        </button>
+      ) : (
+        <div className={cn("flex h-14 items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current text-xs font-bold", look.ink)}>
+          {t(look.missingKey as MessageKey)}
+        </div>
+      )}
     </li>
   );
 }

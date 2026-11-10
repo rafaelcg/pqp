@@ -624,7 +624,7 @@ export function JamPane({
 
       {openSong && (
         <div
-          className="jam-panel-in absolute inset-0 z-20 bg-surface-1 lg:static lg:z-auto lg:w-[min(42rem,60%)] lg:shrink-0 lg:border-l lg:border-border"
+          className="jam-panel-in absolute inset-0 z-20 bg-surface-1 max-sm:fixed max-sm:z-40 lg:static lg:z-auto lg:w-[min(42rem,60%)] lg:shrink-0 lg:border-l lg:border-border"
           data-jam-song-panel=""
           inert={studio !== null}
         >

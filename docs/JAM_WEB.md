@@ -125,11 +125,13 @@ with a tap button; it never changed the song or the placement of a take (the
 engine places a take by the clock, not the beat), so a first-time player was
 asked a number that did nothing for them. The engine still takes any `countIn`.
 
-- **First use on a pair of devices**: a one-screen explanation of the latency
-  check with two ways to measure and a skip that says what it costs. The engine
-  stores a measurement per device pair, and a skip is remembered per pair too, so
-  nobody meets the full-page screen twice; afterwards only the latency chip and a
-  quiet "Calibrar" remain.
+- **First use on a pair of devices**: a suggestion under the band, never a gate:
+  "Quer cravar o tempo?" with "Medir agora" (7 s, by the microphone), "Bater no
+  ritmo" and "Agora não", and the why behind a link. The red button records either
+  way; pressing it with the check pending is the skip (the browser's estimate is
+  used and the skip is remembered for that pair of devices). The engine stores a
+  measurement per device pair, so nobody meets the suggestion twice; afterwards
+  the latency chip and "Calibrar" in "Teu som" remain.
 - **Recording**: count-in (one bar), a live clip growing on the same timeline as
   the others with a red edge where it is being written (`lib/jam-live.ts`: a drawn
   bar never changes), the band's lanes showing where they are, the level meter.
@@ -176,7 +178,7 @@ Measured by `e2e/jam-web.spec.ts`:
 | Flow | Taps |
 |---|---|
 | Server to the studio, over an existing song | 3: the Jam row, the tile, "Gravar por cima" |
-| ...then recording | +1 for the big button (+1 on the first use of a pair of devices: measure or skip) |
+| ...then recording | +1 for the big button (the first use of a pair of devices suggests measuring the delay, and does not block) |
 | Stop to posted | 1: "Mandar pra banda" |
 
 ## Copy, motion, theme

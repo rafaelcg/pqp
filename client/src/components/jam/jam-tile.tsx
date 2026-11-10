@@ -246,15 +246,15 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
                 people={song.contributors}
                 total={song.contributorCount}
                 size={big ? "md" : "sm"}
-                ringClassName="ring-media-scrim"
+                ringClassName="ring-on-media/40"
               />
               <span className="truncate">{`${subtitle} · ${who}`}</span>
             </span>
           )}
           <span className="flex min-w-0 items-center justify-between gap-2">
-            <NeedChip need={need} />
+            <NeedChip need={need} compact={size === "small"} />
             {/* the play disc: the tile opens the song and it starts playing */}
-            {size !== "small" && (
+            {(
             <span
               aria-hidden="true"
               className={cn(
@@ -265,7 +265,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
                   : "bg-on-media text-media-scrim",
                 playing
                   ? ""
-                  : "opacity-0 motion-safe:translate-y-1 group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 [@media(hover:none)]:opacity-100",
+                  : "opacity-90 group-hover:scale-110 group-hover:opacity-100 group-focus-visible:opacity-100",
               )}
             >
               {playing ? <Equalizer /> : <Play className={cn("ml-0.5", big ? "h-5 w-5" : "h-4 w-4")} fill="currentColor" />}
@@ -312,7 +312,6 @@ export function JamInviteTile({
         )}
       >
         <span className="relative grid h-12 w-12 place-items-center rounded-full bg-accent text-on-accent transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-safe:group-hover:scale-110">
-          <span aria-hidden="true" className="jam-invite-ping absolute inset-0 rounded-full ring-2 ring-accent" />
           <Mic className="relative h-5 w-5" aria-hidden="true" />
         </span>
         <span className="font-display text-base font-extrabold text-text">{t("jam.tile.invite")}</span>

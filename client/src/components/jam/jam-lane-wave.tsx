@@ -44,6 +44,7 @@ export function JamLaneWave({
   dimmed = false,
   className,
   animate = false,
+  playhead = false,
 }: {
   instrument: JamInstrument;
   peaks: readonly number[];
@@ -55,6 +56,11 @@ export function JamLaneWave({
   dimmed?: boolean;
   className?: string;
   animate?: boolean;
+  /**
+   * Draw the song's playhead in this lane too: where lanes are stacked (a phone)
+   * one line cannot cross them all, so each draws its piece at the same place.
+   */
+  playhead?: boolean | "phone";
 }) {
   const look = JAM_INSTRUMENT_LOOK[instrument];
   const total = Math.max(1, timeline.endMs - timeline.startMs);
@@ -63,6 +69,7 @@ export function JamLaneWave({
   const right = Math.min(1, Math.max(left, (span.endMs - timeline.startMs) / total));
   const [spanRef, count] = useBarCount(4);
   const played = useRef<HTMLDivElement | null>(null);
+  const line = useRef<HTMLDivElement | null>(null);
 
   const bars = useMemo(() => {
     if (count === 0) {
@@ -88,8 +95,11 @@ export function JamLaneWave({
       const length = Math.max(1, span.endMs - span.startMs);
       const progress = Math.min(1, Math.max(0, (positionMs - span.startMs) / length));
       element.style.clipPath = `inset(0 0 0 ${progress * 100}%)`;
+      if (line.current) {
+        line.current.style.left = `${Math.min(1, Math.max(0, (positionMs - timeline.startMs) / total)) * 100}%`;
+      }
     });
-  }, [clock, span.startMs, span.endMs]);
+  }, [clock, span.startMs, span.endMs, timeline.startMs, total]);
 
   // The lane is the song's whole width, a dark track; the take is a block of its
   // instrument's colour sitting where it plays (a clip, the way every multitrack
@@ -118,6 +128,13 @@ export function JamLaneWave({
           style={{ clipPath: "inset(0 0 0 0)" }}
         />
       </div>
+      {playhead && clock && (
+        <div
+          ref={line}
+          aria-hidden
+          className={cn("pointer-events-none absolute inset-y-0 left-0 w-0.5 -translate-x-1/2 bg-text", playhead === "phone" && "sm:hidden")}
+        />
+      )}
     </div>
   );
 }

@@ -318,7 +318,8 @@ test("a song has an address, and the studio shows and takes a typed latency", as
   // ---- and the take is placed with what was typed ----------------------------
   await recordAndStop(guest, 3);
   await expect(guest.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
-  await expect(guest.locator("[data-jam-take-latency]")).toContainText("55");
+  // said in words on the review, the numbers (55 ms typed) in its tooltip and accessible name
+  await expect(guest.locator("[data-jam-take-latency]")).toHaveAttribute("aria-label", /55/);
   await guest.locator("[data-jam-post]").click();
   await expect(guest.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
   const detail = await call<{ tracks: ApiTrack[] }>(HOST, "GET", `/api/jam-songs/${song.id}`);

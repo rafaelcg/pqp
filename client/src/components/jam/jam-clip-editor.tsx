@@ -210,22 +210,29 @@ export function JamClipEditor({
 
       <div
         ref={stageRef}
-        className="relative h-32 touch-none select-none overflow-hidden rounded-[var(--radius-card)] bg-surface-0 ring-1 ring-inset ring-border"
+        className="relative h-40 touch-none select-none overflow-hidden rounded-[var(--radius-card)] bg-surface-0 ring-1 ring-inset ring-border"
         data-dragging={dragging ?? undefined}
       >
-        {/* the band, behind */}
-        <MirrorBars bars={bandBars} className="absolute inset-x-0 inset-y-5 px-px" barClassName="bg-text-tertiary/50" />
+        {/* the band, on its own row right above the take: the beat to line up with */}
+        <div aria-hidden="true" className="absolute inset-x-0 top-0 h-12 border-b border-border bg-surface-1/60">
+          <MirrorBars bars={bandBars} className="absolute inset-x-0 inset-y-2 px-px" barClassName="bg-text-tertiary/70" />
+          <span className="absolute right-2 top-1 rounded-[var(--radius-tick)] bg-surface-0/80 px-1 text-[11px] font-semibold text-text-secondary">
+            {t("jam.clip.band")}
+          </span>
+        </div>
 
         {/* where the song starts: the line a first note lines up with */}
         {view.startMs < 0 && view.endMs > 0 && (
-          <span aria-hidden="true" className="absolute inset-y-0 w-px bg-accent/70" style={{ left: at(0) }}>
-            <span className="absolute bottom-1 left-1 whitespace-nowrap text-[11px] font-bold text-accent">{t("jam.clip.songStart")}</span>
+          <span aria-hidden="true" className="absolute inset-y-0 w-px bg-accent" style={{ left: at(0) }}>
+            <span className="absolute left-3 top-1 whitespace-nowrap rounded-[var(--radius-tick)] bg-surface-0/80 px-1 text-[11px] font-bold text-accent">
+              {t("jam.clip.songStart")}
+            </span>
           </span>
         )}
 
         {/* the take: its whole reach, the cut parts shaded */}
         <div
-          className={cn("absolute inset-y-6 overflow-hidden rounded-[var(--radius-control)]", look.fill)}
+          className={cn("absolute bottom-3 top-[3.75rem] overflow-hidden rounded-[var(--radius-control)]", look.fill)}
           style={{ left: `${reachLeft * 100}%`, width: `${Math.max(0, reachRight - reachLeft) * 100}%` }}
         >
           <div className="absolute inset-x-1 inset-y-1.5 origin-center" style={{ transform: `scaleY(${loud})` }}>
@@ -234,12 +241,12 @@ export function JamClipEditor({
         </div>
         <div
           aria-hidden="true"
-          className="jam-cut absolute inset-y-6 rounded-l-[var(--radius-control)] bg-surface-0/75"
+          className="jam-cut absolute bottom-3 top-[3.75rem] rounded-l-[var(--radius-control)] bg-surface-0/75"
           style={{ left: `${reachLeft * 100}%`, width: `${Math.max(0, spanLeft - reachLeft) * 100}%` }}
         />
         <div
           aria-hidden="true"
-          className="jam-cut absolute inset-y-6 rounded-r-[var(--radius-control)] bg-surface-0/75"
+          className="jam-cut absolute bottom-3 top-[3.75rem] rounded-r-[var(--radius-control)] bg-surface-0/75"
           style={{ left: `${spanRight * 100}%`, width: `${Math.max(0, reachRight - spanRight) * 100}%` }}
         />
 
@@ -259,7 +266,7 @@ export function JamClipEditor({
           onPointerCancel={end}
           onKeyDown={(event) => keys("body", event)}
           className={cn(
-            "absolute inset-y-6 rounded-[var(--radius-control)] outline-none ring-2 ring-inset ring-text/0 transition-[box-shadow] duration-[var(--duration-fast)] hover:ring-text/40 focus-visible:ring-focus-ring",
+            "absolute bottom-3 top-[3.75rem] rounded-[var(--radius-control)] outline-none ring-2 ring-inset ring-text/0 transition-[box-shadow] duration-[var(--duration-fast)] hover:ring-text/40 focus-visible:ring-focus-ring",
             dragging === "body" ? "cursor-grabbing ring-text/60" : "cursor-grab",
           )}
           style={{ left: `${spanLeft * 100}%`, width: `${Math.max(0, spanRight - spanLeft) * 100}%` }}
@@ -283,7 +290,7 @@ export function JamClipEditor({
               onPointerUp={end}
               onPointerCancel={end}
               onKeyDown={(event) => keys(grip, event)}
-              className="group absolute inset-y-3 z-10 flex w-5 -translate-x-1/2 cursor-ew-resize items-center justify-center outline-none"
+              className="group absolute bottom-1.5 top-[3.4rem] z-10 flex w-5 -translate-x-1/2 cursor-ew-resize items-center justify-center outline-none"
               style={{ left: at(grip === "start" ? span.startMs : span.endMs) }}
             >
               <span
@@ -339,6 +346,7 @@ export function JamClipEditor({
 
         <div className="flex min-w-[12rem] flex-1 items-center gap-2.5">
           <Volume2 className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden />
+          <span className="shrink-0 text-xs font-semibold text-text-secondary">{t("jam.review.volume")}</span>
           <Slider
             variant="volume"
             min={0}

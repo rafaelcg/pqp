@@ -1,5 +1,5 @@
 import type { JamInstrument, JamContributor } from "@pqp/shared";
-import { Check, Music2, Plus, Users, type LucideIcon } from "lucide-react";
+import { Check, Plus, Users } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -50,27 +50,6 @@ const RING: Record<JamInstrument, string> = {
   other: "ring-inst-other",
 };
 export const INST_RING = RING;
-
-/**
- * The Jam's mark at icon size: the header's little band-coloured tile, drawn in
- * the box a menu row gives an icon (`h-3.5 w-3.5`), so the "Criar Jam" row keeps
- * its siblings' geometry and still looks like the thing it makes. Typed as a
- * lucide icon because that is the slot it fills.
- */
-function JamGlyphComponent({ className }: { className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "inline-grid shrink-0 place-items-center rounded-[var(--radius-tick)] bg-gradient-to-br from-inst-guitar via-inst-bass to-inst-vocals text-on-inst",
-        className,
-      )}
-    >
-      <Music2 className="h-[70%] w-[70%]" strokeWidth={2.75} />
-    </span>
-  );
-}
-export const JamGlyph = JamGlyphComponent as unknown as LucideIcon;
 
 /** The instruments on a song in the band's order, the colours of its cover. */
 export function bandOrder(instruments: readonly JamInstrument[]): JamInstrument[] {
@@ -216,55 +195,52 @@ export function ContributorStack({
 }
 
 /**
- * What a song is asking for, as the loudest thing on its tile: "Falta voz" in
- * the voice's own colour with a plus, so the call to join reads as one.
+ * What a song is asking for. A song asking for somebody is the one call on its
+ * tile: a filled chip in the missing instrument's colour, "+ Falta voz". A song
+ * open to anybody, or ready, only says so: a quiet line, never something that
+ * looks like a button. `compact` is the small tile's version: "+ Voz".
  */
 export function NeedChip({
   need,
   className,
   tone = "cover",
+  compact = false,
 }: {
   need: JamNeed;
   className?: string;
-  /** On a cover (a dark capsule) or on a panel surface. */
+  /** On a cover (over the dark scrim) or on a panel surface. */
   tone?: "cover" | "panel";
+  compact?: boolean;
 }) {
+  const { t } = useTranslation();
   const label = useNeedLabel()(need);
-  const base = "inline-flex h-7 w-fit max-w-full items-center gap-1.5 rounded-full px-2.5 text-xs font-bold";
   if (need.kind === "missing") {
     const first = need.instruments[0]!;
     const look = JAM_INSTRUMENT_LOOK[first];
+    const more = need.instruments.length - 1;
     return (
       <span
         data-jam-need="missing"
-        className={cn(base, look.fill, className)}
+        className={cn("inline-flex h-7 w-fit max-w-full items-center gap-1 rounded-full pl-2 pr-2.5 text-xs font-bold", look.fill, className)}
       >
         <Plus className="h-3.5 w-3.5 shrink-0" strokeWidth={3} aria-hidden="true" />
-        <span className="truncate first-letter:uppercase">{label}</span>
+        <span className="truncate first-letter:uppercase">
+          {compact ? `${t(look.nameKey as MessageKey)}${more > 0 ? ` +${more}` : ""}` : label}
+        </span>
       </span>
     );
   }
-  if (need.kind === "open") {
-    return (
-      <span
-        data-jam-need="open"
-        className={cn(base, tone === "cover" ? "bg-on-inst text-on-media ring-1 ring-inset ring-on-media/15" : "bg-accent-soft text-on-accent-soft", className)}
-      >
-        <Users className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <span className="truncate first-letter:uppercase">{label}</span>
-      </span>
-    );
-  }
+  const Icon = need.kind === "open" ? Users : need.kind === "ready" ? Check : null;
   return (
     <span
       data-jam-need={need.kind}
       className={cn(
-        base,
-        tone === "cover" ? "bg-on-inst text-on-media ring-1 ring-inset ring-on-media/15" : "bg-surface-2 text-text-secondary",
+        "inline-flex w-fit max-w-full items-center gap-1.5 text-xs font-semibold",
+        tone === "cover" ? "text-on-media-muted" : "text-text-secondary",
         className,
       )}
     >
-      {need.kind === "ready" && <Check className="h-3.5 w-3.5 shrink-0" strokeWidth={3} aria-hidden="true" />}
+      {Icon && <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2.5} aria-hidden="true" />}
       <span className="truncate first-letter:uppercase">{label}</span>
     </span>
   );

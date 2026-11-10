@@ -1,5 +1,5 @@
 import type { JamInstrument, JamSongSummary, JamTrack } from "@pqp/shared";
-import { ArrowLeft, Camera, Check, Loader2, MicOff, RotateCcw, Send, SlidersHorizontal, Square } from "lucide-react";
+import { ArrowLeft, Camera, Check, ChevronDown, Loader2, MicOff, RotateCcw, Send, SlidersHorizontal, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -22,7 +22,7 @@ import { coverGradient } from "./jam-art";
 import { JamClipEditor } from "./jam-clip-editor";
 import { JamLaneWave } from "./jam-lane-wave";
 import { formatList } from "./jam-need";
-import { bandOf, Playhead } from "./jam-song-panel";
+import { bandOf, Playhead, Ruler } from "./jam-song-panel";
 import {
   Countdown,
   DoneOverlay,
@@ -223,7 +223,7 @@ export function JamStudio({
           ? t("jam.mic.error")
           : null;
 
-  const canRecord = studio.mic === "ready" && !studio.needsCheck && phase === "setup";
+  const canRecord = studio.mic === "ready" && phase === "setup" && studio.check !== "measuring";
   const progressText =
     studio.progress.stage === "claiming"
       ? t("jam.post.claiming")
@@ -282,7 +282,7 @@ export function JamStudio({
             </p>
           </div>
         ) : (
-          <div className="mx-auto grid w-full max-w-6xl gap-6 p-3 sm:p-6 @4xl:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-3 sm:p-6">
             <div className="@container flex min-w-0 flex-col gap-5">
               {micProblem && (
                 <div role="alert" className="flex flex-col items-start gap-3 rounded-[var(--radius-card)] bg-danger-soft p-4 text-on-danger-soft">
@@ -336,10 +336,8 @@ export function JamStudio({
                 </div>
               )}
 
-              {phase === "setup" && studio.needsCheck && <LatencyCheck studio={studio} />}
-
               {/* what the screen is asking right now, in one line */}
-              {phase !== "boot" && !(phase === "setup" && studio.needsCheck) && (
+              {phase !== "boot" && (
                 <div className="flex flex-col gap-1" data-jam-stage-title="">
                   <h3 className="font-display text-2xl font-extrabold tracking-tight text-text [text-wrap:balance] sm:text-3xl">
                     {phase === "setup"
@@ -360,7 +358,7 @@ export function JamStudio({
                 </div>
               )}
 
-              {phase === "setup" && !studio.needsCheck && (
+              {phase === "setup" && (
                 <InstrumentPicker value={studio.instrument} options={pickable} wanted={wanted} onChange={studio.setInstrument} />
               )}
 
@@ -402,24 +400,8 @@ export function JamStudio({
                   </p>
                 )}
                 <div className="relative [--lane-head:11rem]">
+                <Ruler timeline={timeline} onSeek={(fraction) => !recording && studio.engine?.player.seek(fraction * (timeline.endMs - timeline.startMs))} />
                 <ul className="flex flex-col gap-1.5" aria-label={t("jam.song.tracks")}>
-                  {backing.map((track, index) => (
-                    <li
-                      key={track.id}
-                      style={{ "--jam-l": index } as CSSProperties}
-                      className="jam-lane-in flex flex-col gap-1.5 sm:grid sm:grid-cols-[var(--lane-head)_minmax(0,1fr)] sm:items-center sm:gap-3 sm:px-1.5"
-                    >
-                      <StudioLaneHead track={track} />
-                      <JamLaneWave
-                        instrument={track.instrument}
-                        peaks={track.peaks}
-                        timing={track}
-                        timeline={timeline}
-                        clock={playingNow || reviewing || recording ? clock : undefined}
-                        seed={track.id}
-                      />
-                    </li>
-                  ))}
                   <li
                     data-jam-your-lane=""
                     className="flex flex-col gap-1.5 sm:grid sm:grid-cols-[var(--lane-head)_minmax(0,1fr)] sm:items-center sm:gap-3 sm:px-1.5"
@@ -465,10 +447,80 @@ export function JamStudio({
                       )}
                     </div>
                   </li>
+                  {backing.map((track, index) => (
+                    <li
+                      key={track.id}
+                      style={{ "--jam-l": index } as CSSProperties}
+                      className="jam-lane-in flex flex-col gap-1.5 sm:grid sm:grid-cols-[var(--lane-head)_minmax(0,1fr)] sm:items-center sm:gap-3 sm:px-1.5"
+                    >
+                      <StudioLaneHead track={track} />
+                      <JamLaneWave
+                        instrument={track.instrument}
+                        peaks={track.peaks}
+                        timing={track}
+                        timeline={timeline}
+                        clock={playingNow || reviewing || recording ? clock : undefined}
+                        seed={track.id}
+                      />
+                    </li>
+                  ))}
                 </ul>
                 {(playingNow || reviewing || recording) && <Playhead clock={clock} timeline={timeline} />}
                 </div>
               </div>
+
+              {phase === "setup" && studio.needsCheck && <LatencyCheck studio={studio} />}
+
+              {(phase === "setup" || phase === "boot") && (
+                <section
+                  className="flex min-w-0 flex-col gap-4 rounded-[var(--radius-panel)] bg-surface-1 p-4 ring-1 ring-inset ring-border"
+                  aria-label={t("jam.studio.settings")}
+                >
+                  <h3 className="font-display text-base font-extrabold text-text">{t("jam.studio.settings")}</h3>
+                  <div className="grid gap-4 @lg:grid-cols-2">
+                    <div className="flex min-w-0 flex-col gap-4">
+                      {studio.devices.length > 0 && (
+                        <label className="flex flex-col gap-1.5 text-xs font-semibold text-text-secondary">
+                          {t("jam.studio.input")}
+                          <span className="relative">
+                            <select
+                              value={studio.deviceId ?? ""}
+                              onChange={(event) => void studio.chooseDevice(event.target.value)}
+                              className="h-11 w-full appearance-none truncate rounded-full border border-border bg-surface-2 pl-4 pr-10 text-sm font-semibold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
+                            >
+                              {studio.devices.map((device, index) => (
+                                <option key={device.deviceId || index} value={device.deviceId}>
+                                  {device.label || t("jam.studio.inputUnnamed", { n: index + 1 })}
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-secondary" aria-hidden />
+                          </span>
+                        </label>
+                      )}
+                      <LevelMeter clock={studio.levelClock} active={studio.mic === "ready"} />
+                    </div>
+                    <div className="flex flex-col divide-y divide-border self-start rounded-[var(--radius-card)] bg-surface-2/60 px-3">
+                      <Switch
+                        checked={studio.countIn.bars > 0}
+                        onCheckedChange={(on) => studio.setCountIn({ ...studio.countIn, bars: on ? 1 : 0 })}
+                        label={t("jam.studio.countIn")}
+                        description={t("jam.studio.countInHint")}
+                      />
+                      <div className="flex flex-col gap-1.5 py-1">
+                        <Switch checked={studio.wantsVideo} onCheckedChange={studio.setWantsVideo} label={t("jam.studio.video")} />
+                        {studio.cameraError && (
+                          <p role="status" className="flex items-center gap-1.5 pb-2 text-xs text-text-tertiary">
+                            <Camera className="h-3.5 w-3.5" aria-hidden />
+                            {t("jam.studio.videoDenied")}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  {!studio.needsCheck && <LatencyCard studio={studio} />}
+                </section>
+              )}
 
               {phase === "review" && (
                 <>
@@ -561,52 +613,7 @@ export function JamStudio({
               )}
             </div>
 
-            {(phase === "setup" || phase === "boot") && (
-              <aside
-                className="flex min-w-0 flex-col gap-5 rounded-[var(--radius-panel)] bg-surface-1 p-4 ring-1 ring-inset ring-border @4xl:self-start"
-                aria-label={t("jam.studio.settings")}
-              >
-                <h3 className="font-display text-base font-extrabold text-text">{t("jam.studio.settings")}</h3>
-                {studio.devices.length > 0 && (
-                  <label className="flex flex-col gap-1.5 text-xs font-semibold text-text-secondary">
-                    {t("jam.studio.input")}
-                    <select
-                      value={studio.deviceId ?? ""}
-                      onChange={(event) => void studio.chooseDevice(event.target.value)}
-                      className="h-11 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 text-sm font-normal text-text outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-                    >
-                      {studio.devices.map((device, index) => (
-                        <option key={device.deviceId || index} value={device.deviceId}>
-                          {device.label || t("jam.studio.inputUnnamed", { n: index + 1 })}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
 
-                <LevelMeter clock={studio.levelClock} active={studio.mic === "ready"} />
-
-                <div className="flex flex-col divide-y divide-border rounded-[var(--radius-card)] bg-surface-2/60 px-3">
-                  <Switch
-                    checked={studio.countIn.bars > 0}
-                    onCheckedChange={(on) => studio.setCountIn({ ...studio.countIn, bars: on ? 1 : 0 })}
-                    label={t("jam.studio.countIn")}
-                    description={t("jam.studio.countInHint")}
-                  />
-                  <div className="flex flex-col gap-1.5 py-1">
-                    <Switch checked={studio.wantsVideo} onCheckedChange={studio.setWantsVideo} label={t("jam.studio.video")} />
-                    {studio.cameraError && (
-                      <p role="status" className="flex items-center gap-1.5 pb-2 text-xs text-text-tertiary">
-                        <Camera className="h-3.5 w-3.5" aria-hidden />
-                        {t("jam.studio.videoDenied")}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {!studio.needsCheck && <LatencyCard studio={studio} />}
-              </aside>
-            )}
           </div>
         )}
 
@@ -622,16 +629,18 @@ export function JamStudio({
       </div>
 
       <footer className={cn("safe-pb relative border-t border-border bg-surface-1 px-3 py-3 sm:px-6", phase === "done" && "hidden")}>
-        {phase === "setup" && studio.needsCheck && (
-          <p className="text-center text-sm font-semibold text-text-secondary">{t("jam.studio.checkFirst")}</p>
-        )}
-        {phase === "setup" && !studio.needsCheck && (
+        {phase === "setup" && (
           <div className="mx-auto flex max-w-md flex-col items-center gap-1.5">
             <button
               ref={recordRef}
               type="button"
               disabled={!canRecord}
-              onClick={() => void studio.startRecording()}
+              onClick={() => {
+                if (studio.needsCheck) {
+                  studio.skipCheck();
+                }
+                void studio.startRecording();
+              }}
               aria-label={t("jam.studio.record")}
               data-jam-record=""
               className="group relative grid h-20 w-20 place-items-center rounded-full bg-surface-0 shadow-[var(--shadow-2)] ring-4 ring-text outline-none transition-[transform,opacity] duration-[var(--duration-fast)] focus-visible:ring-focus-ring enabled:hover:scale-[1.04] enabled:active:scale-[0.95] disabled:opacity-40"
@@ -639,7 +648,7 @@ export function JamStudio({
               {canRecord && <span aria-hidden className="jam-record-ping absolute inset-0 rounded-full ring-2 ring-danger" />}
               <span aria-hidden className="h-12 w-12 rounded-full bg-danger transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] group-enabled:group-hover:scale-90" />
             </button>
-            <p className="text-center text-xs font-semibold text-text-secondary [text-wrap:pretty]">
+            <p className="text-center text-[13px] font-semibold text-text-secondary [text-wrap:pretty]">
               {studio.mic === "opening" ? t("jam.studio.opening") : t("jam.studio.recordHint")}
             </p>
           </div>
@@ -654,8 +663,8 @@ export function JamStudio({
         )}
 
         {phase === "recording" && (
-          <div className="mx-auto grid max-w-lg grid-cols-[1fr_auto_1fr] items-center gap-8">
-            <Button variant="secondary" className="h-12 gap-2 justify-self-end rounded-full px-5" onClick={() => void studio.cancelRecording()}>
+          <div className="mx-auto grid max-w-3xl grid-cols-[1fr_auto_1fr] items-center gap-6">
+            <Button variant="ghost" className="h-12 gap-2 justify-self-start rounded-full px-4 text-text-secondary" onClick={() => void studio.cancelRecording()}>
               <RotateCcw className="h-4 w-4" aria-hidden />
               {t("jam.studio.restart")}
             </Button>
