@@ -11,6 +11,7 @@ import {
   updateJamSongSchema,
   updateJamTrackSchema,
   type JamSongDetailResponse,
+  type JamSongSummary,
   type JamVoteResponse,
 } from "@pqp/shared";
 import { HttpError, readJsonBody } from "../lib/http.js";
@@ -95,6 +96,24 @@ async function requireJamChannel(channelId: string, userId: string): Promise<Jam
     throw new HttpError(404, JAM_NOT_FOUND);
   }
   return { id: channel.id, server_id: channel.server_id };
+}
+
+/**
+ * A song with no track is its author's alone (the list leaves it out for
+ * everybody else), so its create and update frames, which go to the whole
+ * channel, are not sent: the author's own client applies the answer to the
+ * request. The first track announces the song to the room (`jam-track-added`
+ * carries the song).
+ */
+function announceSong(
+  type: "jam-song-created" | "jam-song-updated",
+  channelId: string,
+  song: JamSongSummary,
+): void {
+  if (song.trackCount === 0) {
+    return;
+  }
+  announceJam({ type, channelId, song });
 }
 
 /** A live song the caller can see, with its channel. */
@@ -205,7 +224,7 @@ export function registerJamRoutes(router: Router): void {
     if (!result.created) {
       return { song: result.song };
     }
-    announceJam({ type: "jam-song-created", channelId: channel.id, song: result.song });
+    announceSong("jam-song-created", channel.id, result.song);
     return new Created({ song: result.song });
   });
 
@@ -220,7 +239,8 @@ export function registerJamRoutes(router: Router): void {
       permsOf(channel, user.id),
       findTimeoutForChannel(user.id, channel.id),
     ]);
-    if (!summary) {
+    // A song with no track yet is its author's alone, here as on the list.
+    if (!summary || (summary.trackCount === 0 && !isSongAuthor(song, user.id))) {
       throw new HttpError(404, JAM_NOT_FOUND);
     }
     const mine = tracks.filter((track) => track.authorId === user.id).length;
@@ -257,7 +277,7 @@ export function registerJamRoutes(router: Router): void {
     }
     const patch = updateJamSongSchema.parse(await readJsonBody(req));
     const updated = await updateJamSong(song, patch);
-    announceJam({ type: "jam-song-updated", channelId: channel.id, song: updated });
+    announceSong("jam-song-updated", channel.id, updated);
     return { song: updated };
   });
 
@@ -315,12 +335,12 @@ export function registerJamRoutes(router: Router): void {
       song,
       userId: user.id,
       uploadId,
-      late: (summary) => announceJam({ type: "jam-song-updated", channelId: channel.id, song: summary }),
+      late: (summary) => announceSong("jam-song-updated", channel.id, summary),
     });
     // Announced even for a retried claim: a frame is applied by id and is
     // idempotent, and the retry may be the first call whose summary read failed
     // after the commit, so no other viewer has heard of the change yet.
-    announceJam({ type: "jam-song-updated", channelId: channel.id, song: result.song });
+    announceSong("jam-song-updated", channel.id, result.song);
     return { song: result.song };
   });
 
@@ -334,10 +354,10 @@ export function registerJamRoutes(router: Router): void {
       throw new HttpError(403, "You cannot edit this song");
     }
     const result = await removeJamCover(song, (summary) =>
-      announceJam({ type: "jam-song-updated", channelId: channel.id, song: summary }),
+      announceSong("jam-song-updated", channel.id, summary),
     );
     // Same reasoning as the claim: announcing a removal that already happened is harmless.
-    announceJam({ type: "jam-song-updated", channelId: channel.id, song: result.song });
+    announceSong("jam-song-updated", channel.id, result.song);
     return { song: result.song };
   });
 
@@ -414,12 +434,20 @@ export function registerJamRoutes(router: Router): void {
     if (track.author_id !== user.id && track.song_author_id !== user.id && !perms.isModerator) {
       throw new HttpError(403, "You cannot delete this track");
     }
-    const song = await deleteJamTrack(track);
-    if (song) {
+    // The last track of a song takes the song with it, when the person is the
+    // song's author or a moderator: an empty song is a tile that plays nothing.
+    // Somebody else's last take (an open song) leaves the author's song empty,
+    // which only the author sees.
+    const gone = await deleteJamTrack(track, {
+      dropEmptySong: track.song_author_id === user.id || perms.isModerator,
+    });
+    if (gone?.songDeleted) {
+      announceJam({ type: "jam-song-deleted", channelId: channel.id, songId: track.song_id });
+    } else if (gone?.song) {
       announceJam({
         type: "jam-track-deleted",
         channelId: channel.id,
-        song,
+        song: gone.song,
         trackId: track.id,
       });
     }

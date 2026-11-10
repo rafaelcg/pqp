@@ -64,6 +64,15 @@ export interface JamStudioProps {
   /** The song went away while the studio was open. */
   songDeleted: boolean;
   onClose: () => void;
+  /** Leave the studio and the song under it, for the wall: a song closed to new takes has nothing to send to. */
+  onLeaveToWall?: () => void;
+  /**
+   * Moves each time the browser's Back left the studio's history entry while it
+   * is open. The studio asks about unsent work, like its own arrow does, and
+   * says `onStay` when the person keeps it (the entry is put back).
+   */
+  leaveTick?: number;
+  onStay?: () => void;
   /** The take is on the song: go and look at it. */
   onPosted: (posted: { songId: string; trackId: string }) => void;
 }
@@ -79,6 +88,9 @@ export function JamStudio({
   canSwitchMix,
   songDeleted,
   onClose,
+  onLeaveToWall,
+  leaveTick = 0,
+  onStay,
   onPosted,
 }: JamStudioProps) {
   const { t, locale } = useTranslation();
@@ -101,6 +113,11 @@ export function JamStudio({
   const { clock, transport, durationMs } = useEngineClock(studio.engine);
   /** Which question the leave dialog is asking: a live recording, or a take not sent. */
   const [confirmLeave, setConfirmLeave] = useState<"recording" | "take" | null>(null);
+  /** A take with no sound is sent only after the person says so. */
+  const [confirmSilent, setConfirmSilent] = useState(false);
+  /** The leave question was asked because Back was pressed: saying "keep" puts the studio's history entry back. */
+  const askedByBack = useRef(false);
+  const leaveConfirmed = useRef(false);
   const [editing, setEditing] = useState(false);
   const [soundOpen, setSoundOpen] = useState(false);
   /** Lanes of the band the person muted in their ear (never sent anywhere). */
@@ -208,6 +225,19 @@ export function JamStudio({
     onClose();
   }
 
+  // The browser's Back (or the phone's) from the studio asks what the arrow in
+  // the corner asks. Nothing to lose, it just goes.
+  const seenLeaveTick = useRef(leaveTick);
+  useEffect(() => {
+    if (leaveTick === seenLeaveTick.current) {
+      return;
+    }
+    seenLeaveTick.current = leaveTick;
+    askedByBack.current = recording || reviewing;
+    requestClose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a tick, not a render
+  }, [leaveTick]);
+
   // Escape leaves, the way every other panel does, after the same question.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -247,7 +277,9 @@ export function JamStudio({
         ? t("jam.mic.none")
         : studio.mic === "error"
           ? t("jam.mic.error")
-          : null;
+          : studio.mic === "lost"
+            ? t("jam.mic.lost")
+            : null;
 
   const canRecord = studio.mic === "ready" && phase === "setup" && studio.check !== "measuring";
   const progressText =
@@ -324,6 +356,54 @@ export function JamStudio({
                   <Button variant="secondary" size="sm" onClick={studio.retryMic}>
                     {t("jam.mic.retry")}
                   </Button>
+                </div>
+              )}
+
+              {studio.micLost && (
+                <p
+                  role="alert"
+                  data-jam-mic-lost={studio.micLost}
+                  className="rounded-[var(--radius-control)] bg-warning-soft px-3 py-2 text-sm font-semibold leading-snug text-on-warning-soft"
+                >
+                  {studio.micLost === "kept" ? t("jam.studio.micLostKept") : t("jam.studio.micLostEmpty")}
+                </p>
+              )}
+
+              {studio.songClosed && (
+                <div
+                  role="alert"
+                  data-jam-song-closed=""
+                  className="flex flex-col gap-3 rounded-[var(--radius-card)] bg-warning-soft p-4 text-on-warning-soft"
+                >
+                  <p className="text-sm font-semibold leading-snug">{t("jam.post.closedBody")}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      data-jam-post-as-new=""
+                      onClick={() =>
+                        studio.postAsNewSong({
+                          title: known.current?.title ?? t("jam.studio.new"),
+                          artist: known.current?.artist ?? null,
+                          joinMode: "open",
+                          wantedInstruments: [],
+                          nonce: newJamNonce(),
+                        })
+                      }
+                    >
+                      {t("jam.studio.postAsNew")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      data-jam-back-to-wall=""
+                      onClick={() => {
+                        studio.discardTake();
+                        (onLeaveToWall ?? onClose)();
+                      }}
+                    >
+                      {t("jam.post.backToWall")}
+                    </Button>
+                  </div>
                 </div>
               )}
 
@@ -688,7 +768,7 @@ export function JamStudio({
             <button
               type="button"
               autoFocus
-              onClick={() => void studio.post()}
+              onClick={() => (studio.silent ? setConfirmSilent(true) : void studio.post())}
               data-jam-post=""
               className="group flex h-16 items-center justify-center gap-3 rounded-full bg-accent text-lg font-extrabold text-on-accent shadow-[var(--shadow-2)] outline-none transition-[transform,box-shadow] duration-[var(--duration-fast)] hover:shadow-[var(--shadow-3)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 motion-safe:hover:scale-[1.01] active:scale-[0.98] sm:flex-1"
             >
@@ -706,18 +786,33 @@ export function JamStudio({
           <div className="mx-auto flex max-w-2xl flex-col gap-2" data-jam-posting="">
             {errorText ? (
               <>
-                <p role="alert" className="rounded-[var(--radius-control)] bg-danger-soft px-3 py-2 text-sm text-on-danger-soft">
-                  {errorText}
-                </p>
-                <div className="flex flex-wrap justify-center gap-2">
-                  <Button className="h-12 rounded-full px-6" onClick={() => void studio.post()} data-jam-retry="">
-                    {t("jam.post.retry")}
-                  </Button>
-                  {studio.take?.video && (
+                {!studio.songClosed && (
+                  <p role="alert" className="rounded-[var(--radius-control)] bg-danger-soft px-3 py-2 text-sm text-on-danger-soft">
+                    {errorText}
+                  </p>
+                )}
+                {/* The take is kept: every way out is here, not only "try again". A song closed meanwhile can never take it, so no retry. */}
+                <div className="flex flex-wrap justify-center gap-2" data-jam-post-failed="">
+                  {!studio.songClosed && !studio.songGone && (
+                    <Button className="h-12 rounded-full px-6" onClick={() => void studio.post()} data-jam-retry="">
+                      {t("jam.post.retry")}
+                    </Button>
+                  )}
+                  {studio.take?.video && !studio.songClosed && (
                     <Button variant="secondary" className="h-12 rounded-full px-5" onClick={studio.postWithoutVideo}>
                       {t("jam.post.withoutVideo")}
                     </Button>
                   )}
+                  <Button variant="secondary" className="h-12 rounded-full px-5" onClick={studio.backToReview} data-jam-back-to-take="">
+                    {t("jam.post.backToTake")}
+                  </Button>
+                  <Button variant="ghost" className="h-12 gap-2 rounded-full px-5 text-text-secondary" onClick={studio.discardTake} data-jam-again="">
+                    <RotateCcw className="h-4 w-4" aria-hidden />
+                    {t("jam.review.again")}
+                  </Button>
+                  <Button variant="ghost" className="h-12 rounded-full px-5 text-text-secondary" onClick={() => setConfirmLeave("take")} data-jam-discard="">
+                    {t("jam.studio.discardTake")}
+                  </Button>
                 </div>
               </>
             ) : (
@@ -785,14 +880,35 @@ export function JamStudio({
         </DialogBody>
       </Dialog>
       <ConfirmDialog
+        open={confirmSilent}
+        title={t("jam.review.silentTitle")}
+        description={t("jam.review.silentBody")}
+        confirmLabel={t("jam.review.silentSend")}
+        destructive={false}
+        onClose={() => setConfirmSilent(false)}
+        onConfirm={() => {
+          setConfirmSilent(false);
+          void studio.post();
+        }}
+      />
+      <ConfirmDialog
         open={confirmLeave !== null}
         title={confirmLeave === "recording" ? t("jam.studio.leaveRecordingTitle") : t("jam.studio.leaveTitle")}
         description={confirmLeave === "recording" ? t("jam.studio.leaveRecordingBody") : t("jam.studio.leaveBody")}
         confirmLabel={t("jam.studio.leave")}
         cancelLabel={confirmLeave === "recording" ? t("jam.studio.keepRecording") : t("jam.keep")}
-        onClose={() => setConfirmLeave(null)}
+        onClose={() => {
+          setConfirmLeave(null);
+          // Back was pressed and the person kept the work: the studio gets its entry back.
+          if (askedByBack.current && !leaveConfirmed.current) {
+            onStay?.();
+          }
+          askedByBack.current = false;
+          leaveConfirmed.current = false;
+        }}
         onConfirm={() => {
           const wasRecording = confirmLeave === "recording";
+          leaveConfirmed.current = true;
           setConfirmLeave(null);
           if (wasRecording) {
             void studio.cancelRecording().then(onClose);

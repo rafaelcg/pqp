@@ -229,7 +229,7 @@ function wire(): void {
     const state = channels.get(frame.channelId);
     if (state) {
       record(frame.channelId, frame);
-      write(frame.channelId, applyJamFrame(state, frame));
+      write(frame.channelId, applyJamFrame(state, frame, { viewerId: viewer }));
     }
   });
   subscribeJamReconnected(() => {
@@ -433,7 +433,7 @@ export function applyJamWrite(channelId: string, frame: JamFrame, asked?: number
   }
   wire();
   record(channelId, frame);
-  write(channelId, applyJamFrame(read(channelId), frame));
+  write(channelId, applyJamFrame(read(channelId), frame, { viewerId: viewer }));
 }
 
 export function applyJamVote(channelId: string, vote: JamVoteResponse, asked?: number): void {

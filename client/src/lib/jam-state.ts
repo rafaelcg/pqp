@@ -78,8 +78,27 @@ function songChanged(
   return { songs: upsertSong(state.songs, song), details };
 }
 
-/** Apply one realtime frame to the channel it is about. Anything else is returned unchanged. */
-export function applyJamFrame(state: JamChannelState, frame: JamFrame): JamChannelState {
+/**
+ * Apply one realtime frame to the channel it is about. Anything else is returned unchanged.
+ *
+ * `options.viewerId`, when given, applies the rule the server's list applies: a
+ * song with no track is its author's alone, so a frame that leaves one in the
+ * state of somebody else's (a guest's last take deleted) takes it off this wall.
+ */
+export function applyJamFrame(
+  state: JamChannelState,
+  frame: JamFrame,
+  options?: { viewerId: string | null },
+): JamChannelState {
+  const next = applyFrame(state, frame);
+  if (!options || !("song" in frame) || frame.song.trackCount > 0 || frame.song.authorId === options.viewerId) {
+    return next;
+  }
+  const { [frame.song.id]: _gone, ...details } = next.details;
+  return { ...next, songs: next.songs.filter((one) => one.id !== frame.song.id), details };
+}
+
+function applyFrame(state: JamChannelState, frame: JamFrame): JamChannelState {
   switch (frame.type) {
     case "jam-song-created":
     case "jam-song-updated":

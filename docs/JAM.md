@@ -291,6 +291,14 @@ announce never fails the write.
   day after (`media_purged_at`). `sweepJamMedia`, every minute from `jobs.ts`,
   runs whatever the flag says, so switching the feature off never strands an
   object. A bucket outage leaves the row for the next pass.
+- A song is created first and its first take uploaded after, so a closed page
+  leaves a song with no track. Such a song is its author's alone: the list and
+  the detail leave it out for everybody else, and its create and update frames
+  are not sent (the first track is what announces it). `sweepEmptyJamSongs`
+  (same job, same minute, rows only, `FOR UPDATE SKIP LOCKED`) deletes a song
+  with no live track whose `updated_at` is over 24 hours old. Deleting the last
+  track as the song's author or a moderator deletes the song too (frame
+  `jam-song-deleted`); a guest's last take leaves the author's song empty.
 - Deleting a channel, a server or an account deletes the objects: the keys sit
   only on rows those deletes cascade, so they are read first (`jam-keys.ts`) and
   deleted after the commit, like attachments and soundboard clips. A person's

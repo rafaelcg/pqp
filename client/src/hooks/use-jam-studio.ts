@@ -11,7 +11,8 @@ import {
   type LatencyStatus,
   type RecordingHandle,
 } from "@/lib/jam";
-import { createJamSong, jamErrorKind, updateJamTrack, type JamErrorKind } from "@/lib/jam-api";
+import { createJamSong, deleteJamSong, jamErrorKind, updateJamTrack, type JamErrorKind } from "@/lib/jam-api";
+import { isSilentTake } from "@/lib/jam-take-silence";
 import { forgetCheckSkipped, isCheckSkipped, rememberCheckSkipped } from "@/lib/jam-latency-skip";
 import { replaceInMix, takeToReplace } from "@/lib/jam-mix";
 import { createLevelMeter, type JamLevelMeter } from "@/lib/jam-level";
@@ -57,7 +58,8 @@ export type StudioPhase =
   | "posting"
   | "done";
 
-export type MicState = "opening" | "ready" | "denied" | "none" | "error";
+/** `lost`: the input was working and went away (unplugged, permission taken back). */
+export type MicState = "opening" | "ready" | "denied" | "none" | "error" | "lost";
 
 /** The first-use latency screen: not asked yet, measuring, measured, or skipped. */
 export type CheckState =
@@ -100,6 +102,8 @@ export interface UseJamStudioArgs {
 
 const DEFAULT_BPM = 100;
 const BEATS_PER_BAR = 4;
+/** A take cut short by the input going away is kept when at least this much of it can be heard. */
+const MIN_KEPT_MS = 1000;
 /** A take stops itself a few seconds before the server's ten-minute ceiling. */
 const AUTO_STOP_MS = JAM_TRACK_MAX_DURATION_MS - 5000;
 
@@ -143,6 +147,10 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const [goneOnPost, setGoneOnPost] = useState(false);
   const [wantsReplace, setWantsReplace] = useState(true);
   const [swapFailed, setSwapFailed] = useState(false);
+  /** The input went away mid-recording: what happened to the take, for the screen to say. */
+  const [micLost, setMicLost] = useState<"kept" | "empty" | null>(null);
+  /** The song was closed to new takes while this one waited: it can never be sent there. */
+  const [closedOnPost, setClosedOnPost] = useState(false);
 
   const handle = useRef<RecordingHandle | null>(null);
   const meter = useRef<JamLevelMeter | null>(null);
@@ -401,6 +409,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
       return;
     }
     setStartError(null);
+    setMicLost(null);
     clearReviewTimer();
     try {
       // The click that got us here is the gesture the audio needs.
@@ -431,15 +440,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
     }
   }, [engine, mic, countIn, wantsVideo, resetPeaks, clearReviewTimer]);
 
-  const stopRecording = useCallback(async () => {
-    const live = engine;
-    const running = handle.current;
-    if (!live || !running) {
-      return;
-    }
-    handle.current = null;
-    try {
-      const done = await running.stop();
+  /** A finished take goes on the song, on screen, and plays with the band. */
+  const acceptTake = useCallback(
+    (live: JamEngine, done: JamTake) => {
       live.addTake(TAKE_STEM_ID, done);
       if (takeUrl.current) {
         URL.revokeObjectURL(takeUrl.current);
@@ -455,12 +458,79 @@ export function useJamStudio(args: UseJamStudioArgs) {
         reviewTimer.current = null;
         live.player.play(0).catch(() => setPlayError(true));
       }, 380);
+    },
+    [clearReviewTimer],
+  );
+
+  const stopRecording = useCallback(async () => {
+    const live = engine;
+    const running = handle.current;
+    if (!live || !running) {
+      return;
+    }
+    handle.current = null;
+    try {
+      acceptTake(live, await running.stop());
     } catch {
       setStartError("stop");
       setPhase("setup");
     }
-  }, [engine, clearReviewTimer]);
+  }, [engine, acceptTake]);
   stopRef.current = stopRecording;
+
+  /**
+   * The input went away (unplugged, permission taken back) while it was
+   * `ready`. Mid-recording that is the end of the take: stop it now, keep what was
+   * recorded up to there when it is worth hearing (a second of sound that is not
+   * a flat line), and otherwise go back to the start and say what happened.
+   * Never a screen that keeps saying "Gravando" over a dead input.
+   */
+  const inputLost = useCallback(async () => {
+    setMic("lost");
+    const live = engineRef.current;
+    const running = handle.current;
+    const was = phaseRef.current;
+    if (!live || !running || (was !== "countdown" && was !== "recording")) {
+      return;
+    }
+    handle.current = null;
+    let done: JamTake | null = null;
+    try {
+      done = await running.stop();
+    } catch {
+      done = null;
+    }
+    if (torn.current) {
+      return;
+    }
+    const played = done ? done.durationMs - done.trimStartMs - done.trimEndMs : 0;
+    if (done && played >= MIN_KEPT_MS && !isSilentTake(done, done)) {
+      acceptTake(live, done);
+      setMicLost("kept");
+      return;
+    }
+    live.player.stop();
+    resetPeaks();
+    setElapsedMs(0);
+    setMicLost("empty");
+    setPhase("setup");
+  }, [acceptTake, resetPeaks]);
+  const inputLostRef = useRef(inputLost);
+  inputLostRef.current = inputLost;
+  // The track of the open input ends: whoever is recording hears about it now.
+  useEffect(() => {
+    const track = engine?.input?.track;
+    if (mic !== "ready" || !track) {
+      return;
+    }
+    if (track.readyState === "ended") {
+      void inputLostRef.current();
+      return;
+    }
+    const onEnded = () => void inputLostRef.current();
+    track.addEventListener("ended", onEnded);
+    return () => track.removeEventListener("ended", onEnded);
+  }, [engine, mic, deviceId]);
 
   const discardTake = useCallback(() => {
     const live = engine;
@@ -478,8 +548,18 @@ export function useJamStudio(args: UseJamStudioArgs) {
     setElapsedMs(0);
     job.current = null;
     setPostError(null);
+    setMicLost(null);
     setPhase("setup");
   }, [engine, resetPeaks, clearReviewTimer]);
+
+  /**
+   * A send that failed leaves the take where it was: back to the review, where
+   * it can be adjusted, sent again or recorded over. Nothing is thrown away.
+   */
+  const backToReview = useCallback(() => {
+    setPostError(null);
+    setPhase("review");
+  }, []);
 
   const cancelRecording = useCallback(async () => {
     const running = handle.current;
@@ -524,11 +604,17 @@ export function useJamStudio(args: UseJamStudioArgs) {
   );
 
   const posting = useRef(false);
+  /** The upload in flight, so leaving the studio stops it instead of letting it finish into a song nobody asked for. */
+  const postAbort = useRef<AbortController | null>(null);
+  const postedRef = useRef(false);
+  const channelRef = useRef(channelId);
+  channelRef.current = channelId;
   const post = useCallback(async () => {
     if (!take || !edits || phaseRef.current === "done" || posting.current) {
       return;
     }
     posting.current = true;
+    postAbort.current = new AbortController();
     // The identity this post is made under: its answers are not written into the
     // store if another account has taken over by the time they land.
     const asked = jamStoreEpoch();
@@ -585,6 +671,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
         take: job.current.take,
         state: job.current.state,
         onProgress: setProgress,
+        signal: postAbort.current.signal,
       });
       putJamTrackInSong(channelId, answer.song, answer.track, asked);
       // A new take of an instrument the poster already has in the mix replaces it
@@ -608,12 +695,17 @@ export function useJamStudio(args: UseJamStudioArgs) {
           setSwapFailed(true);
         }
       }
+      postedRef.current = true;
       setPosted({ songId: targetSong, trackId: answer.track.id });
       setPhase("done");
     } catch (failure) {
       // The song is not there any more: the take is kept, and the person chooses.
       if ((failure as { status?: unknown } | null)?.status === 404 && songId && !detached) {
         setGoneOnPost(true);
+      }
+      // Closed to new takes while this one was waiting: no retry can succeed.
+      if (jamErrorKind(failure) === "closed" && songId && !detached) {
+        setClosedOnPost(true);
       }
       setPostError(jamErrorKind(failure));
     } finally {
@@ -632,6 +724,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
       createdSongId.current = null;
       setDetached(next);
       setGoneOnPost(false);
+      setClosedOnPost(false);
       setPostError(null);
       setPhase("review");
     },
@@ -759,8 +852,36 @@ export function useJamStudio(args: UseJamStudioArgs) {
   }, []);
 
   // ---- teardown ------------------------------------------------------------
+  // ---- unsent work survives neither a reload nor a closed tab -----------------
+  // A take that is recorded and not sent, or one going up, exists only in this
+  // page. The browser asks before it goes (its own words, never ours). Not in
+  // any other phase: nothing is lost by leaving the setup, and a live recording
+  // has its own question when it is the app that is left.
+  const unsent = phase === "review" || phase === "posting";
+  useEffect(() => {
+    if (!unsent) {
+      return;
+    }
+    const ask = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", ask);
+    return () => window.removeEventListener("beforeunload", ask);
+  }, [unsent]);
+
   useEffect(() => {
     return () => {
+      // The studio is closing with a song it made and nothing in it (the upload
+      // failed and the person left, or the page asked and they said so): the
+      // song would otherwise sit on the wall of its author with no take.
+      postAbort.current?.abort();
+      const abandoned = createdSongId.current;
+      if (abandoned && !postedRef.current) {
+        createdSongId.current = null;
+        void deleteJamSong(abandoned).catch(() => undefined);
+        applyJamWrite(channelRef.current, { type: "jam-song-deleted", channelId: channelRef.current, songId: abandoned });
+      }
       const running = handle.current;
       handle.current = null;
       void running?.cancel().catch(() => undefined);
@@ -795,6 +916,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
     }),
     [],
   );
+
+  /** The part of the take that would be heard is a flat line: worth a word before it is sent. */
+  const silent = useMemo(() => (take && edits ? isSilentTake(take, edits) : false), [take, edits]);
 
   const needsCheck =
     mic === "ready" &&
@@ -837,6 +961,10 @@ export function useJamStudio(args: UseJamStudioArgs) {
     progress,
     postError,
     songGone: (args.songDeleted || goneOnPost) && !detached && songId !== null,
+    songClosed: closedOnPost && !detached && songId !== null,
+    micLost,
+    silent,
+    backToReview,
     postAsNewSong,
     replaceTake,
     wantsReplace,

@@ -70,6 +70,24 @@ wall with that song open (read by id when it is not on the first page; a song
 that does not exist says so). It survives a sign-up redirect like every `/app`
 route.
 
+**Wall, song and studio are history steps** (`lib/jam-history.ts`, `jam-pane.tsx`).
+Opening a song from a tile pushes an entry (`{ jamStep: "song" }` in the router
+state), opening the studio pushes another with the same path (`"studio"`), so the
+browser's Back and the phone's go studio, song, wall instead of out of the app.
+The flag in the state is what says "the entry below is the previous Jam step", and
+it survives a reload, so closing a step in the app goes BACK when the flag is there
+and rewrites the address (the forum's way) when it is not (a pasted link). Back from
+a studio holding a recording or a take asks the studio's own "Descartar esse take?";
+"keep" puts the entry back. A reload on a studio entry lands on the song. A new
+song's studio entry becomes the song's when the take is posted.
+
+**Unsent work.** A take that is recorded and not sent, or one going up, makes the
+browser ask before a reload or a closed tab (`beforeunload`, in those two phases
+only). A song is created before its first take is uploaded, so a closed page leaves
+a song with no take; the server keeps it from everybody else (`docs/JAM.md`), the
+author sees "Sem faixa ainda" with "Gravar o primeiro take" and "Apagar música", and
+leaving the studio of a song it made, with nothing sent, deletes the empty song.
+
 ## The song
 
 All in-mix tracks play through the one engine (`lib/jam-session.ts`, shared with
@@ -157,6 +175,15 @@ asked a number that did nothing for them. The engine still takes any `countIn`.
   keeps its title and its band, says so, and offers to post the take as a song of its
   own (the recording is kept; only the upload tickets are asked for again) or to
   discard it.
+- **The input goes away** (unplugged, permission taken back; the track's `ended`):
+  a recording stops at once, keeps what was played when it has a second of sound
+  that is not a flat line, and says what happened; otherwise it goes back to the
+  start with the same words. Never "Gravando" over a dead input.
+- **A silent take** (the part that would be heard never rises above 0.01, about
+  -40 dBFS, `lib/jam-take-silence.ts`) asks before it is sent, and can still be sent.
+- **A send that fails** keeps the take: try again, back to the take (to adjust it or
+  record again), record again, or discard. A song closed to new takes meanwhile says
+  so (no retry can work) and offers a song of its own, or the songs list.
 
 **Starting a song** is the same studio with no backing, behind one small sheet:
 title, optional artist (empty means an original), who may join (anyone, only the

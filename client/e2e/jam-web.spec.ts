@@ -286,9 +286,13 @@ test("one person starts a song, another records over it from the wall in three t
 
 test("a song someone else starts grows onto an open wall by itself", async ({ browser }) => {
   const seeded = await seed();
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
   const host = await openAs(browser, HOST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}`);
   await expect(host.locator("[data-jam-empty]")).toBeVisible({ timeout: 20_000 });
-  await call(GUEST, "POST", `/api/channels/${seeded.jamId}/jam-songs`, { title: "Tempo Perdido" });
+  // A song is on the wall once it has a take: until then it is its author's alone.
+  const started = await call<{ song: { id: string } }>(GUEST, "POST", `/api/channels/${seeded.jamId}/jam-songs`, { title: "Tempo Perdido" });
+  await expect(host.locator("[data-jam-tile]")).toHaveCount(0);
+  await addTrackApi(GUEST, started.song.id, "guitar");
   const tile = host.locator("[data-jam-tile]").filter({ hasText: "Tempo Perdido" });
   await expect(tile).toBeVisible({ timeout: 15_000 });
   await expect(tile).toHaveClass(/jam-tile-arrive/);
@@ -301,6 +305,8 @@ test("a song has an address, and the studio shows and takes a typed latency", as
   const { song } = await call<{ song: { id: string } }>(HOST, "POST", `/api/channels/${seeded.jamId}/jam-songs`, {
     title: "Mar de Rosas",
   });
+  // On the wall for everybody once it has a take (a song with none is its author's alone).
+  await addTrackApi(HOST, song.id, "guitar");
   const jamPath = `/app/server/${seeded.serverId}/channel/${seeded.jamId}`;
   const songPath = `${jamPath}/song/${song.id}`;
 
@@ -341,8 +347,10 @@ test("a song has an address, and the studio shows and takes a typed latency", as
   await guest.locator("[data-jam-post]").click();
   await expect(guest.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
   const detail = await call<{ tracks: ApiTrack[] }>(HOST, "GET", `/api/jam-songs/${song.id}`);
-  expect(detail.tracks).toHaveLength(1);
-  const behind = -detail.tracks[0]!.offsetMs - COUNT_IN_MS;
+  // the host's own take (made through the API) and the guest's, the later one
+  expect(detail.tracks).toHaveLength(2);
+  const guestsTake = [...detail.tracks].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[1]!;
+  const behind = -guestsTake.offsetMs - COUNT_IN_MS;
   expect(Math.abs(behind - 55), "count-in plus the typed 55 ms, to the millisecond of rounding").toBeLessThanOrEqual(1);
   await guest.context().close();
 });
@@ -451,6 +459,7 @@ test("leaving a live recording asks first, and keeps recording when told to", as
   const seeded = await seed();
   test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
   const songId = await makeSong(HOST, seeded.jamId, "Para gravar");
+  await addTrackApi(HOST, songId, "guitar"); // on the wall once it has a take
   const guest = await openAs(browser, GUEST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}`);
   await guest.locator("[data-jam-record-over]").click();
   await skipTheLatencyCheck(guest);
@@ -589,6 +598,7 @@ test("a song deleted under an open panel is said, and under a recording the take
   const seeded = await seed();
   test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
   const watched = await makeSong(HOST, seeded.jamId, "Vai sumir");
+  await addTrackApi(HOST, watched, "guitar"); // on the wall once it has a take
   const guest = await openAs(browser, GUEST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${watched}`);
   await expect(guest.locator(`[data-jam-song="${watched}"]`)).toBeVisible({ timeout: 20_000 });
   // Escape closes the panel (and the song is reachable again by its tile)
@@ -601,6 +611,7 @@ test("a song deleted under an open panel is said, and under a recording the take
 
   // ---- a recording over a song that then disappears --------------------------------
   const doomed = await makeSong(HOST, seeded.jamId, "Vai sumir 2");
+  await addTrackApi(HOST, doomed, "guitar");
   await guest.locator("[data-jam-tile]").filter({ hasText: "Vai sumir 2" }).click();
   await guest.locator("[data-jam-record-over]").click();
   await skipTheLatencyCheck(guest);

@@ -36,6 +36,19 @@ import { z } from "zod";
  * media URL in it. Deleting a channel, a server or an account deletes the
  * objects as well (the author's tracks go with the account).
  *
+ * A SONG WITH NO TRACK IS ITS AUTHOR'S ALONE. A song is created first and its
+ * first take uploaded after, so for a while (a page closed mid-upload, a take
+ * that never finished, the last track deleted by somebody who is not the
+ * song's author) a song has `trackCount: 0`. The list and the detail leave such
+ * a song out for everybody but its author (404 on the detail), and its
+ * `jam-song-created` / `jam-song-updated` frames are not sent: the first track
+ * announces the song to the room (`jam-track-added` carries the whole summary,
+ * and a client applies it by id, so it is the song appearing). A song nobody
+ * put a track in for 24 hours is deleted by the sweep. Deleting the LAST track
+ * as the song's author or a moderator deletes the song (`jam-song-deleted`,
+ * not `jam-track-deleted`). Every field this adds is behaviour, not shape: no
+ * client has to change to keep parsing.
+ *
  * -------------------------------------------------------------------------
  * THE TIMELINE (what `offsetMs`, `trimStartMs`, `trimEndMs` and `durationMs` mean)
  *
