@@ -75,8 +75,8 @@ object JamVideoPlan {
     const val STATE_IDLE = 1
     const val STATE_ENDED = 4
 
-    /** True while the song position has not reached the video's slice yet: it waits on its first frame. */
-    fun waiting(songMs: Double, track: JamTrack): Boolean = songMs < track.offsetMs
+    /** True while the song position has not reached the video's heard slice yet: it waits on its first frame. */
+    fun waiting(songMs: Double, track: JamTrack): Boolean = songMs < track.startMs
 
     /** True once the song position is past the end of the video's slice. */
     fun finished(songMs: Double, track: JamTrack): Boolean = songMs >= track.endMs
@@ -93,10 +93,10 @@ object JamVideoPlan {
  * a large one by a seek. Before its slice starts a video waits on its first
  * frame; after it ends it holds the last.
  *
- * The file time shown at song time `s` is `s - offsetMs + trimStartMs`
- * (`JamAlignment.videoFileMs`): the same slice arithmetic as the audio, because
+ * The file time shown at song time `s` is `s - offsetMs`, kept inside the heard
+ * slice (`JamAlignment.videoFileMs`): the same arithmetic as the audio, because
  * a take recorded with a camera is cut so its sample 0 is the video's first
- * frame, and one `offsetMs` places both.
+ * frame, and one `offsetMs` places both (the web's `attachVideo` does the same).
  *
  * Main thread only. At most [MAX_PLAYERS] exist, so a song with nine videos
  * decodes four.

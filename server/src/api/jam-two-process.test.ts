@@ -329,8 +329,13 @@ describeDb("jam frames between two API processes on the Postgres bus", () => {
     });
     expect(song.status, JSON.stringify(song.body)).toBe(201);
     const songId = song.body.song.id;
-    const created = await next("jam-song-created", "the new song on api-b");
-    expect(created).toMatchObject({ channelId: jamId, song: { id: songId, title: "Wonderwall" } });
+    // A song with no track is its author's alone: nothing is sent for it, and
+    // api-b's list does not have it. The first track announces it.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(jamFrames()).toEqual([]);
+    expect(
+      (await call<{ songs: unknown[] }>(b!, "GET", `/api/channels/${jamId}/jam-songs`, BOB)).body.songs,
+    ).toEqual([]);
 
     // A track, through the real presign, PUT and claim, all on api-a.
     const bytes = Buffer.from("pretend this is opus");
@@ -406,26 +411,60 @@ describeDb("jam frames between two API processes on the Postgres bus", () => {
     expect(await next("jam-song-updated", "the song edit on api-b")).toMatchObject({
       song: { id: songId, joinMode: "closed", wantedInstruments: [] },
     });
-    expect((await call(a!, "DELETE", `/api/jam-tracks/${trackId}`, ALICE)).status).toBe(204);
+    // Bob adds a take from b and takes it back; Alice's guitar is still there.
+    // (Reopened first: the song was closed above.)
+    expect(
+      (await call(a!, "PATCH", `/api/jam-songs/${songId}`, ALICE, { joinMode: "open" })).status,
+    ).toBe(200);
+    const bobsBytes = Buffer.from("bob on bass");
+    const bobsTicket = await call<{ uploadId: string; uploadUrl: string }>(
+      b!,
+      "POST",
+      `/api/jam-songs/${songId}/uploads`,
+      BOB,
+      { kind: "audio", contentType: "audio/webm", byteSize: bobsBytes.length },
+    );
+    expect(bobsTicket.status, JSON.stringify(bobsTicket.body)).toBe(201);
+    expect(
+      (
+        await fetch(bobsTicket.body.uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "audio/webm" },
+          body: new Uint8Array(bobsBytes),
+        })
+      ).status,
+    ).toBe(200);
+    const bobsTrack = await call<{ track: { id: string } }>(
+      b!,
+      "POST",
+      `/api/jam-songs/${songId}/tracks`,
+      BOB,
+      { instrument: "bass", audioUploadId: bobsTicket.body.uploadId, durationMs: 5000 },
+    );
+    expect(bobsTrack.status, JSON.stringify(bobsTrack.body)).toBe(201);
+    expect((await call(b!, "DELETE", `/api/jam-tracks/${bobsTrack.body.track.id}`, BOB)).status).toBe(204);
     expect(await next("jam-track-deleted", "the track removal on api-b")).toMatchObject({
-      trackId,
-      song: { id: songId, trackCount: 0 },
+      trackId: bobsTrack.body.track.id,
+      song: { id: songId, trackCount: 1 },
     });
-    expect((await call(a!, "DELETE", `/api/jam-songs/${songId}`, ALICE)).status).toBe(204);
+    // The song's author deleting its last track takes the song with it.
+    expect((await call(a!, "DELETE", `/api/jam-tracks/${trackId}`, ALICE)).status).toBe(204);
     expect(await next("jam-song-deleted", "the song removal on api-b")).toEqual({
       type: "jam-song-deleted",
       channelId: jamId,
       songId,
     });
 
-    // All seven kinds arrived, once each (the vote twice: Alice's and Bob's).
+    // Every kind a write still announces arrived (the vote twice: Alice's and
+    // Bob's; the song edit twice, closing it and reopening it; two tracks added).
     expect(jamFrames().map((f) => f.type).sort()).toEqual(
       [
-        "jam-song-created",
+        "jam-track-added",
         "jam-track-added",
         "jam-track-updated",
         "jam-track-votes",
         "jam-track-votes",
+        "jam-song-updated",
         "jam-song-updated",
         "jam-track-deleted",
         "jam-song-deleted",

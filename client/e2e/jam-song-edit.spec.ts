@@ -19,6 +19,7 @@
 import { deflateSync } from "node:zlib";
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { E2E_ADMIN_TOKEN } from "../playwright.config";
+import { addApiTrack } from "./jam-api-track";
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const DEV_TOKEN = "dev-local-token";
@@ -132,6 +133,10 @@ async function seed(): Promise<Seeded> {
     title: "Antes da Capa",
     artist: "Banda Velha",
   });
+  // On everybody's wall once it has a take (a song with none is its author's alone).
+  if (config.uploads) {
+    await addApiTrack(API, HOST, song.id, "guitar");
+  }
   return { serverId: server.id, jamId: channel.id, songId: song.id, uploads: config.uploads };
 }
 
@@ -238,6 +243,7 @@ test("a moderator who did not write the song can edit it, and a photo that is no
   const { song } = await call<{ song: { id: string } }>(GUEST, "POST", `/api/channels/${seeded.jamId}/jam-songs`, {
     title: "Da Visita",
   });
+  await addApiTrack(API, GUEST, song.id, "guitar");
   const owner = await openAs(browser, HOST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${song.id}`);
   await expect(owner.locator(`[data-jam-song="${song.id}"]`)).toBeVisible({ timeout: 20_000 });
   await owner.locator("[data-jam-edit-open]").click();

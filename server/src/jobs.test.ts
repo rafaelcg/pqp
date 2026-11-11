@@ -44,6 +44,7 @@ vi.mock("./services/forums.js", () => ({
 }));
 vi.mock("./services/jam.js", () => ({
   sweepJamMedia: vi.fn(async () => 0),
+  sweepEmptyJamSongs: vi.fn(async () => 0),
 }));
 
 vi.mock("./services/soundboard.js", () => ({
@@ -196,7 +197,7 @@ import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepClientPlatforms } from "./services/client-platforms.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
-import { sweepJamMedia } from "./services/jam.js";
+import { sweepEmptyJamSongs, sweepJamMedia } from "./services/jam.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
 import { startSpeechJobPoller } from "./services/speech-worker.js";
@@ -361,6 +362,8 @@ describe("cold jobs", () => {
     expect(sweepSoundboardUploads).toHaveBeenCalledTimes(4);
     // The jam media sweep: a minute, so four, and none at boot.
     expect(sweepJamMedia).toHaveBeenCalledTimes(4);
+    // Songs left with no track for a day ride the same job.
+    expect(sweepEmptyJamSongs).toHaveBeenCalledTimes(4);
     // The bot reminders: every 30 s, no boot run, so eight in four minutes.
     expect(deliverDueReminders).toHaveBeenCalledTimes(8);
     // The apps live-session sweep: every 15 s, no boot run, so sixteen.

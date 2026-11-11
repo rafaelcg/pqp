@@ -2,6 +2,7 @@ import { JAM_ARTIST_MAX, JAM_TITLE_MAX, type JamSongSummary } from "@pqp/shared"
 import { Camera, Check, ImagePlus, Trash2 } from "lucide-react";
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ImageCropDialog } from "@/components/user/image-crop-dialog";
@@ -69,8 +70,14 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
   const formId = useId();
   const fileInput = useRef<HTMLInputElement | null>(null);
   const abort = useRef<AbortController | null>(null);
-  const [title, setTitle] = useState(song.title);
-  const [artist, setArtist] = useState(song.artist ?? "");
+  // What the person typed, or null while a field is untouched: an untouched field
+  // shows (and sends) nothing of its own, so it follows the song as it is now, and a
+  // name changed in another window is never written back over.
+  const [titleEdit, setTitleEdit] = useState<string | null>(null);
+  const [artistEdit, setArtistEdit] = useState<string | null>(null);
+  const title = titleEdit ?? song.title;
+  const artist = artistEdit ?? song.artist ?? "";
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [cover, setCover] = useState<JamCoverChoice>({ kind: "keep" });
   const [preview, setPreview] = useState<string | null>(null);
   /** The framed picture while it goes up: it becomes the preview only if the upload lands. */
@@ -96,8 +103,9 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
   // Every time the sheet opens it starts from the song as it is now.
   useEffect(() => {
     if (open) {
-      setTitle(song.title);
-      setArtist(song.artist ?? "");
+      setTitleEdit(null);
+      setArtistEdit(null);
+      setConfirmDiscard(false);
       setCover({ kind: "keep" });
       replacePreview(null);
       replacePending(null);
@@ -113,7 +121,6 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
       replacePreview(null);
       replacePending(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- a fresh start per opening, not per keystroke of the song under it
   }, [open]);
   useEffect(
     () => () => {
@@ -136,6 +143,17 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
   // disabled button cannot be pressed to find out why).
   const showTitleError = titleMissing && (touched || title !== song.title);
   const uploading = upload.status === "uploading";
+  // Something would be lost by closing: a change that Save would send, or a photo going up.
+  const dirty = !plan.empty || uploading;
+  /** Close the sheet; with something typed or picked it asks first, so Escape and a stray click do not throw it away. */
+  function requestClose() {
+    if (saving) return;
+    if (dirty) {
+      setConfirmDiscard(true);
+      return;
+    }
+    onClose();
+  }
   const hasPhoto = cover.kind === "new" || uploading || (cover.kind === "keep" && song.coverUrl !== null);
 
   async function pick(file: File | null) {
@@ -249,10 +267,10 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
         open={open}
         title={t("jam.edit.title")}
         size="md"
-        onClose={saving ? () => undefined : onClose}
+        onClose={requestClose}
         footer={
           <div className="flex w-full justify-end gap-2">
-            <Button variant="ghost" onClick={onClose} disabled={saving}>
+            <Button variant="ghost" onClick={requestClose} disabled={saving}>
               {t("jam.start.cancel")}
             </Button>
             <Button
@@ -352,7 +370,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
                   autoFocus={typeof window !== "undefined" && window.matchMedia?.("(pointer: fine)").matches}
                   value={title}
                   maxLength={JAM_TITLE_MAX}
-                  onChange={(event) => setTitle(event.target.value)}
+                  onChange={(event) => setTitleEdit(event.target.value)}
                   placeholder={t("jam.start.songTitlePlaceholder")}
                   aria-invalid={showTitleError ? true : undefined}
                   aria-describedby={showTitleError ? `${formId}-title-error` : undefined}
@@ -381,7 +399,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
                 <Input
                   value={artist}
                   maxLength={JAM_ARTIST_MAX}
-                  onChange={(event) => setArtist(event.target.value)}
+                  onChange={(event) => setArtistEdit(event.target.value)}
                   placeholder={t("jam.edit.artistPlaceholder")}
                   className="bg-surface-2"
                   data-jam-edit-artist=""
@@ -397,6 +415,18 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
         </DialogBody>
       </Dialog>
 
+      <ConfirmDialog
+        open={confirmDiscard}
+        title={t("jam.edit.discardTitle")}
+        description={t("jam.edit.discardBody")}
+        confirmLabel={t("jam.studio.leave")}
+        cancelLabel={t("jam.edit.keepEditing")}
+        onClose={() => setConfirmDiscard(false)}
+        onConfirm={() => {
+          setConfirmDiscard(false);
+          onClose();
+        }}
+      />
       <ImageCropDialog
         file={cropping}
         shape="cover"

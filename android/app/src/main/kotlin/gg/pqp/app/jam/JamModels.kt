@@ -17,11 +17,13 @@ import kotlinx.serialization.encoding.Encoder
  * optionally with a video. A client plays every track that is `inMix` at the
  * same time. Nothing is mixed on the server.
  *
- * THE TIMELINE, ONCE (header of `jam.ts`). A track plays
- * `audio[trimStartMs, durationMs - trimEndMs]` and that slice starts at
- * `offsetMs` on the song timeline (which may be negative). Trims are applied at
- * play time and never touch the stored bytes. `audio/JamAlignment.kt` turns
- * this into frames; nothing else in the app does the arithmetic.
+ * THE TIMELINE, ONCE (header of `jam.ts`). `offsetMs` is the song time of the
+ * stored file's FIRST sample (which may be negative) and only
+ * `audio[trimStartMs, durationMs - trimEndMs]` is heard: a trim hides audio and
+ * never moves it, so the track is heard from `offsetMs + trimStartMs` to
+ * `offsetMs + durationMs - trimEndMs`. Trims are applied at play time and never
+ * touch the stored bytes. `audio/JamAlignment.kt` turns this into frames;
+ * nothing else in the app does the arithmetic.
  *
  * Hand-copied like every other wire model here and pinned field by field
  * against the zod schemas by `JamContractTest`. Decoded leniently: a field a
@@ -212,7 +214,7 @@ data class JamTrack(
     val videoContentType: String? = null,
     val videoBytes: Long? = null,
     val mediaExpiresAt: String = "",
-    /** Where the first PLAYED sample sits on the song timeline. May be negative. */
+    /** The song time of the stored file's FIRST sample (a count-in is before 0). May be negative. */
     val offsetMs: Double = 0.0,
     val trimStartMs: Double = 0.0,
     val trimEndMs: Double = 0.0,
@@ -230,22 +232,22 @@ data class JamTrack(
     /** The length the track plays for on the song timeline (`jamTrackPlayedMs`). */
     val playedMs: Double get() = maxOf(0.0, durationMs - trimStartMs - trimEndMs)
 
-    /** Where the played slice starts on the song timeline. */
-    val startMs: Double get() = offsetMs
+    /** Where the first HEARD sample sits on the song timeline: the file's start plus the head the trim hides (`jamTrackStartMs`). */
+    val startMs: Double get() = offsetMs + trimStartMs
 
-    /** Where the played slice ends (`jamTrackEndMs`). */
-    val endMs: Double get() = offsetMs + playedMs
+    /** Where the heard slice ends: the file's end less the tail the trim hides (`jamTrackEndMs`). */
+    val endMs: Double get() = offsetMs + durationMs - trimEndMs
 
     val createdAtMs: Long get() = parseJamInstant(createdAt)
 
     /**
-     * The envelope at a song time, 0 outside the played slice. `peaks` run
+     * The envelope at a song time, 0 outside the heard slice. `peaks` run
      * across the whole stored recording, so the position in them is the file
-     * time: `t - offset + trimStart`.
+     * time: `t - offset`.
      */
     fun peakAt(songMs: Double): Double {
         if (peaks.isEmpty() || durationMs <= 0 || songMs < startMs || songMs >= endMs) return 0.0
-        val fileMs = songMs - offsetMs + trimStartMs
+        val fileMs = songMs - offsetMs
         val index = (fileMs / durationMs * peaks.size).toInt().coerceIn(0, peaks.size - 1)
         return peaks[index].coerceIn(0.0, 1.0)
     }

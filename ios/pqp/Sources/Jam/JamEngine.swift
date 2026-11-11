@@ -15,8 +15,10 @@ import Foundation
  (`scheduleSegment`, which streams from disk, so a ten minute stem costs no
  memory) at a SAMPLE time relative to the transport start, and then every
  player is started at ONE host time. The frames come from `JamAlignment`, the
- only place the contract's timeline is arithmetic. A negative `offsetMs` is not
- special: the transport's zero is the earliest start of any stem.
+ only place a track's numbers are arithmetic: the file's first sample sits at
+ `offsetMs` and a trim hides audio without moving it, as the web recorder
+ writes it. A negative `offsetMs` is not special: the transport's zero is the
+ earliest heard sample of any stem.
 
  WHAT IT PROVES AND WHAT IT CANNOT. `renderOffline` runs the same graph in
  manual rendering mode, which has no hardware and no clock, so a test can say
@@ -73,7 +75,7 @@ final class JamEngine {
     private var voices: [String: Voice] = [:]
     private var order: [String] = []
 
-    /// The earliest start of any loaded stem, in song ms.
+    /// The earliest heard sample of any loaded stem, in song ms.
     private(set) var originMs: Double = 0
     /// The mix length in ms.
     private(set) var durationMs: Double = 0
@@ -318,6 +320,10 @@ final class JamEngine {
         engine.stop()
         return out
     }
+
+    /// Where every stem has been summed: a test taps it to hear what the
+    /// speaker gets (`JamWebTakeAlignmentTests`).
+    var outputMixer: AVAudioMixerNode { engine.mainMixerNode }
 
     // MARK: - Host time
 

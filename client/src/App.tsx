@@ -454,6 +454,7 @@ import {
   type ServerRole,
 } from "@/lib/api";
 import { clearBootPrefetch } from "@/lib/boot-prefetch";
+import { jamHistoryState, type JamRouteMode } from "@/lib/jam-history";
 import {
   channelRoutePath,
   forumPostRoutePath,
@@ -6554,18 +6555,35 @@ function MainAppContent({
    * lands on the same song, and closing it puts the Jam's back.
    */
   const setJamSongRoute = useCallback(
-    (jamId: string, songId: string | null) => {
+    (jamId: string, songId: string | null, mode: JamRouteMode = "replace") => {
       setJamRouteSong(songId ? { jamId, songId } : null);
       const serverId = selectedServerIdRef.current;
       if (serverId && selectedChannelIdRef.current === jamId) {
-        syncPath(
-          songId
-            ? jamSongRoutePath(serverId, jamId, songId)
-            : channelRoutePath(serverId, jamId),
-        );
+        const path = songId
+          ? jamSongRoutePath(serverId, jamId, songId)
+          : channelRoutePath(serverId, jamId);
+        if (mode === "pop") {
+          // The pane takes its own entry off with `navigate(-1)`: the address
+          // it lands on is this one, which the deep-link effect must not read
+          // as a link to follow.
+          routeRef.current = path;
+          return;
+        }
+        if (mode === "push" || mode === "swap") {
+          if (window.location.pathname === path) {
+            return;
+          }
+          routeRef.current = path;
+          navigate(path, {
+            replace: mode === "swap",
+            state: jamHistoryState("song"),
+          });
+          return;
+        }
+        syncPath(path);
       }
     },
-    [syncPath],
+    [syncPath, navigate],
   );
 
   /**
@@ -9166,6 +9184,9 @@ function MainAppContent({
           // wall. The pane reads the song itself and says so when it is gone.
           if (targetSongId && requested.type === "jam" && stillOn(requested.id)) {
             setJamSongRoute(requested.id, targetSongId);
+          } else if (requested.type === "jam" && stillOn(requested.id)) {
+            // Back (or a link) to the Jam's own address: no song open any more.
+            setJamRouteSong(null);
           }
         } else {
           const targetServer = serversRef.current.find(
@@ -14443,7 +14464,7 @@ function MainAppContent({
             routeSongId={
               jamRouteSong?.jamId === selectedChannel.id ? jamRouteSong.songId : null
             }
-            onRouteSongChange={(songId) => setJamSongRoute(selectedChannel.id, songId)}
+            onRouteSongChange={(songId, mode) => setJamSongRoute(selectedChannel.id, songId, mode)}
             onOpenNav={() => setMobileNavOpen(true)}
             headerActions={
               canManageChannels || canManageRoles ? (

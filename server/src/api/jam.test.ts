@@ -104,7 +104,7 @@ const { resetSharedRateLimit } = await import("../lib/cluster-rate-limit.js");
 const { resetFeatureFlagsForTests, setServerFlagOverride, startFeatureFlags } = await import(
   "../lib/flags.js"
 );
-const { sweepJamMedia, reducePeaks } = await import("../services/jam.js");
+const { sweepEmptyJamSongs, sweepJamMedia, reducePeaks } = await import("../services/jam.js");
 const { jamKeysForChannels, jamKeysForServer, jamKeysForUser } = await import(
   "../services/jam-keys.js"
 );
@@ -235,6 +235,20 @@ async function songId(
   const reply = await createSong(as, title, extra);
   expect(reply.status, JSON.stringify(reply.body)).toBe(201);
   return reply.body.song.id;
+}
+
+/**
+ * A song the room can see: one with its author's first take. A song with no
+ * track is its author's alone (no frames, left out of everybody else's list).
+ */
+async function liveSong(
+  as: Actor,
+  title = "Wonderwall",
+  extra: Record<string, unknown> = {},
+): Promise<string> {
+  const id = await songId(as, title, extra);
+  await trackId(as, id, "guitar");
+  return id;
 }
 
 /** Step 1 and 2: a ticket, and the bytes PUT where it says. Returns the upload id. */
@@ -499,9 +513,26 @@ describeDb("jam channels", () => {
       channelId: jamId,
       serverId,
     });
-    expect(takeFrames()).toEqual([
-      { type: "jam-song-created", channelId: jamId, song: reply.body.song },
-    ]);
+    // A song with no track is its author's alone: the room is not told, the
+    // list and the detail leave it out for everybody else, and the first track
+    // is what announces it (`jam-track-added` carries the song).
+    expect(takeFrames()).toEqual([]);
+    const listed = async (as: Actor) =>
+      jamSongListResponseSchema
+        .parse((await call(as, "GET", `/api/channels/${jamId}/jam-songs`)).body)
+        .songs.map((s) => s.id);
+    expect(await listed(bob)).toEqual([reply.body.song.id]);
+    expect(await listed(carol)).toEqual([]);
+    expect((await call(carol, "GET", `/api/jam-songs/${reply.body.song.id}`)).status).toBe(404);
+    expect((await call(bob, "GET", `/api/jam-songs/${reply.body.song.id}`)).status).toBe(200);
+    // Editing it does not announce it either.
+    expect((await call(bob, "PATCH", `/api/jam-songs/${reply.body.song.id}`, { title: "Outra" })).status).toBe(200);
+    expect(takeFrames()).toEqual([]);
+    const first = await addTrack(bob, reply.body.song.id, "guitar");
+    expect(first.status).toBe(201);
+    expect(takeFrames().map((f) => f.type)).toEqual(["jam-track-added"]);
+    expect(await listed(carol)).toEqual([reply.body.song.id]);
+    expect((await call(carol, "GET", `/api/jam-songs/${reply.body.song.id}`)).status).toBe(200);
   });
 
   it("a nonce retry answers the same song with 200 and writes nothing", async () => {
@@ -511,7 +542,7 @@ describeDb("jam channels", () => {
     expect(second.status).toBe(200);
     expect(second.body.song.id).toBe(first.body.song.id);
     expect((await getPool().query(`SELECT 1 FROM jam_songs`)).rowCount).toBe(1);
-    expect(takeFrames()).toHaveLength(1);
+    expect(takeFrames()).toHaveLength(0);
   });
 
   it("a deleted song's nonce does not block a new song, and a constraint is never a 500", async () => {
@@ -571,6 +602,8 @@ describeDb("jam channels", () => {
 
   it("wanted needs instruments; leaving wanted clears them; an artist can be cleared", async () => {
     const song = await songId(alice, "Cover", { artist: "Oasis", joinMode: "wanted", wantedInstruments: ["bass", "drums"] });
+    await trackId(alice, song, "guitar");
+    stubs.frames.length = 0;
     let summary = (await detail(bob, song)).song;
     expect(summary).toMatchObject({ artist: "Oasis", joinMode: "wanted", wantedInstruments: ["bass", "drums"] });
 
@@ -617,7 +650,9 @@ describeDb("jam channels", () => {
   it("lists a page at a time, newest activity first, with a keyset cursor", async () => {
     const ids: string[] = [];
     for (const title of ["Um", "Dois", "Três", "Quatro", "Cinco"]) {
-      ids.push(await songId(bob, title));
+      const id = await songId(bob, title);
+      await trackId(bob, id, "guitar");
+      ids.push(id);
       await new Promise((done) => setTimeout(done, 5));
     }
     const first = jamSongListResponseSchema.parse(
@@ -673,6 +708,11 @@ describeDb("jam channels", () => {
          FROM generate_series(1, 7) g`,
       [jamId, serverId, bob.id],
     );
+    // A song with no track is its author's alone, so each one has a take.
+    await getPool().query(
+      `INSERT INTO jam_tracks (song_id, author_id, instrument, audio_key, audio_content_type, audio_bytes, duration_ms)
+       SELECT id, author_id, 'guitar', 'jam/test/' || id, 'audio/webm', 10, 1000 FROM jam_songs`,
+    );
     const seen: string[] = [];
     let cursor = "";
     for (let page = 0; page < 10; page += 1) {
@@ -689,8 +729,12 @@ describeDb("jam channels", () => {
   });
 
   it("filters: title and artist without accents or case, who is wanted, mine; deleted songs never show", async () => {
-    await songId(bob, "Águas de Março", { artist: "Elis Regina" });
-    await songId(carol, "Another Brick", { artist: "Pink Floyd", joinMode: "wanted", wantedInstruments: ["bass"] });
+    await trackId(bob, await songId(bob, "Águas de Março", { artist: "Elis Regina" }), "guitar");
+    await trackId(
+      carol,
+      await songId(carol, "Another Brick", { artist: "Pink Floyd", joinMode: "wanted", wantedInstruments: ["bass"] }),
+      "guitar",
+    );
     const gone = await songId(carol, "Apagada");
     await call(carol, "DELETE", `/api/jam-songs/${gone}`);
     const titles = async (query: string) =>
@@ -741,6 +785,7 @@ describeDb("jam channels", () => {
 
   it("wanted: only the wanted instruments from other people; the author adds anything", async () => {
     const song = await songId(alice, "Procura-se", { joinMode: "wanted", wantedInstruments: ["bass", "drums"] });
+    await trackId(alice, song, "guitar");
     expect((await detail(bob, song)).viewer.addableInstruments).toEqual(["bass", "drums"]);
     expect((await detail(alice, song)).viewer.addableInstruments).toHaveLength(6);
 
@@ -755,6 +800,7 @@ describeDb("jam channels", () => {
 
   it("closed: only the author adds, and nobody else gets a signed URL", async () => {
     const song = await songId(alice, "Só minha", { joinMode: "closed" });
+    await trackId(alice, song, "drums");
     const ticket = await call(bob, "POST", `/api/jam-songs/${song}/uploads`, {
       kind: "audio",
       contentType: "audio/webm",
@@ -837,7 +883,8 @@ describeDb("jam channels", () => {
       contributorCount: 1,
       mixDurationMs: 30_000 - 200 - 100,
     });
-    expect(takeFrames().map((f) => f.type)).toEqual(["jam-song-created", "jam-track-added"]);
+    // The song is announced by its first track: a song with none is its author's alone.
+    expect(takeFrames().map((f) => f.type)).toEqual(["jam-track-added"]);
     // Both uploads are claimed.
     expect(
       (await getPool().query(`SELECT 1 FROM jam_uploads WHERE claimed_at IS NOT NULL`)).rowCount,
@@ -1081,7 +1128,7 @@ describeDb("jam channels", () => {
       wantedInstruments: ["bass", "drums"],
     });
     // Empty first.
-    const empty = (await detail(carol, song)).song;
+    const empty = (await detail(alice, song)).song;
     expect(empty).toMatchObject({
       previewPeaks: [],
       hasVideo: false,
@@ -1183,6 +1230,39 @@ describeDb("jam channels", () => {
     expect(summary.contributorCount).toBe(2);
   });
 
+  it("the mix length is earliest heard sample to latest, for takes shaped like the web recorder's uploads", async () => {
+    // Three takes as the web uploads them (`offsetMs` is the song time of the file's first sample, a trim hides
+    // audio without moving it): a count-in take, a camera take trimmed in the editor, a count-in take at 44.1 kHz.
+    // Heard slices: guitar 0..60 s, bass 0.5..59 s, keys 0..60 s, so the mix is 60 s. The old arithmetic (the
+    // earliest OFFSET to the latest end minus BOTH trims) said 62.05 s - 2.05 s of count-in nobody hears.
+    const song = await songId(alice);
+    await trackId(alice, song, "guitar", {
+      offsetMs: -2023,
+      trimStartMs: 2023,
+      trimEndMs: 0,
+      durationMs: 62_023,
+    });
+    await trackId(bob, song, "bass", {
+      offsetMs: -137,
+      trimStartMs: 637,
+      trimEndMs: 1000,
+      durationMs: 60_137,
+    });
+    const keys = await addTrack(carol, song, "keys", {
+      offsetMs: -2050,
+      trimStartMs: 2050,
+      trimEndMs: 0,
+      durationMs: 62_050,
+    });
+    expect(keys.status, JSON.stringify(keys.body)).toBe(201);
+    expect(keys.body.song.mixDurationMs).toBe(60_000);
+    expect((await detail(alice, song)).song.mixDurationMs).toBe(60_000);
+    // It is computed on read (nothing stores it), so a later take moves it with nothing to recompute: drums
+    // heard 0.1 s to 70.1 s make the mix 70.1 s.
+    await trackId(mod, song, "drums", { offsetMs: 100, durationMs: 70_000 });
+    expect((await detail(alice, song)).song.mixDurationMs).toBe(70_100);
+  });
+
   // ------------------------------------------------------------ track edits
 
   it("the track's author owns label, offset, trims and gain; nobody else, not even the song's author", async () => {
@@ -1270,18 +1350,123 @@ describeDb("jam channels", () => {
     stubs.frames.length = 0;
     expect((await call(bob, "DELETE", `/api/jam-tracks/${track}`)).status).toBe(204);
     const frames = takeFrames();
-    expect(frames).toHaveLength(1);
-    expect(frames[0]).toMatchObject({ type: "jam-track-deleted", trackId: track, channelId: jamId });
-    expect((frames[0] as Extract<JamFrame, { type: "jam-track-deleted" }>).song.trackCount).toBe(0);
+    // The song is left with no take and is its author's alone: the room is told
+    // it is gone, not handed its summary (`jam-track-deleted` carries one).
+    expect(frames).toEqual([{ type: "jam-song-deleted", channelId: jamId, songId: song }]);
     expect((await call(bob, "DELETE", `/api/jam-tracks/${track}`)).status).toBe(404);
     expect((await detail(alice, song)).tracks).toEqual([]);
     // Soft: the object is still there until the sweep a day later.
     expect([...objects.keys()]).toEqual(keysBefore);
 
+    // With another take still there, a delete is the ordinary frame, with the summary.
     const second = await trackId(carol, song, "keys");
+    await trackId(alice, song, "drums");
+    stubs.frames.length = 0;
     expect((await call(alice, "DELETE", `/api/jam-tracks/${second}`)).status).toBe(204);
+    expect(takeFrames()).toMatchObject([{ type: "jam-track-deleted", trackId: second, song: { trackCount: 1 } }]);
     const third = await trackId(carol, song, "keys");
     expect((await call(mod, "DELETE", `/api/jam-tracks/${third}`)).status).toBe(204);
+    expect((await detail(alice, song)).tracks).toHaveLength(1);
+  });
+
+  it("the last track of a song takes the song with it when its author or a moderator deletes it; anybody else's leaves it empty and theirs alone", async () => {
+    // The song's author deletes the last take: the song goes, the room is told.
+    const mine = await songId(alice, "Minha");
+    const only = await trackId(alice, mine, "guitar");
+    stubs.frames.length = 0;
+    expect((await call(alice, "DELETE", `/api/jam-tracks/${only}`)).status).toBe(204);
+    expect(takeFrames()).toEqual([{ type: "jam-song-deleted", channelId: jamId, songId: mine }]);
+    expect((await call(alice, "GET", `/api/jam-songs/${mine}`)).status).toBe(404);
+    expect(
+      (await getPool().query(`SELECT 1 FROM jam_songs WHERE id = $1 AND deleted_at IS NOT NULL`, [mine])).rowCount,
+    ).toBe(1);
+
+    // A moderator, too.
+    const other = await songId(bob, "Do Bob");
+    const take = await trackId(bob, other, "bass");
+    stubs.frames.length = 0;
+    expect((await call(mod, "DELETE", `/api/jam-tracks/${take}`)).status).toBe(204);
+    expect(takeFrames().map((f) => f.type)).toEqual(["jam-song-deleted"]);
+
+    // The song's author deleting one of two takes keeps the song.
+    const pair = await songId(alice, "Duas");
+    const a = await trackId(alice, pair, "guitar");
+    await trackId(alice, pair, "bass");
+    stubs.frames.length = 0;
+    expect((await call(alice, "DELETE", `/api/jam-tracks/${a}`)).status).toBe(204);
+    expect(takeFrames().map((f) => f.type)).toEqual(["jam-track-deleted"]);
+    expect((await detail(alice, pair)).tracks).toHaveLength(1);
+
+    // A guest's last take in somebody else's song: the song stays, empty, and
+    // is the author's alone. The frame still says the song has no track.
+    const guest = await songId(alice, "Aberta");
+    const theirs = await trackId(bob, guest, "keys");
+    stubs.frames.length = 0;
+    expect((await call(bob, "DELETE", `/api/jam-tracks/${theirs}`)).status).toBe(204);
+    expect(takeFrames()).toEqual([{ type: "jam-song-deleted", channelId: jamId, songId: guest }]);
+    const ids = async (as: Actor) =>
+      jamSongListResponseSchema
+        .parse((await call(as, "GET", `/api/channels/${jamId}/jam-songs`)).body)
+        .songs.map((s) => s.id);
+    expect(await ids(alice)).toContain(guest);
+    expect(await ids(carol)).not.toContain(guest);
+  });
+
+  it("a song the studio made and never filled is deleted with ?ifEmpty=true, and never when a take is in it", async () => {
+    const empty = await songId(bob, "Nunca enchida");
+    stubs.frames.length = 0;
+    expect((await call(bob, "DELETE", `/api/jam-songs/${empty}?ifEmpty=true`)).status).toBe(204);
+    expect(takeFrames()).toEqual([{ type: "jam-song-deleted", channelId: jamId, songId: empty }]);
+    expect((await call(bob, "GET", `/api/jam-songs/${empty}`)).status).toBe(404);
+
+    // A claim that committed without its answer reaching the page: the take is there,
+    // so the cleanup is refused and nothing is deleted.
+    const filled = await songId(bob, "Enchida");
+    await trackId(bob, filled, "guitar");
+    stubs.frames.length = 0;
+    const refused = await call(bob, "DELETE", `/api/jam-songs/${filled}?ifEmpty=true`);
+    expect(refused.status).toBe(409);
+    expect((refused.body as { error?: string }).error).toBe("jam_song_not_empty");
+    expect(takeFrames()).toEqual([]);
+    expect((await detail(bob, filled)).tracks).toHaveLength(1);
+    // The same permission rule as any delete.
+    expect((await call(carol, "DELETE", `/api/jam-songs/${filled}?ifEmpty=true`)).status).toBe(403);
+    // Without the flag it is the delete it always was.
+    expect((await call(bob, "DELETE", `/api/jam-songs/${filled}`)).status).toBe(204);
+  });
+
+  it("the sweep deletes a song that stayed with no track for a day, and nothing that has a track, is fresh or was deleted", async () => {
+    const empty = await songId(alice, "Vazia");
+    const filled = await songId(alice, "Cheia");
+    await trackId(alice, filled, "guitar");
+    const fresh = await songId(bob, "Recente");
+    const reborn = await songId(bob, "Ganhou take");
+    // Both look a day old to the sweep; only one has a track by then.
+    await getPool().query(
+      `UPDATE jam_songs SET created_at = NOW() - INTERVAL '2 days', updated_at = NOW() - INTERVAL '2 days'
+        WHERE id = ANY($1::uuid[])`,
+      [[empty, filled, reborn]],
+    );
+    await trackId(bob, reborn, "bass");
+    await getPool().query(
+      `UPDATE jam_songs SET updated_at = NOW() - INTERVAL '2 days' WHERE id = $1`,
+      [filled],
+    );
+    expect(await sweepEmptyJamSongs()).toBe(1);
+    const alive = (
+      await getPool().query<{ id: string }>(`SELECT id FROM jam_songs WHERE deleted_at IS NULL`)
+    ).rows.map((row) => row.id);
+    expect(alive.sort()).toEqual([filled, fresh, reborn].sort());
+    expect((await call(alice, "GET", `/api/jam-songs/${empty}`)).status).toBe(404);
+    // Nothing left to do, and a second pass is a no-op.
+    expect(await sweepEmptyJamSongs()).toBe(0);
+    // A song whose last track was deleted days ago is empty since then.
+    const emptied = await songId(alice, "Esvaziada");
+    const take = await trackId(bob, emptied, "keys");
+    expect((await call(bob, "DELETE", `/api/jam-tracks/${take}`)).status).toBe(204);
+    expect(await sweepEmptyJamSongs()).toBe(0);
+    await getPool().query(`UPDATE jam_songs SET updated_at = NOW() - INTERVAL '25 hours' WHERE id = $1`, [emptied]);
+    expect(await sweepEmptyJamSongs()).toBe(1);
   });
 
   it("deleting a song takes its tracks with it", async () => {
@@ -1326,6 +1511,7 @@ describeDb("jam channels", () => {
 
   it("the detail names the viewer: author, moderator, what they may add", async () => {
     const song = await songId(bob, "Do Bob", { joinMode: "wanted", wantedInstruments: ["keys"] });
+    await trackId(bob, song, "guitar");
     expect((await detail(bob, song)).viewer).toMatchObject({ isAuthor: true, canModerate: false });
     expect((await detail(mod, song)).viewer).toMatchObject({ isAuthor: false, canModerate: true });
     expect((await detail(alice, song)).viewer.canModerate).toBe(true);
@@ -1561,14 +1747,14 @@ describeDb("jam channels", () => {
     ).rows[0]!.storage_key;
 
   it("a song has no cover until one is set, and every read says so with null", async () => {
-    const song = await songId(alice);
+    const song = await liveSong(alice);
     expect((await detail(bob, song)).song.coverUrl).toBeNull();
     const list = await call(bob, "GET", `/api/channels/${jamId}/jam-songs`);
     expect(jamSongListResponseSchema.parse(list.body).songs[0]!.coverUrl).toBeNull();
   });
 
   it("sets a cover end to end: the picture is on the list, the detail and the frame, and the bytes are fetchable", async () => {
-    const song = await songId(bob, "Com capa");
+    const song = await liveSong(bob, "Com capa");
     takeFrames();
     const id = await coverUpload(bob, song);
     const set = await setCover(bob, song, id);
@@ -1593,7 +1779,7 @@ describeDb("jam channels", () => {
   });
 
   it("who may set a cover: the author or a moderator, not another member, not somebody who cannot see the channel", async () => {
-    const song = await songId(bob);
+    const song = await liveSong(bob);
     // Not the author: no ticket either, so a stranger's picture costs the bucket nothing.
     const denied = await call(carol, "POST", `/api/jam-songs/${song}/uploads`, {
       kind: "cover",
@@ -1618,7 +1804,7 @@ describeDb("jam channels", () => {
   });
 
   it("a cover upload is not a back door: it cannot be claimed as a track, in a closed song or any other", async () => {
-    const song = await songId(bob, "Fechada", { joinMode: "closed" });
+    const song = await liveSong(bob, "Fechada", { joinMode: "closed" });
     const id = await coverUpload(bob, song);
     const track = await call(bob, "POST", `/api/jam-songs/${song}/tracks`, {
       instrument: "guitar",
@@ -1629,7 +1815,7 @@ describeDb("jam channels", () => {
   });
 
   it("verifies the object: wrong type, not an image, over the limit, never uploaded", async () => {
-    const song = await songId(bob);
+    const song = await liveSong(bob);
     // Types: only the three pictures, and the size is bounded at the ticket.
     for (const contentType of ["image/gif", "image/svg+xml", "audio/webm", "text/html"]) {
       const refused = await call(bob, "POST", `/api/jam-songs/${song}/uploads`, {
@@ -1682,7 +1868,7 @@ describeDb("jam channels", () => {
   });
 
   it("replacing a cover deletes the old object and its ledger row; removing deletes the last one", async () => {
-    const song = await songId(bob);
+    const song = await liveSong(bob);
     const first = await coverUpload(bob, song);
     await setCover(bob, song, first);
     const firstKey = await keyOf(first);
@@ -1706,7 +1892,8 @@ describeDb("jam channels", () => {
     expect(removed.status).toBe(200);
     expect(removed.body.song.coverUrl).toBeNull();
     expect(takeFrames()).toMatchObject([{ type: "jam-song-updated" }]);
-    await settled(() => objects.size === 0);
+    // Only the take's own audio is left in the bucket.
+    await settled(() => objects.size === 1);
     expect((await getPool().query(`SELECT 1 FROM jam_song_covers`)).rowCount).toBe(0);
     // Nothing left to remove: 200, and the same frame again (a retry whose first answer was lost still tells the room).
     expect((await removeCover(bob, song)).status).toBe(200);
@@ -1714,7 +1901,7 @@ describeDb("jam channels", () => {
   });
 
   it("off refuses a ticket and a set for a cover, never a read, and lets the removal through", async () => {
-    const song = await songId(bob);
+    const song = await liveSong(bob);
     const id = await coverUpload(bob, song);
     await setCover(bob, song, id);
     const spare = await coverUpload(bob, song, { bytes: pngBytes(16) });
@@ -1734,7 +1921,7 @@ describeDb("jam channels", () => {
   });
 
   it("a timed-out member cannot change the cover", async () => {
-    const song = await songId(bob);
+    const song = await liveSong(bob);
     const id = await coverUpload(bob, song);
     await issueTimeout({ serverId, userId: bob.id, issuedBy: alice.id, minutes: 5 });
     expect((await setCover(bob, song, id)).status).toBe(403);
@@ -1742,7 +1929,7 @@ describeDb("jam channels", () => {
   });
 
   it("the sweep collects a cover the song stopped showing, and a deleted song's cover a day later, never a live one", async () => {
-    const song = await songId(bob);
+    const song = await liveSong(bob);
     const live = await coverUpload(bob, song);
     await setCover(bob, song, live);
     const liveKey = await keyOf(live);
@@ -1773,7 +1960,7 @@ describeDb("jam channels", () => {
   });
 
   it("a failed delete of the old cover is left for the sweep, not lost", async () => {
-    const song = await songId(bob);
+    const song = await liveSong(bob);
     const first = await coverUpload(bob, song);
     await setCover(bob, song, first);
     storage.failDeletes = true;
@@ -1796,7 +1983,7 @@ describeDb("jam channels", () => {
   });
 
   it("an account that set a cover on somebody else's song takes the picture with it; the cascades name the cover's key", async () => {
-    const song = await songId(alice, "Da Alice");
+    const song = await liveSong(alice, "Da Alice");
     const id = await coverUpload(mod, song);
     await setCover(mod, song, id);
     const keys = await jamKeysForUser(mod.id);
@@ -1808,7 +1995,7 @@ describeDb("jam channels", () => {
   });
 
   it("a blip of the database after the commit does not lose the announcement: the summary read is tried again", async () => {
-    const song = await songId(bob);
+    const song = await liveSong(bob);
     const id = await coverUpload(bob, song);
     takeFrames();
     const pool = getPool();
@@ -1835,7 +2022,7 @@ describeDb("jam channels", () => {
   });
 
   it("a database that stays unreadable for the whole retry window still tells the room once it can read again", async () => {
-    const song = await songId(bob);
+    const song = await liveSong(bob);
     const id = await coverUpload(bob, song);
     takeFrames();
     const pool = getPool();
@@ -1866,7 +2053,7 @@ describeDb("jam channels", () => {
   });
 
   it("an edit of the title keeps the cover and is announced once, with both", async () => {
-    const song = await songId(bob, "Antes");
+    const song = await liveSong(bob, "Antes");
     await setCover(bob, song, await coverUpload(bob, song));
     takeFrames();
     const renamed = await call<{ song: JamSongSummary }>(bob, "PATCH", `/api/jam-songs/${song}`, {

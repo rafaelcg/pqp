@@ -3748,10 +3748,18 @@ heap), so it is tested on the JVM against known impulses.
   to the destination's Nyquist when the rate goes down) and **no delay**: output
   `j` is the source at exactly `j * src / dst`. A streaming resampler's group
   delay is what put the iOS engine's 44.1 kHz impulse 17 frames late.
-- **Place** (`JamAlignment`): `audio[trimStart, length - trimEnd]` starts at
-  `offsetMs`; the transport's zero is the earliest start of any stem, so a
-  negative `offsetMs` (a count-in) is not cut off. Trims count from the decoded
-  file's real ends, as the contract says.
+- **Place** (`JamAlignment`): `offsetMs` is the song time of the stored file's
+  FIRST sample and a trim hides audio without moving it, so stored frame `j`
+  sounds at `frames(offsetMs - origin) + j` and only
+  `audio[trimStart, length - trimEnd]` is heard (the web recorder's rule and the
+  web player's `planSegment`; every stored track was recorded there). The
+  transport's zero is the earliest HEARD sample of any stem
+  (`offsetMs + trimStartMs`), so a count-in take (`offsetMs -2023`,
+  `trimStartMs 2023`) starts at 0 and nothing is cut off. Trims count from the
+  decoded file's real ends. Until 2026-11-10 this followed the old wording in the
+  header of `jam.ts` ("where the first PLAYED sample sits") and played every
+  stem `trimStartMs` early: a take with a count-in two seconds ahead of one
+  without (`JamWebTakeAlignmentTest`).
 - **Output** (`JamPlayer`): one audio thread writing non-blocking, every sink
   call on that thread, a 1024-frame buffer, about 130 ms of track buffer. The
   position the playhead and the video follow is the sink's PRESENTED frame
@@ -3763,13 +3771,20 @@ heap), so it is tested on the JVM against known impulses.
 
 `JamMixerTest` renders real stems (impulses at known file positions) through the
 real mixer and reads where each lands in the output, against the hand-computed
-contract. No hardware.
+timeline rule. No hardware. `JamWebTakeAlignmentTest` does the same with three
+takes shaped like the web recorder's uploads (guitar 48 kHz `offset -2023,
+trimStart 2023`; bass 48 kHz `offset -137, trimStart 637, trimEnd 1000`; keys
+44.1 kHz `offset -2050, trimStart 2050`), one-sample clicks at known song times,
+read from the output from the top and after a seek: every click is 0 frames from
+where the web plays it (the 44.1 kHz stem too, the resampler has no delay), and
+the mix is 60 000 ms long. On the previous arithmetic the same test read the
+first click -2023, -637 and -2050 ms from the web's.
 
 | Case | Expected frame (48 kHz) | Measured |
 |---|---|---|
 | B, offset -250 ms (count-in): first and last sample | 0, 5999 | 0, 5999 |
 | A, offset 0: first and last sample | 12000, 23999 | 12000, 23999 |
-| C, offset 100 ms, 200 ms off the head, 300 ms off the tail: first played / last played | 16800, 52799 | 16800, 52799 |
+| C, offset 100 ms, 200 ms off the head, 300 ms off the tail: first heard / last heard (the file starts at 16800 and a trim moves nothing) | 26400, 62399 | 26400, 62399 |
 | C, the frames just outside both trims | absent | absent |
 | a stem 837 ms late | 52176 | 52176 |
 | a stem 37 ms behind another | 1776 apart | 1776 apart |
@@ -3828,8 +3843,8 @@ song's author or a moderator, and delete where the contract allows it
 disabled (no decoder, no audio focus) and locked to the audio clock: a drift
 under 45 ms is left alone, up to 350 ms is eased out with a 4 % speed change, past
 that a seek (`JamVideoPlan`); at most four play, and before its slice starts a
-video waits on its first frame. File time is `song - offset + trimStart`, one
-`offsetMs` for picture and sound, as on the web.
+video waits on its first frame. File time is `song - offset` (kept inside the heard
+slice), one `offsetMs` for picture and sound, as on the web.
 
 ### Audio focus, calls and the background
 

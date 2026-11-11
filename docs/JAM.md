@@ -85,14 +85,17 @@ the next one is the first again.
 
 ### Timeline
 
-`durationMs` is the stored audio's full length. The track plays
-`audio[trimStartMs, durationMs - trimEndMs]` and that slice starts at `offsetMs`
-on the song timeline (`offsetMs` may be negative). Trims are applied at play
-time and never touch the bytes. `gain` is a linear multiplier, 0 to 2. `peaks`
+`durationMs` is the stored audio's full length. `offsetMs` is the song time of
+the stored file's FIRST sample (it may be negative: a take recorded with a
+count-in has its count-in in the file, before the song's zero). The track plays
+`audio[trimStartMs, durationMs - trimEndMs]`: a trim hides audio and never moves
+it, so the track is heard from `offsetMs + trimStartMs` to
+`offsetMs + durationMs - trimEndMs`. Trims are applied at play time and never
+touch the bytes. `gain` is a linear multiplier, 0 to 2. `peaks`
 is up to 400 numbers in 0..1 across the whole recording, for a waveform with no
 audio downloaded. The server stores what the recorder sends, bounded and clamped,
-and never decodes audio. The song's `mixDurationMs` is the latest end of an
-`inMix` track minus the earliest start. Full definitions: the header of `jam.ts`.
+and never decodes audio. The song's `mixDurationMs` is the latest heard end of an
+`inMix` track minus the earliest heard start (computed on read, nothing stores it). Full definitions: the header of `jam.ts`.
 
 ### The preview on a song summary
 
@@ -288,6 +291,19 @@ announce never fails the write.
   day after (`media_purged_at`). `sweepJamMedia`, every minute from `jobs.ts`,
   runs whatever the flag says, so switching the feature off never strands an
   object. A bucket outage leaves the row for the next pass.
+- A song is created first and its first take uploaded after, so a closed page
+  leaves a song with no track. Such a song is its author's alone: the list and
+  the detail leave it out for everybody else, and its create and update frames
+  are not sent (the first track is what announces it). `sweepEmptyJamSongs`
+  (same job, same minute, rows only, `FOR UPDATE SKIP LOCKED`) deletes a song
+  with no live track whose `updated_at` is over 24 hours old. Deleting the last
+  track as the song's author or a moderator deletes the song too (frame
+  `jam-song-deleted`); a guest's last take leaves the author's song empty, and
+  the room is told with `jam-song-deleted` too (a `jam-track-deleted` would carry
+  the summary the list now hides). The studio cleans up a song it made and never
+  filled with `DELETE /api/jam-songs/:id?ifEmpty=true`, which is 409
+  `jam_song_not_empty` when a take is in it, so a claim that committed without
+  its answer is never deleted.
 - Deleting a channel, a server or an account deletes the objects: the keys sit
   only on rows those deletes cascade, so they are read first (`jam-keys.ts`) and
   deleted after the commit, like attachments and soundboard clips. A person's

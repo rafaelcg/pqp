@@ -1,6 +1,7 @@
 import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
 import { ArrowLeft, Camera, Headphones, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
@@ -119,7 +120,9 @@ export function JamSongPanel({
     }
   }, [channelId, song.id, detail?.viewerStale]);
 
-  const playing = playback.transport === "playing";
+  // The detail is in and the song has no take: only its author sees this (the server leaves it out for everybody else). Nothing plays.
+  const isEmpty = detail !== undefined && tracks.length === 0;
+  const playing = playback.transport === "playing" && !isEmpty;
   const playingChange = useRef(onPlayingChange);
   playingChange.current = onPlayingChange;
   useEffect(() => {
@@ -239,10 +242,15 @@ export function JamSongPanel({
         ]
       : [];
 
-  const recordLabel =
-    first && need.kind === "missing" && need.instruments.includes(first)
+  const recordLabel = isEmpty
+    ? t("jam.song.recordFirst")
+    : first && need.kind === "missing" && need.instruments.includes(first)
       ? t(`jam.song.recordAs.${first}` as MessageKey)
       : t("jam.song.record");
+  // The take about to be deleted is the song's last one, and the person may delete
+  // the song (its author or a moderator: the server's rule): then deleting the take
+  // deletes the song, and the confirm says so.
+  const deletesSong = pendingDelete !== null && tracks.length === 1 && canManage;
 
   return (
     <section aria-label={song.title} data-jam-song={song.id} className="flex h-full min-h-0 flex-col bg-surface-1">
@@ -322,6 +330,20 @@ export function JamSongPanel({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 sm:px-5">
+        {isEmpty ? (
+          <div
+            data-jam-empty-song=""
+            className="mt-4 flex flex-col items-start gap-3 rounded-[var(--radius-card)] bg-surface-2 p-4"
+          >
+            <h3 className="font-display text-lg font-extrabold text-text">{t("jam.song.empty.title")}</h3>
+            <p className="text-sm leading-snug text-text-secondary [text-wrap:pretty]">{t("jam.song.empty.body")}</p>
+            {canManage && enabled && (
+              <Button variant="secondary" size="sm" data-jam-empty-delete="" onClick={() => setConfirmSong(true)}>
+                {t("jam.song.delete")}
+              </Button>
+            )}
+          </div>
+        ) : (
         <section className="mt-1" aria-labelledby={`band-${song.id}`}>
           <div className="sticky top-0 z-10 -mx-3 mb-2 flex flex-col gap-1 bg-surface-1/95 px-3 pb-2 pt-3 backdrop-blur-sm sm:-mx-5 sm:px-5 [@media(max-height:32rem)]:static [@media(max-height:32rem)]:pt-1">
             <div className="flex items-baseline justify-between gap-3">
@@ -473,6 +495,7 @@ export function JamSongPanel({
             </div>
           )}
         </section>
+        )}
 
         {error && (
           <p role="alert" className="mt-4 rounded-[var(--radius-control)] bg-danger-soft px-3 py-2 text-sm text-on-danger-soft">
@@ -516,9 +539,9 @@ export function JamSongPanel({
       )}
       <ConfirmDialog
         open={pendingDelete !== null}
-        title={t("jam.take.deleteTitle")}
-        description={t("jam.take.deleteBody")}
-        confirmLabel={t("jam.take.delete")}
+        title={deletesSong ? t("jam.take.deleteLastTitle") : t("jam.take.deleteTitle")}
+        description={deletesSong ? t("jam.take.deleteLastBody") : t("jam.take.deleteBody")}
+        confirmLabel={deletesSong ? t("jam.song.delete") : t("jam.take.delete")}
         cancelLabel={t("jam.keep")}
         onClose={() => setPendingDelete(null)}
         onConfirm={() => {
@@ -528,6 +551,9 @@ export function JamSongPanel({
           if (adjustingId === track.id) setAdjustingId(null);
           void guard(async () => {
             await deleteJamTrack(track.id);
+            // When it was the song's last take the server took the song with it (if nobody
+            // added one meanwhile): the reads below are what say which it was, so a take that
+            // arrived in between is never taken for a deleted song.
             // Deleted is deleted: the lane goes at once, and the refreshes below are
             // best effort (their failing must not make a done delete look undone).
             writeFrame({ type: "jam-track-deleted", channelId, song, trackId: track.id });

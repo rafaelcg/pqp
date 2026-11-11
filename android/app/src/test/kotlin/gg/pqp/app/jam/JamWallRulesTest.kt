@@ -340,13 +340,17 @@ class JamWallRulesTest {
 
     @Test
     fun `peaks run across the whole recording, so trims and offsets are applied here`() {
-        // 1 s recording, two peak values: first half quiet, second half loud. Head trim 500 ms leaves only the loud half.
+        // 1 s recording whose first sample is at song time 2000, two peak values: first half quiet, second half loud.
+        // A head trim of 500 ms hides the quiet half and moves nothing: the loud half is still at 2500..3000.
         val t = track("t", "s", offset = 2000.0, trimStart = 500.0, peaks = listOf(0.1, 0.9))
-        assertEquals(2000.0, t.startMs, 0.0)
-        assertEquals(2500.0, t.endMs, 0.0)
-        assertEquals(0.9, t.peakAt(2100.0), 1e-9)
-        assertEquals(0.0, t.peakAt(1999.0), 0.0)
-        assertEquals(0.0, t.peakAt(2500.0), 0.0)
+        assertEquals(2500.0, t.startMs, 0.0)
+        assertEquals(3000.0, t.endMs, 0.0)
+        assertEquals(0.9, t.peakAt(2600.0), 1e-9)
+        assertEquals(0.0, t.peakAt(2100.0), 0.0) // under the trim, where the quiet half is hidden
+        assertEquals(0.0, t.peakAt(2499.0), 0.0)
+        assertEquals(0.0, t.peakAt(3000.0), 0.0)
+        // Without the trim the quiet half is heard where it is stored.
+        assertEquals(0.1, track("u", "s", offset = 2000.0, peaks = listOf(0.1, 0.9)).peakAt(2100.0), 1e-9)
     }
 
     @Test

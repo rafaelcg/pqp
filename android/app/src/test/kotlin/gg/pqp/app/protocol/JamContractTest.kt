@@ -219,7 +219,10 @@ class JamContractTest {
         assertEquals(1.25, track.gain, 0.0)
         assertEquals(3, track.peaks.size)
         assertEquals(13_989.5, track.playedMs, 0.0)
-        assertEquals(-250.0 + 13_989.5, track.endMs, 0.0)
+        // The file's first sample is at -250 and 10.5 ms of its head are hidden: heard from -239.5 to the file's end.
+        assertEquals(-250.0 + 10.5, track.startMs, 0.0)
+        assertEquals(-250.0 + 14_000.0, track.endMs, 0.0)
+        assertEquals(track.startMs + track.playedMs, track.endMs, 0.0)
         assertTrue(!track.hasVideo)
     }
 

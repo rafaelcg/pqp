@@ -380,7 +380,7 @@ object JamPeaks {
         }
     }
 
-    /** [bars] values across one track's PLAYED slice, for its own row. */
+    /** [bars] values across one track's HEARD slice, for its own row. */
     fun trackBars(track: JamTrack, bars: Int): List<Double> {
         if (bars <= 0) return emptyList()
         return List(bars) { i -> track.peakAt(track.startMs + (i + 0.5) / bars * track.playedMs) }

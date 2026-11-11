@@ -22,13 +22,14 @@ class JamSongRulesTest {
         instrument: JamInstrument = JamInstrument.Guitar,
         inMix: Boolean = true,
         offset: Double = 0.0,
+        trimStart: Double = 0.0,
         gain: Double = 1.0,
         created: String = "2026-11-01T10:00:00.000Z",
         author: String = "u",
         songId: String = "s",
         video: Boolean = false,
     ) = JamTrack(
-        id = id, songId = songId, authorId = author, instrument = instrument, inMix = inMix, offsetMs = offset, gain = gain,
+        id = id, songId = songId, authorId = author, instrument = instrument, inMix = inMix, offsetMs = offset, trimStartMs = trimStart, gain = gain,
         durationMs = 1000.0, createdAt = created, videoUrl = if (video) "https://x/v.mp4" else null,
     )
 
@@ -279,13 +280,20 @@ class JamSongRulesTest {
         assertFalse(JamVideoPlan.waiting(500.0, t))
         assertFalse(JamVideoPlan.finished(1499.0, t))
         assertTrue(JamVideoPlan.finished(1500.0, t))
+        // A head trim hides the first part of the file and moves nothing: the video waits for the first HEARD frame.
+        val trimmed = track("w", offset = 500.0, trimStart = 200.0, video = true)
+        assertTrue(JamVideoPlan.waiting(699.0, trimmed))
+        assertFalse(JamVideoPlan.waiting(700.0, trimmed))
+        assertTrue(JamVideoPlan.finished(1500.0, trimmed))
     }
 
     @Test
     fun `the video file time is the audio file time`() {
-        // offset 500, trim start 200: at song time 700 the file is 400 ms in.
-        assertEquals(400.0, JamAlignment.videoFileMs(700.0, 500.0, 200.0, 0.0, 2000.0), 0.0)
-        // Before the slice it holds on the first played frame; after, on the last.
+        // offset 500 (the file's first sample), trim start 200: at song time 900 the file is 400 ms in, and song
+        // time 700 is its first heard frame.
+        assertEquals(400.0, JamAlignment.videoFileMs(900.0, 500.0, 200.0, 0.0, 2000.0), 0.0)
+        assertEquals(200.0, JamAlignment.videoFileMs(700.0, 500.0, 200.0, 0.0, 2000.0), 0.0)
+        // Before the slice it holds on the first heard frame; after, on the last.
         assertEquals(200.0, JamAlignment.videoFileMs(0.0, 500.0, 200.0, 0.0, 2000.0), 0.0)
         assertEquals(2000.0, JamAlignment.videoFileMs(9000.0, 500.0, 200.0, 0.0, 2000.0), 0.0)
         // A negative offset: song time 0 is already 250 ms into the file.

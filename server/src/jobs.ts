@@ -49,7 +49,7 @@ import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepClientPlatforms } from "./services/client-platforms.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
-import { sweepJamMedia } from "./services/jam.js";
+import { sweepEmptyJamSongs, sweepJamMedia } from "./services/jam.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
@@ -426,6 +426,7 @@ export function startColdJobs(): ColdJobs {
     every(FORUM_SHELL_SWEEP_INTERVAL_MS, "forum-shells", sweepForumPostShells),
     every(SOUNDBOARD_UPLOAD_SWEEP_INTERVAL_MS, "soundboard-uploads", sweepSoundboardUploads),
     every(JAM_MEDIA_SWEEP_INTERVAL_MS, "jam-media", async () => {
+      await sweepEmptyJamSongs();
       await sweepJamMedia();
     }),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),

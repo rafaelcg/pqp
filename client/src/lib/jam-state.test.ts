@@ -258,3 +258,49 @@ describe("a read answers with a snapshot, and frames are newer", () => {
     expect(next.details).toEqual({});
   });
 });
+
+describe("a song with no track is its author's alone", () => {
+  const AUTHOR = "44444444-4444-4444-8444-444444444444";
+  const GUEST = "66666666-6666-4666-8666-666666666666";
+
+  it("a frame that leaves somebody else's song with no track takes it off the wall", () => {
+    const s = song({ id: "a", trackCount: 1 });
+    const state = ready({ songs: [s], details: { a: { tracks: [track({ id: "t1", songId: "a" })], viewer, viewerStale: false } } });
+    const next = applyJamFrame(
+      state,
+      { type: "jam-track-deleted", channelId, song: song({ id: "a", trackCount: 0 }), trackId: "t1" },
+      { viewerId: GUEST },
+    );
+    expect(next.songs).toEqual([]);
+    expect(next.details).toEqual({});
+  });
+
+  it("the author keeps it, in an empty state of their own", () => {
+    const next = applyJamFrame(
+      ready({ songs: [song({ id: "a", trackCount: 1 })] }),
+      { type: "jam-track-deleted", channelId, song: song({ id: "a", trackCount: 0 }), trackId: "t1" },
+      { viewerId: AUTHOR },
+    );
+    expect(next.songs.map((s) => [s.id, s.trackCount])).toEqual([["a", 0]]);
+  });
+
+  it("a song created or updated with no track never reaches a stranger's wall", () => {
+    for (const type of ["jam-song-created", "jam-song-updated"] as const) {
+      const next = applyJamFrame(
+        ready(),
+        { type, channelId, song: song({ id: "a", trackCount: 0 }) },
+        { viewerId: GUEST },
+      );
+      expect(next.songs).toEqual([]);
+    }
+  });
+
+  it("the first track is what puts the song on the wall", () => {
+    const next = applyJamFrame(
+      ready(),
+      { type: "jam-track-added", channelId, song: song({ id: "a", trackCount: 1 }), track: track({ id: "t1", songId: "a" }) },
+      { viewerId: GUEST },
+    );
+    expect(next.songs.map((s) => s.id)).toEqual(["a"]);
+  });
+});
