@@ -29,14 +29,7 @@ describe("JamRowArt", () => {
     expect(art()?.getAttribute("aria-hidden")).toBe("true");
     expect(art()?.getAttribute("data-mood")).toBe("news");
     expect(art()?.getAttribute("data-selected")).toBe("false");
-    expect(host.querySelector(".jam-art-here")).toBeNull();
-  });
-
-  it("draws the open-page marker only while selected", () => {
-    draw(<JamRowArt mood="quiet" selected />);
-    expect(host.querySelector(".jam-art-here")).not.toBeNull();
-    draw(<JamRowArt mood="quiet" selected={false} />);
-    expect(host.querySelector(".jam-art-here")).toBeNull();
+    expect(art()?.childElementCount).toBe(0);
   });
 
   it("stops animating while the tab is hidden and resumes when it is visible again", () => {

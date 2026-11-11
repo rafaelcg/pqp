@@ -1,32 +1,15 @@
 /*
- * The sidebar's Jam row: the art behind it and the icon in front of it.
+ * The sidebar's Jam row: the plate behind it and the icon in front of it.
  *
- * Rules this file keeps:
- * - Only transform and opacity are animated. The waveform is drawn once on a
- *   layer of its own and moved by the compositor, so the sidebar is never
- *   repainted a frame at a time.
- * - The waveform always scrolls, very slowly (one loop is about half a minute), so
- *   the row is alive at a glance; it gets faster with attention: hover, news,
- *   the open page, a song playing. News also plays a soft sheen three times.
- *   `--jam-run` is the one switch every animation reads, and an art that is off
- *   screen or in a hidden tab forces it to `paused`.
- * - Every colour is a role token (the instrument fills are identities, the
- *   same in light and dark), drawn as crisp bars at full colour, never as a
- *   translucent blend: six fills mixed over a dark base turn to mud. The left
- *   of the row is masked off so the name and the count are read on the plain base.
- * - Reduced motion: no animation at all, and every element has a resting
- *   position that is a finished picture.
+ * The plate is a plain row: a base, a hover step, the open-page step and the
+ * focus ring. No waveform, no sheen, no edge marker (removed 2026-11-11).
+ * The only animation is the icon's equaliser while a song is playing; it
+ * animates transform only, pauses off screen and in a hidden tab, and stands
+ * still under reduced motion.
  */
 
 .jam-row-art {
   --jam-base: var(--color-surface-2);
-  /* How much colour the wash carries: a bit more in the light themes, where the
-     same fill on a pale surface reads weaker. `--jam-mood-o` is the state's own. */
-  --jam-wash: 1;
-  --jam-mood-o: 0.62;
-  --jam-run: running;
-  /* Multiplies the loop's length: 1 is the slow drift at rest, less is faster. */
-  --jam-speed: 1;
   position: absolute;
   inset: 0;
   z-index: -1;
@@ -34,12 +17,10 @@
   border-radius: var(--radius-card);
   background: var(--jam-base);
   pointer-events: none;
-  contain: paint;
+  transition: background-color var(--duration-fast) var(--ease-standard);
 }
 
-
-/* The edge is drawn last so the wash never covers it. It only ever carries the
-   focus ring: plain rows have no border, and neither does this one. */
+/* The edge only ever carries the focus ring: plain rows have no border. */
 .jam-row-art::after {
   content: "";
   position: absolute;
@@ -52,213 +33,17 @@
 [data-jam-card]:hover .jam-row-art,
 [data-jam-card]:focus-within .jam-row-art {
   --jam-base: color-mix(in oklab, var(--color-text) 5%, var(--color-surface-2));
-  --jam-mood-o: 0.85;
-  --jam-speed: 0.5;
 }
 
 [data-jam-card]:has(:focus-visible) .jam-row-art::after {
   box-shadow: inset 0 0 0 2px var(--color-focus-ring);
 }
 
-/* The Jam is the open page: a warm tint, a bar on the left edge, a slow drift. */
-.jam-row-art[data-selected="true"] {
-  --jam-base: color-mix(in oklab, var(--color-inst-guitar) 11%, var(--color-surface-2));
-  --jam-speed: 0.85;
-  --jam-mood-o: 0.8;
-}
-
+/* The Jam is the open page: one step brighter than hover, no colour. */
+.jam-row-art[data-selected="true"],
 [data-jam-card]:hover .jam-row-art[data-selected="true"],
 [data-jam-card]:focus-within .jam-row-art[data-selected="true"] {
-  --jam-speed: 0.5;
-  /* The open page keeps its warm tint while the pointer or focus is on it. */
-  --jam-base: color-mix(
-    in oklab,
-    var(--color-inst-guitar) 11%,
-    color-mix(in oklab, var(--color-text) 5%, var(--color-surface-2))
-  );
-}
-
-.jam-art-here {
-  position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: 0;
-  width: 3px;
-  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  background: var(--color-inst-guitar);
-}
-
-/* News is livelier than hover, and a song playing is the liveliest. */
-.jam-row-art[data-mood="news"] {
-  --jam-mood-o: 0.95;
-  --jam-speed: 0.4;
-}
-
-.jam-row-art[data-mood="playing"] {
-  --jam-mood-o: 1;
-  --jam-speed: 0.22;
-}
-
-/* The pointer on a row never slows what the state already made livelier. */
-[data-jam-card]:hover .jam-row-art[data-mood="news"],
-[data-jam-card]:focus-within .jam-row-art[data-mood="news"] {
-  --jam-speed: 0.4;
-}
-
-[data-jam-card]:hover .jam-row-art[data-mood="playing"],
-[data-jam-card]:focus-within .jam-row-art[data-mood="playing"] {
-  --jam-speed: 0.22;
-}
-
-.jam-row-art[data-mood="empty"] {
-  --jam-mood-o: 0.3;
-}
-
-/* Off screen or in a hidden tab: nothing runs, whatever the row's state. */
-.jam-row-art[data-alive="false"] {
-  --jam-run: paused !important;
-}
-
-/* ---- the waveform: bars in the instruments' colours, scrolling ------------ */
-
-/* The name and the count sit on the plain base: the mask keeps the left of the
-   row empty and fades the bars in on the right. */
-.jam-wave {
-  position: absolute;
-  inset: 0;
-  opacity: calc(var(--jam-wash) * var(--jam-mood-o));
-  -webkit-mask-image: linear-gradient(90deg, transparent 46%, black 78%);
-  mask-image: linear-gradient(90deg, transparent 46%, black 78%);
-  transition: opacity var(--duration-fast) var(--ease-standard);
-}
-
-/* The pin and the settings cog come in on hover and focus, and stay while the
-   Jam is open: the bars stop short of them. */
-[data-jam-card]:hover .jam-wave,
-[data-jam-card]:focus-within .jam-wave,
-.jam-row-art[data-selected="true"] .jam-wave {
-  -webkit-mask-image: linear-gradient(
-    90deg,
-    transparent 44%,
-    black 58%,
-    black calc(100% - 100px),
-    transparent calc(100% - 78px)
-  );
-  mask-image: linear-gradient(
-    90deg,
-    transparent 44%,
-    black 58%,
-    black calc(100% - 100px),
-    transparent calc(100% - 78px)
-  );
-}
-
-.jam-wave-scroll {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  height: 40px;
-  margin-top: -20px;
-  /* Stepped, not continuous: a step is half a pixel, the eye cannot tell, and the
-     compositor only produces a frame when the bars actually moved (12 a second
-     at rest, not one per display refresh). One loop is 216px, the width of the
-     36 bars drawn in `jam-row-art.tsx`. */
-  animation: jam-row-wave calc(36s * var(--jam-speed)) steps(432) infinite;
-  animation-play-state: var(--jam-run);
-}
-
-.jam-wave-beat {
-  display: block;
-  height: 100%;
-  transform-origin: center;
-}
-
-/* A song is playing: the bars breathe with it. */
-.jam-row-art[data-mood="playing"] .jam-wave-beat {
-  animation: jam-row-beat 0.52s steps(6) infinite alternate;
-  animation-play-state: var(--jam-run);
-}
-
-.jam-wave-svg {
-  display: block;
-  height: 100%;
-}
-
-.jam-wave-svg [data-inst="vocals"] {
-  fill: var(--color-inst-vocals);
-}
-.jam-wave-svg [data-inst="guitar"] {
-  fill: var(--color-inst-guitar);
-}
-.jam-wave-svg [data-inst="drums"] {
-  fill: var(--color-inst-drums);
-}
-.jam-wave-svg [data-inst="keys"] {
-  fill: var(--color-inst-keys);
-}
-.jam-wave-svg [data-inst="bass"] {
-  fill: var(--color-inst-bass);
-}
-.jam-wave-svg [data-inst="other"] {
-  fill: var(--color-inst-other);
-}
-
-@keyframes jam-row-wave {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(-216px);
-  }
-}
-
-@keyframes jam-row-beat {
-  from {
-    transform: scaleY(0.72);
-  }
-  to {
-    transform: scaleY(1.12);
-  }
-}
-
-/* ---- news: one soft band crosses the row, three times ---------------------- */
-
-.jam-art-sheen {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 46%;
-  opacity: 0;
-  transform: translateX(-120%);
-  background: linear-gradient(
-    100deg,
-    transparent 0%,
-    color-mix(in oklab, var(--color-text) 4%, transparent) 25%,
-    color-mix(in oklab, var(--color-text) 14%, transparent) 50%,
-    color-mix(in oklab, var(--color-text) 4%, transparent) 75%,
-    transparent 100%
-  );
-}
-
-.jam-row-art[data-mood="news"] .jam-art-sheen {
-  animation: jam-row-sheen 2.8s var(--ease-standard) 500ms 3 both;
-}
-.jam-row-art[data-mood="news"][data-alive="false"] .jam-art-sheen {
-  animation-play-state: paused;
-}
-
-@keyframes jam-row-sheen {
-  0% {
-    opacity: 0;
-    transform: translateX(-120%);
-  }
-  20%,
-  80% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translateX(520%);
-  }
+  --jam-base: color-mix(in oklab, var(--color-text) 9%, var(--color-surface-2));
 }
 
 /* ---- the icon ------------------------------------------------------------ */
@@ -302,8 +87,7 @@
 }
 
 /* An off-screen or hidden row pauses its icon too (the art next to it knows). */
-[data-jam-card]:has([data-alive="false"]) .jam-icon-eq > span,
-[data-jam-card]:has([data-alive="false"]) .jam-icon-note {
+[data-jam-card]:has([data-alive="false"]) .jam-icon-eq > span {
   animation-play-state: paused;
 }
 
@@ -312,10 +96,6 @@
 }
 .jam-row-icon[data-mood="playing"] .jam-icon-eq {
   display: flex;
-}
-
-.jam-row-icon[data-mood="news"] .jam-icon-note {
-  animation: jam-row-hop 1.8s var(--ease-emphasized) 900ms 3;
 }
 
 @keyframes jam-row-eq-icon {
@@ -328,30 +108,9 @@
   }
 }
 
-@keyframes jam-row-hop {
-  0%,
-  40%,
-  100% {
-    transform: translateY(0);
-  }
-  18% {
-    transform: translateY(-2.5px) rotate(-8deg);
-  }
-  30% {
-    transform: translateY(0) rotate(0deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .jam-art-sheen,
-  .jam-wave-scroll,
-  .jam-wave-beat,
-  .jam-icon-eq > span,
-  .jam-icon-note {
+  .jam-icon-eq > span {
     animation: none !important;
-  }
-  .jam-art-sheen {
-    opacity: 0;
   }
   .jam-icon-eq > span:nth-child(1) {
     transform: scaleY(0.55);
@@ -359,6 +118,7 @@
   .jam-icon-eq > span:nth-child(3) {
     transform: scaleY(0.75);
   }
+  .jam-row-art,
   .jam-row-art::after {
     transition: none;
   }
