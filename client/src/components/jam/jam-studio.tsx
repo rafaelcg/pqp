@@ -1,12 +1,11 @@
 import type { JamInstrument, JamSongSummary, JamTrack } from "@pqp/shared";
-import { ArrowLeft, Camera, Check, ChevronDown, Loader2, MicOff, RotateCcw, Send, SlidersHorizontal, Square, Volume2, VolumeX } from "lucide-react";
+import { ArrowLeft, Camera, Check, ChevronDown, Loader2, MicOff, RotateCcw, Send, SlidersHorizontal, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
-import { UserAvatar } from "@/components/user/user-avatar";
 import { useEngineClock } from "@/hooks/use-jam-clock";
 import { useJamStudio, type NewSongDraft } from "@/hooks/use-jam-studio";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -23,7 +22,8 @@ import { coverGradient } from "./jam-art";
 import { JamClipEditor } from "./jam-clip-editor";
 import { JamLaneWave } from "./jam-lane-wave";
 import { formatList } from "./jam-need";
-import { bandOf, Playhead, Ruler } from "./jam-song-panel";
+import { JamLaneFrame, JamLaneIdentity, JAM_BAND_BOX } from "./jam-lane-frame";
+import { bandOf, Ruler } from "./jam-song-panel";
 import {
   Countdown,
   DoneOverlay,
@@ -587,14 +587,13 @@ export function JamStudio({
                     {t("jam.studio.playError")}
                   </p>
                 )}
-                <div className={cn("relative", videoOn ? "[--lane-head:9rem]" : "[--lane-head:12.5rem]")}>
+                <div className={cn("relative [--lane-ctl:2.5rem]", JAM_BAND_BOX)}>
                 <Ruler timeline={timeline} onSeek={(fraction) => !recording && studio.engine?.player.seek(fraction * (timeline.endMs - timeline.startMs))} />
-                <ul className="flex flex-col gap-1.5" aria-label={t("jam.song.tracks")}>
-                  <li
-                    data-jam-your-lane=""
-                    className="flex flex-col gap-1.5 sm:grid sm:grid-cols-[var(--lane-head)_minmax(0,1fr)] sm:items-center sm:gap-3 sm:px-1.5"
-                  >
-                    <YourLaneHead
+                <ul className="flex flex-col gap-1" aria-label={t("jam.song.tracks")}>
+                  <li data-jam-your-lane="" className="rounded-[var(--radius-card)] p-1.5">
+                    <JamLaneFrame
+                      identity={
+                    <YourLaneIdentity
                       instrument={studio.instrument}
                       recording={recording}
                       review={
@@ -612,11 +611,29 @@ export function JamStudio({
                           : null
                       }
                     />
+                      }
+                      controls={
+                        phase === "review" && studio.take ? (
+                          <Tooltip label={t("jam.take.adjust")}>
+                            <button
+                              type="button"
+                              onClick={() => setEditing((open) => !open)}
+                              aria-pressed={editing}
+                              aria-label={t("jam.take.adjustMine")}
+                              data-jam-edit-open=""
+                              className={cn(LANE_ICON_BUTTON, editing && "bg-text text-surface-0 hover:bg-text hover:text-surface-0")}
+                            >
+                              <SlidersHorizontal className="h-4 w-4" aria-hidden />
+                            </button>
+                          </Tooltip>
+                        ) : null
+                      }
+                      wave={
                     <div className="min-w-0">
                       {phase === "setup" || phase === "boot" ? (
                         <div
                           className={cn(
-                            "jam-howto-you flex h-12 items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current text-[13px] font-bold",
+                            "jam-howto-you flex h-[3.25rem] items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current text-[13px] font-bold",
                             JAM_INSTRUMENT_LOOK[studio.instrument].ink,
                           )}
                         >
@@ -647,37 +664,46 @@ export function JamStudio({
                             timeline={timeline}
                             clock={clock}
                             seed="take"
+                            playhead
                           />
                         </div>
                       )}
                     </div>
+                      }
+                    />
                   </li>
                   {backing.map((track, index) => (
                     <li
                       key={track.id}
                       style={{ "--jam-l": index } as CSSProperties}
-                      className="jam-lane-in flex flex-col gap-1.5 sm:grid sm:grid-cols-[var(--lane-head)_minmax(0,1fr)] sm:items-center sm:gap-3 sm:px-1.5"
+                      className="jam-lane-in rounded-[var(--radius-card)] p-1.5"
                     >
-                      <StudioLaneHead
-                        track={track}
-                        mine={viewerId !== null && track.authorId === viewerId}
-                        muted={mutedLanes.has(track.id)}
-                        onMute={() => toggleLaneMute(track.id)}
-                      />
-                      <JamLaneWave
-                        instrument={track.instrument}
-                        peaks={track.peaks}
-                        timing={track}
-                        timeline={timeline}
-                        clock={playingNow || reviewing || recording ? clock : undefined}
-                        seed={track.id}
-                        dimmed={mutedLanes.has(track.id)}
-                        className={recording ? "h-14" : undefined}
+                      <JamLaneFrame
+                        identity={<StudioLaneIdentity track={track} mine={viewerId !== null && track.authorId === viewerId} />}
+                        controls={
+                          <StudioLaneMute
+                            track={track}
+                            mine={viewerId !== null && track.authorId === viewerId}
+                            muted={mutedLanes.has(track.id)}
+                            onMute={() => toggleLaneMute(track.id)}
+                          />
+                        }
+                        wave={
+                          <JamLaneWave
+                            instrument={track.instrument}
+                            peaks={track.peaks}
+                            timing={track}
+                            timeline={timeline}
+                            clock={playingNow || reviewing || recording ? clock : undefined}
+                            seed={track.id}
+                            dimmed={mutedLanes.has(track.id)}
+                            playhead
+                          />
+                        }
                       />
                     </li>
                   ))}
                 </ul>
-                {(playingNow || reviewing || recording) && <Playhead clock={clock} timeline={timeline} />}
                 </div>
               </div>
               </div>
@@ -977,8 +1003,18 @@ export function JamStudio({
   );
 }
 
-/** Who plays a backing lane: their face with the instrument on it. */
-function StudioLaneHead({
+/** 32 px with a pointer, 44 px under a finger: the studio lane's icon buttons. */
+const LANE_ICON_BUTTON =
+  "grid h-8 w-8 shrink-0 place-items-center rounded-full text-text-secondary outline-none transition-colors duration-[var(--duration-fast)] hover:bg-surface-3 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:h-11 pointer-coarse:w-11";
+
+/** Who plays a backing lane: the instrument's badge, its name, and the person under it. */
+function StudioLaneIdentity({ track, mine }: { track: JamTrack; mine: boolean }) {
+  const { t } = useTranslation();
+  const person = mine ? t("jam.lane.you") : (track.authorName ?? t("jam.tile.anonymous"));
+  return <JamLaneIdentity instrument={track.instrument} sub={person} subTitle={person} />;
+}
+
+function StudioLaneMute({
   track,
   mine,
   muted,
@@ -991,95 +1027,53 @@ function StudioLaneHead({
 }) {
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[track.instrument];
-  const Icon = look.icon;
-  const instrument = t(look.nameKey as MessageKey);
   const person = mine ? t("jam.lane.you") : (track.authorName ?? t("jam.tile.anonymous"));
-  const name = `${instrument}, ${person}`;
+  const name = `${t(look.nameKey as MessageKey)}, ${person}`;
+  const label = muted ? t("jam.lane.unmute", { name }) : t("jam.lane.mute", { name });
   return (
-    <div className="flex min-w-0 items-center gap-2.5">
-      <span className="relative shrink-0">
-        <UserAvatar name={track.authorName ?? t("jam.tile.anonymous")} avatarUrl={track.authorAvatarUrl} rounded="full" className="h-8 w-8" />
-        <span aria-hidden className={cn("absolute -bottom-1 -right-1 grid h-4 w-4 place-items-center rounded-full ring-2 ring-surface-1", look.fill)}>
-          <Icon className="h-2.5 w-2.5" />
-        </span>
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col leading-tight">
-        <span className="truncate text-sm font-bold text-text">{instrument}</span>
-        <span className="truncate text-xs text-text-secondary">{person}</span>
-      </span>
-      <Tooltip label={muted ? t("jam.lane.unmute", { name }) : t("jam.lane.mute", { name })}>
-        <button
-          type="button"
-          aria-pressed={muted}
-          onClick={onMute}
-          data-jam-studio-mute=""
-          className={cn(
-            "grid h-8 w-8 shrink-0 place-items-center rounded-full outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring",
-            muted ? "bg-warning-soft text-on-warning-soft" : "text-text-secondary",
-          )}
-        >
-          {muted ? <VolumeX className="h-4 w-4" aria-hidden /> : <Volume2 className="h-4 w-4" aria-hidden />}
-        </button>
-      </Tooltip>
-    </div>
+    <span className="rounded-full bg-surface-2 px-0.5">
+    <Tooltip label={label}>
+      <button
+        type="button"
+        aria-pressed={muted}
+        aria-label={label}
+        onClick={onMute}
+        data-jam-studio-mute=""
+        className={cn(LANE_ICON_BUTTON, muted && "bg-warning-soft text-on-warning-soft hover:bg-warning-soft hover:text-on-warning-soft")}
+      >
+        <span aria-hidden="true" className="text-[13px] font-extrabold leading-none">M</span>
+      </button>
+    </Tooltip>
+    </span>
   );
 }
 
-function YourLaneHead({
+function YourLaneIdentity({
   instrument,
   recording,
   review,
 }: {
   instrument: JamInstrument;
   recording: boolean;
-  /** After the take: it landed in time (the numbers in the tooltip), and "Ajustar". */
+  /** After the take: it landed in time (the numbers in the tooltip). */
   review: { latency: string; editing: boolean; edited: boolean; onAdjust: () => void } | null;
 }) {
   const { t } = useTranslation();
-  const look = JAM_INSTRUMENT_LOOK[instrument];
-  const Icon = look.icon;
-  return (
-    <div className="flex min-w-0 items-center gap-2.5">
-      <span className={cn("relative grid h-8 w-8 shrink-0 place-items-center rounded-full", look.fill)}>
-        {recording && <span aria-hidden className="jam-rec-ring absolute inset-0 rounded-full bg-danger" />}
-        <Icon className="relative h-4 w-4" aria-hidden />
+  const sub = review ? (
+    <Tooltip label={review.latency}>
+      <span
+        tabIndex={0}
+        data-jam-take-latency=""
+        className="inline-flex w-fit max-w-full items-center gap-1 whitespace-nowrap rounded-full align-top text-xs font-semibold text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+      >
+        <Check className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={3} aria-hidden />
+        <span className="truncate">{review.edited ? t("jam.review.editedShort") : t("jam.review.onTimeShort")}</span>
       </span>
-      <span className="flex min-w-0 flex-1 flex-col leading-tight">
-        <span className="truncate text-sm font-bold text-text">{t(look.nameKey as MessageKey)}</span>
-        {review ? (
-          <Tooltip label={review.latency}>
-            <span
-              tabIndex={0}
-              data-jam-take-latency=""
-              className="flex w-fit items-center gap-1 whitespace-nowrap rounded-full text-xs font-semibold text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-            >
-              <Check className="h-3.5 w-3.5 text-accent" strokeWidth={3} aria-hidden />
-              {review.edited ? t("jam.review.editedShort") : t("jam.review.onTimeShort")}
-            </span>
-          </Tooltip>
-        ) : (
-          <span className={cn("truncate text-xs", recording ? "font-bold text-danger" : "text-text-secondary")}>
-            {recording ? t("jam.lane.recording") : t("jam.lane.you")}
-          </span>
-        )}
-      </span>
-      {review && (
-        <button
-          type="button"
-          onClick={review.onAdjust}
-          aria-pressed={review.editing}
-          data-jam-edit-open=""
-          className={cn(
-            "flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-bold outline-none transition-colors duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring",
-            review.editing ? "bg-text text-surface-0" : "bg-surface-3 text-text hover:bg-border-strong",
-          )}
-        >
-          <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
-          {t("jam.take.adjust")}
-        </button>
-      )}
-    </div>
+    </Tooltip>
+  ) : (
+    <span className={cn(recording && "font-bold text-danger")}>{recording ? t("jam.lane.recording") : t("jam.lane.you")}</span>
   );
+  return <JamLaneIdentity instrument={instrument} sub={sub} recording={recording} />;
 }
 
 function formatTime(ms: number): string {

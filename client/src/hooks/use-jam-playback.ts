@@ -112,8 +112,14 @@ export function useJamPlayback(
 
   // A different song starts from nothing: not ready, nothing heard yet, the
   // listener's mix of the last song forgotten, autoplay owed again.
+  const requestedFor = useRef(songId);
   useEffect(() => {
     loadedOnce.current = false;
+    // The request to play was made for the song this hook opened on: a different song never inherits it.
+    if (requestedFor.current !== songId) {
+      requestedFor.current = songId;
+      wantAutoplay.current = false;
+    }
     setStatus("loading");
     setStemStatus({});
     setLanes({});
@@ -142,7 +148,11 @@ export function useJamPlayback(
         return;
       }
       setStatus("ready");
-      if (!loadedOnce.current) {
+      // The request waits for something to play. A song opened from a card whose details were
+      // never read (a song with no video has no reason to be) first syncs an EMPTY mix, and the
+      // request used to be spent there: the song opened silent. It is spent on the first sync
+      // that has a take in the mix (the detail arriving changes the signature, and syncs again).
+      if (!loadedOnce.current && signature !== "") {
         loadedOnce.current = true;
         // The request is spent on the song it was made for: another song opened
         // on this hook does not start by itself.

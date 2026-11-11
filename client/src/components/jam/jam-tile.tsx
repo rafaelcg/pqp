@@ -26,8 +26,8 @@ import { useJamCover } from "./jam-cover";
  * or Spanish never pushes the play button out of the card.
  *
  * The card is two actions that are NOT nested: the whole card opens the song
- * (a button stretched over it) and the round button plays it (a second button
- * above that). Opening never plays; only the round button does.
+ * and starts it (a button stretched over it) and the round button plays or
+ * pauses it (a second button above that, which changes nothing else).
  *
  * A tile with a video reads its song's detail (for the videos' addresses) once
  * it comes near the screen. A song with a cover never reads its videos.
@@ -47,9 +47,9 @@ export interface JamTileProps {
   playing?: boolean;
   /** A tile with a video came near the screen: the wall reads its detail for the address. */
   onNear?: () => void;
-  /** Open the song, paused. */
+  /** Open the song and start it (a song that is playing already is only opened). */
   onOpen: () => void;
-  /** Open the song and play it (or, when it is open already, play or pause it). */
+  /** The round button: open the song and play it, or, when it is open already, play or pause it. */
   onPlay: () => void;
   /** A song is open beside the wall: the card is a row (a small picture, the words, play), not a square. */
   compact?: boolean;

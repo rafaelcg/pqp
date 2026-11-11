@@ -17,6 +17,8 @@ const STEM_LOADS_AT_ONCE = 4;
  */
 
 let current: Promise<JamEngine> | null = null;
+/** The engine of `current` once it exists, so a gesture can reach its context without waiting a tick. */
+let ready: JamEngine | null = null;
 
 export function getJamEngine(): Promise<JamEngine> {
   if (!current) {
@@ -26,6 +28,7 @@ export function getJamEngine(): Promise<JamEngine> {
         // the engine that is still THE engine: one that was released while it was
         // being created (or replaced by a newer one) must not take the row over.
         if (current === created) {
+          ready = engine;
           followJamPlayer(engine.player);
         }
         return engine;
@@ -41,9 +44,34 @@ export function getJamEngine(): Promise<JamEngine> {
   return current;
 }
 
+/**
+ * Called from inside a click or a keypress that is about to start a song: makes
+ * the engine's AudioContext (if it was not yet) and asks it to run, in the very
+ * task of the gesture. A browser that holds back audio until a person did
+ * something (Safari most of all) counts this as the something; started later,
+ * from an effect after the panel mounted, the same resume can be refused and the
+ * song opens silent.
+ */
+export function unlockJamAudio(): void {
+  // Engine already there (the usual case: a second song, a key press): resume in the gesture itself.
+  if (ready) {
+    if (ready.context.state !== "running") {
+      void ready.context.resume().catch(() => undefined);
+    }
+    return;
+  }
+  // First time: the engine is made in this very task (`JamEngine.create` has no await before the
+  // AudioContext exists), and the resume follows it as a microtask of the same gesture. A resume
+  // that is refused anyway leaves the song paused with its play button: one more press is a gesture.
+  void getJamEngine()
+    .then((engine) => (engine.context.state === "running" ? undefined : engine.context.resume()))
+    .catch(() => undefined);
+}
+
 export async function releaseJamEngine(): Promise<void> {
   const held = current;
   current = null;
+  ready = null;
   forgetJamPlayer();
   if (held) {
     try {

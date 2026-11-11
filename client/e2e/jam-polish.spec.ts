@@ -2,10 +2,11 @@
  * THE JAM'S POLISH, WITH REAL CLICKS AND REAL KEYS: what the three usability
  * testers tripped on that a unit test cannot see.
  *
- *  - Opening a song from its card does NOT play it; only the card's round
- *    button does. The panel takes keyboard focus when it opens, Space plays and
- *    pauses from anywhere that is not a field or a control, and closing the
- *    panel hands focus back to the card.
+ *  - Opening a song from its card plays it (so does the card's round button,
+ *    which also pauses it). The panel takes keyboard focus when it opens, Space
+ *    plays and pauses from anywhere that is not a field or a control, and closing
+ *    the panel hands focus back to the card. (`jam-stage.spec.ts` has the click
+ *    and the Space on the wall in full.)
  *  - The studio takes focus when it opens and gives it back when it closes.
  *  - A cover that is a text file renamed `.jpg`, or a 40 px square, is refused
  *    in words BEFORE the crop step; a transparent PNG is flattened onto a light
@@ -209,7 +210,7 @@ async function openAs(browser: Browser, suffix: string, path: string): Promise<P
 const inside = (page: Page, selector: string) =>
   page.evaluate((css) => Boolean(document.activeElement?.closest(css)), selector);
 
-test("a card opens its song paused; the round button plays; the keyboard goes into the song, Space plays, and Escape gives focus back", async ({ browser }) => {
+test("a card opens its song and plays it; the round button pauses; the keyboard goes into the song, Space plays, and Escape gives focus back", async ({ browser }) => {
   const seeded = await seed();
   test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
   const jamPath = `/app/server/${seeded.serverId}/channel/${seeded.jamId}`;
@@ -223,15 +224,13 @@ test("a card opens its song paused; the round button plays; the keyboard goes in
   await expect(first.locator("[data-jam-open]")).toBeVisible();
   await expect(first.getByRole("button", { name: "Play Primeira" })).toBeVisible();
 
-  // Opening from the card (by keyboard: focus, Enter) does not start the song.
+  // Opening from the card (by keyboard: focus, Enter) starts the song.
   await first.locator("[data-jam-open]").focus();
   await page.keyboard.press("Enter");
   const panel = page.locator(`[data-jam-song="${seeded.songId}"]`);
   await expect(panel).toBeVisible({ timeout: 20_000 });
-  await expect(panel.locator("[data-jam-play]")).toHaveAttribute("data-state", "paused");
-  await page.waitForTimeout(1500);
-  await expect(panel.locator("[data-jam-play]")).toHaveAttribute("data-state", "paused");
-  await expect(first).not.toHaveAttribute("data-playing", "true");
+  await expect(panel.locator("[data-jam-play]")).toHaveAttribute("data-state", "playing", { timeout: 20_000 });
+  await expect(first).toHaveAttribute("data-playing", "true");
 
   // The keyboard is IN the song now: no hunt through the wall to reach it.
   expect(await inside(page, "[data-jam-song]")).toBe(true);
@@ -239,9 +238,9 @@ test("a card opens its song paused; the round button plays; the keyboard goes in
   // Space plays and pauses when focus is not on a control or in a field.
   await expect(panel.locator("[data-jam-play]")).toBeEnabled({ timeout: 20_000 });
   await page.keyboard.press("Space");
-  await expect(panel.locator("[data-jam-play]")).toHaveAttribute("data-state", "playing", { timeout: 10_000 });
+  await expect(panel.locator("[data-jam-play]")).toHaveAttribute("data-state", "paused", { timeout: 10_000 });
   await page.keyboard.press("Space");
-  await expect(panel.locator("[data-jam-play]")).toHaveAttribute("data-state", "paused");
+  await expect(panel.locator("[data-jam-play]")).toHaveAttribute("data-state", "playing");
 
   // Escape closes it and the card that opened it has focus again.
   await page.keyboard.press("Escape");

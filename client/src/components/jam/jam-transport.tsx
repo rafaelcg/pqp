@@ -100,7 +100,7 @@ export function JamTransport({
       </button>
       {!scrubber ? (
         <div className="flex min-w-0 flex-1 flex-col leading-tight">
-          <span className="text-sm font-semibold tabular-nums text-text">
+          <span data-jam-clock="" className="text-sm font-semibold tabular-nums text-text">
             {formatClock(Math.min(reading.positionMs, length))}
             <span className="text-text-secondary"> / {formatClock(length)}</span>
           </span>

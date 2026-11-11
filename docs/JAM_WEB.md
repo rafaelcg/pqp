@@ -56,9 +56,18 @@ its picture into the panel's cover (a View Transition where the browser has one)
 A swapped cover keeps the old picture on screen until the new one has loaded. Filters
 are Tudo, Falta alguém (everything somebody could still add to) and Prontas.
 
-**Keyboard.** Opening a song puts focus in it (its title), Space plays and pauses
-from anywhere that is not a field or a control that owns Space, and Escape closes
-it and gives focus back to the card. The studio does the same.
+**Click to play.** A click (or Enter) on a card opens the song AND plays it; the
+card's round button plays and pauses without changing anything else; a song that is
+playing already is only opened. The click and the keypress are the gesture a browser
+wants before it lets a page make sound, so they call `unlockJamAudio()`
+(`lib/jam-session.ts`) in the very task of the gesture, not later from an effect. A
+link or Back still opens a song and waits.
+
+**Keyboard.** Opening a song puts focus in it (its title), and Escape closes it and
+gives focus back to the card. Space belongs to the wall (`JamPane`) and plays or
+pauses: the open song (playing or paused), else the card the keyboard is on, else
+the first card. It leaves a field or a control that owns Space alone, except a card's
+own button (which would open and play THAT card). The studio does the same.
 
 **Tão te chamando.** Above the tiles, one card per instrument a `wanted` song is
 still missing ("Falta voz em In Bloom"), in that instrument's colour. One click
@@ -109,15 +118,39 @@ leaving the studio of a song it made, with nothing sent, deletes the empty song.
 
 All in-mix tracks play through the one engine (`lib/jam-session.ts`, shared with
 the studio so a take is placed against the backing on one clock). The panel is a
-header (a small cover, the title, the people), and **the band**, whose sticky
+header (a cover, the title, the people), and **the band**, whose sticky
 header holds play and pause right over the lanes: one lane per track as a clip on the song's ONE timeline,
-a ruler to click to jump, and ONE playhead across every lane. A lane has its
+a ruler to click to jump, and a playhead line in every lane.
+
+**The stage.** A song with at least one in-mix recording that has a video opens on a
+stage (`JamStage`): one 16:9 tile per such recording at real size, full width of the
+panel, no taller than about 55vh (so the lanes stay in view on a laptop). One video
+is one large tile, two sit side by side, three in a row, four as two by two, then an
+even grid. Each tile is muted (the sound is the mix), follows the song clock with the
+engine's video follower (`attachVideo`: the file's time is the song's time minus the
+take's offset), carries a chip with the person's name and the instrument's colour as
+a dot, and dims when its lane is muted or another lane is "Só essa". The stage can go
+full screen. With a stage the header is compact (a 56 px cover, the title, and the
+play button beside it); a song with no video keeps the full header (a 120 px cover)
+and the play button above the lanes. The lane carries no thumbnail.
+
+**One lane layout** (`JamLaneFrame`, the song's lanes and the studio's review). Wide
+(the band is 40rem or more across, a container query because the song panel is a
+side panel): one line, `[badge + name over person (10rem) | waveform | controls]`.
+Narrow: two, the identity with the controls and then the waveform, the controls
+wrapping to a line of their own only when they do not fit. Every control is an icon
+with a tooltip and a name for a screen reader (the headphones icon is the one that
+says mute, volume and "Só essa" are only what you hear); "Ajustar" is one of them,
+never laid over the name. The waveform is a quiet surface with bars in the
+instrument's colour (`look.bar`, pulled toward the text colour so a yellow stays
+visible on a light theme), the played part at full strength and the rest dimmer.
+A lane has its
 person, instrument, mute, solo and volume (the listener's own mix, never sent);
 competing takes (more than one for an instrument) carry votes and an "Ouvir no
 lugar" audition; the song's author or a moderator gets "Usar este take" (and
 "Tirar da mix" in the lane's menu). A missing instrument is a dashed lane with
 "Gravar a voz", which opens the studio on it. The videos, locked to the audio,
-sit under the band. "Gravar" (named for the missing instrument when there is
+are the stage above the band. "Gravar" (named for the missing instrument when there is
 one) is drawn only when `viewer.addableInstruments` allows it, and says why not
 otherwise. Finishing and deleting the song are in the header's menu.
 

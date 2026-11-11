@@ -1,11 +1,11 @@
 import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
-import { ArrowLeft, Camera, Headphones, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
+import { ArrowLeft, Camera, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
-import { useJamPlayback, type JamClock } from "@/hooks/use-jam-playback";
+import { useJamPlayback } from "@/hooks/use-jam-playback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   deleteJamSong,
@@ -30,14 +30,14 @@ import {
 } from "@/lib/jam-store";
 import type { JamDetail } from "@/lib/jam-state";
 import { competingInstruments, formatClock, orderTracks, songNeed, songTimeline } from "@/lib/jam-wall";
-import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
-import { isJamStudioOpen } from "@/lib/jam-hint-context";
 import { cn } from "@/lib/utils";
 import { ContributorStack, Equalizer } from "./jam-art";
 import { useBarCount } from "./jam-bars";
 import { JamArtwork } from "./jam-artwork";
 import { JamCoverPhoto, useJamCover, type JamCoverState } from "./jam-cover";
 import { JamEditSheet } from "./jam-edit-sheet";
+import { JamLaneFrame, JamLaneIdentity, JAM_BAND_BOX } from "./jam-lane-frame";
+import { JamStage } from "./jam-stage";
 import { TrackAdjust } from "./jam-track-adjust";
 import { JamTrackRow } from "./jam-track-row";
 import { JamTransport } from "./jam-transport";
@@ -149,31 +149,9 @@ export function JamSongPanel({
     titleRef.current?.focus({ preventScroll: true });
   }, []);
 
-  // Space plays and pauses from anywhere in the song, unless the person is typing,
-  // on a control that owns Space, or a dialog is open.
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key !== " " || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
-        return;
-      }
-      if (escapeOwnedByOverlay(event) || isJamStudioOpen()) {
-        return;
-      }
-      const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest(
-          'input, textarea, select, button, a[href], summary, [contenteditable=""], [contenteditable="true"], [role="slider"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="tab"], [role="combobox"], [role="button"]',
-        )
-      ) {
-        return;
-      }
-      event.preventDefault();
-      toggleRef.current();
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  // Space plays and pauses from anywhere in the song: the wall owns the key (`JamPane`), because
+  // the same press means "the open song" here and "the card" there, and it reaches this panel as
+  // `playNonce` like the wall's round button does.
 
   const viewer = detail?.viewer;
   const competing = useMemo(() => competingInstruments(tracks), [tracks]);
@@ -190,7 +168,38 @@ export function JamSongPanel({
     need.kind === "missing" ? need.instruments.filter((instrument) => !tracks.some((one) => one.instrument === instrument)) : [];
   const inMixCount = new Set(tracks.filter((one) => one.inMix).map((one) => one.instrument)).size;
   const adjusting = adjustingId ? tracks.find((track) => track.id === adjustingId) ?? null : null;
+  // "Ajustar" is the viewer's own: its slot is kept in every lane only when they have a lane to put it on.
+  const hasOwnTake = enabled && mine.length > 0;
+  // The room the lanes' controls need, in the same columns as the ruler: the listener's cluster and the menu,
+  // plus "Ajustar" when the viewer has a take, plus audition, vote and "use this" when the band has alternates.
+  const hasAlternates = competing.size > 0 || tracks.some((track) => !track.inMix);
+  const laneRoom =
+    hasOwnTake && hasAlternates
+      ? "[--lane-ctl:19.25rem]"
+      : hasAlternates
+        ? "[--lane-ctl:17rem]"
+        : hasOwnTake
+          ? "[--lane-ctl:13.75rem]"
+          : "[--lane-ctl:11.5rem]";
   const durationMs = playback.durationMs || timeline.endMs;
+  // The stage: every recording in the song that has a video, drawn big above the lanes. A song
+  // with a video starts with the compact header (a small cover, the play button beside the
+  // title) before its detail has even arrived, so the header does not change shape under it.
+  const stageTracks = useMemo(() => tracks.filter((track) => track.inMix && track.videoUrl), [tracks]);
+  const stageOn = detail ? stageTracks.length > 0 : song.hasVideo;
+  const anySolo = tracks.some((track) => playback.lanes[track.id]?.solo === true);
+  const transport = (
+    <JamTransport
+      clock={playback.clock}
+      playing={playing}
+      loading={!detail || playback.status === "loading"}
+      durationMs={durationMs}
+      onToggle={playback.toggle}
+      onSeek={playback.seek}
+      title={song.title}
+      scrubber={false}
+    />
+  );
 
   const known = useRef<Set<string> | null>(null);
   const [arrived, setArrived] = useState<ReadonlySet<string>>(new Set());
@@ -252,9 +261,31 @@ export function JamSongPanel({
   // deletes the song, and the confirm says so.
   const deletesSong = pendingDelete !== null && tracks.length === 1 && canManage;
 
+  const editPill = canEdit ? (
+    <button
+      type="button"
+      data-jam-edit-open=""
+      onClick={() => setEditing(true)}
+      aria-label={t("jam.edit.open")}
+      className={cn(
+        "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-3.5 text-xs font-bold text-text outline-none ring-1 ring-border sm:h-8 transition-[background-color,transform] duration-[var(--duration-fast)] hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96]",
+        stageOn && "max-sm:w-9 max-sm:justify-center max-sm:px-0",
+      )}
+    >
+      <Pencil className="h-3.5 w-3.5" aria-hidden />
+      <span className={cn(stageOn && "max-sm:sr-only")}>{t("jam.edit.open")}</span>
+    </button>
+  ) : null;
+
   return (
     <section aria-label={song.title} data-jam-song={song.id} className="flex h-full min-h-0 flex-col bg-surface-1">
-      <header className="relative isolate flex items-start gap-2 overflow-hidden border-b border-border px-2 py-3 sm:gap-3 sm:px-4 [@media(max-height:32rem)]:py-1.5">
+      <header
+        data-jam-header={stageOn ? "compact" : "full"}
+        className={cn(
+          "relative isolate flex gap-2 overflow-hidden border-b border-border px-2 py-3 sm:gap-3 sm:px-4 [@media(max-height:32rem)]:py-1.5",
+          stageOn ? "flex-wrap items-start sm:items-center" : "items-start",
+        )}
+      >
         {covered && (
           // The cover's own colours, blurred far past reading, behind the words.
           <span aria-hidden="true" data-jam-header-wash="" className="jam-header-wash pointer-events-none absolute inset-0 -z-10">
@@ -271,34 +302,29 @@ export function JamSongPanel({
         >
           <ArrowLeft className="h-5 w-5" aria-hidden />
         </button>
-        <SongCover song={song} cover={cover} tracks={detail?.tracks} playing={playing} onEdit={canEdit ? () => setEditing(true) : undefined} />
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
+        <SongCover song={song} cover={cover} tracks={detail?.tracks} playing={playing} small={stageOn} onEdit={canEdit ? () => setEditing(true) : undefined} />
+        <div className={cn("flex min-w-0 flex-1 flex-col gap-1.5", stageOn ? "basis-40" : "pt-0.5")}>
           <h2
             ref={titleRef}
             tabIndex={-1}
-            className="font-display text-2xl font-extrabold leading-[1.05] tracking-[-0.01em] text-text outline-none [overflow-wrap:anywhere] [text-wrap:balance] sm:text-4xl [@media(max-height:32rem)]:text-xl"
+            className={cn(
+              "font-display font-extrabold leading-[1.05] tracking-[-0.01em] text-text outline-none [overflow-wrap:anywhere] [text-wrap:balance] [@media(max-height:32rem)]:text-xl",
+              stageOn ? "text-xl sm:text-2xl" : "text-2xl sm:text-4xl",
+            )}
           >
             {song.title}
           </h2>
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-semibold text-text-secondary">
             <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-border-strong" />
-            <span className="min-w-0 basis-full sm:basis-auto">
+            <span className={cn("min-w-0", stageOn ? "truncate" : "basis-full sm:basis-auto")}>
               {song.artist ?? t("jam.original")}
               <span className="max-sm:hidden"> · {viewer?.isAuthor ? t("jam.song.startedByYou") : t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}</span>
             </span>
+            {/* with a stage the pill is a pencil beside the people on a phone, so the video starts higher */}
+            {stageOn && editPill}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {canEdit && (
-              <button
-                type="button"
-                data-jam-edit-open=""
-                onClick={() => setEditing(true)}
-                className="inline-flex h-9 items-center gap-1.5 rounded-full bg-surface-2 px-3.5 text-xs font-bold text-text outline-none ring-1 ring-border sm:h-8 transition-[background-color,transform] duration-[var(--duration-fast)] hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96]"
-              >
-                <Pencil className="h-3.5 w-3.5" aria-hidden />
-                {t("jam.edit.open")}
-              </button>
-            )}
+            {!stageOn && editPill}
             {song.joinMode === "closed" && (
               <span data-jam-closed-line="" className="flex items-center gap-1 text-xs text-text-secondary">
                 <Lock className="h-3 w-3 shrink-0" aria-hidden />
@@ -307,6 +333,12 @@ export function JamSongPanel({
             )}
           </div>
         </div>
+        {stageOn && !isEmpty && (
+          // The song's play button sits with its title, so the stage can have the room below.
+          <div data-jam-header-transport="" className="max-sm:order-last max-sm:basis-full max-sm:pl-1">
+            {transport}
+          </div>
+        )}
         {songMenu.length > 0 && (
           <Menu items={songMenu} align="end">
             <button
@@ -344,8 +376,25 @@ export function JamSongPanel({
             )}
           </div>
         ) : (
+        <>
+        {stageOn && (
+          <JamStage
+            tracks={stageTracks}
+            viewerId={viewerId}
+            lanes={playback.lanes}
+            anySolo={anySolo}
+            attachVideo={playback.attachVideo}
+            loading={!detail}
+          />
+        )}
         <section className="mt-1" aria-labelledby={`band-${song.id}`}>
-          <div className="sticky top-0 z-10 -mx-3 mb-2 flex flex-col gap-1 bg-surface-1/95 px-3 pb-2 pt-3 backdrop-blur-sm sm:-mx-5 sm:px-5 [@media(max-height:32rem)]:static [@media(max-height:32rem)]:pt-1">
+          <div
+            className={cn(
+              "-mx-3 mb-2 flex flex-col gap-1 px-3 pb-2 pt-3 sm:-mx-5 sm:px-5",
+              // the play button rides with the title when the song has a stage; otherwise it is under the band's name and stays in view
+              !stageOn && "sticky top-0 z-10 bg-surface-1/95 backdrop-blur-sm [@media(max-height:32rem)]:static [@media(max-height:32rem)]:pt-1",
+            )}
+          >
             <div className="flex items-baseline justify-between gap-3">
               <h3 id={`band-${song.id}`} className="font-display text-lg font-extrabold text-text">
                 {t("jam.song.band")}
@@ -356,16 +405,7 @@ export function JamSongPanel({
                 </span>
               )}
             </div>
-            <JamTransport
-              clock={playback.clock}
-              playing={playing}
-              loading={!detail || playback.status === "loading"}
-              durationMs={durationMs}
-              onToggle={playback.toggle}
-              onSeek={playback.seek}
-              title={song.title}
-              scrubber={false}
-            />
+            {!stageOn && transport}
           </div>
 
           {!detail ? (
@@ -376,16 +416,9 @@ export function JamSongPanel({
             </div>
           ) : (
             <div className="relative" data-jam-band="">
-              {tracks.length > 0 && (
-                // Said once, above the lanes: mute, "only this" and volume are the listener's own.
-                <p data-jam-mine-note="" className="mb-1.5 flex items-center gap-1.5 px-1.5 text-xs text-text-secondary [text-wrap:pretty]">
-                  <Headphones className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  {t("jam.lane.mineNote")}
-                </p>
-              )}
-              {/* the playhead is drawn over THIS box (ruler and lanes), not over the note above it */}
-              <div className="relative">
-                <Ruler timeline={timeline} onSeek={seekFraction} flush />
+              {/* "only you hear mute, volume and only-this" is the headphones icon's tooltip in each lane, not a line of its own */}
+              <div className={cn("relative", laneRoom, JAM_BAND_BOX)}>
+                <Ruler timeline={timeline} onSeek={seekFraction} />
                 <ul className="flex flex-col gap-1" aria-label={t("jam.song.tracks")}>
                   {tracks.map((track, index) => {
                     const lane = playback.lanes[track.id] ?? { muted: false, solo: false, volume: 1 };
@@ -410,6 +443,7 @@ export function JamSongPanel({
                         fresh={arrived.has(track.id) || freshTrackId === track.id}
                         othersSoloed={tracks.some((other) => other.id !== track.id && playback.lanes[other.id]?.solo === true)}
                         canAdjust={isMine && enabled}
+                        reserveAdjust={hasOwnTake}
                         adjusting={adjustingId === track.id}
                         onAdjust={() => setAdjustingId(track.id)}
                         editor={
@@ -438,7 +472,6 @@ export function JamSongPanel({
                           ) : undefined
                         }
                         onSeek={seekFraction}
-                        attachVideo={track.inMix && track.videoUrl ? playback.attachVideo : undefined}
                         onLane={(patch) => playback.setLane(track.id, patch)}
                         onVote={() =>
                           void guard(async () => {
@@ -495,6 +528,7 @@ export function JamSongPanel({
             </div>
           )}
         </section>
+        </>
         )}
 
         {error && (
@@ -612,19 +646,27 @@ function SongCover({
   cover,
   tracks,
   playing,
+  small = false,
   onEdit,
 }: {
   song: JamSongSummary;
   cover: JamCoverState;
   tracks?: readonly JamTrack[];
   playing: boolean;
+  /** A song with a stage: the cover is a 56 px mark beside the title, not the picture of the panel. */
+  small?: boolean;
   onEdit?: () => void;
 }) {
   const { t } = useTranslation();
   const covered = cover.src !== null && cover.status !== "failed";
   return (
     <div
-      className="group relative isolate h-[5.5rem] w-[5.5rem] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-surface-2 shadow-[var(--shadow-2)] sm:h-40 sm:w-40 [@media(max-height:32rem)]:h-16 [@media(max-height:32rem)]:w-16"
+      className={cn(
+        "group relative isolate shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-surface-2 shadow-[var(--shadow-2)]",
+        small
+          ? "h-12 w-12 sm:h-14 sm:w-14"
+          : "h-[5.5rem] w-[5.5rem] sm:h-[7.5rem] sm:w-[7.5rem] [@media(max-height:32rem)]:h-16 [@media(max-height:32rem)]:w-16",
+      )}
       style={{ viewTransitionName: `jam-cover-${song.id}` } as CSSProperties}
       data-jam-cover=""
       data-jam-cover-photo-on={covered ? "true" : undefined}
@@ -632,7 +674,7 @@ function SongCover({
       {/* the same picture the wall's card shows: the photo, the band's faces, or the band */}
       <JamArtwork song={song} cover={cover} tracks={tracks} loadVideo eager />
       {playing && (
-        <span aria-hidden="true" className="absolute bottom-1.5 left-1.5 flex h-5 items-center rounded-full bg-media-scrim/85 px-1.5 text-on-media">
+        <span aria-hidden="true" className={cn("absolute flex items-center rounded-full bg-media-scrim/85 text-on-media", small ? "bottom-1 left-1 h-4 px-1" : "bottom-1.5 left-1.5 h-5 px-1.5")}>
           <Equalizer className="h-3" />
         </span>
       )}
@@ -646,10 +688,13 @@ function SongCover({
         >
           <span
             aria-hidden="true"
-            className="absolute inset-x-0 top-1/2 mx-auto flex h-9 w-max -translate-y-1/2 items-center gap-1.5 rounded-full bg-media-scrim/80 px-3 text-xs font-bold opacity-0 backdrop-blur-sm transition-opacity duration-[var(--duration-base)] group-hover:opacity-100 group-focus-within:opacity-100 max-sm:hidden"
+            className={cn(
+              "absolute inset-x-0 top-1/2 mx-auto flex h-9 w-max -translate-y-1/2 items-center gap-1.5 rounded-full bg-media-scrim/80 px-3 text-xs font-bold opacity-0 backdrop-blur-sm transition-opacity duration-[var(--duration-base)] group-hover:opacity-100 group-focus-within:opacity-100 max-sm:hidden",
+              small && "px-2.5",
+            )}
           >
             <Camera className="h-4 w-4 shrink-0" strokeWidth={2.25} />
-            <span className="max-sm:hidden">{covered ? t("jam.edit.changePhoto") : t("jam.edit.addPhoto")}</span>
+            {!small && <span className="max-sm:hidden">{covered ? t("jam.edit.changePhoto") : t("jam.edit.addPhoto")}</span>}
           </span>
         </button>
       )}
@@ -657,16 +702,17 @@ function SongCover({
   );
 }
 
-/** Time along the top of the band: where each lane is, and a place to click to jump. */
+/**
+ * Time along the top of the band: where each lane is, and a place to click to
+ * jump. It uses the lanes' own columns (`JamLaneFrame`), so on a wide band its
+ * labels sit exactly over the waveforms and on a narrow one it spans the width.
+ */
 export function Ruler({
   timeline,
   onSeek,
-  flush = false,
 }: {
   timeline: { startMs: number; endMs: number };
   onSeek: (fraction: number) => void;
-  /** The lanes under it run the full width (the song's panel), so it does too, on every screen. */
-  flush?: boolean;
 }) {
   const length = timeline.endMs - timeline.startMs;
   // About one label per 56 px, on a round number of seconds.
@@ -676,9 +722,11 @@ export function Ruler({
   const marks: number[] = [];
   for (let at = 0; at <= length - step / 3; at += step) marks.push(at);
   return (
-    <div className={cn("grid px-1.5 pb-1", flush ? "grid-cols-1" : "grid-cols-[var(--lane-head)_minmax(0,1fr)] gap-3 max-sm:hidden")} aria-hidden="true">
-      {!flush && <span />}
-      <div ref={ref} className="relative h-5">
+    <div
+      className="grid grid-cols-1 px-1.5 pb-1 @min-[40rem]/band:grid-cols-[var(--lane-id)_minmax(0,1fr)_var(--lane-ctl)] @min-[40rem]/band:gap-x-3"
+      aria-hidden="true"
+    >
+      <div ref={ref} className="relative h-5 @min-[40rem]/band:col-start-2">
         <button
           type="button"
           tabIndex={-1}
@@ -695,31 +743,6 @@ export function Ruler({
           </span>
         ))}
       </div>
-    </div>
-  );
-}
-
-/** One line through every lane at once, from the engine's clock. */
-export function Playhead({ clock, timeline }: { clock: JamClock; timeline: { startMs: number; endMs: number } }) {
-  const line = useRef<HTMLDivElement | null>(null);
-  useEffect(
-    () =>
-      clock.subscribe((positionMs) => {
-        const element = line.current;
-        if (!element) {
-          return;
-        }
-        const fraction = Math.min(1, Math.max(0, (positionMs - timeline.startMs) / Math.max(1, timeline.endMs - timeline.startMs)));
-        element.style.left = `${fraction * 100}%`;
-      }),
-    [clock, timeline.startMs, timeline.endMs],
-  );
-  return (
-    <div
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-y-0 left-[calc(var(--lane-head)+1.125rem)] right-1.5 max-sm:hidden"
-    >
-      <div ref={line} className="absolute bottom-0 left-0 top-6 w-0.5 -translate-x-1/2 rounded-full bg-text shadow-[var(--shadow-2)]" />
     </div>
   );
 }
@@ -741,39 +764,35 @@ function MissingLane({
 }) {
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[instrument];
-  const Icon = look.icon;
+  const sub = who === null ? t("jam.song.lookingYou") : t("jam.song.looking", { name: who });
   return (
     <li
       data-jam-slot={instrument}
       style={{ "--jam-l": index } as CSSProperties}
-      className="jam-lane-in flex flex-col gap-2 rounded-[var(--radius-card)] p-1.5"
+      className="jam-lane-in rounded-[var(--radius-card)] p-1.5"
     >
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-full border-2 border-dashed border-current", look.ink)}>
-          <Icon className="h-4 w-4" aria-hidden />
-        </span>
-        <span className="flex min-w-0 flex-col leading-tight">
-          <span className="truncate text-sm font-extrabold text-text">{t(look.nameKey as MessageKey)}</span>
-          <span className="truncate text-xs text-text-secondary">{who === null ? t("jam.song.lookingYou") : t("jam.song.looking", { name: who })}</span>
-        </span>
-      </div>
-      {/* the empty lane is itself the button: where the part goes is where you press */}
-      {canRecord ? (
-        <button
-          type="button"
-          onClick={onRecord}
-          data-jam-slot-record={instrument}
-          aria-label={t(`jam.song.recordAs.${instrument}` as MessageKey)}
-          className="group flex h-14 w-full cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-dashed border-border-strong text-[13px] font-semibold text-text-secondary outline-none transition-[background-color,border-color,color] duration-[var(--duration-base)] hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft focus-visible:ring-2 focus-visible:ring-focus-ring"
-        >
-          <Mic className="h-4 w-4 transition-transform duration-[var(--duration-base)] motion-safe:group-hover:scale-110" aria-hidden />
-          {t("jam.song.slotHint", { instrument: t(look.nameKey as MessageKey).toLowerCase() })}
-        </button>
-      ) : (
-        <div className={cn("flex h-14 items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current text-xs font-bold", look.ink)}>
-          {t(look.missingKey as MessageKey)}
-        </div>
-      )}
+      <JamLaneFrame
+        identity={<JamLaneIdentity instrument={instrument} sub={sub} subTitle={sub} dashed />}
+        wave={
+          // the empty lane is itself the button: where the part goes is where you press
+          canRecord ? (
+            <button
+              type="button"
+              onClick={onRecord}
+              data-jam-slot-record={instrument}
+              aria-label={t(`jam.song.recordAs.${instrument}` as MessageKey)}
+              className="group flex h-[3.25rem] w-full cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-dashed border-border-strong px-2 text-[13px] font-semibold text-text-secondary outline-none transition-[background-color,border-color,color] duration-[var(--duration-base)] hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft focus-visible:ring-2 focus-visible:ring-focus-ring"
+            >
+              <Mic className="h-4 w-4 shrink-0 transition-transform duration-[var(--duration-base)] motion-safe:group-hover:scale-110" aria-hidden />
+              <span className="truncate">{t("jam.song.slotHint", { instrument: t(look.nameKey as MessageKey).toLowerCase() })}</span>
+            </button>
+          ) : (
+            <div className={cn("flex h-[3.25rem] items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current px-2 text-xs font-bold", look.ink)}>
+              <span className="truncate">{t(look.missingKey as MessageKey)}</span>
+            </div>
+          )
+        }
+      />
     </li>
   );
 }
