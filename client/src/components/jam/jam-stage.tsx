@@ -123,6 +123,7 @@ export function JamStage({
               mine={viewerId !== null && track.authorId === viewerId}
               dimmed={lanes[track.id]?.muted === true || (anySolo && lanes[track.id]?.solo !== true)}
               attachVideo={attachVideo}
+              eager={tracks.length <= 2}
             />
           ))
         )}
@@ -148,11 +149,14 @@ function StageTile({
   mine,
   dimmed,
   attachVideo,
+  eager,
 }: {
   track: JamTrack;
   mine: boolean;
   dimmed: boolean;
   attachVideo: (trackId: string, element: HTMLVideoElement) => () => void;
+  /** Buffer the picture before play (a still frame on the tile). Off for a big grid: those buffer when they play. */
+  eager: boolean;
 }) {
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[track.instrument];
@@ -176,7 +180,7 @@ function StageTile({
         src={track.videoUrl ?? undefined}
         muted
         playsInline
-        preload="auto"
+        preload={eager ? "auto" : "metadata"}
         aria-hidden="true"
         tabIndex={-1}
         data-jam-stage-video=""

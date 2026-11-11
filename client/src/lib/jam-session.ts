@@ -17,6 +17,8 @@ const STEM_LOADS_AT_ONCE = 4;
  */
 
 let current: Promise<JamEngine> | null = null;
+/** The engine of `current` once it exists, so a gesture can reach its context without waiting a tick. */
+let ready: JamEngine | null = null;
 
 export function getJamEngine(): Promise<JamEngine> {
   if (!current) {
@@ -26,6 +28,7 @@ export function getJamEngine(): Promise<JamEngine> {
         // the engine that is still THE engine: one that was released while it was
         // being created (or replaced by a newer one) must not take the row over.
         if (current === created) {
+          ready = engine;
           followJamPlayer(engine.player);
         }
         return engine;
@@ -50,6 +53,16 @@ export function getJamEngine(): Promise<JamEngine> {
  * song opens silent.
  */
 export function unlockJamAudio(): void {
+  // Engine already there (the usual case: a second song, a key press): resume in the gesture itself.
+  if (ready) {
+    if (ready.context.state !== "running") {
+      void ready.context.resume().catch(() => undefined);
+    }
+    return;
+  }
+  // First time: the engine is made in this very task (`JamEngine.create` has no await before the
+  // AudioContext exists), and the resume follows it as a microtask of the same gesture. A resume
+  // that is refused anyway leaves the song paused with its play button: one more press is a gesture.
   void getJamEngine()
     .then((engine) => (engine.context.state === "running" ? undefined : engine.context.resume()))
     .catch(() => undefined);
@@ -58,6 +71,7 @@ export function unlockJamAudio(): void {
 export async function releaseJamEngine(): Promise<void> {
   const held = current;
   current = null;
+  ready = null;
   forgetJamPlayer();
   if (held) {
     try {

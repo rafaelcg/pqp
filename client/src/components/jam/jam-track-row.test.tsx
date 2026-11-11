@@ -141,6 +141,29 @@ describe("a lane's head", () => {
   });
 });
 
+describe("alternate takes keep their actions while they are heard", () => {
+  it("an out-of-mix take being auditioned still has its stop control, its vote and 'use this', beside the listener's mix", () => {
+    const row = render({ track: track({ inMix: false, authorName: "Bia" }), canSwitchMix: true, competing: true, auditioning: true });
+    const controls = row.querySelector("[data-jam-lane-controls]")!;
+    const stop = controls.querySelector<HTMLElement>("[data-jam-audition]")!;
+    expect(stop.getAttribute("aria-label")).toBe("Back to the recording in the song");
+    expect(stop.getAttribute("aria-pressed")).toBe("true");
+    expect(controls.querySelector("[data-jam-vote]")).not.toBeNull();
+    expect(controls.querySelector("[data-jam-mix-switch]")).not.toBeNull();
+    // and it is heard, so the listener's cluster is there too
+    expect(controls.querySelector("[data-jam-lane-mix]")).not.toBeNull();
+  });
+
+  it("an in-mix take that competes with another still has its vote", () => {
+    const row = render({ competing: true });
+    expect(row.querySelector("[data-jam-lane-controls] [data-jam-vote]")).not.toBeNull();
+    expect(row.querySelector("[data-jam-lane-controls] [data-jam-lane-mix]")).not.toBeNull();
+    // it is in the mix: nothing to audition, nothing to switch in
+    expect(row.querySelector("[data-jam-audition]")).toBeNull();
+    expect(row.querySelector("[data-jam-mix-switch]")).toBeNull();
+  });
+});
+
 describe("the saved volume", () => {
   it("shows on the lane as a static label, not a second slider", () => {
     const row = render({ track: track({ gain: 0.6 }) });

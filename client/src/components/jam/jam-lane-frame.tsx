@@ -52,7 +52,7 @@ export function JamLaneFrame({
       {controls ? (
         <div
           data-jam-lane-controls=""
-          className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-0.5 @min-[40rem]/band:col-start-3 @min-[40rem]/band:row-start-1 @min-[40rem]/band:ml-0 @min-[40rem]/band:flex-nowrap"
+          className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-0.5 @min-[40rem]/band:col-start-3 @min-[40rem]/band:row-start-1 @min-[40rem]/band:ml-0"
         >
           {controls}
         </div>

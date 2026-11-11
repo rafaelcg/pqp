@@ -170,6 +170,17 @@ export function JamSongPanel({
   const adjusting = adjustingId ? tracks.find((track) => track.id === adjustingId) ?? null : null;
   // "Ajustar" is the viewer's own: its slot is kept in every lane only when they have a lane to put it on.
   const hasOwnTake = enabled && mine.length > 0;
+  // The room the lanes' controls need, in the same columns as the ruler: the listener's cluster and the menu,
+  // plus "Ajustar" when the viewer has a take, plus audition, vote and "use this" when the band has alternates.
+  const hasAlternates = competing.size > 0 || tracks.some((track) => !track.inMix);
+  const laneRoom =
+    hasOwnTake && hasAlternates
+      ? "[--lane-ctl:19.25rem]"
+      : hasAlternates
+        ? "[--lane-ctl:17rem]"
+        : hasOwnTake
+          ? "[--lane-ctl:13.75rem]"
+          : "[--lane-ctl:11.5rem]";
   const durationMs = playback.durationMs || timeline.endMs;
   // The stage: every recording in the song that has a video, drawn big above the lanes. A song
   // with a video starts with the compact header (a small cover, the play button beside the
@@ -406,7 +417,7 @@ export function JamSongPanel({
           ) : (
             <div className="relative" data-jam-band="">
               {/* "only you hear mute, volume and only-this" is the headphones icon's tooltip in each lane, not a line of its own */}
-              <div className={cn("relative", hasOwnTake ? "[--lane-ctl:13.75rem]" : "[--lane-ctl:11.5rem]", JAM_BAND_BOX)}>
+              <div className={cn("relative", laneRoom, JAM_BAND_BOX)}>
                 <Ruler timeline={timeline} onSeek={seekFraction} />
                 <ul className="flex flex-col gap-1" aria-label={t("jam.song.tracks")}>
                   {tracks.map((track, index) => {

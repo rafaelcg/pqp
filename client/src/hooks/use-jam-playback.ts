@@ -112,8 +112,14 @@ export function useJamPlayback(
 
   // A different song starts from nothing: not ready, nothing heard yet, the
   // listener's mix of the last song forgotten, autoplay owed again.
+  const requestedFor = useRef(songId);
   useEffect(() => {
     loadedOnce.current = false;
+    // The request to play was made for the song this hook opened on: a different song never inherits it.
+    if (requestedFor.current !== songId) {
+      requestedFor.current = songId;
+      wantAutoplay.current = false;
+    }
     setStatus("loading");
     setStemStatus({});
     setLanes({});

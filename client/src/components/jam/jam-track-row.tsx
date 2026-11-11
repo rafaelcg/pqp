@@ -146,7 +146,60 @@ export function JamTrackRow({
 
   const controls = (
     <>
-      {heard ? (
+      {/* an alternate take (or a competing one) keeps its audition, vote and "use this" whether or not it is being heard: an audition has to be stoppable from the lane it plays in */}
+      {(outOfMix || competing) && (
+        <div data-jam-lane-actions="" className="flex items-center gap-0.5">
+          {outOfMix && (
+            <Tooltip label={auditioning ? t("jam.take.stopListening") : t("jam.take.listen")}>
+              <button
+                type="button"
+                aria-pressed={auditioning}
+                aria-label={auditioning ? t("jam.take.stopListening") : t("jam.take.listen")}
+                onClick={onAudition}
+                data-jam-audition=""
+                className={cn(LANE_BUTTON, auditioning && "bg-accent text-on-accent hover:bg-accent hover:text-on-accent")}
+              >
+                <Ear className="h-4 w-4" aria-hidden />
+              </button>
+            </Tooltip>
+          )}
+          {competing && (
+            <Tooltip label={voted ? t("jam.take.unvote") : t("jam.take.vote")}>
+              <button
+                type="button"
+                aria-pressed={voted}
+                aria-label={voted ? t("jam.take.unvote") : t("jam.take.vote")}
+                disabled={!canVote}
+                onClick={onVote}
+                data-jam-vote=""
+                className={cn(
+                  LANE_BUTTON,
+                  "w-auto gap-1 px-2 text-xs font-bold tabular-nums disabled:opacity-50 pointer-coarse:w-auto",
+                  voted && "bg-accent-soft text-on-accent-soft hover:bg-accent-soft hover:text-on-accent-soft",
+                )}
+              >
+                <ThumbsUp className="h-3.5 w-3.5" aria-hidden />
+                <span>{track.voteCount}</span>
+              </button>
+            </Tooltip>
+          )}
+          {canSwitchMix && outOfMix && (
+            <Tooltip label={t("jam.take.useThis")}>
+              <button
+                type="button"
+                onClick={onSwitchMix}
+                data-jam-mix-switch=""
+                aria-pressed={false}
+                aria-label={t("jam.take.useThis")}
+                className={cn(LANE_BUTTON, "bg-accent text-on-accent hover:bg-accent hover:text-on-accent active:scale-[0.94]")}
+              >
+                <CirclePlus className="h-4 w-4" aria-hidden />
+              </button>
+            </Tooltip>
+          )}
+        </div>
+      )}
+      {heard && (
         // One cluster, and it is only for the listener: nothing here is sent anywhere.
         <div role="group" aria-label={t("jam.lane.mineOnly")} data-jam-lane-mix="" className="flex items-center gap-0.5 rounded-full bg-surface-2 pl-1 pr-1.5">
           <Tooltip label={t("jam.lane.mineNote")}>
@@ -200,57 +253,6 @@ export function JamTrackRow({
             // A 44 px tall hit area (the root is the pointer target) and a bigger thumb under a finger.
             className="mx-1 w-11 @min-[40rem]/band:mx-1.5 @min-[40rem]/band:w-12 pointer-coarse:h-11 pointer-coarse:[&_[role=slider]]:h-6 pointer-coarse:[&_[role=slider]]:w-6"
           />
-        </div>
-      ) : (
-        <div data-jam-lane-actions="" className="flex items-center gap-0.5">
-          {outOfMix && (
-            <Tooltip label={auditioning ? t("jam.take.stopListening") : t("jam.take.listen")}>
-              <button
-                type="button"
-                aria-pressed={auditioning}
-                aria-label={auditioning ? t("jam.take.stopListening") : t("jam.take.listen")}
-                onClick={onAudition}
-                data-jam-audition=""
-                className={cn(LANE_BUTTON, auditioning && "bg-accent text-on-accent hover:bg-accent hover:text-on-accent")}
-              >
-                <Ear className="h-4 w-4" aria-hidden />
-              </button>
-            </Tooltip>
-          )}
-          {competing && (
-            <Tooltip label={voted ? t("jam.take.unvote") : t("jam.take.vote")}>
-              <button
-                type="button"
-                aria-pressed={voted}
-                aria-label={voted ? t("jam.take.unvote") : t("jam.take.vote")}
-                disabled={!canVote}
-                onClick={onVote}
-                data-jam-vote=""
-                className={cn(
-                  LANE_BUTTON,
-                  "w-auto gap-1 px-2 text-xs font-bold tabular-nums disabled:opacity-50 pointer-coarse:w-auto",
-                  voted && "bg-accent-soft text-on-accent-soft hover:bg-accent-soft hover:text-on-accent-soft",
-                )}
-              >
-                <ThumbsUp className="h-3.5 w-3.5" aria-hidden />
-                <span>{track.voteCount}</span>
-              </button>
-            </Tooltip>
-          )}
-          {canSwitchMix && outOfMix && (
-            <Tooltip label={t("jam.take.useThis")}>
-              <button
-                type="button"
-                onClick={onSwitchMix}
-                data-jam-mix-switch=""
-                aria-pressed={false}
-                aria-label={t("jam.take.useThis")}
-                className={cn(LANE_BUTTON, "bg-accent text-on-accent hover:bg-accent hover:text-on-accent active:scale-[0.94]")}
-              >
-                <CirclePlus className="h-4 w-4" aria-hidden />
-              </button>
-            </Tooltip>
-          )}
         </div>
       )}
       {adjustButton}
