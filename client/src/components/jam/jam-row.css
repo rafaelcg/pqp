@@ -2,17 +2,18 @@
  * The sidebar's Jam row: the art behind it and the icon in front of it.
  *
  * Rules this file keeps:
- * - Only transform and opacity are animated. The wash is drawn once on a
+ * - Only transform and opacity are animated. The waveform is drawn once on a
  *   layer of its own and moved by the compositor, so the sidebar is never
  *   repainted a frame at a time.
- * - The wash always drifts, very slowly (one loop is about half a minute), so
+ * - The waveform always scrolls, very slowly (one loop is about half a minute), so
  *   the row is alive at a glance; it gets faster with attention: hover, news,
  *   the open page, a song playing. News also plays a soft sheen three times.
  *   `--jam-run` is the one switch every animation reads, and an art that is off
  *   screen or in a hidden tab forces it to `paused`.
  * - Every colour is a role token (the instrument fills are identities, the
- *   same in light and dark). The left of the row is washed with its own base
- *   so the name and the count are read on a plain surface in every theme.
+ *   same in light and dark), drawn as crisp bars at full colour, never as a
+ *   translucent blend: six fills mixed over a dark base turn to mud. The left
+ *   of the row is masked off so the name and the count are read on the plain base.
  * - Reduced motion: no animation at all, and every element has a resting
  *   position that is a finished picture.
  */
@@ -21,8 +22,8 @@
   --jam-base: var(--color-surface-2);
   /* How much colour the wash carries: a bit more in the light themes, where the
      same fill on a pale surface reads weaker. `--jam-mood-o` is the state's own. */
-  --jam-wash: 0.92;
-  --jam-mood-o: 0.9;
+  --jam-wash: 1;
+  --jam-mood-o: 0.62;
   --jam-run: running;
   /* Multiplies the loop's length: 1 is the slow drift at rest, less is faster. */
   --jam-speed: 1;
@@ -36,9 +37,6 @@
   contain: paint;
 }
 
-:root[data-theme="light"] .jam-row-art {
-  --jam-wash: 1;
-}
 
 /* The edge is drawn last so the wash never covers it. It only ever carries the
    focus ring: plain rows have no border, and neither does this one. */
@@ -54,7 +52,7 @@
 [data-jam-card]:hover .jam-row-art,
 [data-jam-card]:focus-within .jam-row-art {
   --jam-base: color-mix(in oklab, var(--color-text) 5%, var(--color-surface-2));
-  --jam-mood-o: 1;
+  --jam-mood-o: 0.85;
   --jam-speed: 0.5;
 }
 
@@ -66,7 +64,7 @@
 .jam-row-art[data-selected="true"] {
   --jam-base: color-mix(in oklab, var(--color-inst-guitar) 11%, var(--color-surface-2));
   --jam-speed: 0.85;
-  --jam-mood-o: 0.95;
+  --jam-mood-o: 0.8;
 }
 
 [data-jam-card]:hover .jam-row-art[data-selected="true"],
@@ -92,7 +90,7 @@
 
 /* News is livelier than hover, and a song playing is the liveliest. */
 .jam-row-art[data-mood="news"] {
-  --jam-mood-o: 1;
+  --jam-mood-o: 0.95;
   --jam-speed: 0.4;
 }
 
@@ -121,58 +119,106 @@
   --jam-run: paused !important;
 }
 
-/* ---- the wash: the instruments' colours, drifting ------------------------ */
+/* ---- the waveform: bars in the instruments' colours, scrolling ------------ */
 
-.jam-aurora {
+/* The name and the count sit on the plain base: the mask keeps the left of the
+   row empty and fades the bars in on the right. */
+.jam-wave {
   position: absolute;
-  inset: 0 auto 0 0;
-  /* Three tiles of a fixed 256px, so a wide sidebar repeats the palette instead of
-     stretching it into one band. */
-  width: 768px;
+  inset: 0;
   opacity: calc(var(--jam-wash) * var(--jam-mood-o));
-  /* The whole band: pink, yellow, orange, teal, blue, lilac, and round again. */
-  background-image: linear-gradient(
-    100deg,
-    color-mix(in oklab, var(--color-inst-vocals) 62%, transparent),
-    color-mix(in oklab, var(--color-inst-guitar) 70%, transparent),
-    color-mix(in oklab, var(--color-inst-drums) 68%, transparent),
-    color-mix(in oklab, var(--color-inst-keys) 58%, transparent),
-    color-mix(in oklab, var(--color-inst-bass) 64%, transparent),
-    color-mix(in oklab, var(--color-inst-other) 60%, transparent),
-    color-mix(in oklab, var(--color-inst-vocals) 62%, transparent)
+  -webkit-mask-image: linear-gradient(90deg, transparent 46%, black 78%);
+  mask-image: linear-gradient(90deg, transparent 46%, black 78%);
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+/* The pin and the settings cog come in on hover and focus, and stay while the
+   Jam is open: the bars stop short of them. */
+[data-jam-card]:hover .jam-wave,
+[data-jam-card]:focus-within .jam-wave,
+.jam-row-art[data-selected="true"] .jam-wave {
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 44%,
+    black 58%,
+    black calc(100% - 100px),
+    transparent calc(100% - 78px)
   );
-  background-size: 256px 100%;
-  /* Stepped, not continuous: at this speed a step is under a pixel, the eye cannot tell, and the
-     compositor only has to produce a frame when the wash actually moved (about 12 a second at rest,
-     not one per display refresh). The faster states step proportionally more often. */
-  animation: jam-row-aurora calc(28s * var(--jam-speed)) steps(336) infinite;
+  mask-image: linear-gradient(
+    90deg,
+    transparent 44%,
+    black 58%,
+    black calc(100% - 100px),
+    transparent calc(100% - 78px)
+  );
+}
+
+.jam-wave-scroll {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  height: 40px;
+  margin-top: -20px;
+  /* Stepped, not continuous: a step is half a pixel, the eye cannot tell, and the
+     compositor only produces a frame when the bars actually moved (12 a second
+     at rest, not one per display refresh). One loop is 216px, the width of the
+     36 bars drawn in `jam-row-art.tsx`. */
+  animation: jam-row-wave calc(36s * var(--jam-speed)) steps(432) infinite;
   animation-play-state: var(--jam-run);
 }
 
-@keyframes jam-row-aurora {
+.jam-wave-beat {
+  display: block;
+  height: 100%;
+  transform-origin: center;
+}
+
+/* A song is playing: the bars breathe with it. */
+.jam-row-art[data-mood="playing"] .jam-wave-beat {
+  animation: jam-row-beat 0.52s steps(6) infinite alternate;
+  animation-play-state: var(--jam-run);
+}
+
+.jam-wave-svg {
+  display: block;
+  height: 100%;
+}
+
+.jam-wave-svg [data-inst="vocals"] {
+  fill: var(--color-inst-vocals);
+}
+.jam-wave-svg [data-inst="guitar"] {
+  fill: var(--color-inst-guitar);
+}
+.jam-wave-svg [data-inst="drums"] {
+  fill: var(--color-inst-drums);
+}
+.jam-wave-svg [data-inst="keys"] {
+  fill: var(--color-inst-keys);
+}
+.jam-wave-svg [data-inst="bass"] {
+  fill: var(--color-inst-bass);
+}
+.jam-wave-svg [data-inst="other"] {
+  fill: var(--color-inst-other);
+}
+
+@keyframes jam-row-wave {
   from {
     transform: translateX(0);
   }
   to {
-    transform: translateX(-256px);
+    transform: translateX(-216px);
   }
 }
 
-/* The name and the count sit on a plain base; the wash lives on the right. */
-.jam-art-scrim {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, var(--jam-base) 0%, var(--jam-base) 42%, transparent 76%);
-}
-
-/* The pin and the settings cog come in on hover and focus, and stay while the
-   Jam is open: the wash steps back from the right edge so they sit on a plain base. */
-[data-jam-card]:hover .jam-art-scrim,
-[data-jam-card]:focus-within .jam-art-scrim,
-.jam-row-art[data-selected="true"] .jam-art-scrim {
-  background:
-    linear-gradient(270deg, var(--jam-base) 0, var(--jam-base) 52px, transparent 98px),
-    linear-gradient(90deg, var(--jam-base) 0%, var(--jam-base) 42%, transparent 76%);
+@keyframes jam-row-beat {
+  from {
+    transform: scaleY(0.72);
+  }
+  to {
+    transform: scaleY(1.12);
+  }
 }
 
 /* ---- news: one soft band crosses the row, three times ---------------------- */
@@ -298,7 +344,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .jam-art-sheen,
-  .jam-aurora,
+  .jam-wave-scroll,
+  .jam-wave-beat,
   .jam-icon-eq > span,
   .jam-icon-note {
     animation: none !important;

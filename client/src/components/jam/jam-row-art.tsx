@@ -7,10 +7,10 @@ import "./jam-row.css";
 /**
  * The art behind the sidebar's Jam row, and the icon in front of it.
  *
- * The row is the door to a music room: a wash in the colours of the instruments
- * (the same language as the song covers) that always drifts, very slowly, and
- * drifts faster the more is going on: hover, news, the open page, a song playing
- * (the icon turns into an equaliser). Which face it wears is `jamRowMood`
+ * The row is the door to a music room: a waveform in the colours of the
+ * instruments (the same language as the song lanes) scrolls slowly behind the
+ * right of the row, and scrolls faster the more is going on: hover, news, the
+ * open page, a song playing (the bars pulse and the icon turns into an equaliser). Which face it wears is `jamRowMood`
  * (`lib/jam-row-state.ts`); hover and focus are CSS. Everything here is
  * `aria-hidden`: the row's name, count and "música nova" are real text.
  */
@@ -44,6 +44,49 @@ function useAlive(): [React.RefObject<HTMLSpanElement | null>, boolean] {
   return [ref, jamRowMayAnimate(inView, pageVisible)];
 }
 
+const WAVE_INSTRUMENTS = ["vocals", "guitar", "drums", "keys", "bass", "other"] as const;
+/** One loop of the waveform: 36 bars on a 6px pitch, six per instrument. */
+const WAVE_BARS = 36;
+const WAVE_PITCH = 6;
+const WAVE_HEIGHT = 40;
+const JAM_WAVE_PERIOD_PX = WAVE_BARS * WAVE_PITCH;
+
+/** A fixed, smooth contour (two sines and a little grit), so the picture is the same on every render. */
+const WAVE_HEIGHTS: readonly number[] = Array.from({ length: WAVE_BARS }, (_, i) => {
+  const a = Math.sin((i / WAVE_BARS) * Math.PI * 6) * 0.5 + 0.5;
+  const b = Math.sin((i / WAVE_BARS) * Math.PI * 14 + 1.3) * 0.5 + 0.5;
+  const c = ((i * 7919) % 13) / 13;
+  return Math.round((0.22 + 0.78 * (0.5 * a + 0.3 * b + 0.2 * c)) * 30);
+});
+
+/** Three loops side by side, so one loop can scroll out while the row stays covered up to 432px wide. */
+function JamWave() {
+  const loops = [0, 1, 2];
+  return (
+    <svg
+      className="jam-wave-svg"
+      viewBox={`0 0 ${JAM_WAVE_PERIOD_PX * loops.length} ${WAVE_HEIGHT}`}
+      width={JAM_WAVE_PERIOD_PX * loops.length}
+      height={WAVE_HEIGHT}
+      focusable="false"
+    >
+      {loops.map((loop) =>
+        WAVE_HEIGHTS.map((height, i) => (
+          <rect
+            key={`${loop}-${i}`}
+            data-inst={WAVE_INSTRUMENTS[Math.floor(i / (WAVE_BARS / WAVE_INSTRUMENTS.length))]}
+            x={loop * JAM_WAVE_PERIOD_PX + i * WAVE_PITCH}
+            y={(WAVE_HEIGHT - height) / 2}
+            width={3}
+            height={height}
+            rx={1.5}
+          />
+        )),
+      )}
+    </svg>
+  );
+}
+
 export function JamRowArt({ mood, selected }: { mood: JamRowMood; selected: boolean }) {
   const [ref, alive] = useAlive();
   return (
@@ -56,8 +99,13 @@ export function JamRowArt({ mood, selected }: { mood: JamRowMood; selected: bool
       data-alive={alive ? "true" : "false"}
       className="jam-row-art"
     >
-      <span className="jam-aurora" />
-      <span className="jam-art-scrim" />
+      <span className="jam-wave">
+        <span className="jam-wave-scroll">
+          <span className="jam-wave-beat">
+            <JamWave />
+          </span>
+        </span>
+      </span>
       <span className="jam-art-sheen" />
       {selected && <span className="jam-art-here" />}
     </span>
