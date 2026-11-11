@@ -72,6 +72,9 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
   const abort = useRef<AbortController | null>(null);
   /** Counts picks; closing the sheet counts one too, so a late answer is ignored. */
   const pickToken = useRef(0);
+  /** Whether the sheet is open RIGHT NOW (set during render, so a check that resolves between a close and its effect still sees it). */
+  const openNow = useRef(open);
+  openNow.current = open;
   // What the person typed, or null while a field is untouched: an untouched field
   // shows (and sends) nothing of its own, so it follows the song as it is now, and a
   // name changed in another window is never written back over.
@@ -120,6 +123,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
     } else {
       abort.current?.abort();
       pickToken.current += 1;
+      setCropping(null);
       // Closed: nothing keeps the picked picture's local address alive.
       replacePreview(null);
       replacePending(null);
@@ -171,7 +175,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
     // to be a cover, is refused here in words, not after the person has framed it.
     const check = await checkCoverPicture(file);
     // A check that finishes after the sheet closed, or after a newer pick, is not this sheet's any more.
-    if (mine !== pickToken.current) return;
+    if (mine !== pickToken.current || !openNow.current) return;
     if (!check.ok) {
       setUpload({
         status: "failed",
