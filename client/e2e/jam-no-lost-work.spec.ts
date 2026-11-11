@@ -228,6 +228,12 @@ test("1: a reload mid-upload leaves no empty song on anybody's wall; the author 
   await expect(host.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
   await host.locator("[data-jam-post]").click();
   await expect(host.locator("[data-jam-posting]")).toBeVisible();
+  // Back while it uploads asks like the arrow does (a take going up is unsent work), and "Keep" leaves it going
+  await host.goBack();
+  const leaving = host.getByRole("dialog").filter({ hasText: "Discard this take?" });
+  await expect(leaving).toBeVisible();
+  await leaving.getByRole("button", { name: "Keep" }).click();
+  await expect(host.locator("[data-jam-posting]")).toBeVisible();
   // the song row exists now (the upload needs it), the take does not
   await expect
     .poll(async () => (await call<{ songs: unknown[] }>(seeded.host, "GET", `/api/channels/${seeded.jamId}/jam-songs`)).songs.length)
