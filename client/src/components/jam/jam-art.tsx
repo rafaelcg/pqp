@@ -1,12 +1,10 @@
 import type { JamInstrument, JamContributor } from "@pqp/shared";
-import { Check, Plus, Users, type LucideIcon } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { UserAvatar } from "@/components/user/user-avatar";
-import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
-import type { JamNeed } from "@/lib/jam-wall";
+import { useTranslation } from "@/lib/i18n";
+import { JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
 import { cn } from "@/lib/utils";
-import { useNeedLabel } from "./jam-need";
 
 /**
  * The jam's own look, shared by the wall, the song and the studio: a song's
@@ -110,59 +108,6 @@ export function MirrorBars({
   );
 }
 
-/**
- * One dot per instrument on the song, in its colour with its icon, and a dashed
- * dot for each one the song is still asking for. On a cover the filled dots sit
- * on a dark capsule so they read on any gradient.
- */
-export function BandStrip({
-  instruments,
-  missing = [],
-  size = "md",
-  className,
-}: {
-  instruments: readonly JamInstrument[];
-  missing?: readonly JamInstrument[];
-  size?: "sm" | "md";
-  className?: string;
-}) {
-  const { t } = useTranslation();
-  const dot = size === "sm" ? "h-5 w-5" : "h-6 w-6";
-  const icon = size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5";
-  return (
-    <span
-      className={cn("inline-flex items-center gap-1 rounded-full bg-on-inst p-1", className)}
-      role="img"
-      aria-label={[
-        ...bandOrder(instruments).map((one) => t(JAM_INSTRUMENT_LOOK[one].nameKey as MessageKey)),
-        ...missing.map((one) => t(JAM_INSTRUMENT_LOOK[one].missingKey as MessageKey)),
-      ].join(", ")}
-    >
-      {bandOrder(instruments).map((one) => {
-        const look = JAM_INSTRUMENT_LOOK[one];
-        const Icon = look.icon;
-        return (
-          <span key={one} className={cn("grid shrink-0 place-items-center rounded-full", dot, look.fill)}>
-            <Icon className={icon} aria-hidden="true" />
-          </span>
-        );
-      })}
-      {missing.map((one) => {
-        const look = JAM_INSTRUMENT_LOOK[one];
-        const Icon = look.icon;
-        return (
-          <span
-            key={`missing-${one}`}
-            className={cn("grid shrink-0 place-items-center rounded-full border border-dashed", dot, look.ink, "border-current")}
-          >
-            <Icon className={icon} aria-hidden="true" />
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
 /** Overlapping faces of the people on a song, with "+N" past the ones shown. */
 export function ContributorStack({
   people,
@@ -173,13 +118,13 @@ export function ContributorStack({
 }: {
   people: readonly JamContributor[];
   total: number;
-  size?: "sm" | "md" | "lg";
+  size?: "xs" | "sm" | "md" | "lg";
   ringClassName?: string;
   className?: string;
 }) {
   const { t } = useTranslation();
-  const face = size === "lg" ? "h-9 w-9" : size === "sm" ? "h-6 w-6" : "h-7 w-7";
-  const shown = people.slice(0, 4);
+  const face = size === "lg" ? "h-9 w-9" : size === "sm" ? "h-6 w-6" : size === "xs" ? "h-5 w-5" : "h-7 w-7";
+  const shown = people.slice(0, size === "xs" ? 3 : 4);
   const more = Math.max(0, total - shown.length);
   if (shown.length === 0) {
     return null;
@@ -189,91 +134,24 @@ export function ContributorStack({
       {shown.map((person, index) => (
         <span
           key={person.id}
-          className={cn("relative rounded-full ring-2", ringClassName, index > 0 && "-ml-2")}
+          className={cn("relative rounded-full ring-2", ringClassName, index > 0 && "-ml-1.5")}
           style={{ zIndex: shown.length - index }}
         >
           <UserAvatar name={person.name ?? t("jam.tile.anonymous")} avatarUrl={person.avatarUrl} rounded="full" className={face} />
         </span>
       ))}
-      {more > 0 && (
+      {more > 0 && size !== "xs" && (
         <span
           className={cn(
-            "-ml-2 grid place-items-center rounded-full bg-on-inst text-[11px] font-bold tabular-nums text-on-media ring-2",
+            "-ml-1.5 grid min-w-[1.5rem] place-items-center rounded-full bg-surface-3 px-1 text-[11px] font-bold tabular-nums text-text ring-2",
             ringClassName,
             face,
+            "w-auto",
           )}
         >
           +{more}
         </span>
       )}
-    </span>
-  );
-}
-
-/**
- * What a song is asking for. A song asking for somebody is the one call on its
- * tile: a filled chip in the missing instrument's colour, "+ Falta voz". A song
- * open to anybody, or ready, only says so: a quiet line, never something that
- * looks like a button. `compact` is the small tile's version: "+ Voz".
- */
-export function NeedChip({
-  need,
-  className,
-  tone = "cover",
-  compact = false,
-}: {
-  need: JamNeed;
-  className?: string;
-  /** On a cover (over the dark scrim) or on a panel surface. */
-  tone?: "cover" | "panel" | "line";
-  compact?: boolean;
-}) {
-  const { t } = useTranslation();
-  const label = useNeedLabel()(need);
-  if (need.kind === "missing") {
-    const first = need.instruments[0]!;
-    const look = JAM_INSTRUMENT_LOOK[first];
-    const more = need.instruments.length - 1;
-    const words = compact
-      ? more > 0
-        ? t("jam.needs.missingCount", { count: more + 1, countLabel: more + 1 })
-        : t(look.missingKey as MessageKey)
-      : label;
-    // On a tile the missing part already shows as a dashed band: the words say it
-    // in that instrument's colour, without one more filled button.
-    if (tone === "line") {
-      return (
-        <span
-          data-jam-need="missing"
-          className={cn("inline-flex w-fit max-w-full items-center gap-1 text-[13px] font-bold", look.ink, className)}
-        >
-          <Plus className="h-3.5 w-3.5 shrink-0" strokeWidth={3} aria-hidden="true" />
-          <span className="truncate first-letter:uppercase">{words}</span>
-        </span>
-      );
-    }
-    return (
-      <span
-        data-jam-need="missing"
-        className={cn("inline-flex h-7 w-fit max-w-full items-center gap-1 rounded-full pl-2 pr-2.5 text-xs font-bold", look.fill, className)}
-      >
-        <Plus className="h-3.5 w-3.5 shrink-0" strokeWidth={3} aria-hidden="true" />
-        <span className="truncate first-letter:uppercase">{words}</span>
-      </span>
-    );
-  }
-  const Icon = need.kind === "open" ? Users : need.kind === "ready" ? Check : null;
-  return (
-    <span
-      data-jam-need={need.kind}
-      className={cn(
-        "inline-flex w-fit max-w-full items-center gap-1.5 text-[13px] font-semibold",
-        tone === "cover" ? "text-on-media-muted" : "text-text-secondary",
-        className,
-      )}
-    >
-      {Icon && <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2.5} aria-hidden="true" />}
-      <span className="truncate first-letter:uppercase">{label}</span>
     </span>
   );
 }

@@ -1,6 +1,6 @@
 import { JAM_ARTIST_MAX, JAM_TITLE_MAX } from "@pqp/shared";
-import { describe, expect, it } from "vitest";
-import { cleanSongTitle, isCoverPicture, planJamEdit } from "./jam-cover";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { checkCoverPicture, cleanSongTitle, isCoverPicture, JAM_COVER_MIN_SIDE, planJamEdit } from "./jam-cover";
 
 const SONG = { title: "In Bloom", artist: "Nirvana" as string | null, coverUrl: null as string | null };
 const KEEP = { kind: "keep" } as const;
@@ -87,5 +87,62 @@ describe("what saving the sheet writes", () => {
     const both = planJamEdit(withCover, { title: "Outro", artist: "Nirvana", cover: { kind: "new", uploadId: upload } });
     expect(both.patch).toEqual({ title: "Outro" });
     expect(both.cover).toEqual({ op: "set", uploadId: upload });
+  });
+});
+
+describe("looking inside a picked photo before the crop step opens", () => {
+  /** An `<img>` that says what it decoded to (or that it could not), the way a browser would. */
+  function fakeImage(outcome: { width: number; height: number } | "error") {
+    return class {
+      naturalWidth = 0;
+      naturalHeight = 0;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => {
+          if (outcome === "error") {
+            this.onerror?.();
+          } else {
+            this.naturalWidth = outcome.width;
+            this.naturalHeight = outcome.height;
+            this.onload?.();
+          }
+        });
+      }
+    };
+  }
+  const revoke = vi.fn();
+  function stub(outcome: { width: number; height: number } | "error") {
+    vi.stubGlobal("Image", fakeImage(outcome));
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:x", revokeObjectURL: revoke });
+  }
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    revoke.mockClear();
+  });
+
+  it("takes a picture big enough, and lets go of its temporary address", async () => {
+    stub({ width: 1600, height: 1200 });
+    await expect(checkCoverPicture(new Blob(["x"]))).resolves.toEqual({ ok: true, width: 1600, height: 1200 });
+    expect(revoke).toHaveBeenCalledWith("blob:x");
+  });
+
+  it("refuses one that is too small, saying how small it is (a 40 px square is a blur on a big card)", async () => {
+    stub({ width: 40, height: 40 });
+    await expect(checkCoverPicture(new Blob(["x"]))).resolves.toEqual({ ok: false, reason: "small", width: 40, height: 40 });
+    // judged on the SHORTER side: a wide strip with a thin edge is still too small
+    stub({ width: 3000, height: JAM_COVER_MIN_SIDE - 1 });
+    expect(await checkCoverPicture(new Blob(["x"]))).toMatchObject({ ok: false, reason: "small" });
+    stub({ width: JAM_COVER_MIN_SIDE, height: JAM_COVER_MIN_SIDE });
+    expect(await checkCoverPicture(new Blob(["x"]))).toMatchObject({ ok: true });
+  });
+
+  it("refuses a file that is not a picture at all (text renamed .jpg), before anybody frames it", async () => {
+    stub("error");
+    await expect(checkCoverPicture(new Blob(["just text"], { type: "image/jpeg" }))).resolves.toMatchObject({
+      ok: false,
+      reason: "unreadable",
+    });
+    expect(revoke).toHaveBeenCalledWith("blob:x");
   });
 });

@@ -70,37 +70,69 @@ export function sortByActivity(songs: readonly JamSongSummary[]): JamSongSummary
   });
 }
 
-export type JamTileSize = "hero" | "wide" | "tall" | "small";
+export type JamTileSize = "hero" | "card";
 
 export interface JamTilePlan {
   song: JamSongSummary;
   size: JamTileSize;
 }
 
-/** After the hero, the sizes repeat in this rhythm (a Windows Phone start screen, not a list). */
-const RHYTHM: readonly JamTileSize[] = ["small", "small", "wide", "small", "tall", "small"];
-
 /**
- * How big each tile is. The most active song is the hero (2 by 2); after it
- * the sizes follow a fixed rhythm of small, wide (2 by 1) and tall (1 by 2)
- * tiles. A fixed rhythm on purpose: a tile that changed size when somebody
- * else's song moved would make the wall jump under a finger, so a size follows
- * the position and nothing else. With one song the hero stands alone; with a
- * handful the grid (`grid-auto-flow: dense`) fills the gaps the spans leave.
+ * The columns a wall of this width draws: as many as fit at `min` px each (a
+ * phone gets two, a wide screen up to six), never fewer than two.
  */
-export function planTiles(songs: readonly JamSongSummary[]): JamTilePlan[] {
-  return songs.map((song, index) => ({
-    song,
-    size: index === 0 ? "hero" : RHYTHM[(index - 1) % RHYTHM.length]!,
-  }));
+export function wallColumns(width: number, gap = 16, max = 6): number {
+  if (width <= 0) {
+    return 2;
+  }
+  // a wider wall asks more of each card, so a big screen is not a sea of small ones
+  const min = width >= 1500 ? 256 : width >= 1000 ? 208 : 176;
+  return Math.max(2, Math.min(max, Math.floor((width + gap) / (min + gap))));
 }
 
-/** Tailwind span classes per size; the grid is 2 columns, 3 from md, 4 from xl. */
+/**
+ * How richly a song is played: people first, then takes. The one the wall
+ * features follows what is IN the song, not when somebody touched it, so a
+ * one-take riff is never the big tile while a six-person band is small.
+ */
+function richness(song: JamSongSummary): number {
+  return song.contributorCount * 100 + song.trackCount;
+}
+
+/**
+ * How big each tile is. Every song is the same card (a clean picture over a
+ * footer of its own); at most one is FEATURED, twice as wide and tall, and only
+ * when the songs after it can fill the cells it leaves beside it, so the grid
+ * never has a hole. The featured song is the richest one (see `richness`) and
+ * goes first; everything else keeps the order the server gave (latest activity
+ * first). `extra` counts tiles that are not songs but sit in the grid (the
+ * invitation to record), because they fill cells too.
+ */
+export function planTiles(songs: readonly JamSongSummary[], columns = 2, extra = 0): JamTilePlan[] {
+  if (songs.length === 0) {
+    return [];
+  }
+  const beside = 2 * (columns - 2);
+  const others = songs.length - 1 + extra;
+  if (columns < 4 || songs.length < 2 || others < beside) {
+    return songs.map((song) => ({ song, size: "card" }));
+  }
+  let featured = songs[0]!;
+  for (const song of songs) {
+    if (richness(song) > richness(featured)) {
+      featured = song;
+    }
+  }
+  return [
+    { song: featured, size: "hero" },
+    ...songs.filter((song) => song !== featured).map((song): JamTilePlan => ({ song, size: "card" })),
+  ];
+}
+
+/** Tailwind span classes per size. */
 export const JAM_TILE_SPAN: Record<JamTileSize, string> = {
   hero: "col-span-2 row-span-2",
-  wide: "col-span-2",
-  tall: "row-span-2",
-  small: "",
+  card: "",
 };
 
 /**

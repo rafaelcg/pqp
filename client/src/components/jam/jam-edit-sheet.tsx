@@ -1,6 +1,6 @@
 import { JAM_ARTIST_MAX, JAM_TITLE_MAX, type JamSongSummary } from "@pqp/shared";
 import { Camera, Check, ImagePlus, Trash2 } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
@@ -13,19 +13,19 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import type { CropRegion } from "@/lib/image-crop";
 import { jamErrorKind, removeJamCover, setJamCover, updateJamSong } from "@/lib/jam-api";
 import {
+  checkCoverPicture,
   cleanSongTitle,
   isCoverPicture,
+  JAM_COVER_MIN_SIDE,
   JAM_COVER_ACCEPT,
   JamCoverError,
   planJamEdit,
   uploadJamCover,
   type JamCoverChoice,
 } from "@/lib/jam-cover";
-import { barsFromPeaks, seededBars, stretchBars } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
-import { MirrorBars } from "./jam-art";
-import { useBarCount } from "./jam-bars";
-import { JamCoverPhoto, SongArt, useJamCover } from "./jam-cover";
+import { BandArt } from "./jam-artwork";
+import { JamCoverPhoto, useJamCover } from "./jam-cover";
 
 /**
  * Editing a song: its name, its artist and its cover photo, in one small sheet.
@@ -70,6 +70,11 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
   const formId = useId();
   const fileInput = useRef<HTMLInputElement | null>(null);
   const abort = useRef<AbortController | null>(null);
+  /** Counts picks; closing the sheet counts one too, so a late answer is ignored. */
+  const pickToken = useRef(0);
+  /** Whether the sheet is open RIGHT NOW (set during render, so a check that resolves between a close and its effect still sees it). */
+  const openNow = useRef(open);
+  openNow.current = open;
   // What the person typed, or null while a field is untouched: an untouched field
   // shows (and sends) nothing of its own, so it follows the song as it is now, and a
   // name changed in another window is never written back over.
@@ -117,6 +122,8 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
       setTouched(false);
     } else {
       abort.current?.abort();
+      pickToken.current += 1;
+      setCropping(null);
       // Closed: nothing keeps the picked picture's local address alive.
       replacePreview(null);
       replacePending(null);
@@ -139,6 +146,9 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
 
   const plan = planJamEdit(song, { title, artist, cover });
   const titleMissing = cleanSongTitle(title) === null;
+  // Empty is said as soon as it is empty (an empty title also disables Save, and a
+  // disabled button cannot be pressed to find out why).
+  const showTitleError = titleMissing && (touched || title !== song.title);
   const uploading = upload.status === "uploading";
   // Something would be lost by closing: a change that Save would send, or a photo going up.
   const dirty = !plan.empty || uploading;
@@ -153,13 +163,29 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
   }
   const hasPhoto = cover.kind === "new" || uploading || (cover.kind === "keep" && song.coverUrl !== null);
 
-  function pick(file: File | null) {
+  async function pick(file: File | null) {
     if (!file) return;
+    const mine = ++pickToken.current;
     if (!isCoverPicture(file)) {
       setUpload({ status: "failed", message: t("jam.edit.photoType") });
       return;
     }
     setUpload({ status: "idle" });
+    // Looked at BEFORE the crop step: a text file renamed .jpg, or a picture too small
+    // to be a cover, is refused here in words, not after the person has framed it.
+    const check = await checkCoverPicture(file);
+    // A check that finishes after the sheet closed, or after a newer pick, is not this sheet's any more.
+    if (mine !== pickToken.current || !openNow.current) return;
+    if (!check.ok) {
+      setUpload({
+        status: "failed",
+        message:
+          check.reason === "small"
+            ? t("jam.edit.photoSmall", { min: JAM_COVER_MIN_SIDE, width: check.width, height: check.height })
+            : t("jam.edit.photoUnreadable"),
+      });
+      return;
+    }
     setCropping(file);
   }
 
@@ -242,7 +268,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
 
   const { zoneProps, active: dragging } = useFileDropZone({
     mode: open && !saving && !cropping ? "accept" : "off",
-    onDrop: (items) => pick(firstDroppedFile(items).file),
+    onDrop: (items) => void pick(firstDroppedFile(items).file),
   });
 
   return (
@@ -250,7 +276,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
       <Dialog
         open={open}
         title={t("jam.edit.title")}
-        size="lg"
+        size="md"
         onClose={requestClose}
         footer={
           <div className="flex w-full justify-end gap-2">
@@ -330,7 +356,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
                 tabIndex={-1}
                 aria-label={t("jam.edit.cover")}
                 onChange={(event) => {
-                  pick(event.target.files?.[0] ?? null);
+                  void pick(event.target.files?.[0] ?? null);
                   event.target.value = "";
                 }}
               />
@@ -356,14 +382,25 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
                   maxLength={JAM_TITLE_MAX}
                   onChange={(event) => setTitleEdit(event.target.value)}
                   placeholder={t("jam.start.songTitlePlaceholder")}
-                  aria-invalid={touched && titleMissing ? true : undefined}
-                  aria-describedby={touched && titleMissing ? `${formId}-title-error` : undefined}
-                  className={cn("bg-surface-2 text-base font-semibold", touched && titleMissing && "border-danger")}
+                  aria-invalid={showTitleError ? true : undefined}
+                  aria-describedby={showTitleError ? `${formId}-title-error` : undefined}
+                  className={cn("bg-surface-2 text-base font-semibold", showTitleError && "border-danger")}
                   data-jam-edit-title=""
                 />
-                {touched && titleMissing && (
+                {showTitleError && (
                   <span id={`${formId}-title-error`} role="alert" className="text-xs font-normal text-danger">
                     {t("jam.start.needTitle")}
+                  </span>
+                )}
+                {title.length >= JAM_TITLE_MAX - 20 && (
+                  <span
+                    data-jam-title-count=""
+                    aria-live="polite"
+                    className={cn("self-end text-xs font-medium tabular-nums", title.length >= JAM_TITLE_MAX ? "text-danger" : "text-text-secondary")}
+                  >
+                    {title.length >= JAM_TITLE_MAX
+                      ? t("jam.start.titleMax", { max: JAM_TITLE_MAX })
+                      : t("jam.start.titleCount", { count: title.length, max: JAM_TITLE_MAX })}
                   </span>
                 )}
               </label>
@@ -416,12 +453,12 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
 }
 
 /**
- * The song's tile as the list will draw it, live: the photo (or the band's own
- * art when there is none) under the same scrim, with the waveform and the name
- * and artist as they are typed. The whole tile is the button that picks a photo
- * and a drop target, with a solid pill that rises on hover and focus; while a
- * photo goes up the framed picture stays on the tile under a ring, and a fresh
- * one lands with a small pop.
+ * The song's card as the wall will draw it, live: the picture (clean, square,
+ * exactly the frame the crop step showed), and under it the footer with the name
+ * and artist as they are typed. The picture is the button that picks a photo and
+ * a drop target, with a solid pill that rises on hover and focus; while a photo
+ * goes up the framed picture stays under a ring, and a fresh one lands with a
+ * small pop.
  */
 function PreviewTile({
   song,
@@ -451,121 +488,114 @@ function PreviewTile({
   const percent = uploading ? Math.round(upload.fraction * 100) : 0;
   const R = 22;
   const C = 2 * Math.PI * R;
-  const [waveRef, count] = useBarCount(6, 48);
-  const bars = useMemo(
-    () => (count === 0 ? [] : stretchBars(song.previewPeaks.length > 0 ? barsFromPeaks(song.previewPeaks, count) : seededBars(song.id, count))),
-    [count, song.previewPeaks, song.id],
-  );
   return (
     <div
       data-jam-edit-stage=""
       data-state={uploading ? "uploading" : showNew ? "new" : showCurrent ? "current" : "empty"}
       className={cn(
-        "group relative isolate aspect-[6/5] w-48 shrink-0 overflow-hidden rounded-[var(--radius-panel)] bg-surface-2 text-on-media shadow-[var(--shadow-2)] ring-1 ring-inset ring-border transition-[transform,box-shadow] duration-[var(--duration-base)] ease-[var(--ease-standard)] has-[button:focus-visible]:ring-2 has-[button:focus-visible]:ring-focus-ring sm:w-full motion-safe:has-[button:active]:scale-[0.98]",
+        "group relative isolate flex w-48 shrink-0 flex-col overflow-hidden rounded-[var(--radius-panel)] border border-border bg-surface-1 shadow-[var(--shadow-2)] transition-[transform,box-shadow] duration-[var(--duration-base)] ease-[var(--ease-standard)] has-[button:focus-visible]:ring-2 has-[button:focus-visible]:ring-focus-ring sm:w-full motion-safe:has-[button:active]:scale-[0.98]",
         dragging && "ring-2 ring-accent",
       )}
     >
-      {showNew ? (
-        <img
-          key={preview}
-          src={preview!}
-          alt=""
-          draggable={false}
-          data-jam-edit-preview=""
-          className={cn("jam-cover-pop absolute inset-0 h-full w-full object-cover transition-[filter] duration-[var(--duration-slow)]", uploading && "brightness-[0.55]")}
+      <div className="relative aspect-square w-full overflow-hidden text-on-media">
+        {showNew ? (
+          <img
+            key={preview}
+            src={preview!}
+            alt=""
+            draggable={false}
+            data-jam-edit-preview=""
+            className={cn("jam-cover-pop absolute inset-0 h-full w-full object-cover transition-[filter] duration-[var(--duration-slow)]", uploading && "brightness-[0.55]")}
+          />
+        ) : showCurrent ? (
+          <JamCoverPhoto cover={current} eager />
+        ) : (
+          <BandArt song={song} />
+        )}
+        {/* no photo yet: an invitation, not a label over the art */}
+        {!photo && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-2 grid place-items-start justify-items-end rounded-[calc(var(--radius-panel)-0.5rem)] border-2 border-dashed border-on-media/45"
+          >
+            <span className="m-1.5 grid h-9 w-9 place-items-center rounded-full bg-media-scrim/80 text-on-media transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] group-hover:scale-110">
+              <Camera className="h-[18px] w-[18px]" strokeWidth={2.25} />
+            </span>
+          </span>
+        )}
+        {/* a photo is there: the pill that says what the picture does */}
+        {photo && !uploading && (
+          <span
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute inset-x-0 top-3 flex justify-center opacity-0 transition-opacity duration-[var(--duration-base)] group-hover:opacity-100 group-has-[button:focus-visible]:opacity-100",
+              dragging && "opacity-100",
+            )}
+          >
+            <span className="flex h-8 items-center gap-1.5 rounded-full bg-media-scrim/85 px-3 text-xs font-bold backdrop-blur-sm">
+              <Camera className="h-4 w-4" strokeWidth={2.25} />
+              {dragging ? t("jam.edit.dropHere") : t("jam.edit.changePhoto")}
+            </span>
+          </span>
+        )}
+        {dragging && !photo && (
+          <span aria-hidden="true" className="pointer-events-none absolute inset-0 grid place-items-center bg-media-scrim/60 text-[13px] font-bold">
+            {t("jam.edit.dropHere")}
+          </span>
+        )}
+        {showNew && !uploading && (
+          <span
+            aria-hidden="true"
+            className="jam-cover-pop pointer-events-none absolute left-2 top-2 flex h-6 items-center gap-1 rounded-full bg-media-scrim/85 pl-1.5 pr-2 text-[11px] font-bold text-on-media"
+          >
+            <Check className="h-3.5 w-3.5 text-success" strokeWidth={3} />
+            {t("jam.edit.ready")}
+          </span>
+        )}
+        {/* the whole picture is the button; while a photo goes up it waits */}
+        <button
+          type="button"
+          onClick={onPick}
+          disabled={uploading}
+          aria-label={t(photo ? "jam.edit.changePhoto" : "jam.edit.addPhoto")}
+          className="absolute inset-0 z-10 cursor-pointer rounded-[inherit] outline-none disabled:cursor-progress"
         />
-      ) : showCurrent ? (
-        <JamCoverPhoto cover={current} eager />
-      ) : (
-        <SongArt song={song} />
-      )}
-      {/* the scrim and what is written on it, exactly as the list draws a tile */}
-      <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-[92%] bg-gradient-to-t from-media-scrim from-30% via-media-scrim/80 via-60% to-transparent" />
-      <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 flex min-w-0 flex-col gap-1.5 px-4 pb-4">
-        <span ref={waveRef} className={cn("block h-4", !photo && "invisible")}>
-          <MirrorBars bars={bars} className="h-full gap-[2px] drop-shadow-[0_1px_2px_color-mix(in_oklab,var(--color-media-scrim)_55%,transparent)]" barClassName="bg-on-media/70" />
-        </span>
-        <span className="line-clamp-2 font-display text-[19px] font-extrabold leading-[1.08] tracking-[-0.01em] text-on-media [text-shadow:0_1px_10px_color-mix(in_oklab,var(--color-media-scrim)_55%,transparent)] [text-wrap:balance]">
+        {uploading && (
+          <span
+            role="progressbar"
+            aria-label={t("jam.edit.sending")}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+            data-jam-edit-progress=""
+            className="pointer-events-none absolute inset-0 z-20 grid place-items-center"
+          >
+            <span className="relative grid h-16 w-16 place-items-center rounded-full bg-media-scrim/60 backdrop-blur-[2px]">
+              <svg viewBox="0 0 56 56" className="absolute inset-0 -rotate-90" aria-hidden="true">
+                <circle cx="28" cy="28" r={R} fill="none" strokeWidth="4" className="stroke-on-media/25" />
+                <circle
+                  cx="28"
+                  cy="28"
+                  r={R}
+                  fill="none"
+                  strokeWidth="4"
+                  strokeLinecap="round"
+                  className="jam-cover-ring stroke-accent"
+                  style={{ strokeDasharray: C, strokeDashoffset: C * (1 - Math.max(0.04, upload.fraction)) } as CSSProperties}
+                />
+              </svg>
+              <span className="text-sm font-extrabold tabular-nums">{percent}%</span>
+            </span>
+          </span>
+        )}
+      </div>
+      {/* the footer, as the wall draws it */}
+      <div aria-hidden="true" className="flex min-w-0 flex-col gap-1 bg-surface-1 p-3">
+        <span className="line-clamp-2 font-display text-[15px] font-extrabold leading-[1.12] tracking-[-0.01em] text-text [overflow-wrap:anywhere] [text-wrap:balance]">
           {title}
         </span>
-        <span className="truncate text-xs font-medium text-on-media-muted">{artist ?? t("jam.original")}</span>
-      </span>
-      {/* no photo yet: an invitation, not a label over the art */}
-      {!photo && (
-        <span
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-2 grid place-items-start justify-items-end rounded-[calc(var(--radius-panel)-0.5rem)] border-2 border-dashed border-on-media/45"
-        >
-          <span className="m-1.5 grid h-9 w-9 place-items-center rounded-full bg-media-scrim/80 text-on-media transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] group-hover:scale-110">
-            <Camera className="h-[18px] w-[18px]" strokeWidth={2.25} />
-          </span>
-        </span>
-      )}
-      {/* a photo is there: the pill that says what the tile does */}
-      {photo && !uploading && (
-        <span
-          aria-hidden="true"
-          className={cn(
-            "pointer-events-none absolute inset-x-0 top-3 flex justify-center opacity-0 transition-opacity duration-[var(--duration-base)] group-hover:opacity-100 group-has-[button:focus-visible]:opacity-100",
-            dragging && "opacity-100",
-          )}
-        >
-          <span className="flex h-8 items-center gap-1.5 rounded-full bg-media-scrim/85 px-3 text-xs font-bold backdrop-blur-sm">
-            <Camera className="h-4 w-4" strokeWidth={2.25} />
-            {dragging ? t("jam.edit.dropHere") : t("jam.edit.changePhoto")}
-          </span>
-        </span>
-      )}
-      {dragging && !photo && (
-        <span aria-hidden="true" className="pointer-events-none absolute inset-0 grid place-items-center bg-media-scrim/60 text-[13px] font-bold">
-          {t("jam.edit.dropHere")}
-        </span>
-      )}
-      {showNew && !uploading && (
-        <span
-          aria-hidden="true"
-          className="jam-cover-pop pointer-events-none absolute left-2 top-2 flex h-6 items-center gap-1 rounded-full bg-media-scrim/85 pl-1.5 pr-2 text-[11px] font-bold text-on-media"
-        >
-          <Check className="h-3.5 w-3.5 text-success" strokeWidth={3} />
-          {t("jam.edit.ready")}
-        </span>
-      )}
-      {/* the whole tile is the button; while a photo goes up it waits */}
-      <button
-        type="button"
-        onClick={onPick}
-        disabled={uploading}
-        aria-label={t(photo ? "jam.edit.changePhoto" : "jam.edit.addPhoto")}
-        className="absolute inset-0 z-10 cursor-pointer rounded-[inherit] outline-none disabled:cursor-progress"
-      />
-      {uploading && (
-        <span
-          role="progressbar"
-          aria-label={t("jam.edit.sending")}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percent}
-          data-jam-edit-progress=""
-          className="pointer-events-none absolute inset-x-0 top-0 z-20 grid h-[58%] place-items-center"
-        >
-          <span className="relative grid h-16 w-16 place-items-center rounded-full bg-media-scrim/60 backdrop-blur-[2px]">
-            <svg viewBox="0 0 56 56" className="absolute inset-0 -rotate-90" aria-hidden="true">
-              <circle cx="28" cy="28" r={R} fill="none" strokeWidth="4" className="stroke-on-media/25" />
-              <circle
-                cx="28"
-                cy="28"
-                r={R}
-                fill="none"
-                strokeWidth="4"
-                strokeLinecap="round"
-                className="jam-cover-ring stroke-accent"
-                style={{ strokeDasharray: C, strokeDashoffset: C * (1 - Math.max(0.04, upload.fraction)) } as CSSProperties}
-              />
-            </svg>
-            <span className="text-sm font-extrabold tabular-nums">{percent}%</span>
-          </span>
-        </span>
-      )}
+        <span className="min-h-[1.25rem] truncate text-[13px] font-medium text-text-secondary">{artist ?? ""}</span>
+      </div>
     </div>
   );
 }

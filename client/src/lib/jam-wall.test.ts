@@ -10,6 +10,7 @@ import {
   latestActivity,
   orderTracks,
   planTiles,
+  wallColumns,
   rotateBars,
   seededBars,
   songNeed,
@@ -81,26 +82,43 @@ describe("ordering and tile sizes", () => {
     expect(sorted.map((s) => s.id)).toEqual(["c", "a", "b"]);
   });
 
-  it("makes the first song the hero, then a fixed rhythm of small, wide and tall", () => {
-    const songs = Array.from({ length: 10 }, (_, i) => song({ id: `s${i}` }));
-    expect(planTiles(songs).map((t) => t.size)).toEqual([
-      "hero",
-      "small",
-      "small",
-      "wide",
-      "small",
-      "tall",
-      "small",
-      "small",
-      "small",
-      "wide",
-    ]);
+  it("features nobody on two columns: every song is the same card", () => {
+    const songs = Array.from({ length: 6 }, (_, i) => song({ id: `s${i}` }));
+    expect(planTiles(songs, 2, 1).map((t) => t.size)).toEqual(new Array(6).fill("card"));
   });
 
-  it("sizes follow the position and nothing else", () => {
-    const a = planTiles([song({ id: "x", trackCount: 9 }), song({ id: "y", trackCount: 0 })]);
-    const b = planTiles([song({ id: "x", trackCount: 0 }), song({ id: "y", trackCount: 9 })]);
-    expect(a.map((t) => t.size)).toEqual(b.map((t) => t.size));
+  it("features the richest song, first, when the rest can fill the cells beside it", () => {
+    const songs = [
+      song({ id: "riff", contributorCount: 1, trackCount: 1 }),
+      song({ id: "band", contributorCount: 5, trackCount: 6 }),
+      ...Array.from({ length: 4 }, (_, i) => song({ id: `s${i}`, contributorCount: 1, trackCount: 2 })),
+    ];
+    const plan = planTiles(songs, 4, 1);
+    expect(plan[0]).toMatchObject({ size: "hero", song: { id: "band" } });
+    expect(plan.slice(1).every((tile) => tile.size === "card")).toBe(true);
+    expect(plan.map((tile) => tile.song.id).sort()).toEqual(songs.map((one) => one.id).sort());
+  });
+
+  it("never leaves a hole beside the featured tile: too few songs, no hero", () => {
+    const few = [song({ id: "a" }), song({ id: "b" }), song({ id: "c" })];
+    // 6 columns leave 8 cells beside the hero; 2 more songs and an invitation cannot fill them
+    expect(planTiles(few, 6, 1).every((tile) => tile.size === "card")).toBe(true);
+  });
+
+  it("the featured song follows what is in it, not when it was touched", () => {
+    const rest = [song({ id: "y" }), song({ id: "z" }), song({ id: "w" }), song({ id: "v" })];
+    const rich = song({ id: "x", trackCount: 9, contributorCount: 4 });
+    const a = planTiles([rich, ...rest], 4, 1);
+    const b = planTiles([...rest, rich], 4, 1);
+    expect(a[0]!.song.id).toBe("x");
+    expect(b[0]!.song.id).toBe("x");
+  });
+
+  it("counts columns from the width: two on a phone, up to six on a big screen", () => {
+    expect(wallColumns(366)).toBe(2);
+    expect(wallColumns(900)).toBe(4);
+    expect(wallColumns(2400)).toBe(6);
+    expect(wallColumns(0)).toBe(2);
   });
 
   it("plans nothing for an empty wall", () => {

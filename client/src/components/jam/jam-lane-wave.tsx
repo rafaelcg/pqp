@@ -117,7 +117,7 @@ export function JamLaneWave({
   return (
     <div
       className={cn(
-        "relative h-12 overflow-hidden rounded-[var(--radius-control)] bg-surface-0/60 transition-opacity duration-[var(--duration-base)]",
+        "relative h-12 overflow-hidden rounded-[var(--radius-control)] bg-surface-0/60 transition-opacity duration-[var(--duration-base)] motion-reduce:transition-none",
         dimmed && "opacity-35",
         className,
       )}

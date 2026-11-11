@@ -1,30 +1,5 @@
-import type { JamSongSummary } from "@pqp/shared";
-import { useCallback, useMemo, useState, type CSSProperties } from "react";
-import { barsFromPeaks, seededBars } from "@/lib/jam-wall";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
-import { coverGradient, MirrorBars } from "./jam-art";
-import { useBarCount } from "./jam-bars";
-
-/**
- * What a song with no photo shows in a square: the gradient through the colours
- * of its band and the loudest stem's waveform mirrored across it. The panel's
- * header and the edit sheet's cover stage both draw it, so the "no cover" state
- * reads as the same picture everywhere.
- */
-export function SongArt({ song, className }: { song: JamSongSummary; className?: string }) {
-  const [ref, count] = useBarCount(5, 24);
-  const bars = useMemo(
-    () => (count === 0 ? [] : song.previewPeaks.length > 0 ? barsFromPeaks(song.previewPeaks, count) : seededBars(song.id, count)),
-    [count, song.previewPeaks, song.id],
-  );
-  return (
-    <div className={cn("absolute inset-0 text-on-inst", coverGradient(song.instruments), className)} aria-hidden="true">
-      <div ref={ref} className="absolute inset-x-[12%] inset-y-[22%]">
-        <MirrorBars bars={bars} className="absolute inset-0 gap-[2px]" barClassName="bg-on-inst/75" />
-      </div>
-    </div>
-  );
-}
 
 /**
  * A song's cover picture, drawn by the wall's tile and the song panel.
@@ -49,6 +24,8 @@ interface Held {
   path: string;
   src: string;
   status: Exclude<JamCoverStatus, "none">;
+  /** The picture this one replaces, kept on screen until the new one has loaded. */
+  previous: string | null;
 }
 
 const pathOf = (url: string): string => url.split("?")[0] ?? url;
@@ -56,6 +33,12 @@ const pathOf = (url: string): string => url.split("?")[0] ?? url;
 export interface JamCoverState {
   src: string | null;
   status: JamCoverStatus;
+  /**
+   * The picture that was on screen before this one, while the new one loads:
+   * a swapped cover must never leave a blank tile for the seconds a download
+   * takes, so the old one stays until the new one has landed.
+   */
+  previous: string | null;
   onLoad: () => void;
   onError: () => void;
 }
@@ -70,7 +53,8 @@ export function useJamCover(url: string | null): JamCoverState {
     current.path !== pathOf(url) ||
     (current.status === "failed" && current.src !== url)
   ) {
-    current = { path: pathOf(url), src: url, status: "loading" };
+    const keep = current !== null && current.path !== pathOf(url) ? (current.status === "ready" ? current.src : current.previous) : null;
+    current = { path: pathOf(url), src: url, status: "loading", previous: keep };
   }
   if (current !== held) {
     // Derived from the prop, adjusted in the render it changes in: no flash of
@@ -83,9 +67,22 @@ export function useJamCover(url: string | null): JamCoverState {
       setHeld((before) => (before && before.src === src && before.status !== status ? { ...before, status } : before)),
     [src],
   );
+  // The old picture is let go a moment after the new one has faded in over it.
+  const letGo = current?.status === "ready" && current.previous !== null;
+  useEffect(() => {
+    if (!letGo) {
+      return;
+    }
+    const timer = window.setTimeout(
+      () => setHeld((before) => (before && before.src === src ? { ...before, previous: null } : before)),
+      700,
+    );
+    return () => window.clearTimeout(timer);
+  }, [letGo, src]);
   return {
     src,
     status: current?.status ?? "none",
+    previous: current?.previous ?? null,
     onLoad: () => settle("ready"),
     onError: () => settle("failed"),
   };
@@ -94,6 +91,7 @@ export function useJamCover(url: string | null): JamCoverState {
 /**
  * The picture itself, filling its positioned parent. It fades in once decoded
  * (a cached one is simply there), and under reduced motion there is no fade.
+ * While a swapped cover loads, the one it replaces stays underneath.
  */
 export function JamCoverPhoto({
   cover,
@@ -111,21 +109,33 @@ export function JamCoverPhoto({
     return null;
   }
   return (
-    <img
-      src={cover.src}
-      alt=""
-      draggable={false}
-      decoding="async"
-      loading={eager ? "eager" : "lazy"}
-      onLoad={cover.onLoad}
-      onError={cover.onError}
-      data-jam-cover-photo=""
-      data-ready={cover.status === "ready" ? "true" : undefined}
-      style={style}
-      className={cn(
-        "absolute inset-0 h-full w-full select-none object-cover opacity-0 transition-opacity duration-[var(--duration-slow)] ease-[var(--ease-standard)] data-[ready=true]:opacity-100 motion-reduce:transition-none",
-        className,
+    <>
+      {cover.previous !== null && (
+        <img
+          src={cover.previous}
+          alt=""
+          draggable={false}
+          aria-hidden="true"
+          data-jam-cover-previous=""
+          className={cn("absolute inset-0 h-full w-full select-none object-cover", className)}
+        />
       )}
-    />
+      <img
+        src={cover.src}
+        alt=""
+        draggable={false}
+        decoding="async"
+        loading={eager ? "eager" : "lazy"}
+        onLoad={cover.onLoad}
+        onError={cover.onError}
+        data-jam-cover-photo=""
+        data-ready={cover.status === "ready" ? "true" : undefined}
+        style={style}
+        className={cn(
+          "absolute inset-0 h-full w-full select-none object-cover opacity-0 transition-opacity duration-[var(--duration-slow)] ease-[var(--ease-standard)] data-[ready=true]:opacity-100 motion-reduce:transition-none",
+          className,
+        )}
+      />
+    </>
   );
 }

@@ -1,5 +1,5 @@
 import type { Channel, JamInstrument, JamSongSummary } from "@pqp/shared";
-import { CirclePause, CircleHelp, Headphones, Menu as MenuIcon, Mic, Music2, Plus, RefreshCw, Send } from "lucide-react";
+import { CirclePause, CircleHelp, Headphones, Menu as MenuIcon, Mic, Music2, Plus, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -32,6 +32,7 @@ import {
   latestActivity,
   planTiles,
   songNeed,
+  wallColumns,
   type JamWallFilter,
   type JamWallSection,
 } from "@/lib/jam-wall";
@@ -39,6 +40,7 @@ import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
 import { cn } from "@/lib/utils";
 import "./jam.css";
 import { coverGradient } from "./jam-art";
+import { useElementWidth } from "./jam-bars";
 import { JamHowToDialog, JamHowToHero } from "./jam-howto";
 import { JamSongPanel } from "./jam-song-panel";
 import { JamStartSheet, type JamStartResult } from "./jam-start-sheet";
@@ -118,6 +120,10 @@ export function JamPane({
     setSongError(false);
     routeChange.current?.(songId, mode);
   }
+  /** Opened by its tile's round button (or by posting a take): it starts playing. Opened by the card, or by a link, it waits. */
+  const [openAutoplay, setOpenAutoplay] = useState(false);
+  /** The tile's round button pressed on a song that is open already: the panel plays or pauses. */
+  const [playNonce, setPlayNonce] = useState(0);
   const [studio, setStudio] = useState<StudioState | null>(null);
   const studioRef = useRef<StudioState | null>(null);
   const studioOpen = studio !== null;
@@ -283,6 +289,8 @@ export function JamPane({
     if (routeSongId === openSongId) {
       return;
     }
+    // A link or Back opens a song and waits: only a tile's round button, or a take just posted, plays.
+    setOpenAutoplay(false);
     setOpenSongIdState(routeSongId);
     setSongGone(false);
     setSongError(false);
@@ -303,6 +311,25 @@ export function JamPane({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [openSongId, studio]);
+
+  // Closing a song hands focus back to the card that opened it: a keyboard user
+  // lands where they were, not at the top of the page.
+  const lastOpenId = useRef<string | null>(openSongId);
+  useEffect(() => {
+    const before = lastOpenId.current;
+    lastOpenId.current = openSongId;
+    if (!before || openSongId) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active.isConnected) {
+        return;
+      }
+      document.querySelector<HTMLElement>(`[data-jam-tile="${before}"] [data-jam-open]`)?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [openSongId]);
 
   // Another channel, another wall.
   useEffect(() => {
@@ -353,7 +380,14 @@ export function JamPane({
     [songs, filter],
   );
   const shown = sections[0]!.songs;
-  const plan = useMemo(() => planTiles(shown), [shown]);
+  // The wall draws as many columns as its width holds, and plans its tiles for that
+  // many, so the featured tile never leaves a hole beside it.
+  const [wallRef, wallWidth] = useElementWidth();
+  // With a song open the wall is the narrow side of the screen: one column, cards laid out as rows.
+  const compact = openSongId !== null;
+  const columns = compact ? 1 : wallColumns(wallWidth);
+  const hasInvite = canCreate && filter === "all";
+  const plan = useMemo(() => planTiles(shown, columns, hasInvite ? 1 : 0), [shown, columns, hasInvite]);
 
   // Peaks, videos and who is on each song come from the detail, which a tile
   // asks for when it comes near the screen (`onNear`, three at a time).
@@ -364,6 +398,14 @@ export function JamPane({
   const lastTitle = useRef("");
   /** The title of a song that was deleted while it was open. */
   const [deletedTitle, setDeletedTitle] = useState<string | null>(null);
+  // The "deleted" notice says it once and leaves by itself.
+  useEffect(() => {
+    if (deletedTitle === null) {
+      return;
+    }
+    const timer = window.setTimeout(() => setDeletedTitle(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [deletedTitle]);
   useEffect(() => {
     if (openSong) {
       wasThere.current = openSong.id;
@@ -443,9 +485,17 @@ export function JamPane({
    * View Transition, where the browser has one and motion is welcome; the tile
    * and the panel's cover share a `view-transition-name`).
    */
-  function openFromTile(songId: string) {
+  function openFromTile(songId: string, play = false) {
+    if (songId === openSongId) {
+      // Already open: the round button plays or pauses it, the card does nothing new.
+      if (play) {
+        setPlayNonce((before) => before + 1);
+      }
+      return;
+    }
     const go = () => {
       setFreshTrackId(null);
+      setOpenAutoplay(play);
       setOpenSongId(songId, stepRef.current === "song" ? "swap" : "push");
     };
     const doc = document as Document & { startViewTransition?: (update: () => void) => { finished: Promise<void> } };
@@ -593,7 +643,7 @@ export function JamPane({
             <RadioGroup<JamWallFilter>
               label={t("jam.filter.label")}
               variant="chips"
-              size="sm"
+              size="md"
               value={filter}
               onValueChange={setFilter}
               options={FILTERS.map((value) => ({ value, label: filterLabels[value] }))}
@@ -602,18 +652,6 @@ export function JamPane({
           )}
         </header>
 
-        {deletedTitle !== null && (
-          <p
-            role="status"
-            data-jam-song-deleted-notice=""
-            className="mx-3 mt-3 flex items-center justify-between gap-3 rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-3 text-sm text-text-secondary sm:mx-5"
-          >
-            {t("jam.wall.songDeleted", { title: deletedTitle })}
-            <Button variant="ghost" size="sm" onClick={() => setDeletedTitle(null)}>
-              {t("jam.song.close")}
-            </Button>
-          </p>
-        )}
         {songGone && (
           <p
             role="status"
@@ -661,24 +699,43 @@ export function JamPane({
           </p>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-5" data-jam-wall="">
+        <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-5" data-jam-wall="">
           <p className="sr-only" role="status" aria-live="polite">
             {announcement}
           </p>
+          {deletedTitle !== null && (
+            <div className="pointer-events-none sticky top-0 z-30 -mb-px flex h-0 justify-center overflow-visible">
+              <p
+                role="status"
+                data-jam-song-deleted-notice=""
+                className="pointer-events-auto flex max-w-[min(32rem,100%)] animate-toast-in items-center gap-2.5 rounded-full bg-surface-3 py-1.5 pl-3.5 pr-1.5 text-sm font-semibold text-text shadow-[var(--shadow-2)]"
+              >
+                <Trash2 className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden />
+                <span className="min-w-0 truncate">{t("jam.wall.songDeleted", { title: deletedTitle })}</span>
+                <button
+                  type="button"
+                  onClick={() => setDeletedTitle(null)}
+                  aria-label={t("jam.song.close")}
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-text-secondary outline-none hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:h-11 pointer-coarse:w-11"
+                >
+                  <X className="h-4 w-4" aria-hidden />
+                </button>
+              </p>
+            </div>
+          )}
+          <div ref={wallRef} className="mx-auto w-full max-w-[1720px]">
 
           {loading && (
             <ul
               aria-busy="true"
               aria-label={t("jam.wall.loading")}
-              className="grid grid-cols-2 gap-3 [grid-auto-rows:10.5rem] md:grid-cols-3 xl:grid-cols-4"
+              style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+              className="grid gap-3 sm:gap-4"
             >
-              {[0, 1, 2, 3, 4].map((one) => (
+              {Array.from({ length: columns * 2 }, (_, one) => (
                 <li
                   key={one}
-                  className={cn(
-                    "rounded-[var(--radius-panel)] bg-surface-2 motion-safe:animate-pulse",
-                    one === 0 && "col-span-2 row-span-2",
-                  )}
+                  className="aspect-[4/5] rounded-[var(--radius-panel)] bg-surface-2 motion-safe:animate-pulse"
                 />
               ))}
             </ul>
@@ -728,12 +785,12 @@ export function JamPane({
                   </p>
                 ) : (
                   <ul
-                    className={cn(
-                      "grid grid-cols-2 gap-3 [grid-auto-flow:dense] [grid-auto-rows:10.5rem]",
-                      panelOpen ? "2xl:grid-cols-3" : "md:grid-cols-3 xl:grid-cols-4",
-                    )}
+                    data-jam-grid=""
+                    data-jam-columns={columns}
+                    style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+                    className="grid gap-3 [grid-auto-flow:dense] sm:gap-4"
                   >
-                    {plan.map((tile, index) => (
+                    {plan.flatMap((tile, index) => [
                       <JamTile
                         key={tile.song.id}
                         song={tile.song}
@@ -746,11 +803,14 @@ export function JamPane({
                         playing={tile.song.id === openSongId && openPlaying}
                         onNear={() => loadJamDetailLazy(channelId, tile.song.id)}
                         onOpen={() => openFromTile(tile.song.id)}
-                      />
-                    ))}
-                    {canCreate && filter === "all" && (
-                      <JamInviteTile index={plan.length} entrance={entrance} onRecord={beginSong} />
-                    )}
+                        onPlay={() => openFromTile(tile.song.id, true)}
+                        compact={compact}
+                      />,
+                      // The invitation sits right after the first card, where it is seen, not at the very end
+                      ...(hasInvite && index === 0
+                        ? [<JamInviteTile key="invite" index={1} entrance={entrance} onRecord={beginSong} compact={compact} />]
+                        : []),
+                    ])}
                   </ul>
                 )}
                 {state.nextCursor && (
@@ -762,6 +822,7 @@ export function JamPane({
                 )}
               </section>
             ))}
+          </div>
         </div>
       </section>
 
@@ -783,6 +844,8 @@ export function JamPane({
             enabled={config.enabled}
             uploads={config.uploads}
             freshTrackId={freshTrackId}
+            autoplay={openAutoplay}
+            playNonce={playNonce}
             onRecord={(instrument, chosen) => openStudio({ mode: "over", songId: openSong.id, instrument, chosen })}
             onPlayingChange={setOpenPlaying}
             onClose={() => {
@@ -818,6 +881,7 @@ export function JamPane({
           onStay={stayInStudio}
           onPosted={({ songId, trackId }) => {
             setFreshTrackId(trackId);
+            setOpenAutoplay(true);
             if (studio.mode === "new") {
               // A new song: the studio's entry becomes the song's, so Back from
               // the song is the wall and not a studio that no longer exists.

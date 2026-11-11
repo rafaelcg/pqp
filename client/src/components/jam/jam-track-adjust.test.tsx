@@ -36,7 +36,7 @@ function setup() {
     root.render(
       <TrackAdjust
         track={stored}
-        title="Adjusting your guitar take"
+        title="Adjusting your guitar recording"
         band={[]}
         engine={engine}
         previewGain={previewGain}
@@ -49,7 +49,7 @@ function setup() {
 }
 
 function turnDown(times: number) {
-  const slider = host.querySelector<HTMLElement>('[role="slider"][aria-label="Take volume"]');
+  const slider = host.querySelector<HTMLElement>('[role="slider"][aria-label="Recording volume"]');
   expect(slider).not.toBeNull();
   for (let i = 0; i < times; i++) {
     act(() => {
@@ -79,5 +79,19 @@ describe("adjusting a posted track's volume", () => {
     // under a studio the engine keeps its stems and nothing else would reset this one
     expect(updateStem).toHaveBeenCalledWith(stored.id, expect.objectContaining({ gain: stored.gain }));
     root = createRoot(host);
+  });
+});
+
+describe("the adjust box", () => {
+  it("says in one visible line that nothing changes for everyone until Guardar, with Save and Close in the header, where the box opens", () => {
+    setup();
+    const note = host.querySelector<HTMLElement>("[data-jam-adjust-note]")!;
+    expect(note.textContent).toBe("Nothing changes for everyone until you press Save.");
+    const header = host.querySelector<HTMLElement>("[data-jam-adjust-header]")!;
+    expect(header.contains(note)).toBe(true);
+    expect(header.querySelector("[data-jam-adjust-save]")).not.toBeNull();
+    expect(header.querySelector("[data-jam-adjust-close]")).not.toBeNull();
+    // nothing sticks over the editor's own content any more
+    expect(host.querySelector("[data-jam-adjust-footer]")).toBeNull();
   });
 });

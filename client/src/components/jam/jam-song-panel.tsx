@@ -1,5 +1,5 @@
 import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
-import { ArrowLeft, Camera, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
+import { ArrowLeft, Camera, Headphones, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -30,10 +30,13 @@ import {
 } from "@/lib/jam-store";
 import type { JamDetail } from "@/lib/jam-state";
 import { competingInstruments, formatClock, orderTracks, songNeed, songTimeline } from "@/lib/jam-wall";
+import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
+import { isJamStudioOpen } from "@/lib/jam-hint-context";
 import { cn } from "@/lib/utils";
 import { ContributorStack, Equalizer } from "./jam-art";
 import { useBarCount } from "./jam-bars";
-import { JamCoverPhoto, SongArt, useJamCover, type JamCoverState } from "./jam-cover";
+import { JamArtwork } from "./jam-artwork";
+import { JamCoverPhoto, useJamCover, type JamCoverState } from "./jam-cover";
 import { JamEditSheet } from "./jam-edit-sheet";
 import { TrackAdjust } from "./jam-track-adjust";
 import { JamTrackRow } from "./jam-track-row";
@@ -65,6 +68,8 @@ export interface JamSongPanelProps {
   freshTrackId?: string | null;
   /** Start playing as soon as the stems are in. */
   autoplay?: boolean;
+  /** Each change is the wall's round button pressed on this song while it is open: play, or pause. */
+  playNonce?: number;
 }
 
 export function JamSongPanel({
@@ -79,6 +84,7 @@ export function JamSongPanel({
   onPlayingChange,
   freshTrackId,
   autoplay = true,
+  playNonce = 0,
 }: JamSongPanelProps) {
   const { t } = useTranslation();
   const tracks = useMemo(() => orderTracks(detail?.tracks ?? []), [detail?.tracks]);
@@ -123,6 +129,51 @@ export function JamSongPanel({
     playingChange.current?.(playing);
   }, [playing]);
   useEffect(() => () => playingChange.current?.(false), []);
+
+  // The wall's round button on a song that is open already: play or pause it.
+  const toggleRef = useRef(playback.toggle);
+  toggleRef.current = playback.toggle;
+  const shownNonce = useRef(playNonce);
+  useEffect(() => {
+    if (shownNonce.current !== playNonce) {
+      shownNonce.current = playNonce;
+      toggleRef.current();
+    }
+  }, [playNonce]);
+
+  // Opening a song puts the keyboard in it: focus lands on the song's name, so
+  // Tab goes through the song and Escape closes it. (Not stolen back later: this
+  // runs once per song.)
+  const titleRef = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    titleRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // Space plays and pauses from anywhere in the song, unless the person is typing,
+  // on a control that owns Space, or a dialog is open.
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== " " || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+        return;
+      }
+      if (escapeOwnedByOverlay(event) || isJamStudioOpen()) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest(
+          'input, textarea, select, button, a[href], summary, [contenteditable=""], [contenteditable="true"], [role="slider"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="tab"], [role="combobox"], [role="button"]',
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      toggleRef.current();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   const viewer = detail?.viewer;
   const competing = useMemo(() => competingInstruments(tracks), [tracks]);
@@ -173,7 +224,6 @@ export function JamSongPanel({
   const songMenu: ContextMenuItemDef[] =
     canManage && enabled
       ? [
-          { id: "edit", label: t("jam.edit.open"), icon: Pencil, onSelect: () => setEditing(true) },
           {
             id: "join",
             label: song.joinMode === "closed" ? t("jam.song.reopen") : t("jam.song.finish"),
@@ -204,12 +254,13 @@ export function JamSongPanel({
 
   return (
     <section aria-label={song.title} data-jam-song={song.id} className="flex h-full min-h-0 flex-col bg-surface-1">
-      <header className="relative isolate flex items-start gap-2 overflow-hidden border-b border-border px-2 py-3 sm:gap-3 sm:px-4">
+      <header className="relative isolate flex items-start gap-2 overflow-hidden border-b border-border px-2 py-3 sm:gap-3 sm:px-4 [@media(max-height:32rem)]:py-1.5">
         {covered && (
           // The cover's own colours, blurred far past reading, behind the words.
           <span aria-hidden="true" data-jam-header-wash="" className="jam-header-wash pointer-events-none absolute inset-0 -z-10">
-            <JamCoverPhoto cover={cover} eager className="scale-125 blur-2xl saturate-150 data-[ready=true]:opacity-60" />
-            <span className="absolute inset-0 bg-gradient-to-b from-surface-1/10 via-surface-1/55 to-surface-1" />
+            <JamCoverPhoto cover={cover} eager className="scale-125 blur-2xl saturate-150 data-[ready=true]:opacity-45" />
+            {/* the words sit on this: nearly the panel's own surface, so any cover leaves them readable */}
+            <span className="absolute inset-0 bg-gradient-to-b from-surface-1/80 via-surface-1/90 to-surface-1" />
           </span>
         )}
         <button
@@ -220,14 +271,18 @@ export function JamSongPanel({
         >
           <ArrowLeft className="h-5 w-5" aria-hidden />
         </button>
-        <SongCover song={song} cover={cover} playing={playing} onEdit={canEdit ? () => setEditing(true) : undefined} />
+        <SongCover song={song} cover={cover} tracks={detail?.tracks} playing={playing} onEdit={canEdit ? () => setEditing(true) : undefined} />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
-          <h2 className="font-display text-2xl font-extrabold leading-[1.05] tracking-[-0.01em] text-text [text-wrap:balance] sm:text-3xl">
+          <h2
+            ref={titleRef}
+            tabIndex={-1}
+            className="font-display text-2xl font-extrabold leading-[1.05] tracking-[-0.01em] text-text outline-none [overflow-wrap:anywhere] [text-wrap:balance] sm:text-4xl [@media(max-height:32rem)]:text-xl"
+          >
             {song.title}
           </h2>
-          <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-text-secondary">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-semibold text-text-secondary">
             <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-border-strong" />
-            <span className="truncate">
+            <span className="min-w-0 basis-full sm:basis-auto">
               {song.artist ?? t("jam.original")}
               <span className="max-sm:hidden"> · {viewer?.isAuthor ? t("jam.song.startedByYou") : t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}</span>
             </span>
@@ -290,7 +345,7 @@ export function JamSongPanel({
           </div>
         ) : (
         <section className="mt-1" aria-labelledby={`band-${song.id}`}>
-          <div className="sticky top-0 z-10 -mx-3 mb-2 flex flex-col gap-1 bg-surface-1/95 px-3 pb-2 pt-3 backdrop-blur-sm sm:-mx-5 sm:px-5">
+          <div className="sticky top-0 z-10 -mx-3 mb-2 flex flex-col gap-1 bg-surface-1/95 px-3 pb-2 pt-3 backdrop-blur-sm sm:-mx-5 sm:px-5 [@media(max-height:32rem)]:static [@media(max-height:32rem)]:pt-1">
             <div className="flex items-baseline justify-between gap-3">
               <h3 id={`band-${song.id}`} className="font-display text-lg font-extrabold text-text">
                 {t("jam.song.band")}
@@ -320,114 +375,123 @@ export function JamSongPanel({
               ))}
             </div>
           ) : (
-            <div className="relative [--lane-head:8.5rem] sm:[--lane-head:12rem]" data-jam-band="">
-              <Ruler timeline={timeline} onSeek={seekFraction} />
-              <ul className="flex flex-col gap-1" aria-label={t("jam.song.tracks")}>
-                {tracks.map((track, index) => {
-                  const lane = playback.lanes[track.id] ?? { muted: false, solo: false, volume: 1 };
-                  const isMine = viewerId !== null && track.authorId === viewerId;
-                  return (
-                    <JamTrackRow
-                      key={track.id}
-                      track={track}
-                      index={index}
-                      timeline={timeline}
-                      clock={playback.clock}
-                      lane={lane}
-                      viewerId={viewerId}
-                      competing={competing.has(track.instrument)}
-                      voted={votedIds.has(track.id)}
-                      canSwitchMix={canManage && enabled}
-                      canDelete={isMine || canManage}
-                      canVote={enabled}
-                      auditioning={playback.audition === track.id}
-                      loading={playback.stemStatus[track.id] === "loading"}
-                      failed={playback.stemStatus[track.id] === "error"}
-                      fresh={arrived.has(track.id) || freshTrackId === track.id}
-                      canAdjust={isMine && enabled}
-                      adjusting={adjustingId === track.id}
-                      onAdjust={() => setAdjustingId(track.id)}
-                      onSeek={seekFraction}
-                      attachVideo={track.inMix && track.videoUrl ? playback.attachVideo : undefined}
-                      onLane={(patch) => playback.setLane(track.id, patch)}
-                      onVote={() =>
-                        void guard(async () => {
-                          const answer = await voteJamTrack(track.id, !votedIds.has(track.id));
-                          writeVote(answer);
-                        })
-                      }
-                      onSwitchMix={() =>
-                        // One mix change at a time, and "use this take" is a swap (see jam-mix).
-                        void serial(() =>
-                          guard(async () => {
-                            const put = async (id: string, inMix: boolean) => {
-                              const answer = await updateJamTrack(id, { inMix });
-                              writeFrame({
-                                type: "jam-track-updated",
-                                channelId,
-                                song: answer.song,
-                                track: answer.track,
-                              });
-                            };
-                            if (track.inMix) {
-                              await put(track.id, false);
-                              return;
-                            }
-                            const outcome = await switchTakeIn(
-                              track.id,
-                              put,
-                              () => readJamChannel(channelId).details[song.id]?.tracks ?? tracks,
-                              () => rereadJamTracks(channelId, song.id),
-                            );
-                            if (outcome === "partial") {
-                              setError(t("jam.error.swapPartial"));
-                            }
-                          }),
-                        )
-                      }
-                      onDelete={() => setPendingDelete(track)}
-                      onAudition={() => playback.setAudition(playback.audition === track.id ? null : track.id)}
+            <div className="relative" data-jam-band="">
+              {tracks.length > 0 && (
+                // Said once, above the lanes: mute, "only this" and volume are the listener's own.
+                <p data-jam-mine-note="" className="mb-1.5 flex items-center gap-1.5 px-1.5 text-xs text-text-secondary [text-wrap:pretty]">
+                  <Headphones className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  {t("jam.lane.mineNote")}
+                </p>
+              )}
+              {/* the playhead is drawn over THIS box (ruler and lanes), not over the note above it */}
+              <div className="relative">
+                <Ruler timeline={timeline} onSeek={seekFraction} flush />
+                <ul className="flex flex-col gap-1" aria-label={t("jam.song.tracks")}>
+                  {tracks.map((track, index) => {
+                    const lane = playback.lanes[track.id] ?? { muted: false, solo: false, volume: 1 };
+                    const isMine = viewerId !== null && track.authorId === viewerId;
+                    return (
+                      <JamTrackRow
+                        key={track.id}
+                        track={track}
+                        index={index}
+                        timeline={timeline}
+                        clock={playback.clock}
+                        lane={lane}
+                        viewerId={viewerId}
+                        competing={competing.has(track.instrument)}
+                        voted={votedIds.has(track.id)}
+                        canSwitchMix={canManage && enabled}
+                        canDelete={isMine || canManage}
+                        canVote={enabled}
+                        auditioning={playback.audition === track.id}
+                        loading={playback.stemStatus[track.id] === "loading"}
+                        failed={playback.stemStatus[track.id] === "error"}
+                        fresh={arrived.has(track.id) || freshTrackId === track.id}
+                        othersSoloed={tracks.some((other) => other.id !== track.id && playback.lanes[other.id]?.solo === true)}
+                        canAdjust={isMine && enabled}
+                        adjusting={adjustingId === track.id}
+                        onAdjust={() => setAdjustingId(track.id)}
+                        editor={
+                          adjusting && adjusting.id === track.id ? (
+                            <TrackAdjust
+                              key={adjusting.id}
+                              track={adjusting}
+                              title={t("jam.take.adjustTitle", {
+                                instrument: t(JAM_INSTRUMENT_LOOK[adjusting.instrument].nameKey as MessageKey).toLowerCase(),
+                              })}
+                              band={bandOf(tracks, adjusting.id)}
+                              engine={playback.engine}
+                              clock={playback.clock}
+                              previewGain={playback.previewGain}
+                              onDone={() => setAdjustingId(null)}
+                              onSave={async (patch) => {
+                                const answer = await updateJamTrack(adjusting.id, patch);
+                                writeFrame({
+                                  type: "jam-track-updated",
+                                  channelId,
+                                  song: answer.song,
+                                  track: answer.track,
+                                });
+                              }}
+                            />
+                          ) : undefined
+                        }
+                        onSeek={seekFraction}
+                        attachVideo={track.inMix && track.videoUrl ? playback.attachVideo : undefined}
+                        onLane={(patch) => playback.setLane(track.id, patch)}
+                        onVote={() =>
+                          void guard(async () => {
+                            const answer = await voteJamTrack(track.id, !votedIds.has(track.id));
+                            writeVote(answer);
+                          })
+                        }
+                        onSwitchMix={() =>
+                          // One mix change at a time, and "use this take" is a swap (see jam-mix).
+                          void serial(() =>
+                            guard(async () => {
+                              const put = async (id: string, inMix: boolean) => {
+                                const answer = await updateJamTrack(id, { inMix });
+                                writeFrame({
+                                  type: "jam-track-updated",
+                                  channelId,
+                                  song: answer.song,
+                                  track: answer.track,
+                                });
+                              };
+                              if (track.inMix) {
+                                await put(track.id, false);
+                                return;
+                              }
+                              const outcome = await switchTakeIn(
+                                track.id,
+                                put,
+                                () => readJamChannel(channelId).details[song.id]?.tracks ?? tracks,
+                                () => rereadJamTracks(channelId, song.id),
+                              );
+                              if (outcome === "partial") {
+                                setError(t("jam.error.swapPartial"));
+                              }
+                            }),
+                          )
+                        }
+                        onDelete={() => setPendingDelete(track)}
+                        onAudition={() => playback.setAudition(playback.audition === track.id ? null : track.id)}
+                      />
+                    );
+                  })}
+                  {missingSlots.map((instrument, index) => (
+                    <MissingLane
+                      key={instrument}
+                      instrument={instrument}
+                      index={tracks.length + index}
+                      who={viewer?.isAuthor ? null : (song.authorName ?? t("jam.tile.anonymous"))}
+                      canRecord={reason === null && addable.includes(instrument)}
+                      onRecord={() => onRecord(instrument, true)}
                     />
-                  );
-                })}
-                {missingSlots.map((instrument, index) => (
-                  <MissingLane
-                    key={instrument}
-                    instrument={instrument}
-                    index={tracks.length + index}
-                    who={viewer?.isAuthor ? null : (song.authorName ?? t("jam.tile.anonymous"))}
-                    canRecord={reason === null && addable.includes(instrument)}
-                    onRecord={() => onRecord(instrument, true)}
-                  />
-                ))}
-              </ul>
-              <Playhead clock={playback.clock} timeline={timeline} />
-            </div>
-          )}
-
-          {adjusting && (
-            <div className="mt-3 flex flex-col gap-2">
-              <TrackAdjust
-                key={adjusting.id}
-                track={adjusting}
-                title={t("jam.take.adjustTitle", {
-                  instrument: t(JAM_INSTRUMENT_LOOK[adjusting.instrument].nameKey as MessageKey).toLowerCase(),
-                })}
-                band={bandOf(tracks, adjusting.id)}
-                engine={playback.engine}
-                clock={playback.clock}
-                previewGain={playback.previewGain}
-                onDone={() => setAdjustingId(null)}
-                onSave={async (patch) => {
-                  const answer = await updateJamTrack(adjusting.id, patch);
-                  writeFrame({
-                    type: "jam-track-updated",
-                    channelId,
-                    song: answer.song,
-                    track: answer.track,
-                  });
-                }}
-              />
+                  ))}
+                </ul>
+              </div>
             </div>
           )}
         </section>
@@ -441,13 +505,13 @@ export function JamSongPanel({
       </div>
 
       {/* the dock: the one thing to do */}
-      <footer className="safe-pb flex flex-col gap-3 border-t border-border bg-surface-1 px-3 py-3 sm:px-5">
+      <footer hidden={adjustingId !== null} className="safe-pb flex flex-col gap-3 border-t border-border bg-surface-1 px-3 py-3 sm:px-5 [@media(max-height:32rem)]:py-1.5">
         {reason === null && first ? (
           <button
             type="button"
             data-jam-record-over=""
             onClick={() => onRecord(first, need.kind === "missing")}
-            className="group relative flex h-14 w-full items-center justify-center gap-2.5 overflow-hidden rounded-full bg-accent text-base font-extrabold text-on-accent shadow-[var(--shadow-2)] outline-none transition-[transform,box-shadow] duration-[var(--duration-fast)] hover:shadow-[var(--shadow-3)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 motion-safe:hover:scale-[1.01] active:scale-[0.98]"
+            className="group relative flex h-14 w-full items-center justify-center gap-2.5 overflow-hidden rounded-full bg-accent text-base font-extrabold [@media(max-height:32rem)]:h-11 text-on-accent shadow-[var(--shadow-2)] outline-none transition-[transform,box-shadow] duration-[var(--duration-fast)] hover:shadow-[var(--shadow-3)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 motion-safe:hover:scale-[1.01] active:scale-[0.98]"
           >
             <span className="grid h-8 w-8 place-items-center rounded-full bg-on-accent text-accent transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-safe:group-hover:scale-110">
               <Mic className="h-4 w-4" aria-hidden />
@@ -504,8 +568,8 @@ export function JamSongPanel({
       />
       <ConfirmDialog
         open={confirmSong}
-        title={t("jam.song.deleteTitle")}
-        description={t("jam.song.deleteBody")}
+        title={t("jam.song.deleteTitle", { title: song.title })}
+        description={t("jam.song.deleteBody", { count: song.trackCount, countLabel: song.trackCount })}
         confirmLabel={t("jam.song.delete")}
         cancelLabel={t("jam.keep")}
         onClose={() => setConfirmSong(false)}
@@ -546,11 +610,13 @@ export function bandOf(tracks: readonly JamTrack[], exceptId: string | null): Ba
 function SongCover({
   song,
   cover,
+  tracks,
   playing,
   onEdit,
 }: {
   song: JamSongSummary;
   cover: JamCoverState;
+  tracks?: readonly JamTrack[];
   playing: boolean;
   onEdit?: () => void;
 }) {
@@ -558,14 +624,13 @@ function SongCover({
   const covered = cover.src !== null && cover.status !== "failed";
   return (
     <div
-      className="group relative isolate h-[5.5rem] w-[5.5rem] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-surface-2 shadow-[var(--shadow-2)] sm:h-40 sm:w-40"
+      className="group relative isolate h-[5.5rem] w-[5.5rem] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-surface-2 shadow-[var(--shadow-2)] sm:h-40 sm:w-40 [@media(max-height:32rem)]:h-16 [@media(max-height:32rem)]:w-16"
       style={{ viewTransitionName: `jam-cover-${song.id}` } as CSSProperties}
       data-jam-cover=""
       data-jam-cover-photo-on={covered ? "true" : undefined}
     >
-      <div aria-hidden="true" className="absolute inset-0">
-        {covered ? <JamCoverPhoto cover={cover} eager /> : <SongArt song={song} />}
-      </div>
+      {/* the same picture the wall's card shows: the photo, the band's faces, or the band */}
+      <JamArtwork song={song} cover={cover} tracks={tracks} loadVideo eager />
       {playing && (
         <span aria-hidden="true" className="absolute bottom-1.5 left-1.5 flex h-5 items-center rounded-full bg-media-scrim/85 px-1.5 text-on-media">
           <Equalizer className="h-3" />
@@ -593,7 +658,16 @@ function SongCover({
 }
 
 /** Time along the top of the band: where each lane is, and a place to click to jump. */
-export function Ruler({ timeline, onSeek }: { timeline: { startMs: number; endMs: number }; onSeek: (fraction: number) => void }) {
+export function Ruler({
+  timeline,
+  onSeek,
+  flush = false,
+}: {
+  timeline: { startMs: number; endMs: number };
+  onSeek: (fraction: number) => void;
+  /** The lanes under it run the full width (the song's panel), so it does too, on every screen. */
+  flush?: boolean;
+}) {
   const length = timeline.endMs - timeline.startMs;
   // About one label per 56 px, on a round number of seconds.
   const [ref, width] = useBarCount(1, 4000);
@@ -602,8 +676,8 @@ export function Ruler({ timeline, onSeek }: { timeline: { startMs: number; endMs
   const marks: number[] = [];
   for (let at = 0; at <= length - step / 3; at += step) marks.push(at);
   return (
-    <div className="grid grid-cols-[var(--lane-head)_minmax(0,1fr)] gap-3 px-1.5 pb-1 max-sm:hidden" aria-hidden="true">
-      <span />
+    <div className={cn("grid px-1.5 pb-1", flush ? "grid-cols-1" : "grid-cols-[var(--lane-head)_minmax(0,1fr)] gap-3 max-sm:hidden")} aria-hidden="true">
+      {!flush && <span />}
       <div ref={ref} className="relative h-5">
         <button
           type="button"
@@ -672,7 +746,7 @@ function MissingLane({
     <li
       data-jam-slot={instrument}
       style={{ "--jam-l": index } as CSSProperties}
-      className="jam-lane-in flex flex-col gap-2 rounded-[var(--radius-card)] p-1.5 sm:grid sm:grid-cols-[var(--lane-head)_minmax(0,1fr)] sm:items-center sm:gap-3"
+      className="jam-lane-in flex flex-col gap-2 rounded-[var(--radius-card)] p-1.5"
     >
       <div className="flex min-w-0 items-center gap-2.5">
         <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-full border-2 border-dashed border-current", look.ink)}>

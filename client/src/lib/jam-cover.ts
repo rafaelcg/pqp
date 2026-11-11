@@ -27,6 +27,60 @@ import { putWithProgress } from "@/lib/jam-upload";
 /** What the file picker offers: the three types the server accepts. */
 export const JAM_COVER_ACCEPT = JAM_COVER_CONTENT_TYPES.join(",");
 
+/**
+ * The smallest side, in pixels, a cover photo may have. The wall shows it up to
+ * about 470 px wide on a sharp screen, and a smaller one is a blur on a big
+ * tile; the crop step then scales it up to the 1024 square it sends.
+ */
+export const JAM_COVER_MIN_SIDE = 400;
+
+export type JamCoverCheck =
+  | { ok: true; width: number; height: number }
+  | { ok: false; reason: "unreadable" | "small"; width: number; height: number };
+
+/**
+ * Looks inside a picked file BEFORE the crop step opens: is it a picture a
+ * browser can draw at all (a text file renamed `.jpg` is not), and is it big
+ * enough? Reads only the size, through an `<img>` that decodes lazily, so a
+ * 48 MP phone photo is not held in memory twice.
+ */
+export function checkCoverPicture(file: Blob): Promise<JamCoverCheck> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    const done = (check: JamCoverCheck) => {
+      URL.revokeObjectURL(url);
+      resolve(check);
+    };
+    image.onload = () => {
+      const width = image.naturalWidth;
+      const height = image.naturalHeight;
+      if (width <= 0 || height <= 0) {
+        done({ ok: false, reason: "unreadable", width, height });
+      } else if (Math.min(width, height) < JAM_COVER_MIN_SIDE) {
+        done({ ok: false, reason: "small", width, height });
+      } else {
+        done({ ok: true, width, height });
+      }
+    };
+    image.onerror = () => done({ ok: false, reason: "unreadable", width: 0, height: 0 });
+    image.src = url;
+  });
+}
+
+/**
+ * The colour a transparent part of a picture becomes in the JPEG: the near-white
+ * of text on a picture, read from the theme's own token (a colour is never
+ * written here). Null when the page has no such token (a test).
+ */
+export function coverFlatten(): string | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  const value = getComputedStyle(document.documentElement).getPropertyValue("--color-on-media").trim();
+  return value === "" ? null : value;
+}
+
 /** Is this file one the cover accepts? A phone photo (HEIC) is decoded by the browser or refused there. */
 export function isCoverPicture(file: { type: string; name?: string }): boolean {
   if ((JAM_COVER_CONTENT_TYPES as readonly string[]).includes(file.type)) {
@@ -71,6 +125,7 @@ export async function uploadJamCover(args: JamCoverUploadArgs): Promise<JamCover
       JAM_COVER_SIZE,
       JAM_COVER_SIZE,
       args.region ?? null,
+      coverFlatten(),
     );
   } catch {
     // `createImageBitmap` refuses anything that is not a decodable image: the
