@@ -14,7 +14,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Dialog } from "@/components/ui/dialog";
+import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Menu } from "@/components/ui/menu";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -177,7 +177,7 @@ export function JamTrackRow({
         <div className="flex min-w-0 flex-1 basis-[10.5rem] items-center gap-2.5">
           <span className={cn("relative shrink-0 motion-safe:transition-opacity motion-safe:duration-[var(--duration-base)]", soloDimmed && "opacity-40")}>
             {attachVideo && track.videoUrl ? (
-              <LaneVideo track={track} attach={attachVideo} muted={lane.muted} label={name} onOpen={() => setWatching(true)} />
+              <LaneVideo track={track} attach={attachVideo} muted={lane.muted} label={name} suspended={watching} onOpen={() => setWatching(true)} />
             ) : (
               <UserAvatar
                 name={track.authorName ?? t("jam.tile.anonymous")}
@@ -381,7 +381,9 @@ export function JamTrackRow({
 
       {attachVideo && track.videoUrl && (
         <Dialog open={watching} title={name} description={t("jam.lane.watchHint")} size="lg" onClose={() => setWatching(false)}>
-          <EnlargedVideo track={track} attach={attachVideo} />
+          <DialogBody>
+            <EnlargedVideo track={track} attach={attachVideo} />
+          </DialogBody>
         </Dialog>
       )}
     </li>
@@ -432,12 +434,15 @@ function LaneVideo({
   attach,
   muted,
   label,
+  suspended,
   onOpen,
 }: {
   track: JamTrack;
   attach: (trackId: string, element: HTMLVideoElement) => () => void;
   muted: boolean;
   label: string;
+  /** The enlarged player is open: this small one is detached and paused until it closes. */
+  suspended: boolean;
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
@@ -447,8 +452,12 @@ function LaneVideo({
     if (!element) {
       return;
     }
+    if (suspended) {
+      element.pause();
+      return;
+    }
     return attach(track.id, element);
-  }, [attach, track.id]);
+  }, [attach, track.id, suspended]);
   return (
     <button
       type="button"
@@ -507,7 +516,7 @@ function EnlargedVideo({
       src={track.videoUrl ?? undefined}
       muted
       playsInline
-      preload="auto"
+      preload="metadata"
       data-jam-lane-video-big=""
       className="aspect-video w-full rounded-[var(--radius-card)] bg-surface-0 object-contain"
     />

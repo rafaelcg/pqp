@@ -114,8 +114,9 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
     if (event.pointerType !== "mouse" || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
       return;
     }
-    event.currentTarget.querySelectorAll<HTMLVideoElement>("video[data-jam-artwork-video]").forEach((video) => {
-      if (on) void video.play().catch(() => undefined);
+    // Only the first picture moves: the others stay still frames, so a hover is one decoder, not four.
+    event.currentTarget.querySelectorAll<HTMLVideoElement>("video[data-jam-artwork-video]").forEach((video, index) => {
+      if (on && index === 0) void video.play().catch(() => undefined);
       else video.pause();
     });
   }
@@ -282,7 +283,7 @@ function PlayButton({ hero, playing, title, onPlay }: { hero: boolean; playing: 
 function TileStatus({ need, closed, className, compact = false }: { need: JamNeed; closed: boolean; className?: string; compact?: boolean }) {
   const { t } = useTranslation();
   const label = useNeedLabel();
-  if (need.kind === "missing") {
+  if (need.kind === "missing" && !closed) {
     const first = need.instruments[0]!;
     const look = JAM_INSTRUMENT_LOOK[first];
     const Icon = look.icon;

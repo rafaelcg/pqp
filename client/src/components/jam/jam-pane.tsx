@@ -289,6 +289,8 @@ export function JamPane({
     if (routeSongId === openSongId) {
       return;
     }
+    // A link or Back opens a song and waits: only a tile's round button, or a take just posted, plays.
+    setOpenAutoplay(false);
     setOpenSongIdState(routeSongId);
     setSongGone(false);
     setSongError(false);

@@ -129,6 +129,12 @@ describe("a song's card", () => {
     expect(tile.querySelector("[data-jam-need]")).toBeNull();
   });
 
+  it("a closed song that still lists parts it wanted says closed, not what it was missing", () => {
+    const { tile } = render({}, { joinMode: "closed", wantedInstruments: ["vocals"], instruments: ["guitar"] });
+    expect(tile.querySelector("[data-jam-tile-closed]")).not.toBeNull();
+    expect(tile.querySelector('[data-jam-need="missing"]')).toBeNull();
+  });
+
   it("marks a closed song with a lock and the word, not a surprise", () => {
     const { tile } = render({}, { joinMode: "closed" });
     expect(tile.querySelector("[data-jam-tile-closed]")).not.toBeNull();
