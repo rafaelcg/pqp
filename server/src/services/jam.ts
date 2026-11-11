@@ -68,6 +68,12 @@ const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 const ORPHAN_GRACE = "1 hour";
 /** A deleted track's objects are kept this long before the sweep deletes them. */
 const PURGE_GRACE = "1 day";
+/**
+ * A song with no track since this long is deleted by the sweep. Such a song is
+ * what a first take leaves behind when the page was closed between creating the
+ * song and finishing the upload; only its author can see it until then.
+ */
+const EMPTY_SONG_GRACE = "24 hours";
 /** How much of a cover's start is read to check it is the picture it says it is. */
 const COVER_SNIFF_BYTES = 256 * 1024;
 /** Rows per sweep pass. */
@@ -484,6 +490,11 @@ export async function listJamSongs(input: {
   const params: unknown[] = [channelId];
   const where = [`s.channel_id = $1`, `s.deleted_at IS NULL`];
 
+  // A song with no track is its author's alone: it is what a first take that
+  // never finished uploading leaves behind, and to everybody else it is a tile
+  // that plays nothing. The frames follow the same rule (`jam-routes.ts`).
+  params.push(viewerId);
+  where.push(`(agg.track_count > 0 OR s.author_id = $${params.length})`);
   if (query.mine) {
     params.push(viewerId);
     where.push(`s.author_id = $${params.length}`);
@@ -895,11 +906,30 @@ export async function removeJamCover(
  * objects are deleted by the sweep a day later (`sweepJamMedia`), which is
  * also the window in which a mistaken delete could be recovered by hand.
  * Returns false when the song was already gone.
+ *
+ * `onlyIfEmpty`: the studio of a song it made asks for the song to go when the
+ * person leaves with nothing sent. The song row is locked and its tracks looked
+ * at in the same transaction, so a claim that committed without its answer
+ * reaching the page (and a take added by anybody else) is never deleted: 409
+ * `jam_song_not_empty` and nothing changes.
  */
-export async function deleteJamSong(songId: string): Promise<boolean> {
+export async function deleteJamSong(
+  songId: string,
+  options: { onlyIfEmpty?: boolean } = {},
+): Promise<boolean> {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    if (options.onlyIfEmpty) {
+      await client.query(`SELECT 1 FROM jam_songs WHERE id = $1 FOR UPDATE`, [songId]);
+      const held = await client.query(
+        `SELECT 1 FROM jam_tracks WHERE song_id = $1 AND deleted_at IS NULL LIMIT 1`,
+        [songId],
+      );
+      if ((held.rowCount ?? 0) > 0) {
+        throw new HttpError(409, JAM_ERRORS.songNotEmpty);
+      }
+    }
     const song = await client.query(
       `UPDATE jam_songs SET deleted_at = NOW(), updated_at = NOW()
         WHERE id = $1 AND deleted_at IS NULL`,
@@ -1382,17 +1412,60 @@ export async function updateJamTrack(
   return { track: fresh, song: await requireSummary(track.song_id) };
 }
 
-/** Soft-delete a track; its objects go with the sweep a day later. */
-export async function deleteJamTrack(track: JamTrackRow): Promise<JamSongSummary | null> {
-  const result = await getPool().query(
-    `UPDATE jam_tracks SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`,
-    [track.id],
-  );
-  if ((result.rowCount ?? 0) === 0) {
-    return null;
+/**
+ * Soft-delete a track; its objects go with the sweep a day later.
+ *
+ * `dropEmptySong`: when this was the song's LAST live track the song goes with
+ * it (the caller says so for the song's author and a moderator). An empty song
+ * is not something a person meant to keep, and one left behind is a tile that
+ * plays nothing. The song row is locked first, in the order `deleteJamSong` and
+ * `addJamTrack` lock it, so a track added at this moment either lands before
+ * (the song is not empty) or finds the song gone.
+ *
+ * Returns null when the track was already gone.
+ */
+export async function deleteJamTrack(
+  track: JamTrackRow,
+  options: { dropEmptySong?: boolean } = {},
+): Promise<{ song: JamSongSummary | null; songDeleted: boolean } | null> {
+  const client = await getPool().connect();
+  let songDeleted = false;
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT 1 FROM jam_songs WHERE id = $1 FOR UPDATE`, [track.song_id]);
+    const result = await client.query(
+      `UPDATE jam_tracks SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`,
+      [track.id],
+    );
+    if ((result.rowCount ?? 0) === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    if (options.dropEmptySong) {
+      const left = await client.query(
+        `SELECT 1 FROM jam_tracks WHERE song_id = $1 AND deleted_at IS NULL LIMIT 1`,
+        [track.song_id],
+      );
+      if ((left.rowCount ?? 0) === 0) {
+        const gone = await client.query(
+          `UPDATE jam_songs SET deleted_at = NOW(), updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL`,
+          [track.song_id],
+        );
+        songDeleted = (gone.rowCount ?? 0) > 0;
+      }
+    }
+    if (!songDeleted) {
+      await client.query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [track.song_id]);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-  await getPool().query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [track.song_id]);
-  return getJamSongSummary(track.song_id);
+  return { song: songDeleted ? null : await getJamSongSummary(track.song_id), songDeleted };
 }
 
 // ------------------------------------------------------------------ votes
@@ -1549,6 +1622,31 @@ export async function sweepJamMedia(): Promise<number> {
     done += 1;
   }
   return done;
+}
+
+/**
+ * Songs nobody put a track in for a day, deleted. Rows only (a song with no
+ * track owns no object; an upload nobody claimed is the pass above's), and safe
+ * on two processes: the rows are claimed with `FOR UPDATE SKIP LOCKED`, the
+ * same lock `addJamTrack` takes, so a track added at this moment is either
+ * committed first (the song is no longer empty and `updated_at` is fresh, which
+ * the claim re-checks) or finds the song deleted and is answered 404. Runs
+ * whatever the flag and the storage say, like the media sweep.
+ */
+export async function sweepEmptyJamSongs(): Promise<number> {
+  const result = await getPool().query(
+    `UPDATE jam_songs SET deleted_at = NOW()
+      WHERE id IN (
+        SELECT s.id FROM jam_songs s
+         WHERE s.deleted_at IS NULL
+           AND s.updated_at < NOW() - INTERVAL '${EMPTY_SONG_GRACE}'
+           AND NOT EXISTS (SELECT 1 FROM jam_tracks t WHERE t.song_id = s.id AND t.deleted_at IS NULL)
+         ORDER BY s.updated_at LIMIT ${SWEEP_BATCH}
+           FOR UPDATE SKIP LOCKED)
+        AND deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM jam_tracks t WHERE t.song_id = jam_songs.id AND t.deleted_at IS NULL)`,
+  );
+  return result.rowCount ?? 0;
 }
 
 /** Content types, exported for the doc and the tests. */

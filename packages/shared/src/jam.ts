@@ -36,6 +36,24 @@ import { z } from "zod";
  * media URL in it. Deleting a channel, a server or an account deletes the
  * objects as well (the author's tracks go with the account).
  *
+ * A SONG WITH NO TRACK IS ITS AUTHOR'S ALONE. A song is created first and its
+ * first take uploaded after, so for a while (a page closed mid-upload, a take
+ * that never finished, the last track deleted by somebody who is not the
+ * song's author) a song has `trackCount: 0`. The list and the detail leave such
+ * a song out for everybody but its author (404 on the detail), and its
+ * `jam-song-created` / `jam-song-updated` frames are not sent: the first track
+ * announces the song to the room (`jam-track-added` carries the whole summary,
+ * and a client applies it by id, so it is the song appearing). A song nobody
+ * put a track in for 24 hours is deleted by the sweep. Deleting the LAST track
+ * as the song's author or a moderator deletes the song (`jam-song-deleted`,
+ * not `jam-track-deleted`). Anybody else's last take leaves the song empty and
+ * its author's alone, and is announced as `jam-song-deleted` too (a
+ * `jam-track-deleted` would hand the room a summary the list hides): the author's
+ * wall reads the song again on its next ask. `DELETE /api/jam-songs/:id?ifEmpty=true`
+ * is the studio cleaning up a song it made and never filled; it answers 409
+ * `jam_song_not_empty` when a take is in it. This adds behaviour and one optional
+ * query parameter, no field: no client has to change to keep parsing.
+ *
  * -------------------------------------------------------------------------
  * THE TIMELINE (what `offsetMs`, `trimStartMs`, `trimEndMs` and `durationMs` mean)
  *
@@ -318,6 +336,12 @@ export const JAM_ERRORS = {
    * instead (400), with this token as the issue's message.
    */
   wantedNeedsInstruments: "jam_wanted_needs_instruments",
+  /**
+   * 409: `DELETE /api/jam-songs/:id?ifEmpty=true` found a track in the song. The
+   * studio of a song it made asks for the song to go only while it has no
+   * take, so a claim that committed unseen (the answer was lost) is never deleted.
+   */
+  songNotEmpty: "jam_song_not_empty",
   /** 409: the song already holds `JAM_MAX_TRACKS_PER_SONG` tracks. */
   songFull: "jam_song_full",
   /** 409: the caller already has `JAM_MAX_TRACKS_PER_AUTHOR` tracks in it. */

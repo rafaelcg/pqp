@@ -2,6 +2,7 @@ import type { Channel, JamInstrument, JamSongSummary } from "@pqp/shared";
 import { CirclePause, CircleHelp, Headphones, Menu as MenuIcon, Mic, Music2, Plus, RefreshCw, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Button } from "@/components/ui/button";
 import { RadioGroup } from "@/components/ui/radio-group";
@@ -11,6 +12,8 @@ import type { NewSongDraft } from "@/hooks/use-jam-studio";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
 import { setJamHintContext } from "@/lib/jam-hint-context";
+import { parseAppRoute } from "@/lib/app-route";
+import { jamHistoryState, jamStepOf, type JamRouteMode } from "@/lib/jam-history";
 import { pickInstrument } from "@/lib/jam-record";
 import { rememberJamSeen } from "@/lib/jam-seen";
 import { releaseJamEngine } from "@/lib/jam-session";
@@ -68,7 +71,7 @@ export interface JamPaneProps {
    * arrangement as the forum's post. Omitted, the pane keeps its own.
    */
   routeSongId?: string | null;
-  onRouteSongChange?: (songId: string | null) => void;
+  onRouteSongChange?: (songId: string | null, mode?: JamRouteMode) => void;
   onOpenNav: () => void;
   /** The channel header's usual buttons (settings, members). */
   headerActions?: ReactNode;
@@ -109,13 +112,143 @@ export function JamPane({
   const routeChange = useRef(onRouteSongChange);
   routeChange.current = onRouteSongChange;
   /** Open or close a song, and say so to the address bar. */
-  function setOpenSongId(songId: string | null) {
+  function setOpenSongId(songId: string | null, mode?: JamRouteMode) {
     setOpenSongIdState(songId);
     setSongGone(false);
     setSongError(false);
-    routeChange.current?.(songId);
+    routeChange.current?.(songId, mode);
   }
   const [studio, setStudio] = useState<StudioState | null>(null);
+  const studioRef = useRef<StudioState | null>(null);
+  const studioOpen = studio !== null;
+  studioRef.current = studio;
+
+  // ---- history: wall, song and studio are steps, so Back goes up one ----------
+  // (`lib/jam-history.ts`). The router's location state says which Jam step the
+  // current entry was pushed for; closing a step goes back when the Jam pushed it.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const step = jamStepOf(location.state);
+  const stepRef = useRef(step);
+  stepRef.current = step;
+  const pathRef = useRef("");
+  pathRef.current = `${location.pathname}${location.search}`;
+  /** The step below the studio's entry: "song" when the Jam pushed the song under it. */
+  const belowStudio = useRef<"song" | null>(null);
+  /** The studio's own entry is on its way off (we called `navigate(-1)`). */
+  const popping = useRef(false);
+  /** Moves each time Back left the studio while it was open: the studio asks what to do with unsent work. */
+  const [leaveTick, setLeaveTick] = useState(0);
+
+  /** Close the open song: up one history step when the Jam pushed it, the address rewritten otherwise. */
+  function closeSong() {
+    setOpenPlaying(false);
+    if (stepRef.current === "song" && studioRef.current === null) {
+      setOpenSongId(null, "pop");
+      navigate(-1);
+      return;
+    }
+    setOpenSongId(null);
+  }
+  const closeSongRef = useRef(closeSong);
+  closeSongRef.current = closeSong;
+
+  /** Open the studio: a history step of its own, so Back asks before it throws a take away. */
+  function openStudio(next: StudioState) {
+    belowStudio.current = stepRef.current === "song" ? "song" : null;
+    setStudio(next);
+    navigate(pathRef.current, { state: jamHistoryState("studio") });
+  }
+
+  /**
+   * Close the studio. When the Jam pushed its entry the entry comes off (Back);
+   * after a Back there is nothing to take off. `toWall` also takes off the song
+   * the Jam pushed under it.
+   */
+  function closeStudio(options: { toWall?: boolean } = {}) {
+    const pushed = stepRef.current === "studio";
+    setStudio(null);
+    if (options.toWall) {
+      popping.current = pushed;
+      if (pushed && belowStudio.current === "song") {
+        setOpenSongId(null, "pop");
+        navigate(-2);
+      } else if (!pushed && stepRef.current === "song") {
+        setOpenSongId(null, "pop");
+        navigate(-1);
+      } else {
+        // A song opened by a link has nothing of ours under it to take off: the
+        // address becomes the wall's, on this very entry.
+        setOpenSongId(null);
+      }
+      return;
+    }
+    if (!pushed) {
+      return;
+    }
+    popping.current = true;
+    navigate(-1);
+  }
+
+  // Back or Forward moved between the wall and a song: the panel follows the
+  // address the browser is at now. The router's own state is read too late for a
+  // quick Back after a click (it batches both into one update, and the app's
+  // route effect then sees no change), so this reads the address itself.
+  const openSongRef = useRef(openSongId);
+  openSongRef.current = openSongId;
+  useEffect(() => {
+    const onPop = () => {
+      if (studioRef.current !== null) {
+        return;
+      }
+      const target = parseAppRoute(window.location.pathname);
+      const songId = target?.kind === "channel" && target.channelId === channelId ? target.songId : null;
+      if (songId !== openSongRef.current) {
+        setOpenSongIdState(songId);
+        setSongGone(false);
+        setSongError(false);
+      }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [channelId]);
+  // Back (or Forward) left the studio's entry while it is open: the studio
+  // decides, because it knows whether a take or a recording is at stake.
+  // Read from the browser's own event, not from the router's state: the router
+  // batches a quick Keep-then-Back into one update and the second Back would go
+  // unseen. `history.state.usr` is where the router keeps the entry's state.
+  useEffect(() => {
+    if (!studioOpen) {
+      return;
+    }
+    const onPop = () => {
+      if (popping.current) {
+        return;
+      }
+      const entry = (window.history.state as { usr?: unknown } | null)?.usr;
+      if (jamStepOf(entry) !== "studio") {
+        setLeaveTick((before) => before + 1);
+      }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [studioOpen]);
+  // An entry of the studio with no studio open (a reload, a Forward onto it)
+  // lands on the step below it, never on a screen with nothing in it.
+  useEffect(() => {
+    if (step !== "studio") {
+      popping.current = false;
+      return;
+    }
+    if (studio === null && !popping.current) {
+      popping.current = true;
+      navigate(-1);
+    }
+  }, [step, studio, navigate]);
+  /** Back was pressed and the person chose to stay: the studio gets its entry back. */
+  function stayInStudio() {
+    navigate(pathRef.current, { state: jamHistoryState("studio") });
+  }
   const [startOpen, setStartOpen] = useState(false);
   const [howToOpen, setHowToOpen] = useState(false);
   const [freshTrackId, setFreshTrackId] = useState<string | null>(null);
@@ -165,7 +298,7 @@ export function JamPane({
       if (event.key !== "Escape" || escapeOwnedByOverlay(event)) {
         return;
       }
-      setOpenSongId(null);
+      closeSongRef.current();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -243,9 +376,13 @@ export function JamPane({
     }
     // Deleted under an open panel: close it, and say so.
     if (wasThere.current === openSongId) {
+      // The studio is over it: the song's panel goes when the studio does.
+      if (studioOpen) {
+        return;
+      }
       wasThere.current = null;
       setDeletedTitle(lastTitle.current);
-      setOpenSongId(null);
+      closeSongRef.current();
       return;
     }
     // Opened by a link: not on the first page, so read it by id.
@@ -276,7 +413,7 @@ export function JamPane({
     return () => {
       cancelled = true;
     };
-  }, [openSongId, openSong, state.status, channelId, songTry]);
+  }, [openSongId, openSong, state.status, channelId, songTry, studioOpen]);
 
   const liveStudioSong = studio?.mode === "over" ? (songs.find((song) => song.id === studio.songId) ?? null) : null;
   const liveStudioDetail = studio?.mode === "over" ? state.details[studio.songId] : undefined;
@@ -309,7 +446,7 @@ export function JamPane({
   function openFromTile(songId: string) {
     const go = () => {
       setFreshTrackId(null);
-      setOpenSongId(songId);
+      setOpenSongId(songId, stepRef.current === "song" ? "swap" : "push");
     };
     const doc = document as Document & { startViewTransition?: (update: () => void) => { finished: Promise<void> } };
     const still = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -335,7 +472,7 @@ export function JamPane({
     setFreshTrackId(null);
     setOpenSongId(songId);
     void loadJamDetail(channelId, songId);
-    setStudio({ mode: "over", songId, instrument, chosen: true });
+    openStudio({ mode: "over", songId, instrument, chosen: true });
   }
 
   const calls = useMemo(
@@ -357,7 +494,7 @@ export function JamPane({
 
   function onStart(result: JamStartResult) {
     setStartOpen(false);
-    setStudio({ mode: "new", draft: result.draft, instrument: result.instrument });
+    openStudio({ mode: "new", draft: result.draft, instrument: result.instrument });
   }
 
   const filterLabels: Record<JamWallFilter, string> = {
@@ -484,7 +621,7 @@ export function JamPane({
             className="mx-3 mt-3 flex items-center justify-between gap-3 rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-3 text-sm text-text-secondary sm:mx-5"
           >
             {t("jam.wall.songGone")}
-            <Button variant="ghost" size="sm" onClick={() => setOpenSongId(null)}>
+            <Button variant="ghost" size="sm" onClick={closeSong}>
               {t("jam.song.close")}
             </Button>
           </p>
@@ -646,11 +783,11 @@ export function JamPane({
             enabled={config.enabled}
             uploads={config.uploads}
             freshTrackId={freshTrackId}
-            onRecord={(instrument, chosen) => setStudio({ mode: "over", songId: openSong.id, instrument, chosen })}
+            onRecord={(instrument, chosen) => openStudio({ mode: "over", songId: openSong.id, instrument, chosen })}
             onPlayingChange={setOpenPlaying}
             onClose={() => {
               setOpenPlaying(false);
-              setOpenSongId(null);
+              closeSong();
             }}
           />
         </div>
@@ -675,11 +812,22 @@ export function JamPane({
               ? (pickInstrument(studioSong, studioDetail.viewer.addableInstruments, []) ?? studio.instrument)
               : studio.instrument
           }
-          onClose={() => setStudio(null)}
+          onClose={() => closeStudio()}
+          onLeaveToWall={() => closeStudio({ toWall: true })}
+          leaveTick={leaveTick}
+          onStay={stayInStudio}
           onPosted={({ songId, trackId }) => {
-            setStudio(null);
             setFreshTrackId(trackId);
-            setOpenSongId(songId);
+            if (studio.mode === "new") {
+              // A new song: the studio's entry becomes the song's, so Back from
+              // the song is the wall and not a studio that no longer exists.
+              popping.current = stepRef.current === "studio";
+              setStudio(null);
+              setOpenSongId(songId, stepRef.current === "studio" ? "swap" : "push");
+            } else {
+              closeStudio();
+              setOpenSongId(songId);
+            }
             void loadJamDetail(channelId, songId, { force: true });
           }}
         />

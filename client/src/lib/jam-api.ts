@@ -79,8 +79,12 @@ export const createJamSong = (channelId: string, body: CreateJamSongRequest) =>
 export const updateJamSong = (songId: string, patch: UpdateJamSongRequest) =>
   apiFetch<{ song: JamSongSummary }>(`/api/jam-songs/${songId}`, json("PATCH", patch));
 
-export const deleteJamSong = (songId: string) =>
-  noContent(`/api/jam-songs/${songId}`, json("DELETE"));
+/**
+ * `ifEmpty`: only while the song has no take (409 `jam_song_not_empty` otherwise). The studio
+ * asks it of a song it made and never filled, so a claim whose answer was lost is never deleted.
+ */
+export const deleteJamSong = (songId: string, options: { ifEmpty?: boolean } = {}) =>
+  noContent(`/api/jam-songs/${songId}${options.ifEmpty ? "?ifEmpty=true" : ""}`, json("DELETE"));
 
 export const createJamUpload = (songId: string, body: CreateJamUploadRequest) =>
   apiFetch<JamUploadTicket>(`/api/jam-songs/${songId}/uploads`, json("POST", body));
