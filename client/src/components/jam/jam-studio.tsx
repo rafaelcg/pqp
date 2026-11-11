@@ -117,6 +117,34 @@ export function JamStudio({
   }
   const recordRef = useRef<HTMLButtonElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
+  // Opening the studio puts the keyboard in it (the wall behind is inert, so focus
+  // would otherwise fall to the page): onto the studio itself, so the first Tab is
+  // its own back button. Closing it hands focus back to whatever opened it.
+  const root = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement && !document.activeElement.closest("[data-jam-studio]") ? document.activeElement : null;
+    // The opener may be re-drawn while the studio is open (the song refreshes under it), so what
+    // identifies it is remembered too: a lane's own record button, the dock's, the wall's.
+    const marks = ["data-jam-slot-record", "data-jam-record-over", "data-jam-new-song", "data-jam-empty-record"];
+    const mark = opener ? marks.find((name) => opener.hasAttribute(name)) : undefined;
+    const again = opener && mark ? `[${mark}="${opener.getAttribute(mark)}"]` : null;
+    root.current?.focus({ preventScroll: true });
+    return () => {
+      // After the pane has made the song live again (it is inert while the studio is open).
+      window.setTimeout(() => {
+        const active = document.activeElement;
+        if (active && active !== document.body && active.isConnected) {
+          return;
+        }
+        const found = opener?.isConnected ? opener : again ? document.querySelector<HTMLElement>(again) : null;
+        if (found) {
+          found.focus({ preventScroll: true });
+        } else {
+          document.querySelector<HTMLElement>("[data-jam-record-over], [data-jam-new-song]")?.focus({ preventScroll: true });
+        }
+      }, 80);
+    };
+  }, []);
   // The delay suggestion answered (measured or "Agora não"): back to the top,
   // where the instrument and the band are, instead of a page scrolled to nothing.
   const wasChecking = useRef(false);
@@ -142,12 +170,14 @@ export function JamStudio({
   // A new song is "Música nova" until it exists, and is itself once it does.
   const created = phase === "done" && !song && draft !== null;
   const title = song
-    ? t("jam.studio.over", { names: formatList(names, locale) || song.title })
+    ? song.title
     : created
       ? draft!.title
       : (draft?.title ?? t("jam.studio.new"));
   const subtitle = song
-    ? `${song.title}${song.artist ? ` · ${song.artist}` : ""}`
+    ? names.length > 0
+      ? t("jam.studio.over", { names: formatList(names, locale) })
+      : (song.artist ?? "")
     : created
       ? (draft?.artist ?? t("jam.original"))
       : t("jam.studio.newSub");
@@ -256,17 +286,21 @@ export function JamStudio({
       : t("jam.post.uploading", { percent: Math.round(studio.progress.fraction * 100) });
   const errorText = studio.postError ? t(`jam.error.${studio.postError}` as MessageKey) : null;
   const playingNow = transport === "playing";
+  /** The camera is on, or a take with a picture is being looked at. */
+  const videoOn = Boolean(studio.camera) || Boolean(studio.takeVideoUrl && (reviewing || phase === "done"));
 
   return (
     <div
+      ref={root}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-label={title}
       data-jam-studio=""
       data-phase={phase}
-      className="jam-panel-in @container absolute inset-0 z-30 flex flex-col bg-surface-0 max-sm:fixed max-sm:z-50"
+      className="jam-panel-in @container absolute inset-0 z-30 flex flex-col bg-surface-0 outline-none max-sm:fixed max-sm:z-50"
     >
-      <header className="flex items-center gap-2.5 border-b border-border bg-surface-1 px-2 py-2 sm:px-4">
+      <header className="flex items-center gap-2.5 border-b border-border bg-surface-1 px-2 py-2 sm:px-4 [@media(max-height:32rem)]:py-1">
         <button
           type="button"
           onClick={requestClose}
@@ -313,8 +347,13 @@ export function JamStudio({
             </p>
           </div>
         ) : (
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-3 pb-10 sm:p-6 sm:pb-12">
-            <div className="@container flex min-w-0 flex-col gap-5">
+          <div
+            className={cn(
+              "mx-auto flex w-full flex-col gap-6 p-3 pb-10 sm:p-6 sm:pb-12 [@media(max-height:32rem)]:gap-3 [@media(max-height:32rem)]:pb-4",
+              videoOn ? "max-w-5xl" : "max-w-3xl",
+            )}
+          >
+            <div className="@container flex min-w-0 flex-col gap-5 [@media(max-height:32rem)]:gap-3">
               {micProblem && (
                 <div role="alert" className="flex flex-col items-start gap-3 rounded-[var(--radius-card)] bg-danger-soft p-4 text-on-danger-soft">
                   <p className="flex items-start gap-2 text-sm leading-snug">
@@ -370,14 +409,14 @@ export function JamStudio({
               {/* what the screen is asking right now, in one line */}
               {phase !== "boot" && (
                 <div className="flex flex-col gap-1" data-jam-stage-title="">
-                  <h3 className="font-display text-2xl font-extrabold tracking-[-0.01em] text-text [text-wrap:balance] sm:text-3xl">
+                  <h3 className="font-display text-2xl font-extrabold tracking-[-0.01em] text-text [text-wrap:balance] sm:text-3xl [@media(max-height:32rem)]:text-xl">
                     {phase === "setup"
                       ? t("jam.studio.stage.setup")
                       : recording
                         ? t("jam.studio.stage.recording", { instrument: instrumentName.toLowerCase() })
                         : t("jam.studio.stage.review")}
                   </h3>
-                  <p className="text-sm text-text-secondary [text-wrap:pretty]">
+                  <p className="text-sm text-text-secondary [text-wrap:pretty] [@media(max-height:32rem)]:hidden">
                     {phase === "setup"
                       ? backing.length > 0
                         ? t("jam.studio.stage.setupBody")
@@ -390,11 +429,26 @@ export function JamStudio({
               )}
 
               {phase === "setup" && (
-                <InstrumentPicker value={studio.instrument} options={pickable} wanted={wanted} onChange={studio.setInstrument} />
+                <div className="flex flex-col gap-2">
+                  {wanted.length > 0 && (
+                    <p data-jam-asked-note="" className="text-[13px] font-medium text-text-secondary [text-wrap:pretty]">
+                      {t("jam.studio.askedFor", {
+                        list: formatList(
+                          wanted.map((one) => t(JAM_INSTRUMENT_LOOK[one].nameKey as MessageKey).toLowerCase()),
+                          locale,
+                        ),
+                      })}
+                    </p>
+                  )}
+                  <InstrumentPicker value={studio.instrument} options={pickable} wanted={wanted} onChange={studio.setInstrument} />
+                </div>
               )}
 
               {phase === "setup" && !studio.needsCheck && studio.mic === "ready" && <StudioTip />}
 
+              {/* with the camera on, the picture sits beside the band on a wide screen, so the lanes stay above the fold */}
+              <div className={cn("flex min-w-0 flex-col gap-5 [@media(max-height:32rem)]:gap-3", videoOn && "lg:grid lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] lg:items-start")}>
+              <div className="flex min-w-0 flex-col gap-5 empty:hidden">
               {/* the camera, on the setup step itself: it used to live behind "Teu som" and went unseen */}
               {phase === "setup" && (
                 <div
@@ -417,15 +471,16 @@ export function JamStudio({
               )}
 
               {studio.camera && (phase === "setup" || recording) && (
-                <div className="relative mx-auto aspect-video w-full max-w-[min(42rem,80vh)] overflow-hidden rounded-[var(--radius-card)] bg-surface-1">
+                <div className="relative mx-auto aspect-video w-full max-w-[min(42rem,80vh)] overflow-hidden rounded-[var(--radius-card)] bg-surface-1 lg:max-w-none">
                   <video ref={stageVideo} autoPlay muted playsInline aria-label={t("jam.studio.camera")} className="h-full w-full -scale-x-100 object-cover" />
                 </div>
               )}
               {studio.takeVideoUrl && (reviewing || phase === "done") && (
-                <div className="relative mx-auto aspect-video w-full max-w-[min(42rem,80vh)] overflow-hidden rounded-[var(--radius-card)] bg-surface-1">
+                <div className="relative mx-auto aspect-video w-full max-w-[min(42rem,80vh)] overflow-hidden rounded-[var(--radius-card)] bg-surface-1 lg:max-w-none">
                   <video ref={takeVideo} src={studio.takeVideoUrl} muted playsInline aria-label={t("jam.studio.camera")} className="h-full w-full object-cover" />
                 </div>
               )}
+              </div>
 
               {/* the band, and the lane the take goes into */}
               <div
@@ -452,7 +507,7 @@ export function JamStudio({
                     {t("jam.studio.playError")}
                   </p>
                 )}
-                <div className="relative [--lane-head:12.5rem]">
+                <div className={cn("relative", videoOn ? "[--lane-head:9rem]" : "[--lane-head:12.5rem]")}>
                 <Ruler timeline={timeline} onSeek={(fraction) => !recording && studio.engine?.player.seek(fraction * (timeline.endMs - timeline.startMs))} />
                 <ul className="flex flex-col gap-1.5" aria-label={t("jam.song.tracks")}>
                   <li
@@ -545,6 +600,7 @@ export function JamStudio({
                 {(playingNow || reviewing || recording) && <Playhead clock={clock} timeline={timeline} />}
                 </div>
               </div>
+              </div>
 
 
 
@@ -617,7 +673,7 @@ export function JamStudio({
         )}
       </div>
 
-      <footer className={cn("safe-pb relative border-t border-border bg-surface-1 px-3 py-4 sm:px-6", phase === "done" && "hidden")}>
+      <footer className={cn("safe-pb relative border-t border-border bg-surface-1 px-3 py-4 sm:px-6 [@media(max-height:32rem)]:py-2", phase === "done" && "hidden")}>
         {phase === "setup" && studio.needsCheck && (
           <div className="mx-auto mb-3 max-w-3xl">
             <LatencyCheck studio={studio} />
@@ -637,12 +693,12 @@ export function JamStudio({
               }}
               aria-label={t("jam.studio.record")}
               data-jam-record=""
-              className="group relative grid h-20 w-20 place-items-center rounded-full bg-surface-0 shadow-[var(--shadow-2)] ring-4 ring-text outline-none transition-[transform,opacity] duration-[var(--duration-fast)] focus-visible:ring-focus-ring enabled:hover:scale-[1.04] enabled:active:scale-[0.95] disabled:opacity-40"
+              className="group relative grid h-20 w-20 place-items-center rounded-full bg-surface-0 shadow-[var(--shadow-2)] ring-4 ring-text outline-none [@media(max-height:32rem)]:h-14 [@media(max-height:32rem)]:w-14 [@media(max-height:32rem)]:ring-[3px] transition-[transform,opacity] duration-[var(--duration-fast)] focus-visible:ring-focus-ring enabled:hover:scale-[1.04] enabled:active:scale-[0.95] disabled:opacity-40"
             >
               {canRecord && <LevelRing clock={studio.levelClock} />}
-              <span aria-hidden className="h-12 w-12 rounded-full bg-danger transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] group-enabled:group-hover:scale-90" />
+              <span aria-hidden className="h-12 w-12 rounded-full bg-danger transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] group-enabled:group-hover:scale-90 [@media(max-height:32rem)]:h-8 [@media(max-height:32rem)]:w-8" />
             </button>
-            <p className="text-center text-[13px] font-semibold text-text-secondary [text-wrap:pretty]">
+            <p className="text-center text-[13px] font-semibold text-text-secondary [text-wrap:pretty] [@media(max-height:32rem)]:hidden">
               {studio.mic === "opening" ? t("jam.studio.opening") : t("jam.studio.recordHint")}
             </p>
           </div>
@@ -668,7 +724,7 @@ export function JamStudio({
               onClick={() => void studio.stopRecording()}
               aria-label={t("jam.studio.stop")}
               data-jam-stop=""
-              className="relative grid h-20 w-20 place-items-center rounded-full bg-danger text-on-danger shadow-[var(--shadow-2)] outline-none transition-transform duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-4 focus-visible:ring-offset-surface-1 hover:scale-[1.04] active:scale-[0.95]"
+              className="relative grid h-20 w-20 place-items-center rounded-full bg-danger text-on-danger shadow-[var(--shadow-2)] outline-none [@media(max-height:32rem)]:h-14 [@media(max-height:32rem)]:w-14 transition-transform duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-4 focus-visible:ring-offset-surface-1 hover:scale-[1.04] active:scale-[0.95]"
             >
               <LevelRing clock={studio.levelClock} />
               <Square aria-hidden className="relative h-7 w-7 fill-current" />
@@ -780,7 +836,7 @@ export function JamStudio({
                       />
                     </div>
                   </div>
-                  {!studio.needsCheck && <LatencyCard studio={studio} />}
+                  {studio.needsCheck ? <LatencyCheck studio={studio} /> : <LatencyCard studio={studio} />}
           </div>
         </DialogBody>
       </Dialog>

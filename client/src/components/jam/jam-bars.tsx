@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -7,12 +7,21 @@ import { cn } from "@/lib/utils";
  * and the entrance is a CSS stagger that switches off under reduced motion.
  */
 
-/** How many bars of `pitch` px (bar plus gap) fit across the element. */
-export function useBarCount(pitch: number, max = 240): [React.RefObject<HTMLDivElement | null>, number] {
-  const ref = useRef<HTMLDivElement | null>(null);
+/**
+ * How many bars of `pitch` px (bar plus gap) fit across the element.
+ *
+ * The first value is a CALLBACK ref, not a ref object: the element it measures
+ * may mount later than the component that asks (a tile that swaps its picture
+ * for another layout, a cover that is removed), and a ref object read once in an
+ * effect never saw the new element, so the waveform stayed at zero bars for good.
+ */
+export function useBarCount<T extends HTMLElement = HTMLDivElement>(
+  pitch: number,
+  max = 240,
+): [(node: T | null) => void, number] {
+  const [element, setElement] = useState<T | null>(null);
   const [count, setCount] = useState(0);
   useEffect(() => {
-    const element = ref.current;
     if (!element) {
       return;
     }
@@ -27,8 +36,28 @@ export function useBarCount(pitch: number, max = 240): [React.RefObject<HTMLDivE
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [pitch, max]);
-  return [ref, count];
+  }, [element, pitch, max]);
+  return [setElement, count];
+}
+
+/** The width of an element, followed as it resizes (a callback ref, so it also follows an element that mounts later). */
+export function useElementWidth<T extends HTMLElement = HTMLDivElement>(): [(node: T | null) => void, number] {
+  const [element, setElement] = useState<T | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    if (!element) {
+      return;
+    }
+    const measure = () => setWidth(element.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [element]);
+  return [setElement, width];
 }
 
 export function JamBars({

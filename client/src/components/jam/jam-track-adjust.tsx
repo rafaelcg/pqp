@@ -19,11 +19,12 @@ import {
 import { JamClipEditor } from "./jam-clip-editor";
 
 /**
- * Adjusting the author's own posted track: the same clip editor the studio has,
- * on a track that is already on the song (the contract lets a track's author
- * change its offset, trims and gain). Every drag is heard at once through the
- * engine; nothing is sent until "Guardar", and "Desfazer" puts the stored
- * numbers back.
+ * Adjusting the author's own posted recording: the same clip editor the studio
+ * has, on a recording that is already on the song (the contract lets its author
+ * change its offset, trims and gain). It is drawn right under the lane it edits.
+ * Every drag is heard at once through the engine; NOTHING is sent until
+ * "Guardar", and the box says so. Save and close live in a footer that sticks to
+ * the bottom of the scroll area, so they are in reach however tall the editor is.
  */
 export function TrackAdjust({
   track,
@@ -36,7 +37,7 @@ export function TrackAdjust({
   onDone,
 }: {
   track: JamTrack;
-  /** Which track this is, said in the box itself ("Ajustando tua guitarra"). */
+  /** Which recording this is, said in the box itself ("Ajustando tua gravação de guitarra"). */
   title: string;
   /** The other in-mix lanes, drawn behind. */
   band: readonly BandLane[];
@@ -118,10 +119,17 @@ export function TrackAdjust({
     [engine],
   );
 
-  // Opened below the lanes: brought into view with its buttons, not left under the dock.
+  // Opened under its lane: brought into view once the lane has finished growing (it
+  // starts at no height), with margins that clear the sticky transport above and the dock below.
   const box = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    box.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    const calm = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const timer = window.setTimeout(
+      // The top of the editor goes just under the sticky transport: its Save and Close live in its header.
+      () => box.current?.scrollIntoView?.({ block: "start", behavior: calm ? "auto" : "smooth" }),
+      calm ? 0 : 300,
+    );
+    return () => window.clearTimeout(timer);
   }, []);
 
   async function save() {
@@ -139,48 +147,54 @@ export function TrackAdjust({
     }
   }
 
+  const close = () => {
+    if (dirty) {
+      hear(editsFromTrack(track));
+    }
+    onDone();
+  };
+
   return (
     <div
       ref={box}
-      className="jam-drop-in flex flex-col gap-3 rounded-[var(--radius-card)] bg-surface-2 p-3.5 ring-1 ring-inset ring-border"
+      className="flex scroll-mt-[6.75rem] flex-col gap-3 rounded-[var(--radius-card)] bg-surface-2 p-3.5 ring-1 ring-inset ring-border"
       data-jam-adjust={track.id}
       onKeyDown={(event) => {
         // Escape closes the editor (putting back what is stored), never the song under it.
         if (event.key === "Escape") {
           event.stopPropagation();
-          if (dirty) {
-            hear(editsFromTrack(track));
-          }
-          onDone();
+          close();
         }
       }}
     >
-      <div className="flex items-center justify-end gap-2 border-b border-border pb-3">
-        <p className="mr-auto min-w-0 truncate text-sm font-bold text-text" data-jam-adjust-title="">
-          {title}
-        </p>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            if (dirty) {
-              hear(editsFromTrack(track));
-            }
-            onDone();
-          }}
-          disabled={busy}
-          data-jam-adjust-close=""
-        >
-          {dirty ? t("jam.take.adjustBack") : t("jam.song.close")}
-        </Button>
-        <Button size="sm" disabled={!dirty || busy} onClick={() => void save()} data-jam-adjust-save="" className="gap-1.5 rounded-full px-4">
-          {busy ? (
-            <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden />
-          ) : saved ? (
-            <Check className="h-3.5 w-3.5" aria-hidden />
-          ) : null}
-          {t("jam.take.adjustSave")}
-        </Button>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2" data-jam-adjust-header="">
+        <div className="flex min-w-0 flex-1 basis-[12rem] flex-col gap-0.5">
+          <p className="min-w-0 text-sm font-bold text-text [text-wrap:balance]" data-jam-adjust-title="">
+            {title}
+          </p>
+          <p className="text-xs text-text-secondary [text-wrap:pretty]" data-jam-adjust-note="">
+            {t("jam.take.adjustNote")}
+          </p>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <Button variant="ghost" size="sm" className="pointer-coarse:h-11" onClick={close} disabled={busy} data-jam-adjust-close="">
+            {dirty ? t("jam.take.adjustBack") : t("jam.song.close")}
+          </Button>
+          <Button
+            size="sm"
+            disabled={!dirty || busy}
+            onClick={() => void save()}
+            data-jam-adjust-save=""
+            className="gap-1.5 rounded-full px-4 pointer-coarse:h-11 disabled:bg-surface-3 disabled:text-text-tertiary disabled:opacity-100"
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden />
+            ) : saved ? (
+              <Check className="h-3.5 w-3.5" aria-hidden />
+            ) : null}
+            {t("jam.take.adjustSave")}
+          </Button>
+        </div>
       </div>
       <div inert={busy} aria-busy={busy} className={busy ? "opacity-60" : undefined}>
         <JamClipEditor

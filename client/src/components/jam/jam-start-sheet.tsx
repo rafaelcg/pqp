@@ -1,4 +1,5 @@
 import { JAM_ARTIST_MAX, JAM_TITLE_MAX, type JamInstrument, type JamJoinMode } from "@pqp/shared";
+import { Check } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
@@ -123,6 +124,17 @@ export function JamStartSheet({
               {t("jam.start.needTitle")}
             </span>
           )}
+          {title.length >= JAM_TITLE_MAX - 20 && (
+            <span
+              data-jam-title-count=""
+              aria-live="polite"
+              className={cn("self-end text-xs font-medium tabular-nums", title.length >= JAM_TITLE_MAX ? "text-danger" : "text-text-secondary")}
+            >
+              {title.length >= JAM_TITLE_MAX
+                ? t("jam.start.titleMax", { max: JAM_TITLE_MAX })
+                : t("jam.start.titleCount", { count: title.length, max: JAM_TITLE_MAX })}
+            </span>
+          )}
         </label>
 
         <label className="flex flex-col gap-1.5 text-xs font-semibold text-text-secondary">
@@ -174,11 +186,14 @@ export function JamStartSheet({
                       )
                     }
                     className={cn(
-                      "flex h-11 items-center gap-2 rounded-full px-4 text-sm font-bold outline-none transition-[background,color,transform] duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96]",
-                      on ? look.fill : "bg-surface-2 text-text-secondary hover:bg-border hover:text-text",
+                      "flex h-11 items-center gap-2 rounded-full px-4 text-sm font-bold outline-none transition-[background,color,transform,box-shadow] duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96]",
+                      // Chosen is unmistakable: the instrument's colour, a tick, and a ring in the text colour.
+                      on
+                        ? cn(look.fill, "ring-2 ring-text ring-offset-2 ring-offset-surface-1")
+                        : "border border-dashed border-border-strong bg-transparent text-text-secondary hover:bg-surface-2 hover:text-text",
                     )}
                   >
-                    <Icon className="h-4 w-4" aria-hidden />
+                    {on ? <Check className="h-4 w-4" strokeWidth={3} aria-hidden /> : <Icon className="h-4 w-4" aria-hidden />}
                     {t(look.nameKey as MessageKey)}
                   </button>
                 );

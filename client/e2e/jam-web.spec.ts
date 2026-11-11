@@ -753,7 +753,7 @@ test("changing the volume of one of a song's tracks changes that track and no ot
   await host.locator(`[data-jam-adjust-open="${guitar.id}"]`).click();
   const adjust = host.locator(`[data-jam-adjust="${guitar.id}"]`);
   await expect(adjust).toBeVisible();
-  await clickSliderAt(host, adjust.getByRole("slider", { name: "Take volume" }), 0.125);
+  await clickSliderAt(host, adjust.getByRole("slider", { name: "Recording volume" }), 0.125);
   const heard = await listen(host);
   await shot(host, "volume-2-guitar-turned-down");
   test.info().annotations.push({ type: "volume probe", description: JSON.stringify({ before, heard }) });
@@ -780,7 +780,7 @@ test("changing the volume of one of a song's tracks changes that track and no ot
   // ---- after save: what is shown and what is heard ---------------------------------
   await expect(adjust).toHaveCount(0);
   // the guitar's own lane says so (a chip and shorter bars); the drums' lane is as it was
-  await expect(guitarLane.locator("[data-jam-gain]")).toHaveText("-75%");
+  await expect(guitarLane.locator("[data-jam-gain]")).toHaveText("recorded at -75%");
   await expect(drumsLane.locator("[data-jam-gain]")).toHaveCount(0);
   expect(await tallest(guitarLane), "the turned-down lane is drawn lower").toBeLessThan(barsBefore.guitar * 0.6);
   expect(await tallest(drumsLane), "the untouched lane is drawn as it was").toBe(barsBefore.drums);
@@ -864,7 +864,7 @@ test("a volume being adjusted keeps playing as the editor says while the lanes a
 
   await host.locator(`[data-jam-adjust-open="${guitar.id}"]`).click();
   const adjust = host.locator(`[data-jam-adjust="${guitar.id}"]`);
-  await clickSliderAt(host, adjust.getByRole("slider", { name: "Take volume" }), 0.125);
+  await clickSliderAt(host, adjust.getByRole("slider", { name: "Recording volume" }), 0.125);
   await expect(adjust).toContainText("-75%");
 
   // somebody mutes the drums and brings them back: the guitar's unsaved volume is still what plays
@@ -935,7 +935,7 @@ test("two takes recorded by the same person in the studio: turning one down leav
   await host.locator(`[data-jam-adjust-open="${first!.id}"]`).click();
   const adjust = host.locator(`[data-jam-adjust="${first!.id}"]`);
   await expect(adjust).toBeVisible();
-  await clickSliderAt(host, adjust.getByRole("slider", { name: "Take volume" }), 0.25);
+  await clickSliderAt(host, adjust.getByRole("slider", { name: "Recording volume" }), 0.25);
   const heard = await listen(host);
   await shot(host, "studio-2-two-takes-first-turned-down");
   const now = takesOnly(heard);

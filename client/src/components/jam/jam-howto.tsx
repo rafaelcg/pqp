@@ -1,7 +1,7 @@
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { Headphones, Mic, Plus, Send } from "lucide-react";
+import { Headphones, Mic, Plus, SlidersHorizontal, Timer, Users, type LucideIcon } from "lucide-react";
 import type { CSSProperties } from "react";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { seededBars } from "@/lib/jam-wall";
@@ -82,10 +82,12 @@ export function JamHowToHero({ className, big = false }: { className?: string; b
 
 export function JamHowToDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
-  const steps = [
-    { icon: Headphones, title: t("jam.howto.one.title"), body: t("jam.howto.one.body") },
-    { icon: Mic, title: t("jam.howto.two.title"), body: t("jam.howto.two.body") },
-    { icon: Send, title: t("jam.howto.three.title"), body: t("jam.howto.three.body") },
+  // The empty wall already says the three steps. This sheet is what the steps leave out.
+  const steps: { icon: LucideIcon; title: string; body: string }[] = [
+    { icon: Headphones, title: t("jam.howto.tip.phones.title"), body: t("jam.howto.tip.phones.body") },
+    { icon: Timer, title: t("jam.howto.tip.timing.title"), body: t("jam.howto.tip.timing.body") },
+    { icon: SlidersHorizontal, title: t("jam.howto.tip.mix.title"), body: t("jam.howto.tip.mix.body") },
+    { icon: Users, title: t("jam.howto.tip.who.title"), body: t("jam.howto.tip.who.body") },
   ];
   return (
     <Dialog

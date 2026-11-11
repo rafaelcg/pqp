@@ -84,7 +84,7 @@ export function JamTransport({
         aria-label={playing ? t("jam.song.pause") : t("jam.song.play", { title })}
         className={cn(
           "relative grid shrink-0 place-items-center rounded-full bg-text text-surface-0 shadow-[var(--shadow-2)] outline-none transition-[background,transform] duration-[var(--duration-fast)] hover:scale-[1.04] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 active:scale-[0.95] disabled:opacity-60",
-          lg ? "h-14 w-14" : "h-12 w-12",
+          lg ? "h-14 w-14" : "h-12 w-12 [@media(max-height:32rem)]:h-10 [@media(max-height:32rem)]:w-10",
           label && "w-auto gap-2 px-5",
         )}
       >

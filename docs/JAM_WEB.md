@@ -24,24 +24,41 @@ recording.
 
 ## The wall
 
-Songs are tiles of four sizes (`planTiles` in `lib/jam-wall.ts`): the most active
-song is the hero (2 by 2), then a fixed rhythm of small, wide (2 by 1) and tall
-(1 by 2) tiles. A size follows the position and nothing else, so a tile never
-changes size under a finger when somebody else's song moves.
+Every song is the SAME card (`JamTile`): its picture on top, clean, and a footer of
+its own under it that holds all the words (title, who is on it, what it needs) and
+the one round play button. Nothing is ever drawn across the picture, so a cover
+photo with big lettering of its own, a dark one, a pale one, a mosaic of faces and
+the generated band all sit in the same card. The card is two buttons that are not
+nested: a stretched one that opens the song (paused) and the round one that plays
+it. The footer is a container: long labels switch to short ones on a narrow card
+("Faltam bateria e voz", "Faltam 2", "+2"), so nothing is cut mid-word and the play
+button never leaves the card, in pt-BR, English or Spanish.
 
-A tile is drawn from the song SUMMARY alone (the preview fields of `docs/JAM.md`).
-Its picture is the song itself: one band per instrument on it, stacked like the
-song's lanes, each in its instrument's colour with the loudest stem's
-`previewPeaks` running through it (contrast-stretched by `stretchBars` so a song
-that is loud throughout still shows a shape), and a dashed band for each of the
-`missingInstruments`. A riff is one band, a full song four. The `contributors`'
-faces sit by the title, and what it needs is one line ("+ Falta voz" in the
-voice's colour, "Qualquer um entra", "Pronta"). Only a tile with `hasVideo` reads
-its detail, once it comes near the screen, for the video's address; a frame from
-it then takes the picture's place (and plays muted under the pointer). The open
-song's tile dances while it plays, and opening a tile morphs its picture into the
-panel's cover (a View Transition where the browser has one). Filters are Tudo, Falta alguém (everything somebody
-could still add to) and Prontas.
+The grid is `wallColumns(width)` columns (two on a phone, up to six on a big screen,
+the content capped at 1720 px and centred). At most ONE card is featured (`planTiles`):
+twice as wide, its picture a square twice the size and its footer, taller, carrying
+the band's instrument dots too. It is the song with the most people and recordings
+in it (what is IN a song, not when it was touched, so a one-take riff is never the
+big tile while a six-person band is small), and only when the songs after it can
+fill the cells beside it (a count the wall computes from its measured width), so the
+grid never has a hole.
+
+A card is drawn from the song SUMMARY alone (the preview fields of `docs/JAM.md`).
+The picture is, first that applies: the cover photo the owner chose (a square, the
+same frame the crop step shows); a mosaic of the first frames of the song's videos
+(one to four, cropped from the top so a face survives; only a card with `hasVideo`
+reads its detail, once it comes near the screen); or the band, one lane per
+instrument in its colour with the loudest stem's `previewPeaks` running through it
+(`BandArt`, lanes capped in height so a riff is one calm band, a dashed lane for each
+of the `missingInstruments`). The open song's header draws the same picture
+(`JamArtwork`), so the card and the panel tell one story, and opening a card morphs
+its picture into the panel's cover (a View Transition where the browser has one).
+A swapped cover keeps the old picture on screen until the new one has loaded. Filters
+are Tudo, Falta alguém (everything somebody could still add to) and Prontas.
+
+**Keyboard.** Opening a song puts focus in it (its title), Space plays and pauses
+from anywhere that is not a field or a control that owns Space, and Escape closes
+it and gives focus back to the card. The studio does the same.
 
 **Tão te chamando.** Above the tiles, one card per instrument a `wanted` song is
 still missing ("Falta voz em In Bloom"), in that instrument's colour. One click

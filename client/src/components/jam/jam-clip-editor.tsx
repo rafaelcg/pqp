@@ -1,6 +1,6 @@
 import type { JamInstrument } from "@pqp/shared";
 import { ChevronLeft, ChevronRight, RotateCcw, Volume2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
@@ -26,11 +26,14 @@ import { cn } from "@/lib/utils";
 import { MirrorBars } from "./jam-art";
 
 /**
- * Adjusting a take by touching it: the take is a clip on the song's timeline
+ * Adjusting a recording by touching it: it is a clip on the song's timeline
  * with the band's waveform drawn behind it, so lining up is seen, not guessed.
  * Drag an end to cut it, drag the middle to move it in time, or use the
- * earlier and later buttons for a few milliseconds at a time. One volume. Every
+ * earlier and later buttons: a tap is 10 ms, and HOLDING one repeats and speeds
+ * up (10, then 50, then 100 ms a step), because on a phone nobody taps thirty
+ * times. One volume, in its own box that says it is what everybody hears. Every
  * handle is a slider for the keyboard too (arrows, with Shift for big steps).
+ * Every target is 44 px under a finger.
  *
  * The editor only reports numbers; the caller decides what they do (the studio
  * changes the take before it is sent, a posted track saves with "Guardar").
@@ -76,6 +79,68 @@ function useWidth(): [React.RefObject<HTMLDivElement | null>, number] {
 
 type Grip = "start" | "end" | "body";
 
+/** A hold waits this long before it repeats, so a tap stays one step. */
+export const NUDGE_HOLD_DELAY_MS = 400;
+export const NUDGE_REPEAT_MS = 90;
+
+/** How far one repeat moves, by how long the button has been held. */
+export function nudgeStepFor(heldMs: number): number {
+  return heldMs >= 1500 ? 100 : heldMs >= 600 ? 50 : 10;
+}
+
+/**
+ * Press-and-hold on an "earlier / later" button. A pointer press steps once at
+ * once; keep holding and it repeats, faster the longer it is held. Letting go,
+ * leaving the button, losing focus or a cancelled touch stops it. A click that
+ * did not come from a pointer (the keyboard, a screen reader) is one step.
+ */
+function useHoldNudge(nudgeMs: number, onNudge: (ms: number) => void) {
+  const latest = useRef({ nudgeMs, onNudge });
+  latest.current = { nudgeMs, onNudge };
+  const timer = useRef<number | undefined>(undefined);
+  const stop = useCallback(() => {
+    if (timer.current !== undefined) {
+      window.clearTimeout(timer.current);
+      timer.current = undefined;
+    }
+  }, []);
+  useEffect(() => stop, [stop]);
+
+  return useCallback(
+    (sign: 1 | -1) => {
+      const step = (size: number) => latest.current.onNudge(latest.current.nudgeMs + sign * size);
+      return {
+        onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+          if (event.pointerType === "mouse" && event.button !== 0) {
+            return;
+          }
+          stop();
+          step(nudgeStepFor(0));
+          let held = NUDGE_HOLD_DELAY_MS;
+          const tick = () => {
+            step(nudgeStepFor(held));
+            held += NUDGE_REPEAT_MS;
+            timer.current = window.setTimeout(tick, NUDGE_REPEAT_MS);
+          };
+          timer.current = window.setTimeout(tick, NUDGE_HOLD_DELAY_MS);
+        },
+        onPointerUp: stop,
+        onPointerLeave: stop,
+        onPointerCancel: stop,
+        onBlur: stop,
+        onContextMenu: (event: { preventDefault: () => void }) => event.preventDefault(),
+        onClick: (event: { detail: number }) => {
+          // A pointer click already stepped on press; only a keyboard or assistive click lands here.
+          if (event.detail === 0) {
+            step(nudgeStepFor(0));
+          }
+        },
+      };
+    },
+    [stop],
+  );
+}
+
 export function JamClipEditor({
   instrument,
   peaks,
@@ -94,6 +159,9 @@ export function JamClipEditor({
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[instrument];
   const [zoom, setZoom] = useState<"whole" | "close">("whole");
+  const holdNudge = useHoldNudge(edits.nudgeMs, onNudge);
+  const timingId = useId();
+  const volumeId = useId();
   const [stageRef, width] = useWidth();
   // While a grip is held the frame does not move under the pointer.
   const held = useRef<{ grip: Grip; x: number; edits: TakeEdits; window: ClipWindow } | null>(null);
@@ -214,7 +282,7 @@ export function JamClipEditor({
         <RadioGroup<"whole" | "close">
           label={t("jam.clip.zoom")}
           variant="segmented"
-          size="sm"
+          size="md"
           fit="content"
           value={zoom}
           onValueChange={setZoom}
@@ -227,7 +295,8 @@ export function JamClipEditor({
 
       <div
         ref={stageRef}
-        className="relative h-40 touch-none select-none overflow-hidden rounded-[var(--radius-card)] bg-surface-0 ring-1 ring-inset ring-border"
+        className="relative h-36 touch-none select-none overflow-hidden [@media(max-height:32rem)]:h-28 rounded-[var(--radius-card)] bg-surface-0 ring-1 ring-inset ring-border"
+        data-jam-clip-stage=""
         data-dragging={dragging ?? undefined}
       >
         {/* the band, on its own row right above the take: the beat to line up with */}
@@ -300,7 +369,7 @@ export function JamClipEditor({
               onPointerUp={end}
               onPointerCancel={end}
               onKeyDown={(event) => keys(grip, event)}
-              className="group absolute bottom-1.5 top-[3.4rem] z-10 flex w-5 -translate-x-1/2 cursor-ew-resize items-center justify-center outline-none"
+              className="group absolute bottom-1.5 top-[3.4rem] z-10 flex w-5 -translate-x-1/2 cursor-ew-resize items-center justify-center outline-none pointer-coarse:w-11"
               style={{ left: at(grip === "start" ? span.startMs : span.endMs) }}
             >
               <span
@@ -320,60 +389,79 @@ export function JamClipEditor({
         <div ref={playhead} aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-20 w-0.5 rounded-full bg-text opacity-0" />
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-        <div className="flex items-center gap-1.5" role="group" aria-label={t("jam.clip.move")}>
-          <button
-            type="button"
-            aria-label={t("jam.review.nudgeEarlier")}
-            onClick={() => onNudge(edits.nudgeMs - 10)}
-            data-jam-nudge="earlier"
-            className="flex h-10 items-center gap-1 whitespace-nowrap rounded-full bg-surface-2 pl-2 pr-3 text-xs font-bold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            <ChevronLeft className="h-4 w-4" aria-hidden />
-            {t("jam.review.nudgeEarlier")}
-          </button>
-          <span className="min-w-[6.5rem] text-center text-xs font-semibold tabular-nums text-text-secondary" aria-live="polite">
-            {nudgeWords}
-          </span>
-          <button
-            type="button"
-            aria-label={t("jam.review.nudgeLater")}
-            onClick={() => onNudge(edits.nudgeMs + 10)}
-            data-jam-nudge="later"
-            className="flex h-10 items-center gap-1 whitespace-nowrap rounded-full bg-surface-2 pl-3 pr-2 text-xs font-bold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            {t("jam.review.nudgeLater")}
-            <ChevronRight className="h-4 w-4" aria-hidden />
-          </button>
+      <div className="grid gap-2">
+        <div
+          role="group"
+          aria-labelledby={timingId}
+          className="flex flex-col gap-2 rounded-[var(--radius-card)] bg-surface-0/60 p-3 ring-1 ring-inset ring-border"
+        >
+          <p id={timingId} className="text-xs font-bold text-text">
+            {t("jam.clip.timingTitle")}
+          </p>
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t("jam.clip.move")}>
+            <button
+              type="button"
+              aria-label={t("jam.review.nudgeEarlier")}
+              data-jam-nudge="earlier"
+              {...holdNudge(-1)}
+              className="flex h-10 touch-manipulation select-none items-center gap-1 whitespace-nowrap rounded-full bg-surface-2 pl-2 pr-3 text-xs font-bold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:h-11"
+            >
+              <ChevronLeft className="h-4 w-4" aria-hidden />
+              {t("jam.review.nudgeEarlier")}
+            </button>
+            <span className="min-w-[6.5rem] flex-1 text-center text-xs font-semibold tabular-nums text-text-secondary" aria-live="polite">
+              {nudgeWords}
+            </span>
+            <button
+              type="button"
+              aria-label={t("jam.review.nudgeLater")}
+              data-jam-nudge="later"
+              {...holdNudge(1)}
+              className="flex h-10 touch-manipulation select-none items-center gap-1 whitespace-nowrap rounded-full bg-surface-2 pl-3 pr-2 text-xs font-bold text-text outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:h-11"
+            >
+              {t("jam.review.nudgeLater")}
+              <ChevronRight className="h-4 w-4" aria-hidden />
+            </button>
+          </div>
+          <p className="text-xs text-text-secondary">{t("jam.clip.holdHint")}</p>
         </div>
 
-        <div className="flex min-w-[12rem] flex-1 items-center gap-2.5">
-          <Volume2 className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden />
-          <span className="shrink-0 text-xs font-semibold text-text-secondary">{t("jam.review.volume")}</span>
-          <Slider
-            variant="volume"
-            min={0}
-            max={200}
-            step={1}
-            value={Math.round(edits.gain * 100)}
-            onValueChange={(value) => onGain(value / 100)}
-            aria-label={t("jam.review.volume")}
-            className="min-w-0 flex-1"
-          />
-          <span className="w-14 text-right text-xs font-semibold tabular-nums text-text-secondary">
-            {volumeDelta(edits.gain) ?? t("jam.clip.volumeNormal")}
-          </span>
+        <div
+          role="group"
+          aria-labelledby={volumeId}
+          data-jam-clip-volume=""
+          className="flex flex-col gap-2 rounded-[var(--radius-card)] bg-surface-0/60 p-3 ring-1 ring-inset ring-border"
+        >
+          <p id={volumeId} className="flex items-center gap-1.5 text-xs font-bold text-text">
+            <Volume2 className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden />
+            {t("jam.clip.everybody")}
+          </p>
+          <div className="flex items-center gap-2.5">
+            <Slider
+              variant="volume"
+              min={0}
+              max={200}
+              step={1}
+              value={Math.round(edits.gain * 100)}
+              onValueChange={(value) => onGain(value / 100)}
+              aria-label={t("jam.review.volume")}
+              className="min-w-0 flex-1 pointer-coarse:h-11 pointer-coarse:[&_[role=slider]]:h-6 pointer-coarse:[&_[role=slider]]:w-6"
+            />
+            <span className="w-14 shrink-0 text-right text-xs font-semibold tabular-nums text-text-secondary">
+              {volumeDelta(edits.gain) ?? t("jam.clip.volumeNormal")}
+            </span>
+          </div>
         </div>
       </div>
 
-      <div className="flex min-h-8 items-center justify-end gap-2 text-xs text-text-secondary">
-        {onReset && edited && (
-          <Button variant="ghost" size="sm" className="gap-1.5 text-text" onClick={onReset} data-jam-clip-reset="">
+      {onReset && edited && (
+        <div className="flex items-center justify-end gap-2 text-xs text-text-secondary">
+          <Button variant="ghost" size="sm" className="gap-1.5 text-text pointer-coarse:h-11" onClick={onReset} data-jam-clip-reset="">
             <RotateCcw className="h-3.5 w-3.5" aria-hidden />
             {t("jam.review.reset")}
           </Button>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

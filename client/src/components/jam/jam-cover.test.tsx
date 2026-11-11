@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { JamCoverPhoto, useJamCover, type JamCoverState } from "./jam-cover";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -17,7 +17,7 @@ function Probe({ url }: { url: string | null }) {
 }
 
 const signed = (path: string, signature: string) => `https://bucket.test/jam/${path}?X-Amz-Signature=${signature}`;
-const src = () => host.querySelector("img")?.getAttribute("src") ?? null;
+const src = () => host.querySelector("img[data-jam-cover-photo]")?.getAttribute("src") ?? null;
 
 beforeEach(() => {
   host = document.createElement("div");
@@ -69,6 +69,28 @@ describe("a song's cover, signed anew on every read", () => {
     act(() => root.render(<Probe url={signed("s/a.jpg", "fresh")} />));
     expect(latest.status).toBe("loading");
     expect(src()).toBe(signed("s/a.jpg", "fresh"));
+  });
+
+  it("keeps showing the picture it replaces until the new one has loaded (no blank tile while a download runs)", () => {
+    vi.useFakeTimers();
+    try {
+      act(() => root.render(<Probe url={signed("s/a.jpg", "one")} />));
+      act(() => latest.onLoad());
+      act(() => root.render(<Probe url={signed("s/b.jpg", "one")} />));
+      // the new one is loading, and the old one is still under it
+      expect(latest.status).toBe("loading");
+      expect(host.querySelector("img[data-jam-cover-previous]")?.getAttribute("src")).toBe(signed("s/a.jpg", "one"));
+      act(() => latest.onLoad());
+      // loaded: the old one is let go a moment later, after the fade
+      expect(host.querySelector("img[data-jam-cover-previous]")).not.toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(800);
+      });
+      expect(host.querySelector("img[data-jam-cover-previous]")).toBeNull();
+      expect(src()).toBe(signed("s/b.jpg", "one"));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("lets go of the picture when the cover is removed", () => {

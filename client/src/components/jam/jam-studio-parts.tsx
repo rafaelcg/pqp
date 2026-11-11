@@ -5,6 +5,7 @@ import {
   Headphones,
   Loader2,
   Mic,
+  Plus,
   Sparkles,
   Volume2,
   X,
@@ -45,7 +46,7 @@ export function InstrumentPicker({
     <div
       role="radiogroup"
       aria-label={t("jam.studio.instrument")}
-      className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 pt-2.5 [scrollbar-width:none] sm:mx-0 sm:grid sm:grid-cols-6 sm:overflow-visible sm:px-0 sm:pb-0"
+      className="grid grid-cols-3 gap-2 sm:grid-cols-6"
     >
       {options.map((instrument) => {
         const look = JAM_INSTRUMENT_LOOK[instrument];
@@ -62,24 +63,29 @@ export function InstrumentPicker({
             data-jam-instrument={instrument}
             onClick={() => onChange(instrument)}
             className={cn(
-              "relative flex h-[4.75rem] w-[4.75rem] shrink-0 flex-col items-center justify-center gap-1.5 rounded-[var(--radius-panel)] text-[13px] font-extrabold sm:h-[5.5rem] sm:w-auto sm:gap-2 sm:text-sm outline-none transition-[background,color,box-shadow,transform] duration-[var(--duration-base)] ease-[var(--ease-emphasized)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 active:scale-[0.96] disabled:opacity-50",
+              "relative flex h-[4.75rem] min-w-0 flex-col items-center justify-center gap-1.5 rounded-[var(--radius-panel)] text-[13px] font-extrabold sm:h-[5.5rem] sm:gap-2 sm:text-sm [@media(max-height:32rem)]:h-16 [@media(max-height:32rem)]:gap-0.5 [@media(max-height:32rem)]:text-xs outline-none transition-[background,color,box-shadow,transform] duration-[var(--duration-base)] ease-[var(--ease-emphasized)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 active:scale-[0.96] disabled:opacity-50",
               on
                 ? cn(look.fill, "shadow-[var(--shadow-2)] motion-safe:-translate-y-0.5")
                 : "bg-surface-1 text-text-secondary ring-1 ring-inset ring-border hover:bg-surface-2 hover:text-text",
             )}
           >
-            <span className={cn("grid h-10 w-10 place-items-center rounded-full transition-colors", on ? "bg-on-inst" : look.fill)}>
-              <Icon className={cn("h-5 w-5", on && look.ink)} aria-hidden />
+            <span className={cn("grid h-10 w-10 place-items-center rounded-full transition-colors [@media(max-height:32rem)]:h-7 [@media(max-height:32rem)]:w-7", on ? "bg-on-inst" : look.fill)}>
+              <Icon className={cn("h-5 w-5 [@media(max-height:32rem)]:h-4 [@media(max-height:32rem)]:w-4", on && look.ink)} aria-hidden />
             </span>
             {t(look.nameKey as MessageKey)}
             {asked && (
+              // Asked for by the song: a small mark in the corner (never on the icon),
+              // explained by the sentence above the picker.
               <span
+                data-jam-asked=""
+                role="img"
+                aria-label={t("jam.studio.wanted")}
                 className={cn(
-                  "absolute -top-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-1.5 py-px text-[11px] font-bold shadow-[var(--shadow-2)]",
-                  on ? "bg-on-inst text-on-media" : "bg-accent-soft text-on-accent-soft",
+                  "absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full",
+                  "bg-accent text-on-accent ring-2 ring-surface-0",
                 )}
               >
-                {t("jam.studio.wanted")}
+                <Plus className="h-3 w-3" strokeWidth={3.5} aria-hidden />
               </span>
             )}
           </button>
@@ -175,17 +181,12 @@ export function useLatencyWords() {
  */
 export function LatencyChip({ studio }: { studio: JamStudio }) {
   const { t } = useTranslation();
-  const words = useLatencyWords();
   const current = studio.latency?.current;
   if (!current || !Number.isFinite(current.roundTripMs)) {
     return null;
   }
   const ms = Math.round(current.roundTripMs);
-  const text = t("jam.latency.chipTitle", {
-    ms,
-    method: words.method(current.method),
-    confidence: words.confidence(current.confidence),
-  });
+  const text = t(current.method === "estimate" ? "jam.latency.chipTitleEstimate" : "jam.latency.chipTitle", { ms });
   return (
     <Tooltip label={text}>
       <span
@@ -340,7 +341,7 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
             <span role="alert">{studio.checkMethod === "tap-along" ? t("jam.latency.failed.tap") : t("jam.latency.failed")}</span>
           ) : (
             <>
-              <span className="font-bold">{t("jam.latency.explain.title")}</span> {t("jam.latency.explain.short")}
+              <span className="font-bold">{t("jam.latency.explain.title")}</span> <span className="[@media(max-height:32rem)]:hidden">{t("jam.latency.explain.short")}</span>
             </>
           )}
         </p>
