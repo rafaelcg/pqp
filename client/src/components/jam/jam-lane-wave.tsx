@@ -111,30 +111,33 @@ export function JamLaneWave({
     });
   }, [clock, span.startMs, span.endMs, timeline.startMs, total]);
 
-  // The lane is the song's whole width, a dark track; the take is a block of its
-  // instrument's colour sitting where it plays (a clip, the way every multitrack
-  // draws one), so a late entrance or an early end is seen at a glance.
+  // The lane is the song's whole width, a quiet surface; the take sits on it where
+  // it plays (a clip, the way every multitrack draws one) as a whisper of its
+  // instrument's colour with the waveform's bars in that colour, so a late
+  // entrance or an early end is seen at a glance and the lane is never a slab.
   return (
     <div
+      data-jam-wave=""
       className={cn(
-        "relative h-12 overflow-hidden rounded-[var(--radius-control)] bg-surface-0/60 transition-opacity duration-[var(--duration-base)] motion-reduce:transition-none",
+        "relative h-[3.25rem] overflow-hidden rounded-[var(--radius-control)] bg-surface-2 transition-opacity duration-[var(--duration-base)] motion-reduce:transition-none",
         dimmed && "opacity-35",
         className,
       )}
     >
       <div
-        className={cn("absolute inset-y-0 overflow-hidden rounded-[var(--radius-control)]", look.fill)}
+        className={cn("absolute inset-y-0 overflow-hidden rounded-[var(--radius-control)]", look.wash)}
         style={{ left: `${left * 100}%`, width: `${Math.max(0.5, (right - left) * 100)}%` }}
       >
-        <div ref={spanRef} className="absolute inset-x-1 inset-y-1.5">
-          <JamBars bars={bars} className="h-full" barClassName="bg-on-inst" animate={animate} />
+        <div ref={spanRef} className="absolute inset-x-1 inset-y-2">
+          <JamBars bars={bars} className="h-full" barClassName={look.bar} animate={animate} />
         </div>
         {/* The bars are drawn once, at full strength; what is still to be played is
-            the lane's own colour laid back over them, so a lane costs one bar tree. */}
+            the lane's own surface laid back over them, so a lane costs one bar tree
+            and the played part is the one that is fully the instrument's colour. */}
         <div
           ref={played}
           aria-hidden
-          className={cn("pointer-events-none absolute inset-0 opacity-70", look.fill)}
+          className="pointer-events-none absolute inset-0 bg-surface-2 opacity-55"
           style={{ clipPath: "inset(0 0 0 0)" }}
         />
       </div>
@@ -142,7 +145,7 @@ export function JamLaneWave({
         <div
           ref={line}
           aria-hidden
-          className={cn("pointer-events-none absolute inset-y-0 left-0 w-0.5 -translate-x-1/2 bg-text", playhead === "phone" && "sm:hidden")}
+          className={cn("pointer-events-none absolute inset-y-0 left-0 w-0.5 -translate-x-1/2 rounded-full bg-text", playhead === "phone" && "sm:hidden")}
         />
       )}
     </div>

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { JamClock, JamLaneMix } from "@/hooks/use-jam-playback";
 import { track } from "@/lib/jam-test-fixtures";
@@ -74,27 +74,35 @@ describe("a lane's head", () => {
     const name = own.querySelector<HTMLElement>("[data-jam-lane-name]")!;
     expect(name.textContent).toContain("Guitar");
     expect(name.textContent).toContain("you");
-    // wraps instead of cutting: nothing on the name is truncated or hidden at any width
-    expect(name.innerHTML).not.toMatch(/truncate|hidden/);
-    // the button is its own control, never inside the name column
+    // a long name is cut with an ellipsis (its words are the tooltip), never wrapped into the next column
+    expect(name.innerHTML).toMatch(/truncate/);
+    expect(name.querySelector("[title='Guitar']")).not.toBeNull();
+    // "Ajustar" is an icon in the controls: its own control, never inside the name column, with a name for a screen reader
     const adjust = own.querySelector<HTMLElement>("[data-jam-adjust-open]")!;
     expect(adjust).not.toBeNull();
     expect(name.contains(adjust)).toBe(false);
     expect(adjust.getAttribute("aria-label")).toBe("Adjust my recording");
+    expect(adjust.textContent).toBe("");
+    expect(own.querySelector("[data-jam-lane-controls]")!.contains(adjust)).toBe(true);
+    // and the identity and the controls are different cells of the one lane frame
+    expect(own.querySelector("[data-jam-lane-identity]")!.contains(adjust)).toBe(false);
   });
 
-  it("puts the out-of-the-song pill after the person, never over the instrument, and its buttons on their own line", () => {
+  it("puts the out-of-the-song pill on the clip, never over the instrument, and its buttons in the controls", () => {
     const out = render({ track: track({ inMix: false, authorName: "Bia" }), canSwitchMix: true, competing: true });
     const name = out.querySelector<HTMLElement>("[data-jam-lane-name]")!;
-    const pill = [...name.querySelectorAll("span")].find((one) => one.textContent === "alternate version")!;
-    expect(pill).toBeTruthy();
+    const pill = out.querySelector<HTMLElement>("[data-jam-out-pill]")!;
+    expect(pill.textContent).toBe("alternate version");
     const instrument = name.firstElementChild as HTMLElement;
     expect(instrument.textContent).toBe("Guitar");
-    expect(instrument.contains(pill)).toBe(false);
-    const actions = out.querySelector("[data-jam-lane-actions]")!;
-    expect(actions.querySelector("[data-jam-mix-switch]")).not.toBeNull();
-    expect(actions.querySelector("[data-jam-vote]")).not.toBeNull();
-    expect(name.contains(actions)).toBe(false);
+    expect(name.contains(pill)).toBe(false);
+    const controls = out.querySelector("[data-jam-lane-controls]")!;
+    expect(controls.querySelector("[data-jam-mix-switch]")).not.toBeNull();
+    expect(controls.querySelector("[data-jam-vote]")).not.toBeNull();
+    expect(controls.querySelector("[data-jam-audition]")).not.toBeNull();
+    // icon-only, each with its own name
+    expect(controls.querySelector("[data-jam-mix-switch]")!.getAttribute("aria-label")).toBe("Use this recording");
+    expect(name.contains(controls)).toBe(false);
   });
 
   it("keeps the lane's own mute, solo and volume in one cluster that says it is only for the listener", () => {
@@ -105,8 +113,15 @@ describe("a lane's head", () => {
     expect(cluster.querySelector("[data-jam-mute]")).not.toBeNull();
     expect(cluster.querySelector("[data-jam-solo]")).not.toBeNull();
     expect(cluster.querySelectorAll('[role="slider"]')).toHaveLength(1);
-    // the solo is a plain word, not a bare "S"
+    // the sentence that used to sit above the ruler is the headphones' own words now
+    const note = cluster.querySelector<HTMLElement>("[data-jam-mine-note]")!;
+    expect(note.getAttribute("aria-label")).toBe("Mute (M), solo (S) and volume here change only what you hear.");
+    expect(note.tabIndex).toBe(0);
+    // mute and solo are the letters a mixer uses, each named in full for a screen reader and by its tooltip
     expect(row.querySelector("[data-jam-solo]")!.getAttribute("aria-label")).toBe("Hear only Guitar, Bia");
+    expect(row.querySelector("[data-jam-mute]")!.getAttribute("aria-label")).toBe("Mute Guitar, Bia");
+    expect(row.querySelector("[data-jam-mute]")!.textContent).toBe("M");
+    expect(row.querySelector("[data-jam-solo]")!.textContent).toBe("S");
   });
 
   it("makes every lane control 44 px under a finger", () => {
@@ -115,6 +130,14 @@ describe("a lane's head", () => {
       expect(row.querySelector(selector)!.className).toMatch(/pointer-coarse:h-11/);
     }
     expect(row.querySelector('[role="slider"]')!.closest("[data-slider]")!.className).toMatch(/pointer-coarse:h-11/);
+  });
+
+  it("is one line on a wide band and two on a narrow one, by the band's own width", () => {
+    const row = render();
+    const frame = row.querySelector<HTMLElement>("[data-jam-lane-frame]")!;
+    // three columns once the band is wide (a container query: the song panel is a side panel), a wrapping flow before
+    expect(frame.className).toContain("@min-[40rem]/band:grid-cols-[var(--lane-id)_minmax(0,1fr)_var(--lane-ctl)]");
+    expect(frame.className).toContain("flex-wrap");
   });
 });
 
@@ -165,21 +188,9 @@ describe("the adjust editor", () => {
 });
 
 describe("a recording's video", () => {
-  it("is a focusable 16:9 button, and opens the same video big on the engine's clock", () => {
-    const detach = vi.fn();
-    const attachVideo = vi.fn((_trackId: string, _element: HTMLVideoElement) => detach);
-    const row = render({ track: track({ videoUrl: "https://example.test/v.mp4", authorName: "Bia" }), attachVideo });
-    const open = row.querySelector<HTMLButtonElement>("[data-jam-lane-video-open]")!;
-    expect(open.tagName).toBe("BUTTON");
-    expect(open.getAttribute("aria-label")).toBe("Watch the video: Guitar, Bia");
-    expect(open.className).toContain("aspect-video");
-    expect(attachVideo).toHaveBeenCalledTimes(1);
-
-    act(() => open.click());
-    expect(document.querySelector("[data-jam-lane-video-big]")).not.toBeNull();
-    // a second element on the same stem, each followed on its own
-    expect(attachVideo).toHaveBeenCalledTimes(2);
-    expect(attachVideo.mock.calls[0]![0]).toBe(attachVideo.mock.calls[1]![0]);
-    expect(attachVideo.mock.calls[0]![1]).not.toBe(attachVideo.mock.calls[1]![1]);
+  it("is not in the lane: the song's stage above the lanes shows it", () => {
+    const row = render({ track: track({ videoUrl: "https://example.test/v.mp4", authorName: "Bia" }) });
+    expect(row.querySelector("video")).toBeNull();
+    expect(row.querySelector("[data-jam-lane-video-open]")).toBeNull();
   });
 });

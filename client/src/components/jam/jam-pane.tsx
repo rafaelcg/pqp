@@ -11,12 +11,12 @@ import { useJamConfig } from "@/hooks/use-jam-config";
 import type { NewSongDraft } from "@/hooks/use-jam-studio";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
-import { setJamHintContext } from "@/lib/jam-hint-context";
+import { isJamStudioOpen, setJamHintContext } from "@/lib/jam-hint-context";
 import { parseAppRoute } from "@/lib/app-route";
 import { jamHistoryState, jamStepOf, type JamRouteMode } from "@/lib/jam-history";
 import { pickInstrument } from "@/lib/jam-record";
 import { rememberJamSeen } from "@/lib/jam-seen";
-import { releaseJamEngine } from "@/lib/jam-session";
+import { releaseJamEngine, unlockJamAudio } from "@/lib/jam-session";
 import { fetchJamSong } from "@/lib/jam-api";
 import {
   loadJamChannel,
@@ -289,7 +289,7 @@ export function JamPane({
     if (routeSongId === openSongId) {
       return;
     }
-    // A link or Back opens a song and waits: only a tile's round button, or a take just posted, plays.
+    // A link or Back opens a song and waits: only a card or its round button, or a take just posted, plays.
     setOpenAutoplay(false);
     setOpenSongIdState(routeSongId);
     setSongGone(false);
@@ -306,11 +306,77 @@ export function JamPane({
       if (event.key !== "Escape" || escapeOwnedByOverlay(event)) {
         return;
       }
+      // Escape in a full screen stage leaves the full screen first (a browser usually keeps that key to itself)
+      if (document.fullscreenElement) {
+        return;
+      }
       closeSongRef.current();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [openSongId, studio]);
+
+  // Space plays and pauses the song, from anywhere on the wall that is not a field or a
+  // control: the open song (playing or paused), else the card the keyboard is on, else the
+  // first card. A card's own button is the one control that does not keep Space: it would
+  // open and play THAT card, and the song already open comes first. Inside the open song's
+  // panel the same rule means the same thing, which is what its own handler used to do.
+  const spaceRef = useRef<() => void>(() => undefined);
+  spaceRef.current = () => {
+    unlockJamAudio();
+    if (openSongId) {
+      setPlayNonce((before) => before + 1);
+      return;
+    }
+    const focused = document.activeElement?.closest("[data-jam-tile]")?.getAttribute("data-jam-tile");
+    const target = focused ?? plan[0]?.song.id;
+    if (target) {
+      openFromTile(target, "play");
+    }
+  };
+  const swallowSpaceUp = useRef(false);
+  useEffect(() => {
+    if (studio !== null) {
+      return;
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== " " || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+        return;
+      }
+      if (escapeOwnedByOverlay(event) || isJamStudioOpen()) {
+        return;
+      }
+      const target = event.target;
+      if (target instanceof Element) {
+        const onCard = target.closest("[data-jam-open]") !== null;
+        if (
+          !onCard &&
+          target.closest(
+            'input, textarea, select, button, a[href], summary, [contenteditable=""], [contenteditable="true"], [role="slider"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="tab"], [role="combobox"], [role="button"]',
+          )
+        ) {
+          return;
+        }
+      }
+      event.preventDefault();
+      swallowSpaceUp.current = true;
+      spaceRef.current();
+    }
+    // A button acts on Space when the key comes UP (Firefox) or on the keydown's default (Chrome):
+    // the keyup is cancelled too, so a card the key was handled on does not also click.
+    function onKeyUp(event: KeyboardEvent) {
+      if (event.key === " " && swallowSpaceUp.current) {
+        swallowSpaceUp.current = false;
+        event.preventDefault();
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("keyup", onKeyUp);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keyup", onKeyUp);
+    };
+  }, [studio]);
 
   // Closing a song hands focus back to the card that opened it: a keyboard user
   // lands where they were, not at the top of the page.
@@ -485,17 +551,21 @@ export function JamPane({
    * View Transition, where the browser has one and motion is welcome; the tile
    * and the panel's cover share a `view-transition-name`).
    */
-  function openFromTile(songId: string, play = false) {
+  function openFromTile(songId: string, via: "card" | "play") {
+    // The click or the keypress is the gesture a browser wants before it lets a page make
+    // sound: unlock the audio right here, not later from an effect.
+    unlockJamAudio();
     if (songId === openSongId) {
-      // Already open: the round button plays or pauses it, the card does nothing new.
-      if (play) {
+      // Already open. The round button plays or pauses it; the card plays it unless it is
+      // playing already (then it has nothing left to do).
+      if (via === "play" || !openPlaying) {
         setPlayNonce((before) => before + 1);
       }
       return;
     }
     const go = () => {
       setFreshTrackId(null);
-      setOpenAutoplay(play);
+      setOpenAutoplay(true);
       setOpenSongId(songId, stepRef.current === "song" ? "swap" : "push");
     };
     const doc = document as Document & { startViewTransition?: (update: () => void) => { finished: Promise<void> } };
@@ -802,8 +872,8 @@ export function JamPane({
                         selected={tile.song.id === openSongId}
                         playing={tile.song.id === openSongId && openPlaying}
                         onNear={() => loadJamDetailLazy(channelId, tile.song.id)}
-                        onOpen={() => openFromTile(tile.song.id)}
-                        onPlay={() => openFromTile(tile.song.id, true)}
+                        onOpen={() => openFromTile(tile.song.id, "card")}
+                        onPlay={() => openFromTile(tile.song.id, "play")}
                         compact={compact}
                       />,
                       // The invitation sits right after the first card, where it is seen, not at the very end
@@ -828,7 +898,7 @@ export function JamPane({
 
       {openSong && (
         <div
-          className="jam-panel-in absolute inset-0 z-20 bg-surface-1 max-sm:fixed max-sm:z-40 lg:static lg:z-auto lg:w-[min(42rem,60%)] lg:shrink-0 lg:border-l lg:border-border"
+          className="jam-panel-in absolute inset-0 z-20 bg-surface-1 max-sm:fixed max-sm:z-40 lg:static lg:z-auto lg:w-[min(50rem,62%)] lg:shrink-0 lg:border-l lg:border-border"
           data-jam-song-panel=""
           inert={studio !== null}
         >

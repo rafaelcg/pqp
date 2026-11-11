@@ -41,6 +41,20 @@ export function getJamEngine(): Promise<JamEngine> {
   return current;
 }
 
+/**
+ * Called from inside a click or a keypress that is about to start a song: makes
+ * the engine's AudioContext (if it was not yet) and asks it to run, in the very
+ * task of the gesture. A browser that holds back audio until a person did
+ * something (Safari most of all) counts this as the something; started later,
+ * from an effect after the panel mounted, the same resume can be refused and the
+ * song opens silent.
+ */
+export function unlockJamAudio(): void {
+  void getJamEngine()
+    .then((engine) => (engine.context.state === "running" ? undefined : engine.context.resume()))
+    .catch(() => undefined);
+}
+
 export async function releaseJamEngine(): Promise<void> {
   const held = current;
   current = null;

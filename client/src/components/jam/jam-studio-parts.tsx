@@ -468,15 +468,15 @@ export function LiveLane({
       role="img"
       aria-label={label}
       data-jam-live-lane=""
-      className="relative h-14 overflow-hidden rounded-[var(--radius-control)] bg-surface-0/60 ring-2 ring-inset ring-danger"
+      className="relative h-[3.25rem] overflow-hidden rounded-[var(--radius-control)] bg-surface-2 ring-2 ring-inset ring-danger"
     >
       {/* the take grows as a clip from song time 0, with a red edge where it is being written */}
       <div
-        className={cn("absolute inset-y-0 left-0 overflow-hidden rounded-[var(--radius-control)]", look.fill)}
+        className={cn("absolute inset-y-0 left-0 overflow-hidden rounded-[var(--radius-control)]", look.wash)}
         style={{ width: `${Math.min(100, (elapsedMs / timelineEndMs) * 100)}%` }}
       >
-        <div className="absolute inset-y-1.5 left-1 right-1.5">
-          <JamBars bars={bars} className="h-full justify-start" barClassName="bg-on-inst" minPercent={10} />
+        <div className="absolute inset-y-2 left-1 right-1.5">
+          <JamBars bars={bars} className="h-full justify-start" barClassName={look.bar} minPercent={10} />
         </div>
         <span aria-hidden className="jam-rec-dot absolute inset-y-0 right-0 w-1 bg-danger" />
       </div>

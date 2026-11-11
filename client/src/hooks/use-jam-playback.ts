@@ -142,7 +142,11 @@ export function useJamPlayback(
         return;
       }
       setStatus("ready");
-      if (!loadedOnce.current) {
+      // The request waits for something to play. A song opened from a card whose details were
+      // never read (a song with no video has no reason to be) first syncs an EMPTY mix, and the
+      // request used to be spent there: the song opened silent. It is spent on the first sync
+      // that has a take in the mix (the detail arriving changes the signature, and syncs again).
+      if (!loadedOnce.current && signature !== "") {
         loadedOnce.current = true;
         // The request is spent on the song it was made for: another song opened
         // on this hook does not start by itself.
