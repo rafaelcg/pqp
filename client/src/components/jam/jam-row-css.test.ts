@@ -15,16 +15,17 @@ function block(selector: string): string {
 }
 
 describe("jam-row.css", () => {
-  it("the wash drifts at rest: running unless the row is off screen or the tab is hidden", () => {
+  it("the waveform scrolls at rest: running unless the row is off screen or the tab is hidden", () => {
     expect(block(".jam-row-art {")).toContain("--jam-run: running;");
     expect(block('.jam-row-art[data-alive="false"]')).toContain("--jam-run: paused !important;");
   });
 
-  it("the wash carries the whole palette at rest", () => {
-    const aurora = block(".jam-aurora {");
+  it("the waveform carries the whole palette, each bar at its instrument's full colour", () => {
     for (const inst of ["vocals", "guitar", "drums", "keys", "bass", "other"]) {
-      expect(aurora).toContain(`--color-inst-${inst}`);
+      expect(block(`.jam-wave-svg [data-inst="${inst}"]`)).toContain(`fill: var(--color-inst-${inst});`);
     }
+    // Never a translucent blend of the fills: that is what turned to mud.
+    expect(css).not.toMatch(/color-mix\([^)]*--color-inst-(vocals|drums|keys|bass|other)/);
   });
 
   it("only transform and opacity are ever animated", () => {
@@ -37,7 +38,8 @@ describe("jam-row.css", () => {
   });
 
   it("is stepped, so a slow drift does not ask the compositor for a frame per refresh", () => {
-    expect(block(".jam-aurora {")).toMatch(/steps\(\d+\)/);
+    expect(block(".jam-wave-scroll {")).toMatch(/steps\(\d+\)/);
+    expect(block('.jam-row-art[data-mood="playing"] .jam-wave-beat')).toMatch(/steps\(\d+\)/);
   });
 
   it("the livelier states drift faster than rest: hover, news, playing", () => {
@@ -48,15 +50,21 @@ describe("jam-row.css", () => {
     expect(speed('.jam-row-art[data-mood="playing"] {')).toBeLessThan(speed('.jam-row-art[data-mood="news"] {'));
   });
 
-  it("reduced motion removes the wash, the sheen, the hop and the equaliser", () => {
+  it("reduced motion removes the scroll, the beat, the sheen, the hop and the equaliser", () => {
     const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
-    for (const selector of [".jam-aurora", ".jam-art-sheen", ".jam-icon-eq > span", ".jam-icon-note"]) {
+    for (const selector of [".jam-wave-scroll", ".jam-wave-beat", ".jam-art-sheen", ".jam-icon-eq > span", ".jam-icon-note"]) {
       expect(reduced).toContain(selector);
     }
     expect(reduced).toContain("animation: none !important;");
   });
 
-  it("keeps the name and the count on a plain base: the scrim is solid across the left of the row", () => {
-    expect(block(".jam-art-scrim {")).toMatch(/var\(--jam-base\) 4\d%/);
+  it("keeps the name and the count on a plain base: no bar is drawn across the left of the row", () => {
+    expect(block(".jam-wave {")).toMatch(/mask-image: linear-gradient\(90deg, transparent 4\d%/);
+    expect(block("[data-jam-card]:hover .jam-wave,")).toMatch(/transparent 4\d%/);
+  });
+
+  it("one scroll loop is exactly the width of the bars drawn", () => {
+    expect(block("@keyframes jam-row-wave")).toBeDefined();
+    expect(css).toContain("translateX(-216px)");
   });
 });
