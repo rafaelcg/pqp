@@ -12,7 +12,7 @@
  *   2  the browser asks before a reload or a closed tab only while a take is
  *      recorded and unsent or going up
  *   3  Back goes studio to song to wall, and from a studio holding a take asks
- *      the same "Discard this take?" the arrow asks
+ *      the same "Discard this recording?" the arrow asks
  *   4  an input that ends mid-recording stops the take and says so; a take that
  *      is silent from start to finish is flagged before it is sent
  *   5  a stale edit sheet sends only what its person changed
@@ -230,7 +230,7 @@ test("1: a reload mid-upload leaves no empty song on anybody's wall; the author 
   await expect(host.locator("[data-jam-posting]")).toBeVisible();
   // Back while it uploads asks like the arrow does (a take going up is unsent work), and "Keep" leaves it going
   await host.goBack();
-  const leaving = host.getByRole("dialog").filter({ hasText: "Discard this take?" });
+  const leaving = host.getByRole("dialog").filter({ hasText: "Discard this recording?" });
   await expect(leaving).toBeVisible();
   await leaving.getByRole("button", { name: "Keep" }).click();
   await expect(host.locator("[data-jam-posting]")).toBeVisible();
@@ -256,11 +256,11 @@ test("1: a reload mid-upload leaves no empty song on anybody's wall; the author 
   await host.locator("[data-jam-tile]").first().click();
   await expect(host.locator("[data-jam-empty-song]")).toBeVisible();
   await expect(host.locator("[data-jam-play]")).toHaveCount(0);
-  await expect(host.locator("[data-jam-record-over]")).toContainText("Record the first take");
+  await expect(host.locator("[data-jam-record-over]")).toContainText("Record the first part");
   await expect(host.locator("[data-jam-record-over]")).not.toContainText("on top");
   await shot(host, "after-1-author-sees-empty-song");
   await host.locator("[data-jam-empty-delete]").click();
-  await expect(host.getByRole("dialog").getByText("Delete this song?")).toBeVisible();
+  await expect(host.getByRole("dialog").getByText(/Delete ".+"\?/)).toBeVisible();
   await host.getByRole("dialog").getByRole("button", { name: "Delete song" }).click();
   await expect(host.locator("[data-jam-tile]")).toHaveCount(0, { timeout: 10_000 });
   expect((await call<{ songs: unknown[] }>(seeded.host, "GET", `/api/channels/${seeded.jamId}/jam-songs`)).songs).toEqual([]);
@@ -284,19 +284,19 @@ test("1: a first take that is sent shows the song to everybody at once; deleting
   const host = await openAs(browser, seeded.host, `${seeded.jamPath}/song/${pair}`);
   await expect(host.locator("[data-jam-track]")).toHaveCount(2, { timeout: 20_000 });
   await host.locator("[data-jam-lane-menu]").first().click();
-  await host.getByRole("menuitem", { name: "Delete take" }).click();
-  await expect(host.getByRole("dialog").getByText("Delete this take?")).toBeVisible();
+  await host.getByRole("menuitem", { name: "Delete recording" }).click();
+  await expect(host.getByRole("dialog").getByText("Delete this recording?")).toBeVisible();
   await host.getByRole("dialog").getByRole("button", { name: "Keep" }).click();
 
   // one take: the confirm says the song goes with it
   await host.goto(`${seeded.jamPath}/song/${single}?lang=en`);
   await expect(host.locator("[data-jam-track]")).toHaveCount(1, { timeout: 20_000 });
   await host.locator("[data-jam-lane-menu]").first().click();
-  await host.getByRole("menuitem", { name: "Delete take" }).click();
+  await host.getByRole("menuitem", { name: "Delete recording" }).click();
   const dialog = host.getByRole("dialog");
   await expect(dialog.getByText("Delete the song?")).toBeVisible();
   await shot(host, "after-1-delete-last-take-confirm");
-  await expect(dialog.getByText("This is the last take, so deleting it deletes the song too.")).toBeVisible();
+  await expect(dialog.getByText("This is the last recording, so deleting it deletes the song too.")).toBeVisible();
   await dialog.getByRole("button", { name: "Delete song" }).click();
   await expect(host.locator("[data-jam-song]")).toHaveCount(0, { timeout: 10_000 });
   await expect(guest.locator("[data-jam-tile]").filter({ hasText: "Só Uma" })).toHaveCount(0, { timeout: 15_000 });
@@ -329,7 +329,7 @@ test("1: leaving the studio after the first upload failed deletes the empty song
   await host.locator("[data-jam-discard]").click();
   await host
     .getByRole("dialog")
-    .filter({ hasText: "Discard this take?" })
+    .filter({ hasText: "Discard this recording?" })
     .getByRole("button", { name: "Discard", exact: true })
     .click();
   await expect(host.locator("[data-jam-studio]")).toHaveCount(0);
@@ -399,7 +399,7 @@ test("3: Back goes studio to song to wall, asks before throwing a take away, and
   // studio holding a take: Back asks, "Keep" stays, "Discard" leaves for the song
   await reviewOver(guest);
   await guest.goBack();
-  const dialog = guest.getByRole("dialog").filter({ hasText: "Discard this take?" });
+  const dialog = guest.getByRole("dialog").filter({ hasText: "Discard this recording?" });
   await expect(dialog).toBeVisible();
   await shot(guest, "after-3-back-asks-before-discarding-the-take");
   await dialog.getByRole("button", { name: "Keep" }).click();
@@ -455,7 +455,7 @@ test("3: a new song's studio is a step too, and Back from it asks about the take
   await recordAndStop(guest, 3);
   await expect(guest.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
   await guest.goBack();
-  const dialog = guest.getByRole("dialog").filter({ hasText: "Discard this take?" });
+  const dialog = guest.getByRole("dialog").filter({ hasText: "Discard this recording?" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Keep" }).click();
   await guest.locator("[data-jam-post]").click();
@@ -552,7 +552,7 @@ test("4: a take that is silent from start to finish is flagged before it is sent
   const guest = await openAs(browser, seeded.guest, `${seeded.jamPath}/song/${song}`, silentInput);
   await reviewOver(guest, 3);
   await guest.locator("[data-jam-post]").click();
-  const dialog = guest.getByRole("dialog").filter({ hasText: "This take has no sound" });
+  const dialog = guest.getByRole("dialog").filter({ hasText: "This recording has no sound" });
   await expect(dialog).toBeVisible();
   await shot(guest, "after-4-silent-take-warning");
   await expect(guest.locator("[data-jam-posting]")).toHaveCount(0);
@@ -637,7 +637,7 @@ test("7: a failed send keeps the take and offers every way out; a song closed me
   await guest.locator("[data-jam-post]").click();
   const closed = guest.locator("[data-jam-song-closed]");
   await expect(closed).toBeVisible({ timeout: 20_000 });
-  await expect(closed).toContainText("closed to new takes");
+  await expect(closed).toContainText("closed to new recordings");
   await shot(guest, "after-7-song-closed-meanwhile");
   await expect(guest.locator("[data-jam-retry]")).toHaveCount(0);
   await expect(closed.locator("[data-jam-post-as-new]")).toBeVisible();
