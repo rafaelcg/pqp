@@ -127,8 +127,8 @@
   position: absolute;
   inset: 0;
   opacity: calc(var(--jam-wash) * var(--jam-mood-o));
-  -webkit-mask-image: linear-gradient(90deg, transparent 46%, #000 78%);
-  mask-image: linear-gradient(90deg, transparent 46%, #000 78%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 46%, black 78%);
+  mask-image: linear-gradient(90deg, transparent 46%, black 78%);
   transition: opacity var(--duration-fast) var(--ease-standard);
 }
 
@@ -140,15 +140,15 @@
   -webkit-mask-image: linear-gradient(
     90deg,
     transparent 44%,
-    #000 58%,
-    #000 calc(100% - 100px),
+    black 58%,
+    black calc(100% - 100px),
     transparent calc(100% - 78px)
   );
   mask-image: linear-gradient(
     90deg,
     transparent 44%,
-    #000 58%,
-    #000 calc(100% - 100px),
+    black 58%,
+    black calc(100% - 100px),
     transparent calc(100% - 78px)
   );
 }
