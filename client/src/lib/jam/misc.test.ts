@@ -196,9 +196,42 @@ describe("video alignment by content", () => {
     expect(a.zeroFrame).toBe(trueZero);
   });
 
-  it("falls back to the timestamp when there is nothing to match", () => {
+  it("falls back to the timestamp when there is nothing to match, and says why", () => {
     const a = alignVideoAudio(new Float32Array(48000), new Float32Array(48000), 48000, -120);
-    expect(a).toEqual({ zeroFrame: -120, method: "timestamp", quality: 0, timestampGuess: -120 });
+    expect(a).toEqual({ zeroFrame: -120, method: "timestamp", quality: 0, timestampGuess: -120, reason: "no-window" });
+    expect(alignVideoAudio(new Float32Array(100), new Float32Array(100), 8000, 0).reason).toBe("short");
+  });
+
+  // THE CI FLAKE (main, 2026-11-11): method "timestamp" with quality 0 and the
+  // guess 107 ms late. The excerpt was the EARLIEST loudest one that fitted the
+  // take by the guess; a mic with a bar of sound once a second makes many
+  // windows equally loud, so the earliest sat a few ms into the take, and with
+  // the guess late the true position was BEFORE the take's first sample: the
+  // needle hung off the haystack and the correlation collapsed. Whether it did
+  // depended on where the camera started against the take and on which
+  // windows came out loudest.
+  it("does not pick an excerpt the late guess pushes off the start of the take", () => {
+    const sr = 8000;
+    let seed = 11;
+    const burst = Float32Array.from({ length: sr / 5 }, () => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return (seed / 2 ** 32 - 0.5) * 0.8;
+    });
+    const mic = new Float32Array(sr * 60);
+    for (let k = 0; k < 59; k++) mic.set(burst, k * sr + sr / 4); // the same 0.2 s of noise, every second
+    const failures: string[] = [];
+    for (let phaseMs = 0; phaseMs < 1000; phaseMs += 25) {
+      const lead = 2.3; // the camera started 2.3 s before the take
+      const takeStart = 10 * sr + Math.round((phaseMs / 1000) * sr);
+      const trueZero = -Math.round(lead * sr);
+      const pcm = mic.slice(takeStart, takeStart + Math.round(9.72 * sr));
+      const file = mic.slice(takeStart + trueZero, takeStart + trueZero + Math.round((lead + 9.72) * sr));
+      const a = alignVideoAudio(pcm, file, sr, trueZero + Math.round(0.107 * sr)); // the guess, 107 ms late
+      if (a.method !== "content" || a.zeroFrame !== trueZero) {
+        failures.push(`phase ${phaseMs} ms: ${a.method} ${a.reason ?? ""} q=${a.quality.toFixed(2)} off by ${a.zeroFrame - trueZero}`);
+      }
+    }
+    expect(failures).toEqual([]);
   });
 
   it("on a repeating riff, takes the match nearest the timestamp guess, not just the strongest", () => {
@@ -217,7 +250,7 @@ describe("video alignment by content", () => {
     expect(a.zeroFrame).toBe(trueZero);
   });
 
-  it("prefers WebM (Chromium's MP4 recorder returned empty files), MP4 where it is all there is", () => {
+  it("prefers WebM, MP4 where it is all there is (see VIDEO_MIME_PREFERENCE for why)", () => {
     expect(pickVideoMime(() => true)).toBe("video/webm;codecs=vp9,opus");
     expect(pickVideoMime((t) => t === "video/mp4")).toBe("video/mp4");
     expect(pickVideoMime(() => false)).toBeNull();
