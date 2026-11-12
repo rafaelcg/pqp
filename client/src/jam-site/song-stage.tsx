@@ -30,6 +30,9 @@ import { cn, partLabel, personLabel } from "./util";
 
 const LEVEL_BARS = 15;
 
+/** How many first frames are being fetched at once before play: a big song starts the next as each lands, not all nine together. */
+const STILLS_IN_FLIGHT = 4;
+
 type Item =
   | { kind: "part"; track: PublicJamTrack }
   | { kind: "need"; instrument: Instrument };
@@ -79,6 +82,8 @@ function PartTile({
   playing,
   stemsReady,
   parts,
+  fetchStill,
+  onSettled,
   spotlit,
   dimmed,
   onSelect,
@@ -90,6 +95,10 @@ function PartTile({
   stemsReady: boolean;
   /** How many parts the song has: a big song only loads its first frames before play. */
   parts: number;
+  /** This video may start loading its first frame now (a queue, so a big song does not fan out every request at once). */
+  fetchStill: boolean;
+  /** Its first frame landed, or failed: the next in the queue may start. */
+  onSettled: () => void;
   spotlit: boolean;
   dimmed: boolean;
   onSelect: () => void;
@@ -100,6 +109,14 @@ function PartTile({
   const videoUrl = useMemo(() => pickJamVideoUrl(track), [track]);
   const video = useRef<HTMLVideoElement | null>(null);
   const [shown, setShown] = useState(false);
+  // a tile tells the queue once, whatever the browser fires after
+  const settledOnce = useRef(false);
+  const settle = () => {
+    if (!settledOnce.current) {
+      settledOnce.current = true;
+      onSettled();
+    }
+  };
 
   useEffect(() => {
     const element = video.current;
@@ -130,7 +147,7 @@ function PartTile({
       {videoUrl && (
         <video
           ref={video}
-          src={jamVideoStillSrc(videoUrl)}
+          src={fetchStill ? jamVideoStillSrc(videoUrl) : undefined}
           muted
           playsInline
           preload={jamVideoPreload(parts, playing || stemsReady)}
@@ -142,9 +159,15 @@ function PartTile({
             const element = event.currentTarget;
             if (element.paused && element.currentTime === 0) element.currentTime = 0.1;
           }}
-          onLoadedData={() => setShown(true)}
+          onLoadedData={() => {
+            setShown(true);
+            settle();
+          }}
           onSeeked={() => setShown(true)}
-          onError={() => setShown(false)}
+          onError={() => {
+            setShown(false);
+            settle();
+          }}
           className={cn(
             "absolute inset-0 h-full w-full object-cover motion-safe:transition-opacity motion-safe:duration-[var(--duration-base)]",
             shown ? "opacity-100" : "opacity-0",
@@ -232,6 +255,13 @@ export function SongStage({
     [layout, items, spotIndex],
   );
   const soloed = spotIndex !== null ? tracks[spotIndex] : null;
+  // The first frames queue: the first few start at once, each that lands lets the next start; once play is
+  // pressed (or the stems are decoded) everything is allowed.
+  const [settled, setSettled] = useState(0);
+  const videoRank = useMemo(() => {
+    let rank = 0;
+    return tracks.map((track) => (pickJamVideoUrl(track) ? rank++ : -1));
+  }, [tracks]);
 
   return (
     <div className="relative w-full">
@@ -248,6 +278,8 @@ export function SongStage({
               playing={state.playing}
               stemsReady={state.stemsReady}
               parts={tracks.length}
+              fetchStill={state.playing || state.stemsReady || tracks.length <= STILLS_IN_FLIGHT || videoRank[index]! < STILLS_IN_FLIGHT + settled}
+              onSettled={() => setSettled((count) => count + 1)}
               spotlit={spotIndex === index}
               dimmed={spotIndex !== null && spotIndex !== index}
               onSelect={() => onSpot(spotIndex === index ? null : index)}

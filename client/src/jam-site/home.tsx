@@ -100,10 +100,18 @@ function PlayButton({ song, size, label }: { song: PublicJamSong; size: "card" |
   );
 }
 
-function Card({ song }: { song: PublicJamSong }) {
+/** The first page of the list is drawn whole; the cards after it (a long scroll) are skipped by the browser while offscreen. */
+const SKIPPED_AFTER = 24;
+
+function Card({ song, skippable }: { song: PublicJamSong; skippable: boolean }) {
   const path = useSongPath()(song);
   return (
-    <article data-jam-card={song.id} className="group relative flex min-w-0 flex-col">
+    <article data-jam-card={song.id} className={cn(
+        "group relative flex min-w-0 flex-col",
+        // the placeholder is a card's own height (phone, tablet, desktop): a taller one leaves a dead gap when the list is short
+        skippable && "[content-visibility:auto] [contain-intrinsic-size:auto_17.5rem] md:[contain-intrinsic-size:auto_21rem] lg:[contain-intrinsic-size:auto_23rem]",
+      )}
+    >
       <div className="overflow-hidden rounded-[var(--radius-panel)]">
         <SongArt song={song} variant="card" />
       </div>
@@ -327,7 +335,7 @@ export function HomePage() {
 
   // The hero is the first of Em alta: it is not shown twice on that tab.
   const shown = useMemo(() => (tab === "top" && featured.song ? list.songs.filter((song) => song.id !== featured.song!.id) : list.songs), [tab, featured.song, list.songs]);
-  const cards = useMemo(() => shown.map((song) => <Card key={song.id} song={song} />), [shown]);
+  const cards = useMemo(() => shown.map((song, index) => <Card key={song.id} song={song} skippable={index >= SKIPPED_AFTER} />), [shown]);
 
   return (
     <div className={CONTAINER}>
