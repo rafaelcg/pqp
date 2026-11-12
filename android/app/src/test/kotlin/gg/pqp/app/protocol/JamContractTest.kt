@@ -73,8 +73,13 @@ class JamContractTest {
             RepoSources.objectKeys(jam, "jamSongSummarySchema").toSet() - notReadYet,
             JamSongSummary.serializer().descriptor.elementNames.toSet(),
         )
+        // The track's `videoSources` is the list of every file a video exists as (the worker's
+        // MP4 copy first, the recording second) for a client that chooses by what it can play.
+        // The phones need none of it: `videoUrl` is already the best file for them (the MP4 copy
+        // once it exists), so the decoder skips the list until a screen wants to choose.
+        val notReadYetOnTracks = setOf("videoSources")
         assertEquals(
-            RepoSources.objectKeys(jam, "jamTrackSchema").toSet(),
+            RepoSources.objectKeys(jam, "jamTrackSchema").toSet() - notReadYetOnTracks,
             JamTrack.serializer().descriptor.elementNames.toSet(),
         )
     }

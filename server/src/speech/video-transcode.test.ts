@@ -3,8 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { JAM_VIDEO_MAX_BYTES } from "@pqp/shared";
 import { UnsupportedContainerError } from "./transcode.js";
 import {
+  conversionArgs,
   convertVideoToMp4,
   demuxerOf,
   inspectMp4File,
@@ -301,6 +303,44 @@ describeFfmpeg("the MP4 copy keeps the picture and the sound where they were", (
     await convertVideoToMp4(input, output, "matroska", "transcode");
     expect(probe(output).video).toMatch(/160x90/);
   }, 30_000);
+
+  it("a picture past 1920x1080 is scaled into it, where a fixed H.264 level would have refused it", async () => {
+    const input = join(dir, "big.webm");
+    const output = join(dir, "big.mp4");
+    execFileSync(
+      FFMPEG,
+      ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=2560x1440:r=5:d=1", "-c:v", "libvpx", "-b:v", "300k", input],
+      { stdio: "ignore" },
+    );
+    await convertVideoToMp4(input, output, "matroska", "transcode");
+    expect(probe(output).video).toMatch(/1920x1080/);
+  }, 60_000);
+
+  it("a header that declares more than a 4K picture is refused by the decoder, before it allocates the frame", async () => {
+    const input = join(dir, "huge.webm");
+    execFileSync(
+      FFMPEG,
+      ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=black:s=4096x2304:r=1:d=1", "-c:v", "libvpx", "-b:v", "50k", input],
+      { stdio: "ignore" },
+    );
+    await expect(convertVideoToMp4(input, join(dir, "huge.mp4"), "matroska", "transcode")).rejects.toThrow(/ffmpeg exited/);
+  }, 60_000);
+});
+
+describe("the ffmpeg command line", () => {
+  it("bounds what a hostile file can cost: decoded pixels, one allocation, the output's size, and nothing but local files", () => {
+    for (const plan of ["transcode", "remux"] as const) {
+      const line = conversionArgs("/in", "/out.mp4", "matroska", plan);
+      expect(line).toContain("-max_alloc");
+      expect(line.join(" ")).toContain("-protocol_whitelist file");
+      expect(line.join(" ")).toContain(`-fs ${JAM_VIDEO_MAX_BYTES + 1}`);
+      // The demuxer is named, never probed.
+      expect(line.join(" ")).toContain("-f matroska -");
+    }
+    expect(conversionArgs("/in", "/out.mp4", "matroska", "transcode")).toContain("-max_pixels");
+    // A fixed level refuses a picture bigger than it allows; x264 picks its own.
+    expect(conversionArgs("/in", "/out.mp4", "matroska", "transcode")).not.toContain("-level");
+  });
 });
 
 // Types only: keep the import used when the ffmpeg block is skipped.

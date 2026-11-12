@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JAM_VIDEO_MAX_BYTES } from "@pqp/shared";
 import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
 import { logEvent } from "../lib/log.js";
-import { deleteObject, downloadObjectToFile, putObject } from "../lib/s3.js";
+import { deleteObject, downloadObjectToFile, putObjectFromFile } from "../lib/s3.js";
 import { TranscodeError, UnsupportedContainerError } from "../speech/transcode.js";
 import {
   convertVideoToMp4,
@@ -84,6 +84,7 @@ export function jamVideoJobMetrics(): JamVideoJobMetrics {
 
 export function resetJamVideoJobMetricsForTests(): void {
   for (const key of Object.keys(stats) as (keyof typeof stats)[]) stats[key] = 0;
+  backfillIdleUntil = 0;
 }
 
 /** `jam/<server>/<id>.webm` -> `jam/<server>/<id>.ios.mp4`: same prefix, same sweeps. */
@@ -106,40 +107,59 @@ export async function enqueueJamVideoTranscode(db: Queryable, trackId: string): 
   return enqueueSpeechJob(db, { kind: JAM_VIDEO_JOB_KIND, trackId });
 }
 
+/** After a pass that found nothing to queue, the backfill rests this long (see below). */
+const BACKFILL_IDLE_MS = 30 * 60_000;
+let backfillIdleUntil = 0;
+
 /**
  * Queue the tracks that have a video, no copy and no job yet: every take
  * recorded before the copy existed. Newest first, at most `limit` per call and
- * never more than `BACKFILL_QUEUE_CAP` waiting or running at once, so a
+ * never more than `cap` (`BACKFILL_QUEUE_CAP`) waiting or running at once, so a
  * backlog of a thousand videos is a trickle. Rows only (a few statements), so
  * it runs on any process whatever ffmpeg says; claiming is what needs ffmpeg.
+ *
+ * A track recorded from now on gets its job in the claim's own transaction, so
+ * once a pass finds NO candidate the backlog is over for good, and the next
+ * scan is `BACKFILL_IDLE_MS` away instead of a minute (what is left is read
+ * through `idx_jam_tracks_video_pending`, which holds only live videos with no
+ * copy, so even the scan that finds nothing touches few rows). A pass that
+ * queued nothing only because the queue was full does not rest.
  */
 export async function enqueueMissingJamVideoTranscodes(
   limit = BACKFILL_QUEUE_CAP,
   cap = BACKFILL_QUEUE_CAP,
 ): Promise<number> {
+  if (Date.now() < backfillIdleUntil) {
+    return 0;
+  }
+  const waiting = await getPool().query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM speech_jobs WHERE kind = $1 AND status IN ('queued', 'running')`,
+    [JAM_VIDEO_JOB_KIND],
+  );
+  const room = Math.max(0, Math.min(limit, cap - (waiting.rows[0]?.n ?? 0)));
+  if (room === 0) {
+    return 0;
+  }
   const inserted = await getPool().query(
-    `WITH room AS (
-       SELECT GREATEST(0, LEAST($1::int, $2::int - COUNT(*)::int)) AS n
-         FROM speech_jobs
-        WHERE kind = $3 AND status IN ('queued', 'running')
-     ),
-     candidates AS (
+    `WITH candidates AS (
        SELECT t.id FROM jam_tracks t
         WHERE t.video_key IS NOT NULL AND t.video_mp4_content_type IS NULL
           AND t.deleted_at IS NULL
           AND NOT EXISTS (
-            SELECT 1 FROM speech_jobs j WHERE j.kind = $3 AND j.track_id = t.id)
+            SELECT 1 FROM speech_jobs j WHERE j.kind = $2 AND j.track_id = t.id)
         ORDER BY t.created_at DESC
-        LIMIT (SELECT n FROM room)
+        LIMIT $1
      )
      INSERT INTO speech_jobs (kind, track_id)
-     SELECT $3, id FROM candidates
+     SELECT $2, id FROM candidates
      ON CONFLICT (kind, track_id) WHERE track_id IS NOT NULL DO NOTHING
      RETURNING id`,
-    [limit, cap, JAM_VIDEO_JOB_KIND],
+    [room, JAM_VIDEO_JOB_KIND],
   );
   const added = inserted.rowCount ?? 0;
-  if (added > 0) {
+  if (added === 0) {
+    backfillIdleUntil = Date.now() + BACKFILL_IDLE_MS;
+  } else {
     await getPool().query(`SELECT pg_notify($1, '')`, [SPEECH_JOBS_CHANNEL]);
   }
   return added;
@@ -164,15 +184,46 @@ async function loadTrack(trackId: string): Promise<TrackRow | null> {
   return found.rows[0] ?? null;
 }
 
+async function dropObject(key: string): Promise<void> {
+  await deleteObject(key).catch((error: unknown) => {
+    console.error(`[jam] leaked video copy ${key}:`, error instanceof Error ? error.message : error);
+  });
+}
+
+/**
+ * A copy that will not be confirmed because the job gave up: delete the object,
+ * then drop the reservation, so no row names a file nobody wants. Only while
+ * nothing was confirmed. If the delete fails the reservation stays, which keeps
+ * the key where the sweep and the cascades read it.
+ */
+async function discardCopy(trackId: string, key: string): Promise<void> {
+  try {
+    await deleteObject(key);
+  } catch (error) {
+    console.error(`[jam] could not delete unconfirmed video copy ${key}:`, error instanceof Error ? error.message : error);
+    return;
+  }
+  await getPool().query(
+    `UPDATE jam_tracks SET video_mp4_key = NULL
+      WHERE id = $1 AND video_mp4_key = $2 AND video_mp4_content_type IS NULL`,
+    [trackId, key],
+  );
+}
+
 /** A failure that no retry will change: say so, count it, settle the job `failed`. */
-async function giveUp(job: SpeechJob, trackId: string, reason: string): Promise<void> {
+async function giveUp(job: SpeechJob, trackId: string, reason: string, reservedKey?: string): Promise<void> {
   stats.failed += 1;
   logEvent("jamVideo.transcode.failed", { trackId, attempt: job.attempts, next: "gave-up", reason: reason.slice(0, 200) });
   await finishSpeechJob(getPool(), job, "failed", reason);
+  if (reservedKey) await discardCopy(trackId, reservedKey);
 }
 
-/** A failure that may be temporary: back to the queue with backoff, or give up when the attempts are spent. */
-async function retryOrGiveUp(job: SpeechJob, trackId: string, reason: string): Promise<void> {
+/**
+ * A failure that may be temporary: back to the queue with backoff, or give up
+ * when the attempts are spent. `reservedKey` is the copy's key once it is on the
+ * row: a retry rewrites the same key, so it is only discarded on the give-up.
+ */
+async function retryOrGiveUp(job: SpeechJob, trackId: string, reason: string, reservedKey?: string): Promise<void> {
   const next = await retrySpeechJobLater(job, reason);
   logEvent("jamVideo.transcode.failed", { trackId, attempt: job.attempts, next, reason: reason.slice(0, 200) });
   if (next === "retrying") {
@@ -180,13 +231,8 @@ async function retryOrGiveUp(job: SpeechJob, trackId: string, reason: string): P
   } else if (next === "gave-up") {
     stats.failed += 1;
     await finishSpeechJob(getPool(), job, "failed", reason);
+    if (reservedKey) await discardCopy(trackId, reservedKey);
   }
-}
-
-async function dropObject(key: string): Promise<void> {
-  await deleteObject(key).catch((error: unknown) => {
-    console.error(`[jam] leaked video copy ${key}:`, error instanceof Error ? error.message : error);
-  });
 }
 
 /** What a claimed `jam_video_transcode` job does. Never throws for a file it cannot convert. */
@@ -278,14 +324,16 @@ export async function runJamVideoJob(job: SpeechJob): Promise<void> {
       return;
     }
     try {
-      await putObject(key, await readFile(outPath), "video/mp4");
+      // Streamed from the file: a 100 MiB copy is never held in memory.
+      await putObjectFromFile(key, outPath, "video/mp4");
     } catch (error) {
-      await retryOrGiveUp(job, trackId, error instanceof Error ? error.message : String(error));
+      await retryOrGiveUp(job, trackId, error instanceof Error ? error.message : String(error), key);
       return;
     }
 
-    const client = await getPool().connect();
     let confirmed = false;
+    let confirmFailure: unknown = null;
+    const client = await getPool().connect();
     try {
       await client.query("BEGIN");
       if (!(await finishSpeechJob(client, job, "done"))) {
@@ -309,9 +357,16 @@ export async function runJamVideoJob(job: SpeechJob): Promise<void> {
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
-      throw error;
+      confirmFailure = error;
     } finally {
       client.release();
+    }
+    if (confirmFailure) {
+      // The object is in the bucket and the row does not say so: a retry
+      // rewrites the same key, and giving up deletes it (`discardCopy`).
+      const reason = confirmFailure instanceof Error ? confirmFailure.message : String(confirmFailure);
+      await retryOrGiveUp(job, trackId, reason, key);
+      return;
     }
     if (!confirmed) {
       await dropObject(key);

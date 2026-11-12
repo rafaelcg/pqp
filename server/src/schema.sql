@@ -7763,6 +7763,13 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_speech_jobs_kind_track
   ON speech_jobs (kind, track_id) WHERE track_id IS NOT NULL;
 
+-- The backfill's scan (`enqueueMissingJamVideoTranscodes`): live videos with no
+-- copy, newest first. Small by construction, so the scan that finds nothing to
+-- queue touches few rows however many tracks the table holds.
+CREATE INDEX IF NOT EXISTS idx_jam_tracks_video_pending
+  ON jam_tracks (created_at DESC)
+  WHERE video_key IS NOT NULL AND video_mp4_content_type IS NULL AND deleted_at IS NULL;
+
 -- Every track of a song, deleted or not: the cascade's key read and the
 -- ON DELETE CASCADE from jam_songs (the partial index below cannot answer
 -- either, it holds live tracks only).

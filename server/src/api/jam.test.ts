@@ -2257,6 +2257,44 @@ describeDb("jam channels", () => {
       expect((await detail(alice, song)).tracks[0]!.videoContentType).toBe("video/webm");
     });
 
+    it("a copy that reached the bucket but could not be confirmed is deleted when the job gives up", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      await getPool().query(`UPDATE speech_jobs SET attempts = 2 WHERE kind = 'jam_video_transcode'`);
+      // The confirm transaction dies on the UPDATE that would make the copy readable.
+      const pool = getPool();
+      const real = pool.connect.bind(pool) as (
+        ...args: unknown[]
+      ) => Promise<{ query: (...args: unknown[]) => Promise<unknown> }>;
+      const spy = vi.spyOn(pool, "connect").mockImplementation(((...args: unknown[]) => {
+        // `pool.query` itself connects with a callback: leave that alone.
+        if (args.length > 0) return real(...args);
+        return real().then((client) => {
+          const query = client.query.bind(client);
+          client.query = ((...queryArgs: unknown[]) =>
+            typeof queryArgs[0] === "string" && queryArgs[0].includes("video_mp4_content_type = 'video/mp4'")
+              ? Promise.reject(new Error("connection terminated"))
+              : query(...queryArgs)) as never;
+          return client;
+        });
+      }) as never);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await runOne();
+      } finally {
+        spy.mockRestore();
+        log.mockRestore();
+      }
+      expect(await jobsOf()).toMatchObject([{ track_id: track.id, status: "failed" }]);
+      // The object is gone and nothing names it any more.
+      expect([...objects.keys()].some((key) => key.endsWith(".ios.mp4"))).toBe(false);
+      const row = (
+        await getPool().query(`SELECT video_mp4_key, video_mp4_content_type FROM jam_tracks WHERE id = $1`, [track.id])
+      ).rows[0];
+      expect(row).toEqual({ video_mp4_key: null, video_mp4_content_type: null });
+      expect((await detail(alice, song)).tracks[0]!.videoContentType).toBe("video/webm");
+    });
+
     it("a file that is not a video is a permanent failure, with no retries", async () => {
       const song = await songId(bob);
       await videoTrack(bob, song, { bytes: Buffer.from("not a video at all"), contentType: "video/mp4" });
@@ -2390,6 +2428,23 @@ describeDb("jam channels", () => {
         else process.env.FFMPEG_PATH = before;
         resetJamTranscodeAvailabilityForTests();
       }
+    });
+
+    it("the backfill rests after a pass that found nothing, since a new video queues its own job", async () => {
+      expect(await enqueueMissingJamVideoTranscodes()).toBe(0); // no tracks: the backlog is over
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      await getPool().query(`DELETE FROM speech_jobs`); // as if it were recorded before
+      expect(await enqueueMissingJamVideoTranscodes()).toBe(0); // resting: not even looked at
+      resetJamVideoJobMetricsForTests(); // (the rest is cleared with the counters, for tests)
+      expect(await enqueueMissingJamVideoTranscodes()).toBe(1);
+      expect((await jobsOf()).map((row) => row.track_id)).toEqual([track.id]);
+      // A full queue is not "nothing to do": it does not rest.
+      expect(await enqueueMissingJamVideoTranscodes(10, 1)).toBe(0);
+      const second = await videoTrack(bob, song);
+      await getPool().query(`DELETE FROM speech_jobs WHERE track_id = $1`, [second.id]);
+      await runOne();
+      expect(await enqueueMissingJamVideoTranscodes(10, 1)).toBe(1);
     });
 
     it("the backfill queues the videos recorded before the copy existed, newest first, a few at a time", async () => {

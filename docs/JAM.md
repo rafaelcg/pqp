@@ -325,19 +325,28 @@ zero) beside the original, and a track read offers it first.
   `track_id`, queued in the transaction that inserts a track with a video, and
   by `enqueueMissingJamVideoTranscodes` (job `jam-video-backfill`, a minute)
   for every video recorded before this existed: newest first, never more than 10
-  waiting, claimed ONE at a time in a lane of its own. Only a process whose
+  waiting, claimed ONE at a time in a lane of its own. A pass that finds
+  nothing to queue means the backlog is over (a new video queues its own job in
+  the claim), so the next scan waits half an hour; the scan reads
+  `idx_jam_tracks_video_pending`, which holds only live videos with no copy. Only a process whose
   ffmpeg has libx264 and AAC claims it (the `worker` image; the API container
   never does), so with the worker down nothing breaks: the rows wait.
 - **What it does with a file.** An MP4 that already is H.264 + AAC with the
   `moov` first and not fragmented is left alone (`last_error =
   'already-playable'`, no second object). The same codecs in MediaRecorder's
   fragmented MP4 are re-wrapped with the streams copied. Everything else (WebM,
-  VP9 in MP4) is re-encoded: libx264 Main, CRF 23 capped at 1800 kbps, even
-  sides, AAC 96 kbps. It never trims, pads or shifts: the first frame and the
-  first audio sample keep their times (pinned on real ffmpeg by
-  `speech/video-transcode.test.ts`, a flash and a click found again in the
-  output). The input is read through a named demuxer with only the `file`
-  protocol, never probed.
+  VP9 in MP4) is re-encoded: libx264 Main at the level x264 picks, CRF 23
+  capped at 1800 kbps, scaled into 1920x1080 with even sides, AAC 96 kbps. It
+  never trims, pads or shifts: the first frame and the first audio sample keep
+  their times (pinned on real ffmpeg by `speech/video-transcode.test.ts`, a
+  flash and a click found again in the output). A file is an untrusted input:
+  it is read through a named demuxer with only the `file` protocol, never
+  probed; the decoder refuses a header past 4K UHD before allocating the frame
+  (`-max_pixels`), no allocation may pass 256 MiB (`-max_alloc`), the output
+  stops at `JAM_VIDEO_MAX_BYTES` (`-fs`, the job then refuses it) and the whole
+  pass is killed at ten minutes. The copy is streamed to the bucket from the
+  file, never held in memory, and a copy that reached the bucket but could not
+  be confirmed is deleted when the job gives up.
 - **Reads.** `videoUrl`, `videoContentType` and `videoBytes` become the copy's
   once it is confirmed; `videoSources` lists every file, copy first, original
   last, each with its type, and the web player picks the first one

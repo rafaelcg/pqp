@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { open } from "node:fs/promises";
+import { JAM_VIDEO_MAX_BYTES } from "@pqp/shared";
 import { TranscodeError, UnsupportedContainerError, videoDemuxerFor } from "./transcode.js";
 
 /**
@@ -168,20 +169,50 @@ export async function demuxerOf(path: string): Promise<"mov" | "matroska"> {
   return demuxer;
 }
 
-/** The video bitrate ceiling: a 100 MiB output is a quarter of an hour at this, past any take. */
+/**
+ * The video bitrate ceiling. Bytes per second, not bytes: 100 MiB is about
+ * seven and a half minutes of it, and the hard bound on the output is `-fs`
+ * (`OUTPUT_LIMIT_BYTES`).
+ */
 const MAX_RATE = "1800k";
 
-function args(inputPath: string, outputPath: string, demuxer: "mov" | "matroska", plan: "remux" | "transcode"): string[] {
+/**
+ * The most a decoded picture may be: 4K UHD. A header that declares more is
+ * refused by the decoder before it allocates the frame, so a crafted file
+ * cannot ask the worker for gigabytes (`-max_pixels`), and no single
+ * allocation may pass 256 MiB (`-max_alloc`, a 4K frame is about 12 MiB).
+ */
+const MAX_PIXELS = 3840 * 2160;
+const MAX_ALLOC_BYTES = 256 * 1024 * 1024;
+/**
+ * The output may not grow past the largest video an upload may be: ffmpeg
+ * stops writing there (`-fs`), so a long clip cannot fill the worker's disk
+ * (a bitrate ceiling bounds bytes per second, not bytes). A file that reaches
+ * the limit is one byte over `JAM_VIDEO_MAX_BYTES`, which the job refuses.
+ */
+const OUTPUT_LIMIT_BYTES = JAM_VIDEO_MAX_BYTES + 1;
+
+/** The ffmpeg command line, exported so a test can pin the guards it carries. */
+export function conversionArgs(
+  inputPath: string,
+  outputPath: string,
+  demuxer: "mov" | "matroska",
+  plan: "remux" | "transcode",
+): string[] {
   const input = [
     "-nostdin",
     "-hide_banner",
     "-loglevel",
     "error",
+    "-max_alloc",
+    String(MAX_ALLOC_BYTES),
     // The demuxer is named and nothing but a local file may be opened: see `videoDemuxerFor`.
     "-protocol_whitelist",
     "file",
     "-f",
     demuxer,
+    // A decoder option, so it sits before the input it applies to; a remux decodes nothing.
+    ...(plan === "transcode" ? ["-max_pixels", String(MAX_PIXELS)] : []),
     "-i",
     inputPath,
     "-map",
@@ -189,7 +220,7 @@ function args(inputPath: string, outputPath: string, demuxer: "mov" | "matroska"
     "-map",
     "0:a:0?",
   ];
-  const output = ["-movflags", "+faststart", "-f", "mp4", "-y", outputPath];
+  const output = ["-fs", String(OUTPUT_LIMIT_BYTES), "-movflags", "+faststart", "-f", "mp4", "-y", outputPath];
   if (plan === "remux") {
     return [...input, "-c", "copy", ...output];
   }
@@ -199,8 +230,8 @@ function args(inputPath: string, outputPath: string, demuxer: "mov" | "matroska"
     "libx264",
     "-profile:v",
     "main",
-    "-level",
-    "4.0",
+    // No `-level`: x264 picks the lowest level that fits the picture and rate,
+    // where a fixed one refuses anything larger than it allows.
     "-pix_fmt",
     "yuv420p",
     "-preset",
@@ -211,9 +242,10 @@ function args(inputPath: string, outputPath: string, demuxer: "mov" | "matroska"
     MAX_RATE,
     "-bufsize",
     "3600k",
-    // Even sides, which yuv420p requires.
+    // Within 1920x1080 (a take is a camera, and a phone plays that), with even
+    // sides, which yuv420p requires.
     "-vf",
-    "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+    "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
     "-fps_mode",
     "cfr",
     "-r",
@@ -241,7 +273,7 @@ export async function convertVideoToMp4(
   timeoutMs = JAM_TRANSCODE_TIMEOUT_MS,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(FFMPEG(), args(inputPath, outputPath, demuxer, plan), {
+    const child = spawn(FFMPEG(), conversionArgs(inputPath, outputPath, demuxer, plan), {
       stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";
