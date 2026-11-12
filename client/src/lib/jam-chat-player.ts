@@ -89,8 +89,26 @@ function holds(songId: string): boolean {
   );
 }
 
-function fail(songId: string) {
-  loadingSong = null;
+/** The start in progress (one at a time): a later click on another song, or the last card leaving, replaces it. */
+let operation: { id: number; songId: string } | null = null;
+let operationSeq = 0;
+
+function stale(op: { id: number }): boolean {
+  return operation === null || operation.id !== op.id;
+}
+
+/** A start failed. A start that was replaced meanwhile says nothing: it is somebody else's turn now. */
+function fail(songId: string, op: { id: number }) {
+  if (stale(op)) {
+    return;
+  }
+  operation = null;
+  if (loadingSong === songId) {
+    loadingSong = null;
+  }
+  if (claim?.songId === songId) {
+    claim = null;
+  }
   failedSong = songId;
   if (failTimer) {
     clearTimeout(failTimer);
@@ -110,13 +128,20 @@ function fail(songId: string) {
  */
 export function toggleJamCardSong(songId: string): void {
   unlockJamAudio();
-  void run(songId).catch(() => fail(songId));
-}
-
-async function run(songId: string): Promise<void> {
   if (loadingSong === songId) {
     return;
   }
+  const op = { id: ++operationSeq, songId };
+  void run(songId, op).catch(() => {
+    // A failure after the claim (resume or play refused) has already cleared the operation: say it anyway.
+    if (operation === null && claim?.songId === songId) {
+      operation = op;
+    }
+    fail(songId, op);
+  });
+}
+
+async function run(songId: string, op: { id: number; songId: string }): Promise<void> {
   const engine = await getJamEngine();
   if (holds(songId)) {
     if (engine.player.state === "playing") {
@@ -128,28 +153,35 @@ async function run(songId: string): Promise<void> {
     bump();
     return;
   }
+  // This start is the one in progress now; whatever was starting before is stale and gives up.
+  operation = op;
   loadingSong = songId;
   failedSong = null;
   bump();
   // Fresh addresses for the media, every time a song is started: what the card was drawn from
   // may be older than the links in it are good for.
   const detail = await fetchJamSong(songId);
+  if (stale(op)) {
+    return;
+  }
   const inMix = detail.tracks.filter((track) => track.inMix);
   if (inMix.length === 0) {
-    fail(songId);
+    fail(songId, op);
     return;
   }
   engine.player.stop();
   await syncJamStems(engine, detail.tracks);
-  if (loadingSong !== songId) {
+  if (stale(op)) {
     return;
   }
   if (!inMix.every((track) => engine.player.stem(track.id) !== null)) {
-    fail(songId);
+    fail(songId, op);
     return;
   }
   claim = { songId, trackIds: inMix.map((track) => track.id), engine };
   loadingSong = null;
+  operation = null;
+  bump();
   await engine.context.resume();
   await engine.player.play(0);
   bump();
@@ -176,7 +208,8 @@ export function useJamCardPlayer(songId: string | null): { state: JamCardPlaySta
       // After the commit: a click on the Jam row unmounts the chat and mounts the wall in one
       // pass, and the wall says it is on screen only once it has mounted.
       setTimeout(() => {
-        if (mounted.has(songId) || claim?.songId !== songId) {
+        const loading = loadingSong === songId;
+        if (mounted.has(songId) || (claim?.songId !== songId && !loading)) {
           return;
         }
         // The Jam is on screen now: the engine belongs to it and the song goes on (the wall
@@ -185,7 +218,11 @@ export function useJamCardPlayer(songId: string | null): { state: JamCardPlaySta
           return;
         }
         claim = null;
-        loadingSong = loadingSong === songId ? null : loadingSong;
+        if (loading) {
+          // The start still in flight has nobody to play for: it gives up where it stands.
+          loadingSong = null;
+          operation = null;
+        }
         void releaseJamEngine();
         bump();
       }, 0);
@@ -197,10 +234,13 @@ export function useJamCardPlayer(songId: string | null): { state: JamCardPlaySta
   if (loadingSong === songId) {
     return { state: "loading", engine: null };
   }
+  if (failedSong === songId) {
+    return { state: "failed", engine: null };
+  }
   if (holds(songId)) {
     return { state: playing && isJamPlaying() ? "playing" : "paused", engine: claim!.engine };
   }
-  return { state: failedSong === songId ? "failed" : "idle", engine: null };
+  return { state: "idle", engine: null };
 }
 
 /**
@@ -218,6 +258,7 @@ export function resetJamChatPlayerForTests(): void {
   claim = null;
   loadingSong = null;
   failedSong = null;
+  operation = null;
   mounted.clear();
   bump();
 }

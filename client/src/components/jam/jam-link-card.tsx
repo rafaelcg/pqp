@@ -188,9 +188,10 @@ export function JamLinkCardView({ song, href, onOpen }: { song: JamSongSummary; 
   );
 }
 
-export function JamLinkCardSkeleton() {
+export function JamLinkCardSkeleton({ observe }: { observe?: (element: Element | null) => void }) {
   return (
     <div
+      ref={observe}
       aria-hidden="true"
       data-jam-link-card-skeleton=""
       className="mt-1.5 flex h-[72px] w-full max-w-[26rem] items-center gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 p-2 pr-3"
@@ -225,10 +226,10 @@ function NavigatingCard({ song }: { song: JamSongSummary }) {
 }
 
 /** The card for a resolved state. The row owns the state (it decides whether the bare link is still worth showing). */
-export function JamLinkCard({ link, state }: { link: JamSongLink; state: JamCardState }) {
+export function JamLinkCard({ link, state, observe }: { link: JamSongLink; state: JamCardState; observe?: (element: Element | null) => void }) {
   const inRouter = useInRouterContext();
   if (state.status === "loading") {
-    return <JamLinkCardSkeleton />;
+    return <JamLinkCardSkeleton observe={observe} />;
   }
   if (state.status !== "ok") {
     return null;

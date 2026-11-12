@@ -139,13 +139,39 @@ export type JamCardState =
   | { status: "ok"; card: JamCardData }
   | { status: "unavailable" };
 
-/** Loads the card for a link. `idle` when the message has none. */
-export function useJamCard(link: JamSongLink | null, viewerId: string | null = null): JamCardState {
+/**
+ * Loads the card for a link, once the row is near the screen: a channel that opens on a long
+ * history must not ask for the detail of every song it ever shared. `observe` goes on the element
+ * the row draws while it waits (the card's placeholder). Without IntersectionObserver (an old
+ * webview, a test DOM) the answer is asked for at once.
+ */
+export function useJamCard(
+  link: JamSongLink | null,
+  viewerId: string | null = null,
+): { state: JamCardState; observe: (element: Element | null) => void } {
   const songId = link?.songId ?? null;
   const key = songId ? `${viewerId ?? ""}:${songId}` : null;
   const [state, setState] = useState<{ key: string; value: JamCardState } | null>(null);
+  const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
+  const [node, setNode] = useState<Element | null>(null);
   useEffect(() => {
-    if (!songId || !key) {
+    if (near || !node) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setNear(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "600px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [near, node]);
+  useEffect(() => {
+    if (!songId || !key || !near) {
       return;
     }
     let cancelled = false;
@@ -160,9 +186,9 @@ export function useJamCard(link: JamSongLink | null, viewerId: string | null = n
       cancelled = true;
       handle.release();
     };
-  }, [songId, key, viewerId]);
+  }, [songId, key, viewerId, near]);
   if (!key) {
-    return { status: "idle" };
+    return { state: { status: "idle" }, observe: setNode };
   }
-  return state && state.key === key ? state.value : { status: "loading" };
+  return { state: state && state.key === key ? state.value : { status: "loading" }, observe: setNode };
 }

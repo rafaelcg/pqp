@@ -60,18 +60,40 @@ function reasonOf(raw: string | undefined): Extract<ShareResult, { ok: false }>[
   }
 }
 
+/**
+ * The nonce of an attempt whose answer never came (the timeout), by channel and body. The server may
+ * have posted it anyway, and a retry that carries the same nonce is answered with that same message
+ * instead of posting the link twice (`postChannelMessage` treats a repeated nonce as one send).
+ */
+const unanswered = new Map<string, string>();
+
 export function sendShareMessage(channelId: string, body: string): Promise<ShareResult> {
   if (!sender || !sender.isOnline()) {
     return Promise.resolve({ ok: false, reason: "offline" });
   }
-  const nonce = newNonce();
+  const key = `${channelId}\n${body}`;
+  const nonce = unanswered.get(key) ?? newNonce();
   return new Promise<ShareResult>((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(nonce);
+      unanswered.set(key, nonce);
       resolve({ ok: false, reason: "timeout" });
     }, ANSWER_TIMEOUT_MS);
-    pending.set(nonce, { resolve, timer });
-    sender!.send({ type: "message-create", channelId, body, nonce });
+    pending.set(nonce, {
+      resolve: (result) => {
+        unanswered.delete(key);
+        resolve(result);
+      },
+      timer,
+    });
+    try {
+      sender!.send({ type: "message-create", channelId, body, nonce });
+    } catch {
+      // The socket went away between the check and the send: a failure on the row, not a stuck spinner.
+      clearTimeout(timer);
+      pending.delete(nonce);
+      resolve({ ok: false, reason: "offline" });
+    }
   });
 }
 

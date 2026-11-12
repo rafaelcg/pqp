@@ -3306,7 +3306,7 @@ const MessageRow = memo(function MessageRow({
           ),
     [message.body, message.forward, bauSelection],
   );
-  const jamState = useJamCard(jamSelection?.link ?? null, currentUserId);
+  const { state: jamState, observe: observeJamCard } = useJamCard(jamSelection?.link ?? null, currentUserId);
   const jamCardShown =
     jamSelection !== null &&
     (jamState.status === "ok" || jamState.status === "loading");
@@ -4109,7 +4109,7 @@ const MessageRow = memo(function MessageRow({
                     <BauPostCard link={bauSelection.link} state={bauState} />
                   )}
                   {jamSelection && (
-                    <JamLinkCard link={jamSelection.link} state={jamState} />
+                    <JamLinkCard link={jamSelection.link} state={jamState} observe={observeJamCard} />
                   )}
                   {showLinkEmbeds &&
                     message.embeds?.[0] &&
