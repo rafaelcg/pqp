@@ -5,6 +5,7 @@ import {
   jamInstrumentSchema,
   jamSongSummarySchema,
   jamTrackSchema,
+  jamVideoSourceSchema,
   JAM_PAGE_MAX,
 } from "./jam.js";
 
@@ -357,9 +358,20 @@ export const publicJamTrackSchema = z.object({
   peaks: z.array(z.number()),
   audioUrl: z.string(),
   audioContentType: z.string(),
-  /** Null unless this part's video is public. */
+  /**
+   * Null unless this part's video is public. The best file for every player,
+   * as `JamTrack.videoUrl`: the worker's H.264 MP4 copy once it exists, the
+   * recorded file until then.
+   */
   videoUrl: z.string().nullable(),
   videoContentType: z.string().nullable(),
+  /**
+   * Every file the public video exists as, best first (`JamTrack.videoSources`:
+   * the MP4 copy first, the recorded WebM or MP4 last), each a public media URL
+   * (see MEDIA URLS). Empty unless the video is public. A `<video>` takes the
+   * first one `canPlayType` accepts; iOS and Safari need the MP4.
+   */
+  videoSources: z.array(jamVideoSourceSchema),
 });
 export type PublicJamTrack = z.infer<typeof publicJamTrackSchema>;
 

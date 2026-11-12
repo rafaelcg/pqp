@@ -248,7 +248,7 @@ function labelFor(row: {
  * filing, and letting resolved rows drop out of the count would mean a
  * moderator working through a flood reopens the tap by clearing it.
  */
-async function assertUnderFloodCap(reporterId: string): Promise<void> {
+export async function assertUnderFloodCap(reporterId: string): Promise<void> {
   const result = await getPool().query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM reports
      WHERE reporter_id = $1 AND escalated_from IS NULL

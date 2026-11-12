@@ -669,6 +669,62 @@ describe("jam_channels against the jam config", () => {
 });
 
 /**
+ * `jam_public`, born with the public jams server PR. Global, off by default,
+ * served as `enabled` on `GET /api/public/jams/config` (signed out) and
+ * `GET /api/jam-public/config` (signed in). No client reads it yet (the
+ * website, the in-app UI and the phones are their own PRs), so the client
+ * half pinned here is the contract in `@pqp/shared` they will import. The
+ * behaviour (routes unmatched while off, writes refused) is pinned on a real
+ * Postgres in `api/jam-public.test.ts`.
+ */
+describe("jam_public against the public jam configs", () => {
+  it("is global, off by default, and served as `enabled` on both configs", () => {
+    const def = FEATURE_FLAGS.jam_public;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe(
+      "GET /api/public/jams/config (enabled), GET /api/jam-public/config (enabled)",
+    );
+  });
+
+  it("the shared contract's public config is `{ enabled }` and nothing else, as the route sends it", () => {
+    const shared = readFileSync(
+      path.resolve(here, "../../../packages/shared/src/jam-public.ts"),
+      "utf8",
+    );
+    const body = /export const publicJamConfigSchema = z\.object\(\{([\s\S]*?)\n\}\);/.exec(shared)?.[1];
+    expect(body, "publicJamConfigSchema not found in jam-public.ts").toBeTruthy();
+    expect([...body!.matchAll(/^ {2}([A-Za-z]\w*):/gm)].map((match) => match[1])).toEqual(["enabled"]);
+    const routes = readFileSync(path.join(serverSrc, "api/jam-public-routes.ts"), "utf8");
+    expect(routes).toContain("sendPublic(req, res, { enabled: jamPublicEnabled() }, 60)");
+    const lib = readFileSync(path.join(serverSrc, "lib/jam-public-config.ts"), "utf8");
+    expect(lib).toMatch(/isEnabled\("jam_public"\)/);
+  });
+
+  it("every public route but config is behind the flag, and the handler runs before the Bearer resolution", () => {
+    const routes = readFileSync(path.join(serverSrc, "api/jam-public-routes.ts"), "utf8");
+    const handler = /export async function handleJamPublicPublicRoute[\s\S]*?\n\}/.exec(routes)?.[0];
+    expect(handler).toBeTruthy();
+    // Config is answered first; then nothing is matched while the flag is off.
+    expect(handler!.indexOf("CONFIG_PATH")).toBeLessThan(handler!.indexOf("if (!jamPublicEnabled())"));
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const publicAt = api.indexOf("await handleJamPublicPublicRoute(req, res, pathname)");
+    const authAt = api.indexOf("resolveAuthSession(req.headers.authorization)");
+    expect(publicAt).toBeGreaterThan(0);
+    expect(publicAt).toBeLessThan(authAt);
+    expect(api).toContain("registerJamPublicRoutes(router)");
+  });
+
+  it("the dashboard has a note for it", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bjam_public:\s*"/);
+  });
+});
+
+/**
  * `forum_announcement`: the one-time "O fórum abriu" corner card. Per server,
  * off by default, served as `announce` on the same forum config, and only
  * ever true where `forum_channels` is on too.

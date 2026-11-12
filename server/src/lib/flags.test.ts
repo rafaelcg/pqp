@@ -195,6 +195,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flags, so there was no old reader: this is their definition.
   locadora_guest: (raw) => raw === "true",
   locadora_saves_announced: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  jam_public: (raw) => raw === "true",
 };
 
 const SAMPLES = [

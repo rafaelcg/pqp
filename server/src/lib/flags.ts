@@ -1205,6 +1205,20 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/public/apps/config (cloudSaves)",
   },
+  jam_public: {
+    description:
+      "Jams públicas: músicas que qualquer pessoa ouve e assiste sem conta (jam.pqp.gg). Qualquer conta começa uma, e quem começou uma música de canal pode deixar ela pública (cada pessoa com parte gravada responde se a parte dela vai). Capa e vídeo passam pelo scanner; áudio não. Ligar muda a categoria jurídica (conteúdo público, como o COMMUNITIES_ENABLED): leia docs/JAM_PUBLIC.md antes. Desligado, as rotas públicas nem existem, ninguém publica e nada aparece; o que já é dos canais não muda.",
+    env: "JAM_PUBLIC",
+    parseEnv: exactTrue,
+    // Off: public content changes the instance's legal category, the way
+    // `COMMUNITIES_ENABLED` does (docs/JAM_PUBLIC.md, docs/CONTENT_SAFETY.md).
+    // It goes on when Rafael says so. Only `true`.
+    codeDefault: false,
+    // GLOBAL: a standalone public jam has no server, and the public site's
+    // visitor has none either.
+    perServer: false,
+    clientVia: "GET /api/public/jams/config (enabled), GET /api/jam-public/config (enabled)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;
