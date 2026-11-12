@@ -184,12 +184,24 @@ export function JamSongPanel({
           ? "[--lane-ctl:13.75rem]"
           : "[--lane-ctl:11.5rem]";
   const durationMs = playback.durationMs || timeline.endMs;
-  // The stage: every recording in the song that has a video, drawn big above the lanes. A song
-  // with a video starts with the compact header (a small cover, the play button beside the
+  // The stage: a mosaic of every recording in the mix, with video or without, above the lanes.
+  // A song with a take starts with the compact header (a small cover, the play button beside the
   // title) before its detail has even arrived, so the header does not change shape under it.
-  const stageTracks = useMemo(() => tracks.filter((track) => track.inMix && track.videoUrl), [tracks]);
-  const stageOn = detail ? stageTracks.length > 0 : song.hasVideo;
+  const stageTracks = useMemo(() => tracks.filter((track) => track.inMix), [tracks]);
+  const stageOn = detail ? stageTracks.length > 0 : song.trackCount > 0;
   const anySolo = tracks.some((track) => playback.lanes[track.id]?.solo === true);
+  // A tile is "only this": it solos its track, and pressing the one that is the only one soloed clears it.
+  const soloFromStage = (trackId: string) => {
+    const onlyThis = playback.lanes[trackId]?.solo === true && !tracks.some((other) => other.id !== trackId && playback.lanes[other.id]?.solo === true);
+    for (const other of tracks) {
+      const soloed = playback.lanes[other.id]?.solo === true;
+      if (other.id === trackId) {
+        playback.setLane(other.id, { solo: !onlyThis });
+      } else if (soloed) {
+        playback.setLane(other.id, { solo: false });
+      }
+    }
+  };
   const transport = (
     <JamTransport
       clock={playback.clock}
@@ -411,6 +423,11 @@ export function JamSongPanel({
             lanes={playback.lanes}
             anySolo={anySolo}
             attachVideo={playback.attachVideo}
+            clock={playback.clock}
+            onSolo={soloFromStage}
+            // the part the song asks for gets its own tile only for somebody who may add it
+            missing={reason === null ? missingSlots.filter((instrument) => addable.includes(instrument)) : []}
+            onRecord={reason === null ? (instrument) => onRecord(instrument, true) : undefined}
             loading={!detail}
           />
         )}
