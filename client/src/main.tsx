@@ -33,6 +33,7 @@ import {
   rememberInviteRefFromLocation,
 } from "./lib/handle-intent";
 import { browserStorage } from "./lib/arrival";
+import { rememberJamIntentFromLocation } from "./lib/jam-intent";
 import { withPqpPtBrCopy } from "./lib/clerk-pt-br";
 import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
@@ -647,6 +648,9 @@ rememberAcquisitionFromLocation(
 rememberCreateIntentFromLocation(browserStorage(), window.location);
 rememberWaitlistIntentFromLocation(browserStorage(), window.location);
 rememberInviteRefFromLocation(browserStorage(), window.location);
+// And the public jam site's: `?jam=<id>&record=1` or `?jam=new` on `/app`
+// (lib/jam-intent.ts), written down before Clerk's redirect drops the query.
+rememberJamIntentFromLocation(browserStorage(), window.location);
 void ensureOsCanExcludeCallAudio();
 installShareAudioProbe();
 installShareHealth();

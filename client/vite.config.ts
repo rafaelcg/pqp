@@ -215,8 +215,9 @@ function umami(): Plugin {
   return {
     name: "pqp-umami",
     apply: "build",
-    transformIndexHtml() {
-      if (!websiteId) {
+    transformIndexHtml(_html, ctx) {
+      // The public jam site carries no third-party tag.
+      if (!websiteId || ctx.path !== "/index.html") {
         return [];
       }
       return [deferredScriptTag(src, { attrs: { "data-website-id": websiteId } })];
@@ -239,7 +240,10 @@ function prerenderHero(): Plugin {
     apply: "build",
     transformIndexHtml: {
       order: "pre",
-      handler(html) {
+      handler(html, ctx) {
+        if (ctx.path !== "/index.html") {
+          return html;
+        }
         const catalogues = Object.fromEntries(
           PRERENDER_LOCALES.map((locale) => [
             locale,
@@ -358,6 +362,39 @@ function emulatorRoom(): Plugin {
 }
 
 /**
+ * The public jam site's addresses, for the dev and preview servers. In
+ * production the Pages middleware does this (`functions/_middleware.ts`): it
+ * answers `jam.pqp.gg/` and `/m/<id>`, and `/jam`, `/jam/`, `/jam/m/<id>` on any
+ * host, with `jam-site/index.html`. Here the same decision is a rewrite of the
+ * request URL before Vite's own HTML handling, so `jam.localhost:5173` and
+ * `localhost:5173/jam` behave like the real thing.
+ */
+function jamSiteRouting(): Plugin {
+  const rewrite = (req: { url?: string; headers: { host?: string } }, _res: unknown, next: () => void) => {
+    const url = req.url ?? "/";
+    const [pathname = "/"] = url.split("?");
+    const search = url.includes("?") ? url.slice(url.indexOf("?")) : "";
+    const host = (req.headers.host ?? "").split(":")[0] ?? "";
+    const onJamHost = /^jam\./i.test(host);
+    const isJamPath = /^\/jam(\/(m\/[^/]+)?)?$/.test(pathname);
+    const isHostPath = onJamHost && (pathname === "/" || /^\/m\/[^/]+\/?$/.test(pathname));
+    if (isJamPath || isHostPath) {
+      req.url = `/jam-site/index.html${search}`;
+    }
+    next();
+  };
+  return {
+    name: "pqp-jam-site-routing",
+    configureServer(server) {
+      server.middlewares.use(rewrite);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(rewrite);
+    },
+  };
+}
+
+/**
  * Starts the app bundle after the first paint on the home page (and at once
  * everywhere else). Runs last, when Vite has already written the entry tag.
  * See `src/lib/defer-entry.ts`.
@@ -369,6 +406,9 @@ function deferEntry(): Plugin {
     transformIndexHtml: {
       order: "post",
       handler: (html, ctx) => {
+        if (ctx.path !== "/index.html") {
+          return html;
+        }
         // The chat client's chunk, when this is a production build: preloaded
         // beside the entry on `/app` routes (see `src/lib/defer-entry.ts`).
         const appChunk = Object.values(ctx.bundle ?? {}).find(
@@ -386,6 +426,7 @@ function deferEntry(): Plugin {
 export default defineConfig(({ command }) => ({
   plugins: [
     react(),
+    jamSiteRouting(),
     edgeConfig(),
     prerenderHero(),
     staticPages(),
@@ -547,6 +588,14 @@ export default defineConfig(({ command }) => ({
   build: {
     sourcemap: faroSourcemapPlugin ? "hidden" : false,
     rollupOptions: {
+      // Two pages. `index.html` is the app and every marketing route; the public
+      // jam site (jam.pqp.gg, `/jam`) is `jam-site/index.html`, an entry of its
+      // own with no Clerk, no router and no socket (`src/jam-site/entry.tsx`).
+      // The Pages middleware serves it for those addresses.
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        "jam-site": path.resolve(__dirname, "jam-site/index.html"),
+      },
       output: {
         // Every lucide icon is its own tiny module, and one imported by two lazy
         // chunks became a chunk of its own: about 60 files of 0 to 2 KB requested
@@ -557,6 +606,13 @@ export default defineConfig(({ command }) => ({
         manualChunks(id) {
           if (id.includes("/node_modules/lucide-react/")) {
             return "icons";
+          }
+          // React's own runtime, apart from the icons. Rollup had hoisted it
+          // INTO the icons chunk (lucide imports it first), so the public jam
+          // site, which needs React and none of the app's icons, downloaded
+          // every icon the app uses (about 29 kB gzipped) to get 7 kB of React.
+          if (/\/node_modules\/(?:\.pnpm\/[^/]+\/node_modules\/)?(?:react|scheduler)\//.test(id)) {
+            return "react-core";
           }
           return undefined;
         },
@@ -580,10 +636,11 @@ export default defineConfig(({ command }) => ({
   // on it ("imported but could not be resolved") on every cold start and fell
   // back to discovering dependencies page by page, each discovery reloading the
   // open pages: the Locadora e2e suites ran into it in CI. The app has one entry.
-  optimizeDeps: { entries: ["index.html"] },
+  optimizeDeps: { entries: ["index.html", "jam-site/index.html"] },
   server: {
     port: 5173,
-    allowedHosts: [".ngrok-free.app"],
+    // `.localhost` so `jam.localhost:5173` (the jam site's host mount) is served.
+    allowedHosts: [".ngrok-free.app", ".localhost"],
     proxy: {
       "/api": {
         target: "http://localhost:3001",

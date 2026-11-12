@@ -608,6 +608,15 @@ jobs:
         timeout-minutes: 5
         run: pnpm --filter @pqp/client e2e:jam --project=chromium
 
+      # The public jam site (client/playwright.jam-site.config.ts): the page alone
+      # on a Vite server with the API mocked in the browser. No media on the home,
+      # a song plays on the engine's clock, the mosaic, the sign-up sheets and the
+      # intent they carry, the disabled page. Chromium, no API, no database.
+      - name: E2E public jam site (mocked API)
+        if: matrix.camera
+        timeout-minutes: 5
+        run: pnpm --filter @pqp/client e2e:jam-site
+
       # `cancelled()` too: a step that hit its timeout ends the job as a
       # cancellation, and that is exactly when the output is wanted.
       - name: Upload E2E artifacts

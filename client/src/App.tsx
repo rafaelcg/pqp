@@ -473,6 +473,11 @@ import {
   stashConnectionCallbackFromWindow,
 } from "@/lib/connection-callback";
 import {
+  jamIntentFromSearch,
+  jamReturnPath,
+  takeJamIntent,
+} from "@/lib/jam-intent";
+import {
   addIntentFromSearch,
   CREATE_INTENT_PARAMS,
   createIntentFromSearch,
@@ -9981,6 +9986,23 @@ function MainAppContent({
 
     const storage = browserStorage();
     const params = new URLSearchParams(location.search);
+    /**
+     * A public jam somebody came from (jam.pqp.gg, `lib/jam-intent.ts`): the
+     * account now exists, so this is the moment the intention is acted on. There
+     * is no public-jam view in the app yet, so the person goes back to the
+     * public page, which says honestly that recording opens in the app and is on
+     * its way (`?from=app`). THE IN-APP PUBLIC JAM VIEW REPLACES THIS BLOCK: it
+     * opens the song (and the studio when `record` is set) instead of leaving.
+     * Read before the other intents and consumed here, so nothing else on this
+     * arrival is spent for a page we are about to leave, and a later visit to the
+     * app is not bounced again.
+     */
+    const jamIntent = jamIntentFromSearch(location.search) ?? takeJamIntent(storage);
+    takeJamIntent(storage);
+    if (jamIntent) {
+      window.location.replace(jamReturnPath(jamIntent));
+      return;
+    }
     // Both stashes are consumed unconditionally, even when the URL also carries
     // the value: leaving one behind is how an intent fires on a later visit.
     const stashedClaim = takeHandleClaim(storage);

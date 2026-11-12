@@ -120,6 +120,8 @@ const projects: E2EProject[] = [
       /locadora-share-sound[\\/]/,
       // the jam engine rig needs a fake microphone file: `playwright.jam.config.ts`
       /[\\/]jam[\\/]/,
+      // the public jam site, its own config and a mocked API: `playwright.jam-site.config.ts`
+      /jam-site[\\/]/,
     ],
   },
   {

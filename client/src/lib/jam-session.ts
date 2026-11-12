@@ -89,8 +89,18 @@ export async function releaseJamEngine(): Promise<void> {
   }
 }
 
+/**
+ * What the engine needs of a track to place it. A `JamTrack` is one; so is the
+ * public site's `PublicJamTrack` with `inMix: true` (every public track is in
+ * the mix), which is how the website plays through this same engine.
+ */
+export type StemTrack = Pick<
+  JamTrack,
+  "id" | "inMix" | "audioUrl" | "offsetMs" | "trimStartMs" | "trimEndMs" | "gain"
+>;
+
 /** The numbers a stem was loaded with, to tell "same stem" from "moved". */
-function stemKey(track: JamTrack): string {
+function stemKey(track: StemTrack): string {
   return [track.audioUrl.split("?")[0], track.offsetMs, track.trimStartMs, track.trimEndMs].join("|");
 }
 
@@ -134,7 +144,7 @@ export const TAKE_STEM_ID = "take";
  */
 export async function syncJamStems(
   engine: JamEngine,
-  tracks: readonly JamTrack[],
+  tracks: readonly StemTrack[],
   onStatus?: (trackId: string, status: StemStatus) => void,
 ): Promise<void> {
   const book = bookOf(engine);
@@ -148,7 +158,7 @@ export async function syncJamStems(
     }
   }
 
-  async function settle(track: JamTrack): Promise<void> {
+  async function settle(track: StemTrack): Promise<void> {
     const key = stemKey(track);
     const url = track.audioUrl.split("?")[0] ?? track.audioUrl;
     for (let pass = 0; pass < 6; pass++) {

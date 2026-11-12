@@ -335,7 +335,7 @@ tokens (`docs/DESIGN.md`), measured by the bench in every theme.
 
 ## Not here
 
-Public songs, comments, the iOS and Android clients (both phones leave a `jam`
+Public songs in the app (the public website is `docs/JAM_SITE.md`), comments, the iOS and Android clients (both phones leave a `jam`
 channel out of their list), punch-in re-record, a server-side sidebar signal for
 a Jam nobody has open.
 
