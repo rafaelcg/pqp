@@ -686,6 +686,8 @@ class JamStudioViewModelTest {
         assertNull(vm.ui.value.block)
         vm.record()
         assertEquals(StudioPhase.Countdown, vm.ui.value.phase)
+        // A running take ticks forever on virtual time: end it, or the test's own final advance never returns.
+        vm.discardAndClose()
     }
 
     @Test
