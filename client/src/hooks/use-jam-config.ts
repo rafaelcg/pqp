@@ -76,6 +76,17 @@ function registerRefresh(): void {
   });
 }
 
+/**
+ * The answer for one server, asked once if nobody has asked yet. For code that is not a
+ * component (a chat card deciding whether it may draw). A failed ask reads as off.
+ */
+export async function ensureJamConfig(serverId: string): Promise<JamConfigState> {
+  if (!settled.has(serverId)) {
+    await load(serverId);
+  }
+  return stateFor(serverId);
+}
+
 export function useJamConfig(serverId: string | null | undefined): JamConfigState {
   const [held, setHeld] = useState(() => ({ serverId: serverId ?? null, config: stateFor(serverId) }));
   const config = held.serverId === (serverId ?? null) ? held.config : stateFor(serverId);

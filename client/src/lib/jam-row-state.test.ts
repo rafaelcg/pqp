@@ -33,9 +33,9 @@ describe("jamRowMood", () => {
     expect(jamRowMood({ ...BASE, selected: true, playing: true, news: true, songCount: 0 })).toBe("playing");
   });
 
-  it("ignores a stale playing flag on a row that is not the open page", () => {
-    expect(jamRowMood({ ...BASE, playing: true })).toBe("quiet");
-    expect(jamRowMood({ ...BASE, playing: true, news: true })).toBe("news");
+  it("is playing on a row that is not the open page too: a song's card in a conversation plays on the same engine", () => {
+    expect(jamRowMood({ ...BASE, playing: true })).toBe("playing");
+    expect(jamRowMood({ ...BASE, playing: true, news: true })).toBe("playing");
   });
 
   it("an open, empty Jam is empty, not news", () => {

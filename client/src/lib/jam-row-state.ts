@@ -2,7 +2,7 @@
  * Which face the sidebar's Jam row wears. One answer from the signals the
  * client already holds, so the art and the icon never disagree about it:
  *
- * - `playing`: this client is playing a song of the Jam it has open (the shared
+ * - `playing`: this client is playing a Jam song, on the Jam page or from a card in a chat (the shared
  *   audio engine's transport, `jam-now-playing.ts`). The loudest state.
  * - `news`: a song or take moved since the person last opened the Jam
  *   (`useJamSidebar`'s `news`). Only while the Jam is not the open page, because
@@ -27,10 +27,10 @@ export interface JamRowSignals {
 }
 
 export function jamRowMood({ selected, playing, news, loaded, songCount }: JamRowSignals): JamRowMood {
-  // Sound can only be playing while the Jam is open (the engine is released when
-  // the person leaves), so a stray `playing` on a row that is not the open page
-  // is a stale flag, not a song.
-  if (playing && selected) {
+  // The engine is released when the person leaves the Jam, so `playing` is never a
+  // leftover. It is true off the Jam's page too: a song's card in a conversation
+  // plays on the same engine (`jam-chat-player.ts`), and the row says so.
+  if (playing) {
     return "playing";
   }
   if (news && !selected) {

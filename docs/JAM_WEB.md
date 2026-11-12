@@ -114,6 +114,40 @@ a song with no take; the server keeps it from everybody else (`docs/JAM.md`), th
 author sees "Sem faixa ainda" with "Gravar o primeiro take" and "Apagar música", and
 leaving the studio of a song it made, with nothing sent, deletes the empty song.
 
+## A song in the conversation
+
+The address above is also how a song travels. All client side; no frame, no route.
+
+**Sending it.** "Mandar no chat" (a pill beside the title and the first row of the "..."
+menu; not on a song with no take) opens `JamSharePicker`: the server's TEXT channels the
+person may write in (`GET /api/servers/:id/forward-destinations`, the list "Encaminhar"
+uses, filtered to `text`). One tap posts the song's address as a plain message over the
+socket (`lib/jam-share-send.ts`: the composer's `message-create` frame, answered to that
+socket by nonce, never queued). The row says "Mandada" or why not (slow mode, AutoMod,
+rate limit).
+
+**The card.** A message holding a song address on this instance (`lib/jam-share.ts`)
+gets a `JamLinkCard` under it (`components/jam/jam-link-card.tsx`): one row of 72 px, a
+picture, the title (the link that opens the song), who is on it, the instrument dots and
+"Falta baixo" when a part is missing, and a round play button. Its data is the song
+detail read (`lib/jam-share-card.ts`), so the server's authorization is the card's: a
+viewer who may not open the Jam, a song that is gone, a song with no take and a server
+whose `jam_channels` is off all get the ordinary link, never a card and never the title.
+One card per message (a Baú card wins), and the pasted address is dropped from the text
+while the card is there.
+
+**Playing from the card.** Through the same single engine as the wall and the studio
+(`lib/jam-chat-player.ts`): the card stops whatever the engine held, loads this song's
+stems and plays. The sidebar row (`jamRowMood`: playing off the Jam's page too) and the
+wall's tile show it playing; opening the song from the card hands it to the Jam, which plays it again from the top.
+The engine is let go when the last card of that song leaves the screen, unless the Jam is
+open by then.
+
+**Finding it.** Ctrl/Cmd+K (`QuickSwitcher`): the Jam is an ordinary row among the
+channels (its own glyph) and its songs come under "Músicas", asked of the server by title
+and artist once two letters are typed (`hooks/use-jam-song-search.ts`).
+Enter opens the song at its address. Specs: `e2e/jam-share.spec.ts`.
+
 ## The song
 
 All in-mix tracks play through the one engine (`lib/jam-session.ts`, shared with

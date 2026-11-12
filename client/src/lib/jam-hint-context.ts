@@ -34,6 +34,11 @@ export function isJamStudioOpen(): boolean {
   return current.studio;
 }
 
+/** Is the Jam's wall on screen right now (it owns the shared engine while it is). */
+export function isJamWallOpen(): boolean {
+  return current.wall;
+}
+
 export function useJamHintContext(): JamHintContext {
   return useSyncExternalStore(
     (listener) => {
