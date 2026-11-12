@@ -2263,18 +2263,26 @@ describeDb("jam channels", () => {
       await getPool().query(`UPDATE speech_jobs SET attempts = 2 WHERE kind = 'jam_video_transcode'`);
       // The confirm transaction dies on the UPDATE that would make the copy readable.
       const pool = getPool();
-      const real = pool.connect.bind(pool) as (
-        ...args: unknown[]
-      ) => Promise<{ query: (...args: unknown[]) => Promise<unknown> }>;
+      const real = pool.connect.bind(pool) as (...args: unknown[]) => Promise<{
+        query: (...args: unknown[]) => Promise<unknown>;
+        release: (...args: unknown[]) => void;
+      }>;
       const spy = vi.spyOn(pool, "connect").mockImplementation(((...args: unknown[]) => {
         // `pool.query` itself connects with a callback: leave that alone.
         if (args.length > 0) return real(...args);
         return real().then((client) => {
-          const query = client.query.bind(client);
+          const query = client.query;
+          const release = client.release;
           client.query = ((...queryArgs: unknown[]) =>
             typeof queryArgs[0] === "string" && queryArgs[0].includes("video_mp4_content_type = 'video/mp4'")
               ? Promise.reject(new Error("connection terminated"))
-              : query(...queryArgs)) as never;
+              : query.apply(client, queryArgs)) as never;
+          // The client goes back into the pool: give it back as it was, or the next test inherits the failure.
+          client.release = ((...releaseArgs: unknown[]) => {
+            client.query = query;
+            client.release = release;
+            return release.apply(client, releaseArgs);
+          }) as never;
           return client;
         });
       }) as never);
