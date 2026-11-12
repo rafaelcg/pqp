@@ -1,5 +1,6 @@
 import type { AppEndReason } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { liveAppsNotServed, type CurrentVersionNotServed } from "./served.js";
 
 /**
  * The apps counters, in process and cumulative since boot like the other
@@ -172,6 +173,13 @@ export interface AppsMetrics {
    * `deadInstanceSeats`, `sweepRuns`, `sweepFailures`).
    */
   counters: ReturnType<typeof appCountersSnapshot>;
+  /**
+   * Live apps pinned to a version this build's apps site does not serve
+   * (`apps/served.ts`): every start of one frames a 404. Belongs empty; the
+   * fix is "Tornar atual" on a served, approved version. `null` when the
+   * database could not be asked.
+   */
+  currentVersionNotServed: CurrentVersionNotServed[] | null;
 }
 
 /** The `apps` block of `GET /api/admin/metrics`. Live, never from the 30 s cache. */
@@ -197,5 +205,11 @@ export async function appsMetrics(): Promise<AppsMetrics> {
   } catch {
     live = null;
   }
-  return { live, counters: appCountersSnapshot() };
+  let currentVersionNotServed: CurrentVersionNotServed[] | null;
+  try {
+    currentVersionNotServed = await liveAppsNotServed();
+  } catch {
+    currentVersionNotServed = null;
+  }
+  return { live, counters: appCountersSnapshot(), currentVersionNotServed };
 }

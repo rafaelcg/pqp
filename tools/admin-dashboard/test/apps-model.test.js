@@ -171,8 +171,40 @@ test("a refused write says the reason the API gave, and anything else is the pla
   assert.match(M.appsWriteError("community-locked"), /Comunidade pública/);
   assert.match(M.appsWriteError("checklist-incomplete"), /Falta marcar/);
   assert.match(M.appsWriteError("version-in-use"), /Essa versão está no ar/);
+  assert.match(M.appsWriteError("version-not-served"), /não está no site dos apps/);
   assert.equal(M.appsWriteError("http 500"), "Não deu pra salvar. O interruptor voltou pro que estava.");
   assert.equal(M.appsWriteError(null), "Não deu pra salvar. O interruptor voltou pro que estava.");
+});
+
+test("a live app on a version the apps site does not serve says so and offers the newest served, approved one", () => {
+  const approved = { reviewStatus: "approved" };
+  // 2026-11-12: live on 1.0.3, the site serving only 1.0.6
+  const stranded = app({
+    currentVersion: "1.0.3",
+    currentServed: "not-served",
+    versions: [
+      version(Object.assign({ version: "1.0.6", isCurrent: false, served: "served" }, approved)),
+      version({ version: "1.0.5", isCurrent: false, served: "not-served", reviewStatus: "approved" }),
+      version(Object.assign({ version: "1.0.3", isCurrent: true, served: "not-served" }, approved)),
+    ],
+  });
+  const note = M.strandedVersion(stranded);
+  assert.equal(note.offer, "1.0.6");
+  assert.match(note.text, /^A v1\.0\.3 não está no site dos apps deste deploy/);
+  assert.match(note.text, /Torna atual a v1\.0\.6\.$/);
+
+  // the served one not approved yet: nothing to offer, and the words say what to do
+  const pending = M.strandedVersion(Object.assign({}, stranded, {
+    versions: [version({ version: "1.0.6", isCurrent: false, served: "served", reviewStatus: "pending" })],
+  }));
+  assert.equal(pending.offer, null);
+  assert.match(pending.text, /Aprova uma versão servida/);
+
+  // nothing to say: served, unknown, or an app nobody can open
+  assert.equal(M.strandedVersion(app({ currentServed: "served" })), null);
+  assert.equal(M.strandedVersion(app({ currentServed: "unknown" })), null);
+  assert.equal(M.strandedVersion(app()), null);
+  assert.equal(M.strandedVersion(Object.assign({}, stranded, { status: "draft", globalEnabled: false })), null);
 });
 
 test("the history reads before and after for every kind of change", () => {

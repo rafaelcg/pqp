@@ -57,7 +57,11 @@ export function startDevServer(root: string, port: number): Promise<Server> {
 
     const file = normalize(join(root, path));
     if (!file.startsWith(root + sep) || file.endsWith(`${sep}_headers`)) return send(404, "not found", "text/plain");
-    if (!existsSync(file) || !statSync(file).isFile()) return send(404, "not found", "text/plain");
+    // A missing file answers with CORS open, as pages.dev does for every response: the pqp page asks for an
+    // app's entry itself (`client/src/lib/apps/entry-probe.ts`) and has to be able to read that it is a 404.
+    if (!existsSync(file) || !statSync(file).isFile()) {
+      return send(404, "not found", "text/plain", new Map([["access-control-allow-origin", "*"]]));
+    }
     return send(200, readFileSync(file), TYPES[extname(file)] ?? "application/octet-stream", headersFor(rules, path));
   });
   return new Promise((resolve, reject) => {

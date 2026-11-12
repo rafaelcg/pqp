@@ -4,6 +4,9 @@ import { AvatarCache, acceptableFinalUrl, fetchAvatarDataUrl } from "./avatar";
 import { mountAppFrame } from "./frame-controller";
 import { FakeTheme, FakeTransport, PNG_BYTES, baseApp, baseSnapshot, rig, users, type Rig } from "./bridge-host.fixture";
 
+// the entry is served: a unit test never asks the network (a dev box may have the apps origin up on 5175)
+vi.mock("./entry-probe", () => ({ probeAppEntry: async () => ({ kind: "ok" }) }));
+
 const rigs: Rig[] = [];
 afterEach(() => {
   for (const r of rigs.splice(0)) r.host.detach();
