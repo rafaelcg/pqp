@@ -177,24 +177,32 @@ the selected one) and pressing it again clears it; the song panel clears any oth
 first, so the tile is always "only this". A recording with a video shows it,
 `object-fit: cover`, muted (the sound is the mix), on the engine's video follower
 (`attachVideo`: the file's time is the song's time minus the take's offset). A recording
-without one is a person on the instrument's own ground: their picture (or their initial)
-as the biggest thing on the tile, the instrument's badge on it, and a strip of the take's
-own level under it (`levelStrip`: the precomputed `peaks` around the song clock, written
-straight to 29 bars when the peak under the clock changes, no analyser node, no re-render;
-the whole take as a still picture under reduced motion). A silent stretch of the strip is
-one baseline, not a row of dots. Every tile has a small caption with the person and the
+without one is a person on the ONE neutral tile ground: their picture (or their initial)
+as the single focal element, the instrument's chip on it, and, ONLY WHILE THE SONG PLAYS,
+a strip of the take's own level under them (`levelStrip`: the precomputed `peaks` around the
+song clock, written straight to 29 bars when the peak under the clock changes, no analyser
+node, no re-render; the whole take as a still picture under reduced motion). At rest there
+is no strip at all: a flat line under a face read as a broken waveform, and a tile that is
+just the person is calmer. The strip is out of the flow (it hangs under the person), so the
+face never moves when it arrives. A silent stretch of a playing strip is one baseline, not a
+row of dots. Every tile has a small caption with the person and the
 instrument's mark (a dark pill over a video, plain text on a flat ground; the name goes
 below 120 px of tile), and dims when its lane is muted or another lane is soloed.
 
 **One tile look for the app and the public site.** The ground, ink, caption, level strip,
 person mark and "+N" tile are `lib/jam-tile-look.ts` and `lib/jam-tile-parts.tsx` (and
 `lib/jam-tile.css`), drawn by this stage and by `jam-site/` alike. The colours are the
-OPAQUE `--color-tile-<instrument>` and `--color-tile-<instrument>-ink` tokens, a deep tint
-of the hue on the dark theme and a pastel on the light one, which the bench measures (ink
-on ground 3:1, text on ground 4.5:1). Nothing on a tile is a translucent wash: several
-washes of different hues on one dark ground turn to mud, and on a light page they were
-charcoal blocks. `other` is a neutral on purpose, so five hues and one that says "none of
-those". "+N" is the number with a stack of the instruments behind it, not a grey box.
+ONE neutral `--color-tile` (an alias of the raised surface, so every look carries it) and a
+`--color-tile-<instrument>-ink` per instrument, which the bench measures for every
+instrument in every look (ink on ground and on the initial's disc 3:1, text on ground
+4.5:1). The ground is NOT tinted per instrument: a tint of each hue, translucent first and
+then opaque, put six muddy colours side by side and scored 5.5 to 6 on colour three review
+rounds running. The hue lives only where it identifies: the chip, the glyph, the strip, the
+initial and a dashed outline. `other` is a violet (`--color-inst-other`), not a grey: grey
+beside five hues read as DISABLED. It is the one open stretch of the hue wheel (green is
+the accent's) and 14 or more apart in OKLab from every other fill, which
+`lib/jam-tile-look.test.ts` pins. "+N" is the number with a stack of the instruments behind
+it, not a grey box.
 
 A part the song asks for ("Falta voz") is one dashed tile on a neutral ground with the
 instrument's ink on the outline, "Tua voz aqui", only for somebody who may add it, and it
@@ -207,6 +215,23 @@ over "Original · iniciada por ti" (whole; the band is the lanes below, so no av
 repeats it), then two round icon buttons (send to chat, edit song), the play button with the
 clock under it and the menu; only a song with no take yet (its author's empty song) keeps
 the full header. The lane carries no thumbnail. Spec: `e2e/jam-stage.spec.ts`.
+
+**The band folds under the stage.** The mosaic already says who is on the song, so the
+lanes below it (header, mosaic, "A banda", one lane per part) read as a list under a
+list. "A banda" is a disclosure (`data-jam-band-toggle`, `aria-expanded`, a chevron):
+folded, the stage and the song's header are all there is; open, the lanes with their
+mute, "Só essa", volume, "Ajustar" and menu. It starts open when the person last left it
+open (`lib/jam-band-pref.ts`, `localStorage`, per account on this device), else when
+every lane fits under the stage without scrolling (`bandFitsBelowStage`, measured, so a
+tall window opens it and a laptop panel folds it), else when they have just recorded a
+take (so the new lane drops in where they can see it). It is held open while "Ajustar"
+is open. A song with no stage keeps its lanes open and has no disclosure. The specs that
+are about what is IN a lane start with the choice a person makes by pressing it once
+(`e2e/jam-band-open.ts`); the fold itself is the last test of `e2e/jam-stage.spec.ts`.
+
+**The record bar is slim.** "Gravar" is a footer of its own, 40 px of pill under a hairline
+(44 under a finger), outside the scroll area, so it takes about 53 px instead of 80 and
+never covers a lane.
 
 **One lane layout** (`JamLaneFrame`, the song's lanes and the studio's review). Wide
 (the band is 40rem or more across, a container query because the song panel is a

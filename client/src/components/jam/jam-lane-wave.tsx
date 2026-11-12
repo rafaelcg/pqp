@@ -125,7 +125,8 @@ export function JamLaneWave({
       )}
     >
       <div
-        className={cn("absolute inset-y-0 overflow-hidden rounded-[var(--radius-control)]", look.wash)}
+        // a neutral ground for the take: the instrument's colour is in the bars, a tinted wash behind them turned muddy
+        className="absolute inset-y-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-3"
         style={{ left: `${left * 100}%`, width: `${Math.max(0.5, (right - left) * 100)}%` }}
       >
         <div ref={spanRef} className="absolute inset-x-1 inset-y-2">
@@ -137,7 +138,7 @@ export function JamLaneWave({
         <div
           ref={played}
           aria-hidden
-          className="pointer-events-none absolute inset-0 bg-surface-2 opacity-55"
+          className="pointer-events-none absolute inset-0 bg-surface-3 opacity-60"
           style={{ clipPath: "inset(0 0 0 0)" }}
         />
       </div>

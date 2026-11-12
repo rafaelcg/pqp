@@ -1,6 +1,6 @@
 import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
-import { ArrowLeft, Camera, Link2, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Send, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { ArrowLeft, Camera, ChevronDown, Link2, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Send, Trash2, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -16,6 +16,7 @@ import {
   voteJamTrack,
 } from "@/lib/jam-api";
 import type { BandLane } from "@/lib/jam-clip";
+import { bandFitsBelowStage, readBandOpen, writeBandOpen } from "@/lib/jam-band-pref";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cannotRecordReason, pickInstrument } from "@/lib/jam-record";
 import { dropInboxTake } from "@/lib/jam-public-store";
@@ -222,6 +223,39 @@ export function JamSongPanel({
   const stageTracks = useMemo(() => tracks.filter((track) => track.inMix), [tracks]);
   const stageOn = detail ? stageTracks.length > 0 : song.trackCount > 0;
   const anySolo = tracks.some((track) => playback.lanes[track.id]?.solo === true);
+
+  // The band's lanes fold under the stage: the stage already shows who is on the song, so a second
+  // list right under it read as a list under a list. Open when the person chose so (remembered per
+  // account), else when there is room under the stage for every lane, else when they just recorded.
+  const scroller = useRef<HTMLDivElement | null>(null);
+  const [bandChoice, setBandChoice] = useState<boolean | null>(() => readBandOpen(viewerId));
+  const [bandRoom, setBandRoom] = useState(false);
+  const bandLanes = tracks.length + missingSlots.length;
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    if (!element || !stageOn || !detail) {
+      return;
+    }
+    const measure = () => setBandRoom(bandFitsBelowStage(element, bandLanes));
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    const stage = element.querySelector("[data-jam-stage]");
+    if (stage) {
+      observer.observe(stage);
+    }
+    return () => observer.disconnect();
+  }, [stageOn, detail, bandLanes]);
+  const collapsible = stageOn && !isEmpty;
+  const bandOpen = !collapsible || adjustingId !== null || (bandChoice ?? (bandRoom || Boolean(freshTrackId)));
+  const toggleBand = () => {
+    const next = !bandOpen;
+    setBandChoice(next);
+    writeBandOpen(viewerId, next);
+  };
   // A tile is "only this": it solos its track, and pressing the one that is the only one soloed clears it.
   const soloFromStage = (trackId: string) => {
     const onlyThis = playback.lanes[trackId]?.solo === true && !tracks.some((other) => other.id !== trackId && playback.lanes[other.id]?.solo === true);
@@ -424,7 +458,7 @@ export function JamSongPanel({
         </button>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 sm:px-5">
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 sm:px-5">
         {pub.strip && <div className="-mx-3 sm:-mx-5">{pub.strip}</div>}
         {isEmpty ? (
           <div
@@ -454,6 +488,7 @@ export function JamSongPanel({
             missing={reason === null ? missingSlots.filter((instrument) => addable.includes(instrument)) : []}
             onRecord={reason === null ? (instrument) => onRecord(instrument, true) : undefined}
             loading={!detail}
+            playing={playing}
           />
         )}
         <JamPublicRequests
@@ -494,27 +529,56 @@ export function JamSongPanel({
               !stageOn && "sticky top-0 z-10 bg-surface-1/95 backdrop-blur-sm [@media(max-height:32rem)]:static [@media(max-height:32rem)]:pt-1",
             )}
           >
-            <div className="flex items-baseline justify-between gap-3">
+            {collapsible ? (
+              // a disclosure: the lanes fold under the stage; mute, "only this" and volume are in them
               <h3 id={`band-${song.id}`} className="font-display text-lg font-extrabold text-text">
-                {t("jam.song.band")}
+                <button
+                  type="button"
+                  data-jam-band-toggle=""
+                  aria-expanded={bandOpen}
+                  aria-controls={`band-body-${song.id}`}
+                  disabled={adjustingId !== null}
+                  onClick={toggleBand}
+                  className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-control)] py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-default pointer-coarse:min-h-11"
+                >
+                  <span>{t("jam.song.band")}</span>
+                  <span className="flex items-center gap-1.5 text-[13px] font-semibold text-text-secondary">
+                    {detail && t("jam.song.bandCount", { count: inMixCount, countLabel: inMixCount })}
+                    <ChevronDown
+                      aria-hidden
+                      className={cn("h-4 w-4 shrink-0 transition-transform duration-[var(--duration-fast)] motion-reduce:transition-none", bandOpen && "rotate-180")}
+                    />
+                  </span>
+                </button>
               </h3>
-              {detail && (
-                <span className="text-[13px] font-semibold text-text-secondary">
-                  {t("jam.song.bandCount", { count: inMixCount, countLabel: inMixCount })}
-                </span>
-              )}
-            </div>
+            ) : (
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 id={`band-${song.id}`} className="font-display text-lg font-extrabold text-text">
+                  {t("jam.song.band")}
+                </h3>
+                {detail && (
+                  <span className="text-[13px] font-semibold text-text-secondary">
+                    {t("jam.song.bandCount", { count: inMixCount, countLabel: inMixCount })}
+                  </span>
+                )}
+              </div>
+            )}
+            {collapsible && !bandOpen && detail && (
+              <p data-jam-band-hint="" className="text-[13px] leading-snug text-text-secondary">
+                {t("jam.song.bandHint")}
+              </p>
+            )}
             {!stageOn && transport}
           </div>
 
-          {!detail ? (
+          {!bandOpen ? null : !detail ? (
             <div className="space-y-2" aria-busy="true">
               {[0, 1, 2].map((one) => (
                 <div key={one} className="h-[4.5rem] rounded-[var(--radius-card)] bg-surface-2 motion-safe:animate-pulse" />
               ))}
             </div>
           ) : (
-            <div className="relative" data-jam-band="">
+            <div className="relative" data-jam-band="" id={`band-body-${song.id}`}>
               {/* "only you hear mute, volume and only-this" is the headphones icon's tooltip in each lane, not a line of its own */}
               <div className={cn("relative", laneRoom, JAM_BAND_BOX)}>
                 <Ruler timeline={timeline} onSeek={seekFraction} />
@@ -640,18 +704,16 @@ export function JamSongPanel({
       </div>
 
       {/* the dock: the one thing to do */}
-      <footer hidden={adjustingId !== null} className="safe-pb flex flex-col gap-3 border-t border-border bg-surface-1 px-3 py-3 sm:px-5 [@media(max-height:32rem)]:py-1.5">
+      <footer data-jam-dock="" hidden={adjustingId !== null} className="safe-pb flex flex-col gap-2 border-t border-border bg-surface-1 px-3 py-1.5 pointer-coarse:py-2 sm:px-5">
         {reason === null && first ? (
           <button
             type="button"
             data-jam-record-over=""
             onClick={() => onRecord(first, need.kind === "missing")}
             data-public-dock={publicView ? "" : undefined}
-            className="group relative flex h-14 w-full data-[public-dock]:sm:mx-auto data-[public-dock]:sm:max-w-sm items-center justify-center gap-2.5 overflow-hidden rounded-full bg-accent text-base font-extrabold [@media(max-height:32rem)]:h-11 text-on-accent shadow-[var(--shadow-2)] outline-none transition-[transform,box-shadow] duration-[var(--duration-fast)] hover:shadow-[var(--shadow-3)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 motion-safe:hover:scale-[1.01] active:scale-[0.98]"
+            className="group relative flex h-10 w-full data-[public-dock]:sm:mx-auto data-[public-dock]:sm:max-w-sm items-center justify-center gap-2 overflow-hidden rounded-full bg-accent text-sm font-extrabold text-on-accent outline-none transition-[transform,background-color] duration-[var(--duration-fast)] hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 pointer-coarse:h-11 motion-safe:active:scale-[0.99]"
           >
-            <span className="grid h-8 w-8 place-items-center rounded-full bg-on-accent text-accent transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-safe:group-hover:scale-110">
-              <Mic className="h-4 w-4" aria-hidden />
-            </span>
+            <Mic className="h-4 w-4 shrink-0" aria-hidden />
             {recordLabel}
           </button>
         ) : (

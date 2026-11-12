@@ -19,6 +19,7 @@
  * `jam-web.spec.ts` (`S3_*` exported); without it the spec skips with that reason.
  */
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { bandOpenByDefault } from "./jam-band-open";
 import { E2E_ADMIN_TOKEN } from "../playwright.config";
 import { call, seedJamShare, type JamShareSeed } from "./jam-share-seed";
 
@@ -65,6 +66,7 @@ async function seedRoom(): Promise<JamShareSeed> {
 
 async function openAs(browser: Browser, suffix: string, route: string, viewport = { width: 1440, height: 900 }): Promise<Page> {
   const context = await browser.newContext({ viewport, colorScheme: "dark" });
+  await bandOpenByDefault(context);
   const page = await context.newPage();
   await page.addInitScript((value) => {
     localStorage.setItem("pqp:dev-user-suffix", value);

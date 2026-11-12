@@ -32,12 +32,13 @@ import { cn } from "@/lib/utils";
  * A recording with a video shows it, covering its tile and following the song clock
  * (`attachVideo`: the file's time is the song's time minus the take's offset, the same
  * follower the engine runs for a stem), muted: the sound is the mix. One without is a
- * person on the instrument's own OPAQUE ground (`lib/jam-tile-look.ts`, the same table the
- * public site draws from): their picture or initial as the biggest thing on the tile, the
- * instrument's badge on it, and a strip of its own loudness running under it: the take's
- * precomputed peaks around the song clock, written straight to the bars (no analyser, no
- * React), a still picture of the whole take under reduced motion, and one baseline where
- * it is silent (`lib/jam-tile.css`).
+ * person on the ONE neutral tile ground (`lib/jam-tile-look.ts`, the same table the public
+ * site draws from): their picture or initial as the single focal element, the instrument's
+ * chip on it, and, only WHILE THE SONG PLAYS, a strip of its own loudness under them: the
+ * take's precomputed peaks around the song clock, written straight to the bars (no analyser,
+ * no React), a still picture of the whole take under reduced motion, and one baseline where
+ * it is silent (`lib/jam-tile.css`). At rest there is no strip at all (a flat line under a
+ * face read as a broken waveform).
  *
  * Every tile is a button: it solos its track ("Só essa") and a second press clears it. A
  * track that is muted, or any that is not soloed while another one is, dims. A small
@@ -82,6 +83,7 @@ export function JamStage({
   missing = [],
   onRecord,
   loading = false,
+  playing = false,
 }: {
   /** The recordings that are in the mix, video or not. */
   tracks: readonly JamTrack[];
@@ -99,6 +101,8 @@ export function JamStage({
   onRecord?: (instrument: JamInstrument) => void;
   /** The song's detail has not arrived: the space is held so nothing jumps. */
   loading?: boolean;
+  /** The song is playing: a tile with no video draws its level strip, and only then. */
+  playing?: boolean;
 }) {
   const { t } = useTranslation();
   const root = useRef<HTMLElement | null>(null);
@@ -210,6 +214,7 @@ export function JamStage({
                 attachVideo={attachVideo}
                 clock={clock}
                 parts={tracks.length}
+                playing={playing}
               />
             );
           })
@@ -245,6 +250,7 @@ function StageTile({
   attachVideo,
   clock,
   parts,
+  playing,
 }: {
   track: JamTrack;
   place: CSSProperties;
@@ -256,6 +262,8 @@ function StageTile({
   clock: JamClock;
   /** How many recordings the song has: a big song only loads each video's first frame before play. */
   parts: number;
+  /** The song is playing: the strip is drawn (never at rest). */
+  playing: boolean;
 }) {
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[track.instrument];
@@ -306,7 +314,8 @@ function StageTile({
           aria-hidden="true"
           data-jam-stage-art=""
           className={cn(
-            "absolute inset-0 flex flex-col items-center justify-center gap-[5cqmin] pb-[9cqmin] motion-safe:transition-opacity motion-safe:duration-[var(--duration-base)]",
+            // a little above the middle, in the room the caption leaves, so a strip fits under the person
+            "absolute inset-0 grid place-items-center pb-[12cqh] motion-safe:transition-opacity motion-safe:duration-[var(--duration-base)]",
             tile.ink,
             dimmed && "opacity-40",
           )}
@@ -316,9 +325,10 @@ function StageTile({
             name={track.authorName ?? person}
             fill={look.fill}
             initialFill={tile.solid}
+            chip={tile.chip}
             icon={<look.icon className="h-[58%] w-[58%]" strokeWidth={2} />}
           />
-          <TileLevel track={track} clock={clock} />
+          {playing && <TileLevel track={track} clock={clock} />}
         </span>
       )}
       {soloed && (
@@ -337,7 +347,7 @@ function StageTile({
         data-jam-stage-chip=""
         tone={hasVideo ? "media" : "ground"}
         mark={
-          <span aria-hidden="true" className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-full @min-[16rem]/tile:h-5 @min-[16rem]/tile:w-5", look.fill)}>
+          <span aria-hidden="true" className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-full @min-[16rem]/tile:h-5 @min-[16rem]/tile:w-5", look.fill, tile.chip)}>
             <look.icon className="h-[58%] w-[58%]" strokeWidth={2} />
           </span>
         }
@@ -382,12 +392,17 @@ function TileLevel({ track, clock }: { track: JamTrack; clock: JamClock }) {
     });
   }, [clock, paint, reduced, peaks, offsetMs, trimStartMs, trimEndMs, durationMs]);
   return (
-    <LevelStrip
-      ref={strip}
-      count={LEVEL_BARS}
-      data-jam-stage-level=""
-      className="flex h-[14cqmin] min-h-4 max-h-10 max-w-[88%] overflow-hidden [--jam-level-gap:clamp(1px,1cqmin,4px)] [--jam-level-w:clamp(2px,1.8cqmin,8px)]"
-    />
+    // under the person and out of the flow: the face never moves when the strip arrives. The wrapper
+    // is what is placed (`.jam-level` sets its own `position`, which beats a utility)
+    // Only on a tile with room for it above the caption: a small one has the person and nothing else.
+    <span className="pointer-events-none absolute inset-x-0 top-[calc(44cqh+29cqmin)] hidden justify-center [@container_tile_(min-width:9rem)_and_(min-height:10rem)]:flex">
+      <LevelStrip
+        ref={strip}
+        count={LEVEL_BARS}
+        data-jam-stage-level=""
+        className="flex h-[11cqmin] min-h-3 max-h-8 max-w-[88%] overflow-hidden [--jam-level-gap:clamp(1px,1cqmin,4px)] [--jam-level-w:clamp(2px,1.8cqmin,8px)]"
+      />
+    </span>
   );
 }
 
@@ -406,12 +421,12 @@ function MissingTile({ instrument, place, onRecord }: { instrument: JamInstrumen
       style={place}
       className={cn(
         TILE_BASE,
-        "group/slot grid place-items-center bg-surface-2 text-text transition-colors duration-[var(--duration-base)] hover:bg-surface-3 motion-reduce:transition-none",
+        "group/slot grid place-items-center bg-surface-0 text-text transition-colors duration-[var(--duration-base)] hover:bg-surface-2 motion-reduce:transition-none",
       )}
     >
       <span aria-hidden="true" className={cn("pointer-events-none absolute inset-1.5 rounded-[var(--radius-card)] border-2 border-dashed @min-[10rem]/tile:inset-2.5", tile.dashed)} />
       <span aria-hidden="true" className="relative flex max-w-[86%] flex-col items-center gap-[4cqmin]">
-        <span className={cn("grid h-[22cqmin] min-h-7 w-[22cqmin] min-w-7 max-h-14 max-w-14 place-items-center rounded-full", look.fill)}>
+        <span className={cn("grid h-[22cqmin] min-h-7 w-[22cqmin] min-w-7 max-h-14 max-w-14 place-items-center rounded-full", look.fill, tile.chip)}>
           <look.icon className="h-[55%] w-[55%]" strokeWidth={2} aria-hidden />
         </span>
         <span className="flex items-center gap-1.5 text-center text-xs font-bold leading-tight @min-[10rem]/tile:text-sm">

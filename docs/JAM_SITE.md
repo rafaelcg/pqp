@@ -85,8 +85,8 @@ the generic `noindex` card.
   keeping the songs that ask for nobody. A filtered tab reads on until it has a
   dozen to show. Cursor paging by an observer at the end of the list, with a
   "Ver mais" button that does the same. A card's art is a small mosaic of the
-  band: a square per part on the instrument's own ground with a strip of the
-  song's own peaks, one dashed square per instrument still asked for, and one
+  band: a square per part, the person alone on a neutral tile with the
+  instrument's chip (no strip: a card is at rest), one dashed square per instrument still asked for, and one
   "+N" square (the number and the instruments behind it) for what did not fit.
   **The cover is not one of the squares**: it is a small thumbnail beside the
   title (the hero's "Em destaque" line, a card's title row), the way the song
@@ -97,17 +97,21 @@ the generic `noindex` card.
   payload has one (`pickJamVideoUrl`, `canPlayType`, the same function the app
   uses; every video shows its first frame before the first press, a song of
   more than four parts loading only that frame per part), otherwise the person
-  (their picture, or an initial) large on the instrument's own ground with a
-  level strip that scrolls with the song clock from the track's `peaks`. The look
-  of a tile is the app's too (`lib/jam-tile-look.ts`, `lib/jam-tile-parts.tsx`:
-  opaque `--color-tile-*` tokens, pastel on the light theme). The dashed tile
+  (their picture, or an initial) large on the ONE neutral tile ground with the
+  instrument's chip, and, only while the song plays, a level strip under them
+  that scrolls with the song clock from the track's `peaks` (none at rest). The
+  look of a tile is the app's too (`lib/jam-tile-look.ts`,
+  `lib/jam-tile-parts.tsx`: the neutral `--color-tile`, a `--color-tile-*-ink`
+  per instrument, `other` a violet). The dashed tile
   takes the smallest cell, never a larger one than a recorded part. A dashed tile when `needs` is not
   empty. Layouts for 1 to 9+ tiles, wide and upright (`src/jam-site/mosaic.ts`,
   pure and tested). Tap a tile to hear only that part, large, the band small
   beside it; Escape or the pill's x goes back. One play button, time, a seek
   slider, like, share (Web Share API, else a copied link), the record button
-  named for the missing instrument, "Quem tocou o quê" lanes with a flag per
-  part, where it was born, report.
+  named for the missing instrument, "Quem tocou o quê" lanes (a part's report is
+  in its lane's small "more" menu, reachable by keyboard: Enter or the down arrow
+  opens it, Escape closes it and gives the focus back; no flag on every row),
+  where it was born, report.
 
 ## Playing
 

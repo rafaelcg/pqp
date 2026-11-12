@@ -1,6 +1,8 @@
 /*
  * The level strip of a part with no video, shared by the public site and the
- * app's song view (`lib/jam-tile-parts.tsx`).
+ * app's song view (`lib/jam-tile-parts.tsx`). It is only drawn WHILE THE SONG
+ * PLAYS: a tile at rest is the person alone, because a strip with nothing
+ * moving in it read as a broken waveform.
  *
  * A strip that is silent is a DELIBERATE baseline: one continuous hairline in
  * the instrument's ink, under bars that rise out of it where the take is

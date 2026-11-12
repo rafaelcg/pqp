@@ -7,45 +7,22 @@ import { MosaicGrid, MoreStill, NeedStill, StillTile } from "./tiles";
 import { cn, instrumentName } from "./util";
 
 /**
- * A song's small picture (a card, the featured hero): a square per part, in the
- * instrument's colour with a strip of the song's own peaks, a dashed one for
- * what it still needs and one "+N" for what did not fit, laid out by the same
- * mosaic the song page uses. Nothing here touches a part's media: the song's
- * own peaks only, so a list of forty songs costs no audio and no video.
+ * A song's small picture (a card, the featured hero): a square per part, the
+ * person on a neutral tile with the instrument's chip, a dashed one for what it
+ * still needs and one "+N" for what did not fit, laid out by the same mosaic the
+ * song page uses. Nothing here touches a part's media, so a list of forty songs
+ * costs no audio and no video, and it draws no level strip (a card is at rest).
  *
  * The cover is NOT part of it (`SongCover`, a small thumbnail beside the
  * title): a painting drawn as one of the squares read as a part somebody played.
  */
-
-const BARS = 9;
-
-/** `count` heights from the song's peaks, a different stretch for each square. */
-export function stillBars(peaks: readonly number[], slot: number, seed: string): number[] {
-  if (peaks.length >= BARS) {
-    let max = 0;
-    for (const value of peaks) if (value > max) max = value;
-    const scale = max > 0.02 ? 1 / max : 1;
-    const stride = Math.max(1, Math.floor(peaks.length / (BARS * 2)));
-    const start = (slot * Math.max(1, Math.floor(stride * 3))) % Math.max(1, peaks.length - BARS * stride);
-    return Array.from({ length: BARS }, (_, k) => Math.min(1, (peaks[start + k * stride] ?? 0) * scale));
-  }
-  // No peaks (a song so new the worker has none yet): a stable pattern from the name.
-  let h = 2166136261;
-  for (const ch of `${seed}${slot}`) {
-    h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
-  }
-  return Array.from({ length: BARS }, (_, k) => {
-    h = Math.imul(h ^ (h >>> 13), 1274126177);
-    return 0.25 + ((h >>> 0) % 1000) / 1400 + (k % 3 === 0 ? 0.08 : 0);
-  });
-}
 
 export function SongArt({
   song,
   variant,
   className,
 }: {
-  song: Pick<PublicJamSong, "title" | "parts" | "needs" | "previewPeaks">;
+  song: Pick<PublicJamSong, "title" | "parts" | "needs">;
   variant: "card" | "hero";
   className?: string;
 }) {
@@ -60,7 +37,7 @@ export function SongArt({
   return (
     <div className={cn("relative", className)}>
       <MosaicGrid layout={layout} aspect={variant === "card" ? 1 : undefined}>
-        {cells.map((cell, slot) => {
+        {cells.map((cell) => {
           if (cell.kind === "more") {
             return (
               <div
@@ -90,7 +67,6 @@ export function SongArt({
               name={cell.name}
               avatarUrl={cell.avatarUrl}
               caption={variant === "hero"}
-              bars={stillBars(song.previewPeaks, slot, `${song.title}${cell.name}`)}
             />
           );
         })}

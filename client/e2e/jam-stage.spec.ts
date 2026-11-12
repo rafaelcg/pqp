@@ -28,6 +28,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
+import { bandOpenByDefault } from "./jam-band-open";
 import { E2E_ADMIN_TOKEN } from "../playwright.config";
 import { FAKE_MIC_WAV } from "../playwright.jam.config";
 
@@ -192,8 +193,11 @@ async function openAs(
   route: string,
   viewport = { width: 1440, height: 900 },
   prepare?: (page: Page) => Promise<void>,
+  /** The lanes start open (what most specs are about). `false` leaves the choice to the app: folded unless there is room. */
+  bandOpen = true,
 ): Promise<Page> {
   const context = await browser.newContext({ viewport, colorScheme: "dark", permissions: ["microphone", "camera"] });
+  if (bandOpen) await bandOpenByDefault(context);
   const page = await context.newPage();
   await prepare?.(page);
   await page.addInitScript((value) => {
@@ -506,7 +510,7 @@ test("a tile is the solo button: a click solos that track, a second clears it, E
   await page.context().close();
 });
 
-test("a tile with no video draws a level that moves with that take's own sound while the song plays", async ({ browser }) => {
+test("a tile with no video is the person alone at rest, and draws a level that moves with that take's own sound while the song plays", async ({ browser }) => {
   const seeded = await seed();
   test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
   const page = await openAs(browser, seeded.host, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${seeded.plain}`);
@@ -518,21 +522,28 @@ test("a tile with no video draws a level that moves with that take's own sound w
   await expect(panel.locator("[data-jam-header]")).toHaveAttribute("data-jam-header", "compact");
   await expect(tile.locator("svg").first()).toBeVisible();
   const strip = () => tile.locator("[data-jam-stage-level] > span").evaluateAll((bars) => (bars as HTMLElement[]).map((bar) => bar.style.transform).join("|"));
-  await expect(tile.locator("[data-jam-stage-level] > span")).toHaveCount(29);
   await expect(playButton(page, seeded.plain)).toBeEnabled({ timeout: 20_000 });
-  const still = await strip();
+  // at rest: the person is the one thing on the tile, and there is no strip (a flat line read as broken)
+  await expect(tile.locator("[data-jam-person]")).toBeVisible();
+  await expect(tile.locator("[data-jam-stage-level]")).toHaveCount(0);
   await playButton(page, seeded.plain).click();
   await expect(playButton(page, seeded.plain)).toHaveAttribute("data-state", "playing", { timeout: 15_000 });
+  // playing: the strip is there, 29 bars, drawn on the tile under the person (not somewhere off it)
+  await expect(tile.locator("[data-jam-stage-level] > span")).toHaveCount(29);
+  const stripBox = await box(tile.locator("[data-jam-stage-level]"));
+  const tileBox = await box(tile);
+  const personBox = await box(tile.locator("[data-jam-person]"));
+  expect(stripBox.y, "the strip is under the person").toBeGreaterThanOrEqual(personBox.y + personBox.height - 2);
+  expect(stripBox.y + stripBox.height, "and inside the tile").toBeLessThanOrEqual(tileBox.y + tileBox.height);
   // the peaks are a second long each: the strip scrolls, so it differs a second and a half later, and again after that
-  await expect.poll(strip, { timeout: 8000 }).not.toBe(still);
+  const early = await strip();
+  await expect.poll(strip, { timeout: 8000 }).not.toBe(early);
   const first = await strip();
   await expect.poll(strip, { timeout: 8000 }).not.toBe(first);
-  // paused is still: the strip stops where the song stopped
+  // paused is at rest again: the strip goes
   await playButton(page, seeded.plain).click();
   await expect(playButton(page, seeded.plain)).toHaveAttribute("data-state", "paused");
-  const paused = await strip();
-  await page.waitForTimeout(1500);
-  expect(await strip()).toBe(paused);
+  await expect(tile.locator("[data-jam-stage-level]")).toHaveCount(0);
   await page.context().close();
 });
 
@@ -546,11 +557,14 @@ test("under reduced motion the level is a still picture of the take, not a movin
   await expect(tile).toHaveCount(1, { timeout: 20_000 });
   const strip = () => tile.locator("[data-jam-stage-level] > span").evaluateAll((bars) => (bars as HTMLElement[]).map((bar) => bar.style.transform).join("|"));
   await expect(playButton(page, seeded.plain)).toBeEnabled({ timeout: 20_000 });
+  // at rest there is no strip, motion or not
+  await expect(tile.locator("[data-jam-stage-level]")).toHaveCount(0);
+  await playButton(page, seeded.plain).click();
+  await expect(playButton(page, seeded.plain)).toHaveAttribute("data-state", "playing", { timeout: 15_000 });
+  await expect(tile.locator("[data-jam-stage-level] > span")).toHaveCount(29);
   const still = await strip();
   // not flat: the whole take as bars
   expect(new Set(still.split("|")).size).toBeGreaterThan(1);
-  await playButton(page, seeded.plain).click();
-  await expect(playButton(page, seeded.plain)).toHaveAttribute("data-state", "playing", { timeout: 15_000 });
   await page.waitForTimeout(2500);
   expect(await strip(), "a still picture does not move").toBe(still);
   await page.context().close();
@@ -739,5 +753,55 @@ test("in the studio's review the lane's name is never overlapped by 'Ajustar', w
   // Ajustar opens the editor
   await adjust.click();
   await expect(page.locator('[data-jam-edit][data-open="true"]')).toBeVisible();
+  await page.context().close();
+});
+
+test("the band's lanes fold under the stage: folded when there is no room, opened and closed with real clicks and keys, remembered, and the record bar never covers a lane", async ({ browser }) => {
+  const seeded = await seed();
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const route = `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${seeded.band.id}`;
+  const page = await openAs(browser, seeded.host, route, { width: 1440, height: 900 }, undefined, false);
+  const panel = page.locator(`[data-jam-song="${seeded.band.id}"]`);
+  await expect(panel.locator("[data-jam-stage-tile]")).toHaveCount(3, { timeout: 20_000 });
+
+  // the stage already says who is on the song: the lanes are folded behind one disclosure, mute and solo not in the way
+  const toggle = panel.locator("[data-jam-band-toggle]");
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toContainText("The band");
+  await expect(panel.locator("[data-jam-track]")).toHaveCount(0);
+
+  // a real click opens it: the lanes, with their mute, solo and volume
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(panel.locator("[data-jam-track]")).toHaveCount(3);
+  const bassLane = panel.locator(`[data-jam-track="${seeded.band.tracks.bass}"]`);
+  await bassLane.scrollIntoViewIfNeeded();
+  await bassLane.locator("[data-jam-mute]").click();
+  await expect(bassLane.locator("[data-jam-mute]")).toHaveAttribute("aria-pressed", "true");
+  await expect(bassLane.locator("[role=slider]")).toBeVisible();
+
+  // the slim record bar is a footer of its own: it sits under the scroll area and never over a lane
+  const dock = await box(panel.locator("[data-jam-dock]"));
+  expect(dock.height, "the record bar is slim").toBeLessThanOrEqual(64);
+  for (const lane of await panel.locator("[data-jam-track]").all()) {
+    await lane.scrollIntoViewIfNeeded();
+    expect(boxesOverlap(await box(lane), await box(panel.locator("[data-jam-dock]"))), "the bar never covers a lane").toBe(false);
+  }
+
+  // remembered: the choice is the person's, so a reload keeps it open
+  await page.reload();
+  await expect(page.locator(`[data-jam-song="${seeded.band.id}"] [data-jam-track]`)).toHaveCount(3, { timeout: 20_000 });
+  const again = page.locator(`[data-jam-song="${seeded.band.id}"] [data-jam-band-toggle]`);
+  await expect(again).toHaveAttribute("aria-expanded", "true");
+
+  // closed with the keyboard, and that is remembered too
+  await again.focus();
+  await page.keyboard.press("Enter");
+  await expect(again).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator("[data-jam-track]")).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator(`[data-jam-song="${seeded.band.id}"] [data-jam-stage-tile]`)).toHaveCount(3, { timeout: 20_000 });
+  await expect(page.locator(`[data-jam-song="${seeded.band.id}"] [data-jam-band-toggle]`)).toHaveAttribute("aria-expanded", "false");
   await page.context().close();
 });

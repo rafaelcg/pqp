@@ -21,6 +21,7 @@
  * this spec skips with that reason.
  */
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { bandOpenByDefault } from "./jam-band-open";
 import { E2E_ADMIN_TOKEN } from "../playwright.config";
 import { FAKE_MIC_WAV } from "../playwright.jam.config";
 
@@ -131,6 +132,7 @@ async function openAs(browser: Browser, suffix: string, path: string): Promise<P
     colorScheme: "dark",
     permissions: ["microphone", "camera"],
   });
+  await bandOpenByDefault(context);
   const page = await context.newPage();
   await page.addInitScript((value) => {
     localStorage.setItem("pqp:dev-user-suffix", value);
@@ -738,6 +740,7 @@ test("changing the volume of one of a song's tracks changes that track and no ot
   const DRUMS = 6;
 
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "dark" });
+  await bandOpenByDefault(context);
   const host = await context.newPage();
   await host.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), HOST_B);
   await host.addInitScript(installAudioProbe);
@@ -868,6 +871,7 @@ test("a volume being adjusted keeps playing as the editor says while the lanes a
   const DRUMS = 6;
 
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "dark" });
+  await bandOpenByDefault(context);
   const host = await context.newPage();
   await host.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), HOST_B);
   await host.addInitScript(installAudioProbe);
@@ -898,6 +902,7 @@ test("two takes recorded by the same person in the studio: turning one down leav
     colorScheme: "dark",
     permissions: ["microphone", "camera"],
   });
+  await bandOpenByDefault(context);
   const host = await context.newPage();
   await host.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), HOST_B);
   await host.addInitScript(installAudioProbe);

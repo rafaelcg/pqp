@@ -82,6 +82,7 @@ interface Extra {
   onRecord?: (instrument: JamInstrument) => void;
   onSolo?: (trackId: string) => void;
   clock?: JamClock;
+  playing?: boolean;
 }
 
 function render(count: number, extra: Extra = {}) {
@@ -99,6 +100,7 @@ function render(count: number, extra: Extra = {}) {
         onSolo={onSolo}
         missing={extra.missing}
         onRecord={extra.onRecord}
+        playing={extra.playing}
       />,
     ),
   );
@@ -319,20 +321,35 @@ describe("a tile is the solo button", () => {
 });
 
 describe("a tile with no video", () => {
-  it("sits on the instrument's own OPAQUE ground token (never a translucent wash), with the person and the instrument's badge on it", () => {
+  it("sits on the ONE neutral tile ground (never a tint of the instrument, never a translucent wash), with the person and the instrument's chip on it", () => {
     const { stage } = render(1, { videoEvery: 0 });
     const tile = stage.querySelector('[data-jam-stage-tile="id-0"]')!;
-    expect(tile.className).toContain("bg-tile-guitar");
-    expect(tile.className).not.toMatch(/color-mix|bg-inst-|\/\d+\b/);
+    expect(tile.className).toMatch(/(^|\s)bg-tile(\s|$)/);
+    expect(tile.className).not.toMatch(/bg-tile-[a-z]|color-mix|bg-inst-|\/\d+\b/);
     expect(tile.querySelector("[data-jam-person]")).not.toBeNull();
     expect(tile.querySelector("svg")).not.toBeNull();
     // the ink of the strip is the tile's own
     expect(tile.querySelector("[data-jam-stage-art]")!.className).toContain("text-tile-guitar-ink");
   });
 
+  it("is the person alone at rest: no level strip, and no clock subscription for one", () => {
+    const { clock, listeners } = fakeClock();
+    const { stage } = render(2, { videoEvery: 0, clock });
+    expect(stage.querySelector("[data-jam-stage-level]")).toBeNull();
+    expect(stage.querySelectorAll("[data-jam-person]")).toHaveLength(2);
+    expect(listeners.size).toBe(0);
+  });
+
+  it("gains its level strip when the song plays and loses it on pause", () => {
+    const { clock } = fakeClock();
+    const draw = (playing: boolean) => render(1, { videoEvery: 0, clock, playing }).stage;
+    expect(draw(true).querySelectorAll("[data-jam-stage-level]")).toHaveLength(1);
+    expect(draw(false).querySelector("[data-jam-stage-level]")).toBeNull();
+  });
+
   it("has a level strip whose bars follow the take's peaks at the song clock, and move when the clock does", () => {
     const { clock, emit } = fakeClock();
-    const { stage } = render(1, { videoEvery: 0, clock });
+    const { stage } = render(1, { videoEvery: 0, clock, playing: true });
     const bars = [...stage.querySelectorAll<HTMLElement>("[data-jam-stage-level] > span")];
     expect(bars).toHaveLength(29);
     const scale = (bar: HTMLElement) => Number(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)![1]);
@@ -363,7 +380,7 @@ describe("a tile with no video", () => {
       onchange: null,
     }));
     const { clock, listeners, emit } = fakeClock();
-    const { stage } = render(1, { videoEvery: 0, clock });
+    const { stage } = render(1, { videoEvery: 0, clock, playing: true });
     expect(listeners.size).toBe(0);
     const bars = [...stage.querySelectorAll<HTMLElement>("[data-jam-stage-level] > span")];
     const before = bars.map((bar) => bar.style.transform);
@@ -375,7 +392,7 @@ describe("a tile with no video", () => {
 
   it("stops listening to the clock when it leaves", () => {
     const { clock, listeners } = fakeClock();
-    render(1, { videoEvery: 0, clock });
+    render(1, { videoEvery: 0, clock, playing: true });
     expect(listeners.size).toBe(1);
     act(() => root.unmount());
     expect(listeners.size).toBe(0);

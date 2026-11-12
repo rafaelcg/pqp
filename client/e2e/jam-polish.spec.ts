@@ -22,6 +22,7 @@
  */
 import { deflateSync } from "node:zlib";
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { bandOpenByDefault } from "./jam-band-open";
 import { E2E_ADMIN_TOKEN } from "../playwright.config";
 import { FAKE_MIC_WAV } from "../playwright.jam.config";
 
@@ -198,6 +199,7 @@ async function seed(): Promise<Seeded> {
 
 async function openAs(browser: Browser, suffix: string, path: string): Promise<Page> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "dark", permissions: ["microphone", "camera"] });
+  await bandOpenByDefault(context);
   const page = await context.newPage();
   await page.addInitScript((value) => {
     localStorage.setItem("pqp:dev-user-suffix", value);
