@@ -25,7 +25,7 @@ import path from "node:path";
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { E2E_ADMIN_TOKEN } from "../playwright.config";
 import { FAKE_MIC_WAV } from "../playwright.jam.config";
-import { materialise, seedJamShare, type JamShareSeed } from "./jam-share-seed";
+import { addTrack, materialise, seedJamShare, type JamShareSeed } from "./jam-share-seed";
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const RUN = Date.now().toString(36).slice(-5);
@@ -137,6 +137,17 @@ test.describe.serial("public jams in the app", () => {
     await item.locator('[data-jam-consent="yes"]').click();
     await expect(strip).toHaveCount(0);
 
+    // The answer stays visible in the song, and can be changed.
+    await member.goto(`${jamWall()}/song/${seed.riff}?lang=en`);
+    const answerLine = member.locator('[data-jam-public-line="answer"]');
+    await expect(answerLine).toContainText("Your answer: Yes", { timeout: 25_000 });
+    await answerLine.locator("[data-jam-public-change]").click();
+    await answerLine.locator('[data-jam-consent="audio_only"]').click();
+    await expect(answerLine).toContainText("Your answer: Audio only", { timeout: 15_000 });
+    await answerLine.locator("[data-jam-public-change]").click();
+    await answerLine.locator('[data-jam-consent="yes"]').click();
+    await expect(answerLine).toContainText("Your answer: Yes", { timeout: 15_000 });
+
     // The starter sees the answer.
     await host.locator("[data-jam-public-manage]").click();
     await expect(host.locator("[data-jam-public-sheet]")).toContainText("2 of 2 answered", { timeout: 15_000 });
@@ -159,11 +170,25 @@ test.describe.serial("public jams in the app", () => {
     await expect(view.locator("[data-jam-likes]")).toHaveCount(0);
     await page.screenshot({ path: path.join(SHOTS, "05-public-view-1440-dark.png") });
 
+    // Listening is counted as a play.
+    await view.getByRole("button", { name: /^Play Meu Riff/ }).click();
+    await expect
+      .poll(
+        async () => {
+          const res = await fetch(`${API}/api/jam-public/songs/${seed.riff}`, {
+            headers: { Authorization: `Bearer dev-local-token:${seed.outsider}` },
+          });
+          return ((await res.json()) as { song: { plays: number } }).song.plays;
+        },
+        { timeout: 20_000 },
+      )
+      .toBeGreaterThan(0);
+
     // Report one part from its lane's menu.
     await view.locator("[data-jam-track]").first().getByRole("button", { name: /More|options/i }).first().click();
     await page.getByRole("menuitem", { name: "Report this part" }).click();
     const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("Report public jam");
+    await expect(dialog).toContainText("Report this part");
     await dialog.getByLabel("Spam").check();
     await dialog.getByRole("button", { name: "Send report" }).click();
     await expect(dialog).toContainText("Report sent");
@@ -210,12 +235,29 @@ test.describe.serial("public jams in the app", () => {
     await host.context().close();
   });
 
+  test("declining an outside request says so, and the song stays on screen", async ({ browser }) => {
+    test.skip(!seed.uploads, "object storage is not configured (S3_*)");
+    await addTrack(API, seed.outsider, seed.riff, "bass", false, 300, { publicConsent: "yes" });
+    const host = await openAs(browser, seed.host, `/app/jam/${seed.riff}`);
+    await ready(host);
+    const requests = host.locator("[data-jam-requests]");
+    await expect(requests).toBeVisible({ timeout: 25_000 });
+    await requests.locator("[data-jam-request-decline]").click();
+    const dialog = host.getByRole("dialog");
+    await expect(dialog).toContainText("Decline this request?");
+    await dialog.getByRole("button", { name: "Decline" }).click();
+    await expect(requests).toHaveCount(0, { timeout: 15_000 });
+    await expect(host.locator(`[data-jam-song="${seed.riff}"]`)).toBeVisible();
+    await expect(host.locator("[data-jam-track]").first()).toBeVisible();
+    await host.context().close();
+  });
+
   test("a new standalone jam starts from the intent, and shows on a wall's Públicas shelf", async ({ browser }) => {
     test.skip(!seed.uploads, "object storage is not configured (S3_*)");
     await materialise(API, `${seed.outsider}b`);
     const maker = await openAs(browser, `${seed.outsider}b`, "/app?jam=new");
     await ready(maker);
-    await maker.locator("[data-jam-start-title]").fill("Jam sem casa");
+    await maker.locator("[data-jam-start-title]").fill(`Jam sem casa ${RUN}`);
     await maker.locator("[data-jam-start-go]").click();
     await expect(maker.locator("[data-jam-studio]")).toBeVisible({ timeout: 25_000 });
     await recordAndPost(maker, 3);
@@ -223,7 +265,7 @@ test.describe.serial("public jams in the app", () => {
     await expect(maker.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
     await maker.locator("[data-jam-done-action]").click();
     await expect(maker.locator('[data-jam-public-view]')).toBeVisible({ timeout: 25_000 });
-    await expect(maker.locator("[data-jam-song]")).toContainText("Jam sem casa");
+    await expect(maker.locator("[data-jam-song]")).toContainText(`Jam sem casa ${RUN}`);
     await expect(maker.locator("[data-jam-track]")).toHaveCount(1, { timeout: 15_000 });
     await maker.screenshot({ path: path.join(SHOTS, "09-new-jam-1440-dark.png") });
     await maker.context().close();
@@ -232,12 +274,12 @@ test.describe.serial("public jams in the app", () => {
     await ready(member);
     const shelf = member.locator("[data-jam-public-shelf]");
     await expect(shelf).toBeVisible({ timeout: 25_000 });
-    await expect(shelf).toContainText("Jam sem casa");
+    await expect(shelf).toContainText(`Jam sem casa ${RUN}`);
     // The channel's own songs get a header only now that there are two sections.
     await expect(member.locator("[data-jam-section-title]")).toBeVisible();
     await expect(shelf.locator("[data-jam-public-all]")).toBeVisible();
     await member.screenshot({ path: path.join(SHOTS, "10-wall-with-shelf-1440-dark.png") });
-    await shelf.getByRole("button", { name: /Jam sem casa/ }).click();
+    await shelf.getByRole("button", { name: new RegExp(`Jam sem casa ${RUN}`) }).click();
     await expect(member.locator("[data-jam-public-view]")).toBeVisible();
     await expect(member).toHaveURL(/\/app\/jam\//);
     await member.goBack();

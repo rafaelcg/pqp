@@ -69,6 +69,8 @@ export interface JamTrackRowProps {
   onAudition: () => void;
   /** A public jam, somebody else's part: "Denunciar essa parte" in the lane's menu. */
   onReport?: () => void;
+  /** This is the viewer's own outside take, waiting for the song's starter (not an alternate version). */
+  waitingForStarter?: boolean;
   onSeek: (fraction: number) => void;
 }
 
@@ -104,6 +106,7 @@ export function JamTrackRow({
   onDelete,
   onAudition,
   onReport,
+  waitingForStarter = false,
   onSeek,
 }: JamTrackRowProps) {
   const { t } = useTranslation();
@@ -327,7 +330,7 @@ export function JamTrackRow({
                 data-jam-out-pill=""
                 className="pointer-events-none absolute left-1.5 top-1.5 rounded-full bg-surface-0/85 px-1.5 py-px text-[11px] font-bold text-text-secondary"
               >
-                {t("jam.take.out")}
+                {waitingForStarter ? t("jam.public.outside.badge") : t("jam.take.out")}
               </span>
             )}
             {gainWords && (

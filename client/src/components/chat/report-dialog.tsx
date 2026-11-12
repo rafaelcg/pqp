@@ -181,9 +181,11 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
           <p>
             {t("report.thanks")}
           </p>
-          <p>
-            {t("report.blockHint")}
-          </p>
+          {target.kind !== "jam_public" && (
+            <p>
+              {t("report.blockHint")}
+            </p>
+          )}
         </div>
       </Dialog>
     );
@@ -215,7 +217,9 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
                   : target.kind === "bau_comment"
                     ? "report.title.bauComment"
                     : target.kind === "jam_public"
-                      ? "report.title.jam"
+                      ? target.trackId
+                        ? "report.title.jamPart"
+                        : "report.title.jam"
                       : "report.title.user",
             )
       }

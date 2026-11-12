@@ -749,7 +749,7 @@ export function JamStudio({
                           checked={studio.shareVideo}
                           onCheckedChange={studio.setShareVideo}
                           label={t("jam.public.studio.shareVideo")}
-                          description={t("jam.public.studio.shareVideoHint")}
+                          description={studio.shareVideo ? t("jam.public.studio.shareVideoOn") : t("jam.public.studio.shareVideoOff")}
                         />
                       )}
                     </div>

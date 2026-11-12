@@ -130,7 +130,13 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
     handledIntent.current = songId;
     intentRef.current = null;
     if (intent.act === "report") {
-      setReport({ kind: "jam_public", songId, trackId: intent.trackId ?? null, subjectName: song.title });
+      const part = intent.trackId ? detail.tracks.find((one) => one.id === intent.trackId) : undefined;
+      setReport({
+        kind: "jam_public",
+        songId,
+        trackId: part ? part.id : null,
+        subjectName: part ? (part.authorName ?? null) : song.title,
+      });
       return;
     }
     if (intent.record && me.uploads) {
@@ -195,10 +201,17 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
   }
 
   // Starting one: the sheet, then the studio. Nothing else of the screen yet.
+  if (isNew && me.loaded && me.publishing === "blocked") {
+    return message(t("jam.public.view.blocked"));
+  }
+  if (isNew && me.loaded && !me.uploads) {
+    return message(t("jam.wall.uploadsOff"));
+  }
   if (isNew) {
     return frame(
       <>
         <JamStartSheet
+          standalone
           open={startOpen}
           onClose={() => {
             setStartOpen(false);

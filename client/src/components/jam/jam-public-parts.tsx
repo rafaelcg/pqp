@@ -22,21 +22,25 @@ export function JamConsentChoices({
   onChoose,
   busy = false,
   className,
+  current,
 }: {
   onChoose: (choice: JamPublicConsent) => void;
   busy?: boolean;
   className?: string;
+  /** The answer given already: it is the pressed one, so changing it is a plain choice among three. */
+  current?: JamPublicConsent;
 }) {
+  const pick = (value: JamPublicConsent) => (current === undefined ? undefined : current === value);
   const { t } = useTranslation();
   return (
     <div role="group" aria-label={t("jam.public.consent.legend")} className={cn("flex flex-wrap items-center gap-2", className)}>
-      <Button size="sm" disabled={busy} onClick={() => onChoose("yes")} data-jam-consent="yes">
+      <Button size="sm" variant={current === undefined || current === "yes" ? "default" : "secondary"} aria-pressed={pick("yes")} disabled={busy} onClick={() => onChoose("yes")} data-jam-consent="yes">
         {t("jam.public.consent.yes")}
       </Button>
-      <Button size="sm" variant="secondary" disabled={busy} onClick={() => onChoose("audio_only")} data-jam-consent="audio_only">
+      <Button size="sm" variant={current === "audio_only" ? "default" : "secondary"} aria-pressed={pick("audio_only")} disabled={busy} onClick={() => onChoose("audio_only")} data-jam-consent="audio_only">
         {t("jam.public.consent.audioOnly")}
       </Button>
-      <Button size="sm" variant="ghost" disabled={busy} onClick={() => onChoose("no")} data-jam-consent="no">
+      <Button size="sm" variant={current === "no" ? "default" : "ghost"} aria-pressed={pick("no")} disabled={busy} onClick={() => onChoose("no")} data-jam-consent="no">
         {t("jam.public.consent.no")}
       </Button>
     </div>

@@ -143,6 +143,7 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
   const showSheet = me.enabled && isStarter && (canPublish || on);
   const pendingConsent = waiting.consents.some((one) => one.songId === song.id);
   const consent = useConsentAnswer(answerConsent);
+  const [changing, setChanging] = useState(false);
   const pendingTakeIds = useMemo(
     () => new Set(waiting.inbox.filter((one) => one.songId === song.id).map((one) => one.track.id)),
     [waiting.inbox, song.id],
@@ -174,10 +175,12 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
   // ---- the quiet lines under the title ---------------------------------------
   const lines: ReactNode[] = [];
   if (me.enabled && isStarter && on && publication) {
-    const answered = publication.parts.filter((part) => part.consent !== "pending").length;
+    // Parts in the mix: an outside request is a question for the starter, not somebody who has answered.
+    const inMixParts = publication.parts.filter((part) => part.inMix);
+    const answered = inMixParts.filter((part) => part.consent !== "pending").length;
     const bits = [t(`jam.public.status.short.${publication.status}` as MessageKey)];
-    if (publication.status === "live" && publication.parts.length > 1) {
-      bits.push(t("jam.public.manage.answered", { done: answered, total: publication.parts.length }));
+    if (publication.status === "live" && inMixParts.length > 1) {
+      bits.push(t("jam.public.manage.answered", { done: answered, total: inMixParts.length }));
     }
     if (publication.pendingTakes > 0) {
       bits.push(t("jam.public.manage.pendingTakesShort", { count: publication.pendingTakes, countLabel: publication.pendingTakes }));
@@ -207,6 +210,47 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
         <p className="text-sm font-semibold leading-snug text-text">{t("jam.public.consent.ask", { title: song.title })}</p>
         <p className="text-[13px] leading-snug text-text-secondary">{t("jam.public.consent.askHint")}</p>
         <JamConsentChoices busy={consent.busy} onChoose={(choice) => void consent.choose(song.id, choice).then(() => state.refresh())} />
+        {consent.error && (
+          <p role="alert" className="text-[13px] text-danger">
+            {consent.error}
+          </p>
+        )}
+      </div>,
+    );
+  }
+  // My answer, once given: shown, and changeable any time (the starter does it in the sheet).
+  const myParts = publication ? publication.parts.filter((part) => viewerId !== null && part.authorId === viewerId && part.inMix && part.consent !== "pending" && !isStarter) : [];
+  const myAnswer = myParts.length > 0 && myParts.every((part) => part.consent === myParts[0]!.consent) ? myParts[0]!.consent : null;
+  if (me.enabled && !isStarter && on && !pendingConsent && myParts.length > 0) {
+    lines.push(
+      <div key="answer" data-jam-public-line="answer" className="flex flex-col gap-2">
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-semibold text-text-secondary">
+          <Globe className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span>
+            {t("jam.public.status.short.live")} · {t("jam.public.consent.mine", { answer: myAnswer ? t(`jam.public.consent.state.${myAnswer}` as MessageKey) : t("jam.public.consent.mixed") })}
+          </span>
+          <button
+            type="button"
+            onClick={() => setChanging((open) => !open)}
+            aria-expanded={changing}
+            data-jam-public-change=""
+            className="rounded-sm font-bold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            {t("jam.public.consent.change")}
+          </button>
+        </p>
+        {changing && (
+          <JamConsentChoices
+            current={myAnswer && myAnswer !== "pending" ? myAnswer : undefined}
+            busy={consent.busy}
+            onChoose={(choice) =>
+              void consent.choose(song.id, choice).then(() => {
+                setChanging(false);
+                void state.refresh();
+              })
+            }
+          />
+        )}
         {consent.error && (
           <p role="alert" className="text-[13px] text-danger">
             {consent.error}
@@ -284,6 +328,8 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
         <JamPublicSheet
           open={sheetOpen}
           onClose={() => setSheetOpen(false)}
+          songId={song.id}
+          viewerId={viewerId}
           songTitle={song.title}
           originName={originName}
           state={state}

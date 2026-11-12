@@ -280,6 +280,10 @@ export function setJamViewer(userId: string | null): void {
 
 /** Read the first page of a channel's songs. Quiet when it already holds some, unless forced. */
 export function loadJamChannel(channelId: string, options: { force?: boolean } = {}): Promise<void> {
+  // A public view's key is not a channel: there is no list to read (`publicJamKey`).
+  if (isPublicJamKey(channelId)) {
+    return Promise.resolve();
+  }
   wire();
   const held = read(channelId);
   // A quiet ask is answered from the store only when the SERVER confirmed this

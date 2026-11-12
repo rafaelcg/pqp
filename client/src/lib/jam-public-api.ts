@@ -52,6 +52,15 @@ export const fetchPublicSongForViewer = (songId: string, signal?: AbortSignal) =
 export const createPublicJam = (body: CreatePublicJamRequest) =>
   apiFetch<JamPublicSongCreated>("/api/jam-public/songs", json("POST", body));
 
+/** One play, counted once per song per account per hour by the server. Best effort: never an error to the listener. */
+export async function notePublicPlay(songId: string): Promise<void> {
+  try {
+    await apiFetch<unknown>(`/api/jam-public/songs/${songId}/play`, json("POST"));
+  } catch {
+    // A 204 has no body, which `apiFetch` reports with that status; any other failure costs one play.
+  }
+}
+
 export const likePublicJam = (songId: string, liked: boolean) =>
   apiFetch<JamPublicLikeResponse>(
     `/api/jam-public/songs/${songId}/like`,

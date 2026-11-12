@@ -19,6 +19,7 @@ import type { BandLane } from "@/lib/jam-clip";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cannotRecordReason, pickInstrument } from "@/lib/jam-record";
 import { dropInboxTake } from "@/lib/jam-public-store";
+import { notePublicPlay } from "@/lib/jam-public-api";
 import { oneAtATime, switchTakeIn } from "@/lib/jam-mix";
 import {
   applyJamVote,
@@ -137,6 +138,14 @@ export function JamSongPanel({
   // The detail is in and the song has no take: only its author sees this (the server leaves it out for everybody else). Nothing plays.
   const isEmpty = detail !== undefined && tracks.length === 0;
   const playing = playback.transport === "playing" && !isEmpty;
+  // A public jam counts a play the first time it is heard in this view.
+  const playCounted = useRef(false);
+  useEffect(() => {
+    if (publicView && playing && !playCounted.current) {
+      playCounted.current = true;
+      void notePublicPlay(song.id);
+    }
+  }, [publicView, playing, song.id]);
   const playingChange = useRef(onPlayingChange);
   playingChange.current = onPlayingChange;
   useEffect(() => {
@@ -187,6 +196,8 @@ export function JamSongPanel({
   });
   const requestTakes = tracks.filter((track) => pub.pendingTakeIds.has(track.id));
   const [requestBusy, setRequestBusy] = useState<string | null>(null);
+  /** The delete being confirmed is the starter declining an outside request. */
+  const [declining, setDeclining] = useState(false);
   const first = pickInstrument(song, addable, mine);
   const missingSlots =
     need.kind === "missing" ? need.instruments.filter((instrument) => !tracks.some((one) => one.instrument === instrument)) : [];
@@ -305,7 +316,7 @@ export function JamSongPanel({
   // The take about to be deleted is the song's last one, and the person may delete
   // the song (its author or a moderator: the server's rule): then deleting the take
   // deletes the song, and the confirm says so.
-  const deletesSong = pendingDelete !== null && tracks.length === 1 && canManage;
+  const deletesSong = pendingDelete !== null && !declining && tracks.length === 1 && canManage;
 
   const editPill = canEdit ? (
     <button
@@ -482,7 +493,10 @@ export function JamSongPanel({
               }),
             ).finally(() => setRequestBusy(null));
           }}
-          onDecline={(track) => setPendingDelete(track)}
+          onDecline={(track) => {
+            setDeclining(true);
+            setPendingDelete(track);
+          }}
         />
         <section className="mt-1" aria-labelledby={`band-${song.id}`}>
           <div
@@ -534,6 +548,7 @@ export function JamSongPanel({
                         canSwitchMix={canManage && enabled}
                         canDelete={isMine || canManage}
                         canVote={enabled && !publicView}
+                        waitingForStarter={publicView && isMine && !track.inMix && viewer?.isAuthor !== true}
                         onReport={!isMine && pub.reportTrack ? () => pub.reportTrack?.(track.id) : undefined}
                         auditioning={playback.audition === track.id}
                         loading={playback.stemStatus[track.id] === "loading"}
@@ -673,14 +688,30 @@ export function JamSongPanel({
       )}
       <ConfirmDialog
         open={pendingDelete !== null}
-        title={deletesSong ? t("jam.take.deleteLastTitle") : t("jam.take.deleteTitle")}
-        description={deletesSong ? t("jam.take.deleteLastBody") : t("jam.take.deleteBody")}
-        confirmLabel={deletesSong ? t("jam.song.delete") : t("jam.take.delete")}
+        title={
+          declining
+            ? t("jam.public.requests.declineTitle")
+            : deletesSong
+              ? t("jam.take.deleteLastTitle")
+              : t("jam.take.deleteTitle")
+        }
+        description={
+          declining
+            ? t("jam.public.requests.declineBody")
+            : deletesSong
+              ? t("jam.take.deleteLastBody")
+              : t("jam.take.deleteBody")
+        }
+        confirmLabel={declining ? t("jam.public.requests.decline") : deletesSong ? t("jam.song.delete") : t("jam.take.delete")}
         cancelLabel={t("jam.keep")}
-        onClose={() => setPendingDelete(null)}
+        onClose={() => {
+          setPendingDelete(null);
+          setDeclining(false);
+        }}
         onConfirm={() => {
           const track = pendingDelete;
           setPendingDelete(null);
+          setDeclining(false);
           if (!track) return;
           if (adjustingId === track.id) setAdjustingId(null);
           void guard(async () => {

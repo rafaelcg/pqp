@@ -27,7 +27,10 @@ export function JamStartSheet({
   open,
   onClose,
   onStart,
+  standalone = false,
 }: {
+  /** A public jam with no server: it says so, and "anybody" is anybody. */
+  standalone?: boolean;
   open: boolean;
   onClose: () => void;
   onStart: (result: JamStartResult) => void;
@@ -98,6 +101,11 @@ export function JamStartSheet({
       }
     >
       <DialogBody>
+      {standalone && (
+        <p data-jam-start-public="" className="mb-4 text-[13px] leading-snug text-text-secondary">
+          {t("jam.public.start.note")}
+        </p>
+      )}
       <form
         id={formId}
         className="flex flex-col gap-4"
@@ -158,7 +166,7 @@ export function JamStartSheet({
               setTouched(false);
             }}
             options={[
-              { value: "open", label: t("jam.start.open"), description: t("jam.start.openHint") },
+              { value: "open", label: t("jam.start.open"), description: standalone ? t("jam.public.start.openHint") : t("jam.start.openHint") },
               { value: "wanted", label: t("jam.start.wanted"), description: t("jam.start.wantedHint") },
               { value: "closed", label: t("jam.start.closed"), description: t("jam.start.closedHint") },
             ]}

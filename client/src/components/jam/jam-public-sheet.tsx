@@ -4,7 +4,10 @@ import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import type { JamPublicationState } from "@/hooks/use-jam-publication";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
+import { answerConsent } from "@/lib/jam-public-store";
+import { JamConsentChoices, useConsentAnswer } from "./jam-public-parts";
 import { useEffect, useState } from "react";
 
 /**
@@ -22,6 +25,9 @@ import { useEffect, useState } from "react";
 export interface JamPublicSheetProps {
   open: boolean;
   onClose: () => void;
+  songId: string;
+  /** The viewer, to find their own parts in the list. */
+  viewerId: string | null;
   songTitle: string;
   /** The server the song came from (a channel song), or null for a standalone one. */
   originName: string | null;
@@ -35,7 +41,7 @@ function isOn(publication: JamPublication | null): boolean {
   return publication !== null && (publication.status === "live" || publication.status === "review" || publication.status === "hidden");
 }
 
-export function JamPublicSheet({ open, onClose, songTitle, originName, state, publicUrl }: JamPublicSheetProps) {
+export function JamPublicSheet({ open, onClose, songId, viewerId, songTitle, originName, state, publicUrl }: JamPublicSheetProps) {
   const { t } = useTranslation();
   const { publication, busy, error } = state;
   const on = isOn(publication);
@@ -57,6 +63,8 @@ export function JamPublicSheet({ open, onClose, songTitle, originName, state, pu
     }
   }
 
+  const answer = useConsentAnswer(answerConsent);
+  const [confirmOff, setConfirmOff] = useState(false);
   const errorText = error ? t(`jam.public.error.${error}` as MessageKey) : null;
 
   if (!on) {
@@ -121,8 +129,13 @@ export function JamPublicSheet({ open, onClose, songTitle, originName, state, pu
   }
 
   const pub = publication!;
-  const answered = pub.parts.filter((part) => part.consent !== "pending").length;
+  // Parts in the mix. An outside request is a question for the starter, listed apart.
+  const parts = pub.parts.filter((part) => part.inMix);
+  const answered = parts.filter((part) => part.consent !== "pending").length;
+  const mine = parts.filter((part) => viewerId !== null && part.authorId === viewerId);
+  const mineAnswer = mine.length > 0 && mine.every((part) => part.consent === mine[0]!.consent) ? mine[0]!.consent : null;
   return (
+    <>
     <Dialog
       open={open}
       title={t("jam.public.manage.title")}
@@ -131,7 +144,7 @@ export function JamPublicSheet({ open, onClose, songTitle, originName, state, pu
       onClose={onClose}
       footer={
         <div className="flex w-full items-center justify-between gap-2">
-          <Button variant="ghost" className="text-danger" onClick={() => void state.unpublish()} disabled={busy} data-jam-public-off="">
+          <Button variant="ghost" className="text-danger" onClick={() => setConfirmOff(true)} disabled={busy} data-jam-public-off="">
             {t("jam.public.manage.unpublish")}
           </Button>
           <Button variant="secondary" onClick={onClose}>
@@ -143,7 +156,7 @@ export function JamPublicSheet({ open, onClose, songTitle, originName, state, pu
       <DialogBody>
         <div className="flex flex-col gap-4 text-sm leading-snug text-text-secondary" data-jam-public-sheet="on">
           <p role="status" className="text-text" data-jam-public-status={pub.status}>
-            {t(`jam.public.status.${pub.status}` as MessageKey)}
+            {pub.status === "live" && !pub.listed ? t("jam.public.status.liveUnlisted") : t(`jam.public.status.${pub.status}` as MessageKey)}
           </p>
           {pub.status === "live" && !pub.listed && <p>{t("jam.public.manage.notListed")}</p>}
           {pub.status === "live" && pub.listed && (
@@ -157,19 +170,34 @@ export function JamPublicSheet({ open, onClose, songTitle, originName, state, pu
             </a>
           )}
 
-          {pub.parts.length > 0 && (
+          {parts.length > 0 && (
             <section aria-labelledby="jam-public-parts" className="flex flex-col gap-1.5">
               <h3 id="jam-public-parts" className="flex items-baseline justify-between text-xs font-bold uppercase tracking-wide text-text-tertiary">
                 <span>{t("jam.public.manage.parts")}</span>
                 <span className="font-semibold normal-case tracking-normal">
-                  {t("jam.public.manage.answered", { done: answered, total: pub.parts.length })}
+                  {t("jam.public.manage.answered", { done: answered, total: parts.length })}
                 </span>
               </h3>
               <ul className="flex flex-col divide-y divide-border rounded-[var(--radius-card)] bg-surface-2">
-                {pub.parts.map((part) => (
+                {parts.map((part) => (
                   <PartRow key={part.trackId} part={part} />
                 ))}
               </ul>
+              {mine.length > 0 && (
+                <div className="mt-2 flex flex-col gap-2" data-jam-public-mine="">
+                  <span className="text-[13px] font-semibold text-text-secondary">{t("jam.public.consent.legend")}</span>
+                  <JamConsentChoices
+                    current={mineAnswer && mineAnswer !== "pending" ? mineAnswer : undefined}
+                    busy={answer.busy}
+                    onChoose={(choice) => void answer.choose(songId, choice).then(() => state.refresh())}
+                  />
+                  {answer.error && (
+                    <p role="alert" className="text-danger">
+                      {answer.error}
+                    </p>
+                  )}
+                </div>
+              )}
             </section>
           )}
 
@@ -205,6 +233,19 @@ export function JamPublicSheet({ open, onClose, songTitle, originName, state, pu
         </div>
       </DialogBody>
     </Dialog>
+    <ConfirmDialog
+      open={confirmOff}
+      title={t("jam.public.manage.offTitle")}
+      description={t("jam.public.manage.offBody")}
+      confirmLabel={t("jam.public.manage.unpublish")}
+      cancelLabel={t("jam.public.manage.keep")}
+      onClose={() => setConfirmOff(false)}
+      onConfirm={() => {
+        setConfirmOff(false);
+        void state.unpublish();
+      }}
+    />
+    </>
   );
 }
 

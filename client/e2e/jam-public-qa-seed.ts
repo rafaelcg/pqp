@@ -40,6 +40,7 @@ async function main() {
   const guest = `jsguest${tag}`;
   await materialise(API, guest);
   await addTrack(API, guest, seed.bloom, "keys", false, 261, { publicConsent: "yes" });
+  // eslint-disable-next-line no-console -- a script: the printout is the product
   console.log(JSON.stringify({ ...seed, maker, guest, standalone: made.song.id }, null, 2));
 }
 

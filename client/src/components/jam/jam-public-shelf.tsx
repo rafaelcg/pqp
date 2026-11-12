@@ -61,7 +61,7 @@ export function JamPublicShelf({ songs, titled }: { songs: readonly PublicJamSon
           target="_blank"
           rel="noreferrer"
           data-jam-public-all=""
-          className="rounded-sm text-[13px] font-bold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="inline-flex min-h-8 items-center rounded-sm text-[13px] font-bold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:min-h-11"
         >
           {t("jam.public.shelf.all")}
         </a>
