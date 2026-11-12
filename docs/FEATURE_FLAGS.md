@@ -989,6 +989,36 @@ section 4), because the audio engine fetches the stems from the browser.
 `server/src/lib/flag-client-contract.test.ts` pins the route, the field and the
 create guard.
 
+## `jam_public` (global, default off)
+
+Public jams: songs anybody hears and watches at jam.pqp.gg without an account
+(`docs/JAM_PUBLIC.md`, the wire contract in `packages/shared/src/jam-public.ts`).
+Behind `JAM_PUBLIC` (only `true` turns it on), born as a flag. **Global**: a
+standalone public jam has no server and the website's visitor has none either.
+
+- **A legal category change.** Like `COMMUNITIES_ENABLED`, on is public content
+  to the open web. It goes on when Rafael says so, after
+  `docs/CONTENT_SAFETY.md` §"Public jams". One flag, no environment
+  acknowledgement on top: the dashboard flip is the decision.
+- **Served by** `GET /api/public/jams/config` -> `{ enabled }` and nothing else
+  (unauthenticated, never reads `Authorization`, its own address bucket,
+  `public, max-age=60`, 200 `{ enabled: false }` when off), and by
+  `GET /api/jam-public/config` (signed in: `enabled`, what this account may do,
+  whether storage is configured).
+- **Off is dark.** Every other `/api/public/jams*` route is not matched (the
+  401 an unknown path gets), every publishing write is 403 `jam_public_off`,
+  a non-member loses public access to a channel's song, and nothing about
+  `jam_channels` changes. The removals stay open (unpublish, a consent of
+  `no`, unlike, deleting a track), so off never strands somebody's own content.
+- **Read per request, nothing cached per process**, so a flip, an unpublish or
+  a takedown is in the next answer on both API containers; a shared cache in
+  front holds a list for at most 60 s and a song for 30 s.
+
+Turn it on from controles → interruptores, or `PUT /api/admin/flags
+{ key: "jam_public", enabled: true }`. Rollback is the same with `false`.
+Pinned by `server/src/api/jam-public.test.ts` (with the flag as a row, the way
+production sets it) and `server/src/lib/flag-client-contract.test.ts`.
+
 ## `apps` (per server)
 
 The apps platform: small interactive things (Locadora, a game room) that a person
