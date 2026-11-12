@@ -7840,3 +7840,253 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jam_song_covers_upload ON jam_song_covers 
 -- The sweep's read: claimed cover uploads, to find the ones no song points at.
 CREATE INDEX IF NOT EXISTS idx_jam_uploads_cover_claimed
   ON jam_uploads (claimed_at) WHERE kind = 'cover' AND claimed_at IS NOT NULL;
+
+-- public jams
+--
+-- A PUBLIC JAM IS A SONG ANYBODY CAN HEAR WITHOUT AN ACCOUNT. The wire
+-- contract and every rule these tables serve are in
+-- packages/shared/src/jam-public.ts; the operator's page is docs/JAM_PUBLIC.md.
+-- The public version is a VIEW of a `jam_songs` row, never a copy: these
+-- tables hold only what being public adds (consent, review, scans, likes,
+-- plays, reports, blocks). Behind the runtime flag `jam_public` (global,
+-- default off); with it off nothing reads them.
+--
+-- Pitfall 22. Every table here is new and placed at the end of the file. The
+-- one change to existing tables is the block below, which lets a song (and its
+-- upload ledger rows) belong to no channel: a standalone public jam. It touches
+-- only `jam_songs` and `jam_uploads`, both small and behind dark flags, and it
+-- is guarded by the catalog, so it takes no lock once applied.
+
+-- A standalone public jam has no channel and no server. DROP NOT NULL is a
+-- catalog change (no rewrite, no scan); the CHECK keeps the two columns
+-- together and is added NOT VALID (every existing row has both, and new rows
+-- are checked), so it scans nothing either.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_attribute
+              WHERE attrelid = 'jam_songs'::regclass AND attname = 'channel_id' AND attnotnull) THEN
+    ALTER TABLE jam_songs ALTER COLUMN channel_id DROP NOT NULL;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_attribute
+              WHERE attrelid = 'jam_songs'::regclass AND attname = 'server_id' AND attnotnull) THEN
+    ALTER TABLE jam_songs ALTER COLUMN server_id DROP NOT NULL;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_attribute
+              WHERE attrelid = 'jam_uploads'::regclass AND attname = 'channel_id' AND attnotnull) THEN
+    ALTER TABLE jam_uploads ALTER COLUMN channel_id DROP NOT NULL;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_attribute
+              WHERE attrelid = 'jam_uploads'::regclass AND attname = 'server_id' AND attnotnull) THEN
+    ALTER TABLE jam_uploads ALTER COLUMN server_id DROP NOT NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                  WHERE conrelid = 'jam_songs'::regclass AND conname = 'jam_songs_place_check') THEN
+    ALTER TABLE jam_songs
+      ADD CONSTRAINT jam_songs_place_check CHECK ((channel_id IS NULL) = (server_id IS NULL)) NOT VALID;
+  END IF;
+END $$;
+
+-- The retry key of a standalone song's create (the channel one,
+-- `idx_jam_songs_nonce_live`, treats a NULL channel as distinct every time).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jam_songs_standalone_nonce
+  ON jam_songs (author_id, client_nonce)
+  WHERE channel_id IS NULL AND client_nonce IS NOT NULL AND deleted_at IS NULL;
+-- The sweep's read: standalone songs whose starter's account is gone.
+CREATE INDEX IF NOT EXISTS idx_jam_songs_standalone_orphan
+  ON jam_songs (created_at) WHERE channel_id IS NULL AND author_id IS NULL AND deleted_at IS NULL;
+
+-- One row per song that was ever published. A status is derived from the
+-- columns (`publicationStatus` in services/jam-public.ts): removed_at (an
+-- operator), unpublished_at (its starter or a server moderator), review_state
+-- 'pending' (a new account's first), hidden_at (reports), else live.
+CREATE TABLE IF NOT EXISTS jam_public_songs (
+  song_id UUID PRIMARY KEY REFERENCES jam_songs(id) ON DELETE CASCADE,
+  -- The last (re)publish: the `new` order.
+  published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- The first publish: what the daily publish limit counts.
+  first_published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  published_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  show_origin BOOLEAN NOT NULL DEFAULT TRUE,
+  review_state TEXT NOT NULL DEFAULT 'none'
+    CONSTRAINT jam_public_songs_review_check
+    CHECK (review_state IN ('none', 'pending', 'approved', 'rejected')),
+  -- The last operator decision on it. Reports filed before it do not count
+  -- toward the auto-hide again.
+  reviewed_at TIMESTAMPTZ,
+  hidden_at TIMESTAMPTZ,
+  unpublished_at TIMESTAMPTZ,
+  unpublish_reason TEXT,
+  removed_at TIMESTAMPTZ,
+  removed_reason TEXT,
+  plays_count BIGINT NOT NULL DEFAULT 0,
+  likes_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_jam_public_songs_new
+  ON jam_public_songs (published_at DESC, song_id DESC)
+  WHERE unpublished_at IS NULL AND removed_at IS NULL AND hidden_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_jam_public_songs_top
+  ON jam_public_songs (likes_count DESC, published_at DESC, song_id DESC)
+  WHERE unpublished_at IS NULL AND removed_at IS NULL AND hidden_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_jam_public_songs_publisher
+  ON jam_public_songs (published_by, first_published_at);
+CREATE INDEX IF NOT EXISTS idx_jam_public_songs_queue
+  ON jam_public_songs (published_at)
+  WHERE review_state = 'pending' OR hidden_at IS NOT NULL;
+
+-- One answer per person per song. No row is "not answered", which is no.
+CREATE TABLE IF NOT EXISTS jam_public_consents (
+  song_id UUID NOT NULL REFERENCES jam_songs(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  choice TEXT NOT NULL
+    CONSTRAINT jam_public_consents_choice_check CHECK (choice IN ('yes', 'audio_only', 'no')),
+  decided_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (song_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_jam_public_consents_user ON jam_public_consents (user_id);
+
+-- What being public adds to one track: review, an operator's removal, the
+-- video scan. A track with NO row here is not public (fail closed: a write
+-- that failed after the track was inserted leaves it private, never public).
+-- Rows are written when a song is published (for every live track) and when a
+-- track is added to a published song.
+CREATE TABLE IF NOT EXISTS jam_public_tracks (
+  track_id UUID PRIMARY KEY REFERENCES jam_tracks(id) ON DELETE CASCADE,
+  song_id UUID NOT NULL REFERENCES jam_songs(id) ON DELETE CASCADE,
+  author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- 'recorded': added to a song that was already public (counts toward the
+  -- daily take limit); 'published': there when the song was made public.
+  origin TEXT NOT NULL CONSTRAINT jam_public_tracks_origin_check
+    CHECK (origin IN ('recorded', 'published')),
+  -- Arrived through public access from somebody other than the starter: a
+  -- request in the starter's inbox while it is out of the mix.
+  outside BOOLEAN NOT NULL DEFAULT FALSE,
+  review_state TEXT NOT NULL DEFAULT 'none'
+    CONSTRAINT jam_public_tracks_review_check
+    CHECK (review_state IN ('none', 'pending', 'approved', 'rejected')),
+  reviewed_at TIMESTAMPTZ,
+  removed_at TIMESTAMPTZ,
+  removed_reason TEXT,
+  -- The frame scan of the video (packages/shared/src/jam-public.ts, SCANNING).
+  -- `video_scan_key` is the object the verdict is about: a verdict whose key is
+  -- not the track's current `video_key` is void and the video is not public.
+  video_scan_status TEXT NOT NULL DEFAULT 'none'
+    CONSTRAINT jam_public_tracks_video_check
+    CHECK (video_scan_status IN ('none', 'pending', 'passed', 'flagged', 'rejected', 'unscanned', 'skipped')),
+  video_scan_key TEXT,
+  video_scan_provider TEXT,
+  video_scan_score DOUBLE PRECISION,
+  video_scan_labels JSONB NOT NULL DEFAULT '[]'::jsonb,
+  video_scan_frames INTEGER,
+  video_scanned_at TIMESTAMPTZ,
+  video_claimed_at TIMESTAMPTZ,
+  video_attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_song ON jam_public_tracks (song_id);
+CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_author ON jam_public_tracks (author_id);
+CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_recorded
+  ON jam_public_tracks (author_id, created_at) WHERE origin = 'recorded';
+CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_video_pending
+  ON jam_public_tracks (created_at) WHERE video_scan_status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_review
+  ON jam_public_tracks (created_at) WHERE review_state = 'pending';
+
+-- The image scanner's verdict on one cover object, keyed by the ledger row
+-- that names it: a replaced cover is a new upload and a new verdict.
+CREATE TABLE IF NOT EXISTS jam_public_cover_scans (
+  upload_id UUID PRIMARY KEY REFERENCES jam_uploads(id) ON DELETE CASCADE,
+  song_id UUID NOT NULL REFERENCES jam_songs(id) ON DELETE CASCADE,
+  status TEXT NOT NULL
+    CONSTRAINT jam_public_cover_scans_status_check
+    CHECK (status IN ('pending', 'passed', 'flagged', 'rejected', 'unscanned')),
+  provider TEXT,
+  score DOUBLE PRECISION,
+  labels JSONB NOT NULL DEFAULT '[]'::jsonb,
+  scanned_at TIMESTAMPTZ,
+  claimed_at TIMESTAMPTZ,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_jam_public_cover_scans_song ON jam_public_cover_scans (song_id);
+CREATE INDEX IF NOT EXISTS idx_jam_public_cover_scans_pending
+  ON jam_public_cover_scans (created_at) WHERE status = 'pending';
+
+-- Objects a scan rejected, kept as evidence (docs/CONTENT_SAFETY.md,
+-- "Retention"). No foreign key on purpose: the row outlives the song, the
+-- track and the server, and every jam key reader (`jam-keys.ts`, the sweeps)
+-- skips a key named here, so a cascade never deletes the evidence.
+CREATE TABLE IF NOT EXISTS jam_public_quarantine (
+  storage_key TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CONSTRAINT jam_public_quarantine_kind_check CHECK (kind IN ('cover', 'video')),
+  song_id UUID,
+  track_id UUID,
+  uploader_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  scan_provider TEXT,
+  scan_score DOUBLE PRECISION,
+  scan_labels JSONB NOT NULL DEFAULT '[]'::jsonb,
+  quarantined_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_jam_public_quarantine_at ON jam_public_quarantine (quarantined_at);
+
+-- One like per account per song. `jam_public_songs.likes_count` is kept in
+-- step in the same transaction.
+CREATE TABLE IF NOT EXISTS jam_public_likes (
+  song_id UUID NOT NULL REFERENCES jam_songs(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (song_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_jam_public_likes_user ON jam_public_likes (user_id);
+
+-- A play counted: one row per song per viewer per clock hour. `viewer` is an
+-- HMAC of the account id or the address, never either in the clear. The
+-- primary key IS the dedupe, on every machine at once; rows older than a few
+-- hours are swept.
+CREATE TABLE IF NOT EXISTS jam_public_play_marks (
+  song_id UUID NOT NULL REFERENCES jam_songs(id) ON DELETE CASCADE,
+  viewer TEXT NOT NULL,
+  hour_bucket INTEGER NOT NULL,
+  PRIMARY KEY (song_id, viewer, hour_bucket)
+);
+CREATE INDEX IF NOT EXISTS idx_jam_public_play_marks_hour ON jam_public_play_marks (hour_bucket);
+
+-- Reports of a public song or one part of it, by a signed-in person. The
+-- moderation record is the row in `reports` (the instance queue) this points
+-- at; this table is what the auto-hide counts (distinct reporters per song)
+-- and the daily report limit reads.
+CREATE TABLE IF NOT EXISTS jam_public_reports (
+  id BIGSERIAL PRIMARY KEY,
+  song_id UUID NOT NULL REFERENCES jam_songs(id) ON DELETE CASCADE,
+  track_id UUID,
+  reporter_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  reason TEXT NOT NULL,
+  details TEXT,
+  report_id BIGINT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_jam_public_reports_song ON jam_public_reports (song_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_jam_public_reports_reporter ON jam_public_reports (reporter_id, created_at);
+
+-- Accounts an operator blocked from publishing and recording publicly.
+CREATE TABLE IF NOT EXISTS jam_public_blocks (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  reason TEXT,
+  blocked_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  blocked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Every operator and moderator action on the public version. No foreign keys:
+-- an audit row outlives what it is about. `actor_id` NULL with actor_kind
+-- 'dashboard' is the machine token.
+CREATE TABLE IF NOT EXISTS jam_public_audit (
+  id BIGSERIAL PRIMARY KEY,
+  action TEXT NOT NULL,
+  song_id UUID,
+  track_id UUID,
+  user_id UUID,
+  actor_id UUID,
+  actor_kind TEXT NOT NULL,
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_jam_public_audit_song ON jam_public_audit (song_id, created_at);

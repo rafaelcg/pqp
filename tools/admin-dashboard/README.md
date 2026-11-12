@@ -223,6 +223,30 @@ as an operator does tomorrow: review the version (`app-review`, `approved`), set
 the app `live` and `globalEnabled`, then `server-apps` for the server, and turn
 the `apps` flag on for that server (`PUT /api/admin/flag-overrides`).
 
+### jams públicas: the list, the review queue and the takedowns
+
+Public jams (`docs/JAM_PUBLIC.md`, contract in `packages/shared/src/jam-public.ts`)
+are dark until the global flag `jam_public` is on. Six routes on the same
+machine token (and the same instance-moderator session), in
+`server/src/api/jam-public-routes.ts` and `server/src/services/jam-public.ts`.
+Exact pathnames: every id travels in the body or the query. No page draws them
+yet; they are here so a takedown never waits for one.
+
+| Route | What it does |
+|---|---|
+| `GET /api/admin/jam-public/songs?status=live\|review\|hidden\|removed\|unpublished\|all&cursor=` | published songs, newest first, 50 a page: status, `listed`, the starter (id, name, handle, whether blocked), the origin server, plays, likes, distinct reporters in the auto-hide window, public parts, `hiddenAt`, `removedReason`. Names people, like the feedback queue |
+| `GET /api/admin/jam-public/queue` | what waits for a human: songs in `review` (a new account's first) or `hidden` (reports), takes in review, and parts whose video the scanner flagged or rejected |
+| `PUT /api/admin/jam-public/unpublish` `{songId, reason}` | takes a song down (`removed`): out of every public read at once, the starter is told with the reason (`jam-public-notice`, kind `removed`) and cannot republish it (409 `jam_public_removed`) |
+| `PUT /api/admin/jam-public/review` `{kind: "song" \| "track", id, decision: "approve" \| "reject", reason?}` | a queued item. `song` approve lists it (and clears a report hide, and restores a `removed` song); reject removes it with the reason. `track` approve makes a new account's take public; reject keeps it out (the track itself stays in its song) |
+| `PUT /api/admin/jam-public/remove-part` `{trackId, reason}` | one part out of the public version; the track stays in its song and channel. Its author is told |
+| `PUT /api/admin/jam-public/block` `{userId, blocked, reason?}` | blocks (or unblocks) an account from publishing and recording publicly; every song and part of theirs leaves the public reads at once |
+
+Every write adds a `jam_public_audit` row (action, song, track, user, actor:
+`dashboard` with a NULL id for the token, `operator` and the id for a session,
+reason). `GET /api/admin/metrics` carries a `jamPublic` block (published, in
+review, hidden by reports, removed, plays, likes, verdicts by status,
+quarantined objects, and per-process refusals by limit).
+
 ### lista de espera: turning "somebody asked" into "somebody can now stream"
 
 First section in the pane, because opening **controles** during a launch is,

@@ -117,7 +117,7 @@ async function asUser<T = Record<string, unknown>>(
 }
 
 describe("matchAdminMachineRoute", () => {
-  it("is exactly the twenty-four routes, and account deletion is not one of them", () => {
+  it("is exactly the listed routes, and account deletion is not one of them", () => {
     const reachable = [
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
@@ -145,6 +145,12 @@ describe("matchAdminMachineRoute", () => {
       ["PUT", "/api/admin/server-apps"],
       ["POST", "/api/admin/app-disable-everywhere"],
       ["POST", "/api/admin/app-session-end"],
+      ["GET", "/api/admin/jam-public/songs"],
+      ["GET", "/api/admin/jam-public/queue"],
+      ["PUT", "/api/admin/jam-public/unpublish"],
+      ["PUT", "/api/admin/jam-public/review"],
+      ["PUT", "/api/admin/jam-public/remove-part"],
+      ["PUT", "/api/admin/jam-public/block"],
     ] as const;
     for (const [method, path] of reachable) {
       expect(matchAdminMachineRoute(method, path)).not.toBeNull();
@@ -179,6 +185,10 @@ describe("matchAdminMachineRoute", () => {
       ["PUT", "/api/admin/flags/watch_party_waitlist"],
       ["GET", "/api/admin/channel-layout"],
       ["PUT", "/api/servers/00000000-0000-4000-8000-000000000001/channel-layout"],
+      ["POST", "/api/admin/jam-public/unpublish"],
+      ["GET", "/api/admin/jam-public/block"],
+      ["DELETE", "/api/admin/jam-public/songs"],
+      ["PUT", "/api/admin/jam-public/songs/00000000-0000-4000-8000-000000000001"],
     ] as const;
     for (const [method, path] of refused) {
       expect(matchAdminMachineRoute(method, path)).toBeNull();
