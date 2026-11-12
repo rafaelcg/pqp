@@ -289,7 +289,8 @@ function StageTile({
       return;
     }
     return attachVideo(track.id, element);
-  }, [attachVideo, track.id]);
+    // `hasVideo` is a dependency: the <video> mounts and unmounts with it, and the follower follows the element
+  }, [attachVideo, track.id, hasVideo]);
   return (
     <button
       type="button"

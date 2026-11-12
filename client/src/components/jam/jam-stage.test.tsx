@@ -131,6 +131,32 @@ describe("the stage's mosaic", () => {
     expect(new Set(attachVideo.mock.calls.map((call) => call[1])).size).toBe(2);
   });
 
+  it("attaches a video that arrives on a track already on the stage, and lets go of one that leaves", () => {
+    const detach = vi.fn();
+    const attachVideo = vi.fn((_trackId: string, _element: HTMLVideoElement) => detach);
+    const draw = (videoUrl: string | null) =>
+      act(() =>
+        root.render(
+          <JamStage
+            tracks={[track({ id: "same", videoUrl })]}
+            viewerId={null}
+            lanes={{}}
+            anySolo={false}
+            attachVideo={attachVideo}
+            clock={fakeClock().clock}
+            onSolo={() => undefined}
+          />,
+        ),
+      );
+    draw(null);
+    expect(attachVideo).not.toHaveBeenCalled();
+    draw("https://example.test/new.webm");
+    expect(attachVideo).toHaveBeenCalledTimes(1);
+    expect(attachVideo.mock.calls[0]![0]).toBe("same");
+    draw(null);
+    expect(detach).toHaveBeenCalledTimes(1);
+  });
+
   it("draws a mosaic even when no recording has a video", () => {
     const { stage } = render(2, { videoEvery: 0 });
     expect(stage.querySelectorAll("[data-jam-stage-tile]")).toHaveLength(2);
