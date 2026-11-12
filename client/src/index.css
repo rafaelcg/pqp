@@ -219,17 +219,17 @@
    * of those", so no two parts of a song are the same colour unless they are
    * the same instrument.
    */
-  --color-tile-guitar: oklch(0.32 0.06 90);
+  --color-tile-guitar: oklch(0.31 0.045 95);
   --color-tile-guitar-ink: oklch(0.88 0.14 92);
-  --color-tile-bass: oklch(0.3 0.08 255);
+  --color-tile-bass: oklch(0.31 0.065 255);
   --color-tile-bass-ink: oklch(0.8 0.11 255);
-  --color-tile-drums: oklch(0.32 0.08 50);
+  --color-tile-drums: oklch(0.31 0.055 42);
   --color-tile-drums-ink: oklch(0.82 0.13 55);
-  --color-tile-vocals: oklch(0.31 0.08 350);
+  --color-tile-vocals: oklch(0.31 0.06 350);
   --color-tile-vocals-ink: oklch(0.84 0.11 350);
-  --color-tile-keys: oklch(0.3 0.06 195);
+  --color-tile-keys: oklch(0.31 0.045 195);
   --color-tile-keys-ink: oklch(0.85 0.1 195);
-  --color-tile-other: oklch(0.3 0.008 95);
+  --color-tile-other: oklch(0.31 0.006 95);
   --color-tile-other-ink: oklch(0.8 0.012 95);
 
   /* The `* Fallback` names are metric-adjusted local fonts declared in

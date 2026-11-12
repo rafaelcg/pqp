@@ -87,7 +87,9 @@ export function SongArt({
             <StillTile
               key={`part-${cell.index}`}
               instrument={cell.instrument}
-              name={variant === "hero" ? cell.name : undefined}
+              name={cell.name}
+              avatarUrl={cell.avatarUrl}
+              caption={variant === "hero"}
               bars={stillBars(song.previewPeaks, slot, `${song.title}${cell.name}`)}
             />
           );

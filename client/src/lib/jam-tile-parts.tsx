@@ -116,13 +116,16 @@ export function PersonMark({
   avatarUrl,
   name,
   fill,
+  initialFill,
   icon,
   className,
 }: {
   avatarUrl: string | null;
   name: string;
-  /** The instrument's solid fill class (with its dark ink). */
+  /** The instrument's solid fill class (with its dark ink): the badge. */
   fill: string;
+  /** The disc of an initial, when it should not be the badge's colour (the ink on the tile's ground reads on a pastel). */
+  initialFill?: string;
   icon: ReactNode;
   className?: string;
 }) {
@@ -139,7 +142,7 @@ export function PersonMark({
           className="h-full w-full rounded-full object-cover"
         />
       ) : (
-        <span aria-hidden="true" className={join("grid h-full w-full place-items-center rounded-full font-display text-[14cqmin] font-extrabold leading-none", fill)}>
+        <span aria-hidden="true" className={join("grid h-full w-full place-items-center rounded-full font-display text-[14cqmin] font-extrabold leading-none", initialFill ?? fill)}>
           {Array.from(name)[0]?.toUpperCase() ?? "?"}
         </span>
       )}

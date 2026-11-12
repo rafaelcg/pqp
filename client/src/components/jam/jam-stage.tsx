@@ -315,6 +315,7 @@ function StageTile({
             avatarUrl={resolveAvatarUrl(track.authorAvatarUrl)}
             name={track.authorName ?? person}
             fill={look.fill}
+            initialFill={tile.solid}
             icon={<look.icon className="h-[58%] w-[58%]" strokeWidth={2} />}
           />
           <TileLevel track={track} clock={clock} />
@@ -341,7 +342,7 @@ function StageTile({
           </span>
         }
         name={person}
-        label={instrumentName}
+        label={track.label?.trim() || instrumentName.toLocaleLowerCase()}
       />
     </button>
   );
@@ -385,7 +386,7 @@ function TileLevel({ track, clock }: { track: JamTrack; clock: JamClock }) {
       ref={strip}
       count={LEVEL_BARS}
       data-jam-stage-level=""
-      className="flex h-[14cqmin] min-h-4 max-h-10 w-full [--jam-level-gap:clamp(1px,1cqmin,4px)] [--jam-level-w:clamp(2px,1.8cqmin,8px)]"
+      className="flex h-[14cqmin] min-h-4 max-h-10 max-w-[88%] overflow-hidden [--jam-level-gap:clamp(1px,1cqmin,4px)] [--jam-level-w:clamp(2px,1.8cqmin,8px)]"
     />
   );
 }

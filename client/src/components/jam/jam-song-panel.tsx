@@ -386,7 +386,7 @@ export function JamSongPanel({
           {/* with a stage the band is the lanes below, so the header does not repeat it: the key line stays whole */}
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-semibold text-text-secondary">
             {!stageOn && <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-border-strong" />}
-            <span className={cn("min-w-0", stageOn ? "sm:whitespace-nowrap" : "basis-full sm:basis-auto")}>
+            <span className={cn("min-w-0", !stageOn && "basis-full sm:basis-auto")}>
               {song.artist ?? t("jam.original")}
               <span className="max-sm:hidden"> · {viewer?.isAuthor ? t("jam.song.startedByYou") : t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}</span>
             </span>
@@ -408,7 +408,7 @@ export function JamSongPanel({
         )}
         {songMenu.length > 0 && (
           <Menu items={songMenu} align="end">
-            <button type="button" aria-label={t("jam.song.more")} data-jam-song-menu="" className={iconButton}>
+            <button type="button" aria-label={t("jam.song.more")} title={t("jam.song.more")} data-jam-song-menu="" className={iconButton}>
               <MoreHorizontal className="h-5 w-5" aria-hidden />
             </button>
           </Menu>
@@ -417,6 +417,7 @@ export function JamSongPanel({
           type="button"
           onClick={onClose}
           aria-label={t("jam.song.close")}
+          title={t("jam.song.close")}
           className={cn(iconButton, "hidden lg:grid")}
         >
           <X className="h-5 w-5" aria-hidden />
@@ -809,6 +810,7 @@ function SongCover({
           onClick={onEdit}
           data-jam-cover-edit=""
           aria-label={covered ? t("jam.edit.changePhoto") : t("jam.edit.addPhoto")}
+          title={covered ? t("jam.edit.changePhoto") : t("jam.edit.addPhoto")}
           className="absolute inset-0 rounded-[inherit] text-on-media outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           <span

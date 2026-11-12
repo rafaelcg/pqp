@@ -38,11 +38,12 @@ function Meta({ song, className, stacked = false }: { song: PublicJamSong; class
   const locale = detectLocale();
   const origin = song.origin?.name ?? (song.startedBy.handle ? `@${song.startedBy.handle}` : personLabel(song.startedBy));
   const stats = (
-    <span className="flex shrink-0 items-center gap-x-1.5 whitespace-nowrap">
+    <span className={cn("flex items-center gap-x-1.5", stacked ? "flex-wrap gap-y-0" : "shrink-0 whitespace-nowrap")}>
       <span>{jt("card.plays", { count: song.plays, countLabel: compactCount(song.plays, locale) })}</span>
       {song.likes > 1 && (
         <>
-          <span aria-hidden="true">·</span>
+          {/* on a card the likes may wrap under the plays in a narrow language, so no separator dangles */}
+          {!stacked && <span aria-hidden="true">·</span>}
           <span className="inline-flex items-center gap-1" aria-label={jt("card.likes", { count: song.likes })}>
             <Heart className="h-3 w-3" aria-hidden />
             {song.likes}
@@ -228,7 +229,7 @@ function Tabs({
             data-jam-tab={id}
             onClick={() => onTab(id)}
             className={cn(
-              "relative h-11 shrink-0 rounded-[var(--radius-control)] px-2.5 text-[15px] font-extrabold outline-none sm:px-3 sm:text-base transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none",
+              "relative h-11 shrink-0 rounded-[var(--radius-control)] px-2.5 text-[15px] font-extrabold outline-none sm:px-3 sm:text-base transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring motion-reduce:transition-none",
               tab === id ? "text-text" : "text-text-secondary hover:text-text",
               "after:absolute after:inset-x-2.5 after:bottom-0 sm:after:inset-x-3 after:h-[3px] after:rounded-full",
               tab === id ? "after:bg-accent" : "after:bg-transparent",

@@ -53,11 +53,13 @@ function PartFace({ track, player, covered }: { track: PublicJamTrack; player: P
     };
   }, [track, player, scale, covered]);
   return (
-    <div className={cn("absolute inset-0 flex flex-col items-center justify-center gap-[5cqmin] pb-[9cqmin] [container:face/size]", look.tile.ground, look.tile.ink)}>
+    <div className={cn("absolute inset-0 [container:face/size]", look.tile.ground, look.tile.ink)}>
+      <div className="flex h-full w-full flex-col items-center justify-center gap-[5cqmin] pb-[9cqmin]">
       <PersonMark
         avatarUrl={track.person.avatarUrl}
         name={personLabel(track.person)}
         fill={look.fill}
+        initialFill={look.tile.solid}
         icon={<look.icon className="h-[58%] w-[58%]" strokeWidth={2} />}
       />
       <LevelStrip
@@ -65,6 +67,7 @@ function PartFace({ track, player, covered }: { track: PublicJamTrack; player: P
         count={LEVEL_BARS}
         className="hidden h-[11cqmin] min-h-4 max-h-9 @min-[10rem]/face:flex"
       />
+      </div>
     </div>
   );
 }

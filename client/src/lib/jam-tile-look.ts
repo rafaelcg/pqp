@@ -25,15 +25,17 @@ export interface JamTileLook {
   ink: string;
   /** The dashed outline of an empty slot. */
   dashed: string;
+  /** A solid disc in the ink with the ground as its letter: a person with no picture, readable on their own ground. */
+  solid: string;
 }
 
 export const JAM_TILE_LOOK: Record<JamTileInstrument, JamTileLook> = {
-  guitar: { ground: "bg-tile-guitar", ink: "text-tile-guitar-ink", dashed: "border-tile-guitar-ink" },
-  bass: { ground: "bg-tile-bass", ink: "text-tile-bass-ink", dashed: "border-tile-bass-ink" },
-  drums: { ground: "bg-tile-drums", ink: "text-tile-drums-ink", dashed: "border-tile-drums-ink" },
-  vocals: { ground: "bg-tile-vocals", ink: "text-tile-vocals-ink", dashed: "border-tile-vocals-ink" },
-  keys: { ground: "bg-tile-keys", ink: "text-tile-keys-ink", dashed: "border-tile-keys-ink" },
-  other: { ground: "bg-tile-other", ink: "text-tile-other-ink", dashed: "border-tile-other-ink" },
+  guitar: { ground: "bg-tile-guitar", ink: "text-tile-guitar-ink", dashed: "border-tile-guitar-ink", solid: "bg-tile-guitar-ink text-tile-guitar" },
+  bass: { ground: "bg-tile-bass", ink: "text-tile-bass-ink", dashed: "border-tile-bass-ink", solid: "bg-tile-bass-ink text-tile-bass" },
+  drums: { ground: "bg-tile-drums", ink: "text-tile-drums-ink", dashed: "border-tile-drums-ink", solid: "bg-tile-drums-ink text-tile-drums" },
+  vocals: { ground: "bg-tile-vocals", ink: "text-tile-vocals-ink", dashed: "border-tile-vocals-ink", solid: "bg-tile-vocals-ink text-tile-vocals" },
+  keys: { ground: "bg-tile-keys", ink: "text-tile-keys-ink", dashed: "border-tile-keys-ink", solid: "bg-tile-keys-ink text-tile-keys" },
+  other: { ground: "bg-tile-other", ink: "text-tile-other-ink", dashed: "border-tile-other-ink", solid: "bg-tile-other-ink text-tile-other" },
 };
 
 /** An instrument id a newer server may send: anything unknown is "other". */

@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import { LevelStrip, MoreBody, StackDot, TileCaption } from "@/lib/jam-tile-parts";
+import { LevelStrip, MoreBody, PersonMark, StackDot, TileCaption } from "@/lib/jam-tile-parts";
 import { INSTRUMENT_LOOK, type Instrument } from "./instruments";
 import type { MosaicLayout } from "./mosaic";
 import { cn } from "./util";
@@ -90,36 +90,40 @@ export function Badge({ instrument, className }: { instrument: Instrument; class
 }
 
 /**
- * The still stand-in for a part on a list: its colour, its glyph and a strip of
- * the song's own peaks, so no two squares of a card are the same pattern.
+ * The still stand-in for a part on a list: the person (their picture, or an
+ * initial) on the instrument's own ground with a strip of the song's own peaks,
+ * so a card is a row of faces and no two squares of it are the same.
  */
 export function StillTile({
   instrument,
   bars,
   name,
+  avatarUrl,
+  caption = false,
 }: {
   instrument: Instrument;
   bars: readonly number[];
+  name: string;
+  avatarUrl: string | null;
   /** The person's name, drawn as a caption when the picture is large enough to read it. */
-  name?: string;
+  caption?: boolean;
 }) {
   const look = INSTRUMENT_LOOK[instrument];
+  const Icon = look.icon;
   return (
-    <div
-      aria-hidden="true"
-      className={cn(
-        "@container/tile absolute inset-0 flex flex-col items-center justify-center gap-[7%]",
-        look.tile.ground,
-        look.tile.ink,
-      )}
-    >
-      <Glyph instrument={instrument} className="h-[26%] w-[26%] min-h-5 min-w-5" />
-      <LevelStrip
-        count={bars.length}
-        values={bars}
-        className="hidden h-[16%] [--jam-level-gap:3px] @min-[5rem]/tile:flex"
+    // the container is the tile; the column that centres the person is its child, so its own gaps can use the tile's units
+    <div aria-hidden="true" className={cn("absolute inset-0 [container:tile/size]", look.tile.ground, look.tile.ink)}>
+      <div className="flex h-full w-full flex-col items-center justify-center gap-[5cqmin] pb-[6cqmin]">
+      <PersonMark
+        avatarUrl={avatarUrl}
+        name={name}
+        fill={look.fill}
+        initialFill={look.tile.solid}
+        icon={<Icon className="h-[58%] w-[58%]" strokeWidth={2} />}
       />
-      {name && (
+      <LevelStrip count={bars.length} values={bars} className="hidden h-[10cqmin] max-h-6 [--jam-level-gap:3px] @min-[7rem]/tile:flex" />
+      </div>
+      {caption && (
         <span className="hidden @min-[9rem]/tile:contents">
           <TileCaption mark={<Badge instrument={instrument} className="h-4 w-4" />} name={name} tone="ground" />
         </span>
@@ -133,7 +137,8 @@ export function NeedStill({ instrument, label }: { instrument: Instrument; label
   const look = INSTRUMENT_LOOK[instrument];
   return (
     <div aria-hidden="true" className="@container/tile absolute inset-0 grid place-items-center bg-surface-2">
-      <span className={cn("pointer-events-none absolute inset-[7%] rounded-[var(--radius-card)] border-2 border-dashed", look.tile.dashed)} />
+      {/* the dashed outline is the hero's; a small card slot is a quiet neutral tile with the badge */}
+      {label && <span className={cn("pointer-events-none absolute inset-[7%] rounded-[var(--radius-card)] border-2 border-dashed", look.tile.dashed)} />}
       <span className="relative flex flex-col items-center gap-2 px-2 text-center">
         <Badge instrument={instrument} className="h-8 w-8 @min-[9rem]/tile:h-10 @min-[9rem]/tile:w-10" />
         {label && <span className="hidden text-sm font-bold leading-tight text-text @min-[9rem]/tile:block">{label}</span>}

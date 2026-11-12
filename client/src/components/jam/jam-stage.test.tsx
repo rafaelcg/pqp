@@ -252,7 +252,7 @@ describe("the stage's mosaic", () => {
     const chips = [...stage.querySelectorAll("[data-jam-stage-chip]")];
     expect(chips.map((chip) => chip.querySelector("[data-jam-caption-person]")!.textContent)).toEqual(["Pessoa 0", "you"]);
     // a tile big enough also says the instrument in words, after the name
-    expect(chips.map((chip) => chip.querySelector("[data-jam-caption-label]")!.textContent)).toEqual([" · Guitar", " · Bass"]);
+    expect(chips.map((chip) => chip.querySelector("[data-jam-caption-label]")!.textContent)).toEqual([" · guitar", " · bass"]);
     expect(chips[0]!.querySelector("span[aria-hidden]")!.className).toMatch(/bg-inst-guitar/);
   });
 

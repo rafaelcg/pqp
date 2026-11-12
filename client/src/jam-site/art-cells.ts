@@ -19,7 +19,7 @@ import { asInstrument, type Instrument } from "./instruments";
  * end (with the instruments behind it), not a badge floating on a picture.
  */
 export type ArtCell =
-  | { kind: "part"; instrument: Instrument; name: string; index: number }
+  | { kind: "part"; instrument: Instrument; name: string; avatarUrl: string | null; index: number }
   | { kind: "need"; instrument: Instrument }
   | { kind: "more"; count: number; instruments: Instrument[] };
 
@@ -31,6 +31,7 @@ export function artCells(song: Pick<PublicJamSong, "parts" | "needs">, max: numb
     kind: "part" as const,
     instrument: asInstrument(part.instrument),
     name: part.person.name,
+    avatarUrl: part.person.avatarUrl ?? null,
     index,
   }));
   const room = Math.max(1, max);
