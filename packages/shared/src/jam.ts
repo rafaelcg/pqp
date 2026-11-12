@@ -153,9 +153,16 @@ import { z } from "zod";
  *           minutes of it is ~57 MB); the recorder encodes first.
  *   video   JAM_VIDEO_CONTENT_TYPES, at most JAM_VIDEO_MAX_BYTES. Not scanned,
  *           like every audio and video object in the product
- *           (`docs/CONTENT_SAFETY.md`).
+ *           (`docs/CONTENT_SAFETY.md`). Chrome records WebM, which iOS and
+ *           Safari cannot play, so the worker makes an H.264 + AAC MP4 copy of
+ *           any camera file that is not one already (`speech_jobs` kind
+ *           `jam_video_transcode`, `services/jam-video-transcode.ts`), same
+ *           duration and same time zero, and a track read then lists both in
+ *           `videoSources`, the copy first and in `videoUrl`. Until the copy
+ *           exists (or when the worker is down) the recorded file is what
+ *           `videoUrl` says. Nothing in the upload changes.
  *
- *   cover   (a song's picture, not part of a track) JAM_COVER_CONTENT_TYPES,
+ *   cover  (a song's picture, not part of a track) JAM_COVER_CONTENT_TYPES,
  *           at most JAM_COVER_MAX_BYTES. The web client frames it square and
  *           sends a JPEG of `JAM_COVER_SIZE` pixels. Same three steps with a
  *           different third one: `PUT /api/jam-songs/:songId/cover` with the
@@ -668,6 +675,15 @@ export type UpdateJamSongRequest = z.infer<typeof updateJamSongSchema>;
 
 // ---------------------------------------------------------------- tracks
 
+/** One file a track's video exists as: a presigned GET and what it is. */
+export const jamVideoSourceSchema = z.object({
+  url: z.string(),
+  /** Bare, without `;codecs=`: `video/mp4` or `video/webm`. */
+  contentType: z.string(),
+  bytes: z.number().int().nonnegative(),
+});
+export type JamVideoSource = z.infer<typeof jamVideoSourceSchema>;
+
 /**
  * One track, shared by every viewer. `audioUrl` and `videoUrl` are presigned
  * GETs minted when the track was read, valid until `mediaExpiresAt` (the
@@ -690,10 +706,26 @@ export const jamTrackSchema = z.object({
   audioUrl: z.string(),
   audioContentType: z.string(),
   audioBytes: z.number().int().nonnegative(),
-  /** Null when the track has no video. */
+  /**
+   * Null when the track has no video. THE BEST FILE FOR EVERY PLAYER: the
+   * H.264 + AAC MP4 copy (`jamVideoSourceSchema`) once the worker made one,
+   * the recorded file until then. A client that reads only this field and its
+   * type plays everywhere the copy exists; one that wants to choose reads
+   * `videoSources`.
+   */
   videoUrl: z.string().nullable(),
   videoContentType: z.string().nullable(),
   videoBytes: z.number().int().nonnegative().nullable(),
+  /**
+   * Every file the track's video exists as, best first, each with its own
+   * type. The recorded file is always last (WebM from Chrome, MP4 from
+   * Safari); an MP4 copy made by the worker is first. Chrome can play both,
+   * Safari and iOS only the MP4: a `<video>` takes the first one
+   * `canPlayType` accepts (`client/src/lib/jam-video-source.ts`). Empty or
+   * absent when there is no video, and absent from a server older than this
+   * field, so read it as `videoSources ?? []`.
+   */
+  videoSources: z.array(jamVideoSourceSchema).optional(),
   mediaExpiresAt: z.string(),
   /** See "THE TIMELINE" in the header. */
   offsetMs: z.number(),

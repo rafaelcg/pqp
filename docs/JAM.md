@@ -314,6 +314,48 @@ announce never fails the write.
   retries); every table is new (pitfall 22). `db-boot-schema.test.ts` runs it
   under a held lock.
 
+### The MP4 copy of a camera video (iOS and Safari)
+
+Chrome records the camera as WebM, which AVPlayer on iOS and Safari cannot
+play, so a take's video was blank on every iPhone. The worker therefore makes an
+H.264 + AAC MP4 copy (`+faststart`, constant 30 fps, same duration, same time
+zero) beside the original, and a track read offers it first.
+
+- **Where it runs.** A `speech_jobs` row of kind `jam_video_transcode` keyed by
+  `track_id`, queued in the transaction that inserts a track with a video, and
+  by `enqueueMissingJamVideoTranscodes` (job `jam-video-backfill`, a minute)
+  for every video recorded before this existed: newest first, never more than 10
+  waiting, claimed ONE at a time in a lane of its own. Only a process whose
+  ffmpeg has libx264 and AAC claims it (the `worker` image; the API container
+  never does), so with the worker down nothing breaks: the rows wait.
+- **What it does with a file.** An MP4 that already is H.264 + AAC with the
+  `moov` first and not fragmented is left alone (`last_error =
+  'already-playable'`, no second object). The same codecs in MediaRecorder's
+  fragmented MP4 are re-wrapped with the streams copied. Everything else (WebM,
+  VP9 in MP4) is re-encoded: libx264 Main, CRF 23 capped at 1800 kbps, even
+  sides, AAC 96 kbps. It never trims, pads or shifts: the first frame and the
+  first audio sample keep their times (pinned on real ffmpeg by
+  `speech/video-transcode.test.ts`, a flash and a click found again in the
+  output). The input is read through a named demuxer with only the `file`
+  protocol, never probed.
+- **Reads.** `videoUrl`, `videoContentType` and `videoBytes` become the copy's
+  once it is confirmed; `videoSources` lists every file, copy first, original
+  last, each with its type, and the web player picks the first one
+  `canPlayType` accepts. Until then, and whenever the columns are empty, a read
+  is what it always was, so an older client and a worker that is down both land
+  on the original.
+- **Schema.** `jam_tracks.video_mp4_key`, `video_mp4_content_type`,
+  `video_mp4_bytes` (nullable; the key is reserved before the PUT and the type
+  written last, so a half-made copy is never offered); `speech_jobs.track_id`
+  with the kind and the CHECKs widened, guarded like the Baú captions'.
+- **Deletes.** The sweep, a channel, a server and an account delete take the
+  copy with the original (`jam-keys.ts`); the job row cascades with the track.
+- **Failures are visible.** `jamVideo` on `GET /api/admin/metrics`: `failed` (no
+  copy and the job gave up: no picture on iOS) belongs at 0, `waiting`,
+  `queue.oldestQueuedSeconds` (nothing is claiming) and `jobs24h`. Every failure
+  logs `jamVideo.transcode.failed trackId=... attempt=... next=... reason=...`
+  and a success `jamVideo.transcode.done`.
+
 ## Phones and older clients
 
 Both native clients leave a channel type they do not know out of the list (iOS

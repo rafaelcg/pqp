@@ -23,6 +23,7 @@ import {
   type JamJoinMode,
   type JamSongSummary,
   type JamTrack,
+  type JamVideoSource,
   type JamUploadKind,
   type JamUploadTicket,
   type ListJamSongsQuery,
@@ -43,6 +44,7 @@ import {
   presignPut,
 } from "../lib/s3.js";
 import { attachmentUrlTtlSeconds } from "./attachments.js";
+import { enqueueJamVideoTranscode } from "./jam-video-transcode.js";
 
 /**
  * Jam channels: songs, tracks, votes and the upload ledger. The contract and
@@ -133,6 +135,10 @@ export interface JamTrackRow {
   video_key: string | null;
   video_content_type: string | null;
   video_bytes: string | null;
+  /** The worker's MP4 copy (null until it is made); the type is set last and is what a read checks. */
+  video_mp4_key: string | null;
+  video_mp4_content_type: string | null;
+  video_mp4_bytes: string | null;
   offset_ms: number;
   trim_start_ms: number;
   trim_end_ms: number;
@@ -382,8 +388,36 @@ function signedUrl(key: string, ttlSeconds: number): string {
   return isStorageConfigured() ? presignGet(key, { ttlSeconds }) : "";
 }
 
+/**
+ * The files a track's video exists as, best first: the worker's MP4 copy (once
+ * its content type is set, which is the last write of the job), then the
+ * recorded file. See `jamVideoSourceSchema`.
+ */
+function videoSourcesOf(row: JamTrackRow, ttl: number): JamVideoSource[] {
+  const sources: JamVideoSource[] = [];
+  if (row.video_mp4_key && row.video_mp4_content_type) {
+    sources.push({
+      url: signedUrl(row.video_mp4_key, ttl),
+      contentType: row.video_mp4_content_type,
+      bytes: row.video_mp4_bytes === null ? 0 : Number(row.video_mp4_bytes),
+    });
+  }
+  if (row.video_key) {
+    sources.push({
+      url: signedUrl(row.video_key, ttl),
+      contentType: row.video_content_type ?? "video/webm",
+      bytes: row.video_bytes === null ? 0 : Number(row.video_bytes),
+    });
+  }
+  return sources;
+}
+
 function mapTrack(row: TrackJoinRow): JamTrack {
   const ttl = attachmentUrlTtlSeconds();
+  const videoSources = videoSourcesOf(row, ttl);
+  // `videoUrl` stays the one best file for a client that reads no list: the
+  // copy when there is one, the recorded file otherwise (null for no video).
+  const best = videoSources[0] ?? null;
   return {
     id: row.id,
     songId: row.song_id,
@@ -397,9 +431,10 @@ function mapTrack(row: TrackJoinRow): JamTrack {
     audioUrl: signedUrl(row.audio_key, ttl),
     audioContentType: row.audio_content_type,
     audioBytes: Number(row.audio_bytes),
-    videoUrl: row.video_key ? signedUrl(row.video_key, ttl) : null,
-    videoContentType: row.video_content_type,
-    videoBytes: row.video_bytes === null ? null : Number(row.video_bytes),
+    videoUrl: best ? best.url : null,
+    videoContentType: best ? best.contentType : row.video_content_type,
+    videoBytes: best ? best.bytes : row.video_bytes === null ? null : Number(row.video_bytes),
+    videoSources,
     mediaExpiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
     offsetMs: row.offset_ms,
     trimStartMs: row.trim_start_ms,
@@ -1287,6 +1322,11 @@ export async function addJamTrack(
       ],
     );
     trackId = inserted.rows[0]!.id;
+    // The MP4 copy for iOS and Safari: a row and a NOTIFY, in this transaction,
+    // so a track is never committed without its job (and a rollback has none).
+    if (video) {
+      await enqueueJamVideoTranscode(client, trackId);
+    }
     await client.query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [song.id]);
     await client.query("COMMIT");
   } catch (error) {
@@ -1564,8 +1604,9 @@ export async function sweepJamMedia(): Promise<number> {
     id: string;
     audio_key: string;
     video_key: string | null;
+    video_mp4_key: string | null;
   }>(
-    `SELECT id, audio_key, video_key FROM jam_tracks
+    `SELECT id, audio_key, video_key, video_mp4_key FROM jam_tracks
       WHERE deleted_at IS NOT NULL AND media_purged_at IS NULL
         AND deleted_at < NOW() - INTERVAL '${PURGE_GRACE}'
       ORDER BY deleted_at LIMIT ${SWEEP_BATCH}`,
@@ -1575,6 +1616,10 @@ export async function sweepJamMedia(): Promise<number> {
       await deleteObject(row.audio_key);
       if (row.video_key) {
         await deleteObject(row.video_key);
+      }
+      // The worker's MP4 copy, named on the row since before it was PUT.
+      if (row.video_mp4_key) {
+        await deleteObject(row.video_mp4_key);
       }
     } catch (error) {
       console.error(
