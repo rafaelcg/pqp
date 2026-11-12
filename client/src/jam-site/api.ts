@@ -32,6 +32,27 @@ function base(): string {
   return import.meta.env.VITE_API_URL ?? "";
 }
 
+/**
+ * An address the API hands out that points back at ITSELF (`/api/avatars/<id>`,
+ * a server's icon) is root-relative, because the server does not know its own
+ * public origin. The page does: this site is `jam.pqp.gg` and the API is
+ * `api.pqp.gg`, two origins, with no dev proxy in a production build, so a bare
+ * `/api/avatars/x` resolves against the site, 404s, and every person in the
+ * mosaic is an initial. Same rule the app has (`resolveUploadedImageUrl`),
+ * without its dependencies. Absolute URLs (a signed bucket address, a Clerk
+ * picture) pass through; with no API base (same origin) so does everything.
+ */
+export function resolveApiUrl<T extends string | null | undefined>(value: T, apiBase: string = base()): T {
+  if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//")) {
+    return value;
+  }
+  return `${apiBase.replace(/\/+$/, "")}${value}` as T;
+}
+
+function resolvePerson<T extends { avatarUrl: string | null }>(person: T): T {
+  return person.avatarUrl ? { ...person, avatarUrl: resolveApiUrl(person.avatarUrl) } : person;
+}
+
 async function read<T>(path: string, signal?: AbortSignal, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -71,15 +92,18 @@ export interface JamListParams {
   limit?: number;
 }
 
-function normaliseSong(raw: unknown): PublicJamListResponse["songs"][number] {
+export function normaliseSong(raw: unknown): PublicJamListResponse["songs"][number] {
   if (!isObject(raw) || typeof raw.id !== "string" || typeof raw.title !== "string") {
     throw new JamApiError(502, "bad song");
   }
   const song = raw as unknown as PublicJamListResponse["songs"][number];
   return {
     ...song,
+    coverUrl: resolveApiUrl(song.coverUrl ?? null),
+    startedBy: song.startedBy ? resolvePerson(song.startedBy) : song.startedBy,
+    origin: song.origin ? { ...song.origin, iconUrl: resolveApiUrl(song.origin.iconUrl) } : song.origin,
     previewPeaks: Array.isArray(song.previewPeaks) ? song.previewPeaks : [],
-    parts: Array.isArray(song.parts) ? song.parts : [],
+    parts: Array.isArray(song.parts) ? song.parts.map((part) => ({ ...part, person: resolvePerson(part.person) })) : [],
     needs: Array.isArray(song.needs) ? song.needs : [],
     plays: typeof song.plays === "number" ? song.plays : 0,
     likes: typeof song.likes === "number" ? song.likes : 0,
@@ -118,6 +142,7 @@ export async function fetchJam(songId: string, signal?: AbortSignal): Promise<Pu
     const track = raw as unknown as PublicJamSongDetail["tracks"][number];
     return {
       ...track,
+      person: track.person ? resolvePerson(track.person) : track.person,
       peaks: Array.isArray(track.peaks) ? track.peaks : [],
       videoSources: Array.isArray(track.videoSources) ? track.videoSources : [],
       videoUrl: typeof track.videoUrl === "string" ? track.videoUrl : null,

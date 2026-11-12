@@ -154,11 +154,6 @@
   transition: stroke-dashoffset 220ms linear;
 }
 
-/* The song panel's header takes the cover's colours, softly, behind the words. */
-.jam-header-wash {
-  animation: jam-cover-pop 600ms var(--ease-standard) backwards;
-}
-
 .jam-tile-in {
   animation: jam-tile-in 380ms var(--ease-emphasized) backwards;
   animation-delay: calc(var(--jam-i, 0) * 45ms);
@@ -388,8 +383,7 @@
   .jam-panel-in,
   .jam-howto-you,
   .jam-lane-in,
-  .jam-cover-pop,
-  .jam-header-wash {
+  .jam-cover-pop {
     animation: none;
   }
   .jam-cover-ring {

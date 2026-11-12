@@ -4,8 +4,11 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import type { JamClock, JamLaneMix } from "@/hooks/use-jam-playback";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { resolveAvatarUrl } from "@/lib/avatar";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
-import { pickJamVideoUrl } from "@/lib/jam-video-source";
+import { jamTileLook } from "@/lib/jam-tile-look";
+import { LevelStrip, MoreBody, paintLevelStrip, PersonMark, StackDot, TileCaption } from "@/lib/jam-tile-parts";
+import { jamVideoPreload, jamVideoStillSrc, pickJamVideoUrl } from "@/lib/jam-video-source";
 import {
   assignCells,
   levelOverview,
@@ -24,51 +27,26 @@ import { cn } from "@/lib/utils";
  * halves, three are one big and two small, four two by two, up to three by three, and
  * past nine the first eight and a "+N"), from the stage's own aspect: 16:9 on a wide
  * panel, 4:3 on a narrow one and square on a phone, so no tile is ever a sliver. The tiles
- * tile the stage exactly; the 2 px gutter between them is CSS.
+ * tile the stage exactly; the 3 px gutter between them is CSS.
  *
  * A recording with a video shows it, covering its tile and following the song clock
  * (`attachVideo`: the file's time is the song's time minus the take's offset, the same
  * follower the engine runs for a stem), muted: the sound is the mix. One without is a
- * flat tile tinted with its instrument's colour, a large glyph of the instrument and a
- * strip of its own loudness running under it: the take's precomputed peaks around the
- * song clock, written straight to the bars (no analyser, no React), and a still picture
- * of the whole take under reduced motion.
+ * person on the instrument's own OPAQUE ground (`lib/jam-tile-look.ts`, the same table the
+ * public site draws from): their picture or initial as the biggest thing on the tile, the
+ * instrument's badge on it, and a strip of its own loudness running under it: the take's
+ * precomputed peaks around the song clock, written straight to the bars (no analyser, no
+ * React), a still picture of the whole take under reduced motion, and one baseline where
+ * it is silent (`lib/jam-tile.css`).
  *
  * Every tile is a button: it solos its track ("Só essa") and a second press clears it. A
- * track that is muted, or any that is not soloed while another one is, dims. A corner
- * chip names the person, with the instrument's colour as its dot (a colour is never the
- * only cue: the glyph, the lane below and the button's name carry the instrument too).
- * A part the song asks for, and that the viewer may add, is one dashed tile that opens
- * the studio on that instrument. The stage can go full screen where the browser allows.
+ * track that is muted, or any that is not soloed while another one is, dims. A small
+ * caption names the person with the instrument's mark (a colour is never the only cue: the
+ * glyph, the lane below and the button's name carry the instrument too). A part the song
+ * asks for, and that the viewer may add, is one dashed tile on a neutral ground that opens
+ * the studio on that instrument and never takes a larger cell than a recording. The stage
+ * can go full screen where the browser allows.
  */
-
-/** What a tile with no video is made of, per instrument: a tinted flat surface and the glyph's ink. Written out in full for Tailwind. */
-const TILE_LOOK: Record<JamInstrument, { tint: string; glyph: string }> = {
-  guitar: {
-    tint: "bg-[color-mix(in_oklab,var(--color-inst-guitar)_30%,var(--color-surface-2))]",
-    glyph: "text-[color-mix(in_oklab,var(--color-inst-guitar)_78%,var(--color-text))] [:root[data-theme=light]_&]:text-[color-mix(in_oklab,var(--color-inst-guitar)_36%,var(--color-text))]",
-  },
-  bass: {
-    tint: "bg-[color-mix(in_oklab,var(--color-inst-bass)_30%,var(--color-surface-2))]",
-    glyph: "text-[color-mix(in_oklab,var(--color-inst-bass)_78%,var(--color-text))] [:root[data-theme=light]_&]:text-[color-mix(in_oklab,var(--color-inst-bass)_50%,var(--color-text))]",
-  },
-  drums: {
-    tint: "bg-[color-mix(in_oklab,var(--color-inst-drums)_30%,var(--color-surface-2))]",
-    glyph: "text-[color-mix(in_oklab,var(--color-inst-drums)_78%,var(--color-text))] [:root[data-theme=light]_&]:text-[color-mix(in_oklab,var(--color-inst-drums)_50%,var(--color-text))]",
-  },
-  vocals: {
-    tint: "bg-[color-mix(in_oklab,var(--color-inst-vocals)_30%,var(--color-surface-2))]",
-    glyph: "text-[color-mix(in_oklab,var(--color-inst-vocals)_78%,var(--color-text))] [:root[data-theme=light]_&]:text-[color-mix(in_oklab,var(--color-inst-vocals)_50%,var(--color-text))]",
-  },
-  keys: {
-    tint: "bg-[color-mix(in_oklab,var(--color-inst-keys)_30%,var(--color-surface-2))]",
-    glyph: "text-[color-mix(in_oklab,var(--color-inst-keys)_78%,var(--color-text))] [:root[data-theme=light]_&]:text-[color-mix(in_oklab,var(--color-inst-keys)_50%,var(--color-text))]",
-  },
-  other: {
-    tint: "bg-[color-mix(in_oklab,var(--color-inst-other)_30%,var(--color-surface-2))]",
-    glyph: "text-[color-mix(in_oklab,var(--color-inst-other)_78%,var(--color-text))] [:root[data-theme=light]_&]:text-[color-mix(in_oklab,var(--color-inst-other)_50%,var(--color-text))]",
-  },
-};
 
 /** Bars in a tile's level strip: the middle one is under the song clock. */
 const LEVEL_BARS = 29;
@@ -150,6 +128,7 @@ export function JamStage({
     ...shownMissing.map((instrument): Item => ({ kind: "missing", instrument })),
     ...(shown.more > 0 ? [{ kind: "more", count: shown.more } as Item] : []),
   ];
+  const hiddenInstruments = [...new Set(tracks.slice(shown.tracks).map((track) => track.instrument))];
   const layout = mosaicLayout(items.length, aspect);
   const kinds = items.map((item): MosaicKind => item.kind);
   // the cell of each item. The tiles stay in the DOM in the band's own order (the lanes' order, and
@@ -189,7 +168,7 @@ export function JamStage({
     >
       <div
         data-jam-stage-grid=""
-        className="mx-auto grid w-full gap-0.5 overflow-hidden rounded-[var(--radius-card)] bg-surface-1"
+        className="mx-auto grid w-full gap-[3px] overflow-hidden rounded-[var(--radius-card)] bg-surface-1"
         style={
           {
             aspectRatio: `${aspect}`,
@@ -216,7 +195,7 @@ export function JamStage({
               return <MissingTile key={`missing-${item.instrument}`} instrument={item.instrument} place={place} onRecord={() => onRecord?.(item.instrument)} />;
             }
             if (item.kind === "more") {
-              return <MoreTile key="more" count={item.count} place={place} />;
+              return <MoreTile key="more" count={item.count} instruments={hiddenInstruments} place={place} />;
             }
             const track = item.track;
             return (
@@ -230,7 +209,7 @@ export function JamStage({
                 onSolo={() => onSolo(track.id)}
                 attachVideo={attachVideo}
                 clock={clock}
-                eager={tracks.length <= 2}
+                parts={tracks.length}
               />
             );
           })
@@ -252,7 +231,7 @@ export function JamStage({
   );
 }
 
-/** A tile is its own size container, so its glyph, strip and chip follow the tile (a ninth of the stage or all of it), not the window. */
+/** A tile is its own size container, so its glyph, strip and caption follow the tile (a ninth of the stage or all of it), not the window. */
 const TILE_BASE =
   "[container:tile/size] relative block h-full w-full min-h-0 min-w-0 cursor-pointer overflow-hidden p-0 text-left outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring";
 
@@ -265,7 +244,7 @@ function StageTile({
   onSolo,
   attachVideo,
   clock,
-  eager,
+  parts,
 }: {
   track: JamTrack;
   place: CSSProperties;
@@ -275,11 +254,12 @@ function StageTile({
   onSolo: () => void;
   attachVideo: (trackId: string, element: HTMLVideoElement) => () => void;
   clock: JamClock;
-  /** Buffer the picture before play (a still frame on the tile). Off for a big grid: those buffer when they play. */
-  eager: boolean;
+  /** How many recordings the song has: a big song only loads each video's first frame before play. */
+  parts: number;
 }) {
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[track.instrument];
+  const tile = jamTileLook(track.instrument);
   const person = mine ? t("jam.lane.you") : (track.authorName ?? t("jam.tile.anonymous"));
   const instrumentName = t(look.nameKey as MessageKey);
   const hasVideo = Boolean(track.videoUrl);
@@ -292,6 +272,7 @@ function StageTile({
     return attachVideo(track.id, element);
     // `hasVideo` is a dependency: the <video> mounts and unmounts with it, and the follower follows the element
   }, [attachVideo, track.id, hasVideo]);
+  const videoUrl = pickJamVideoUrl(track);
   return (
     <button
       type="button"
@@ -303,15 +284,15 @@ function StageTile({
       aria-label={t("jam.stage.tile", { instrument: instrumentName, name: person })}
       onClick={onSolo}
       style={place}
-      className={cn(TILE_BASE, "group/tile", hasVideo ? "bg-surface-0" : TILE_LOOK[track.instrument].tint)}
+      className={cn(TILE_BASE, "group/tile", hasVideo ? "bg-surface-0" : tile.ground)}
     >
       {hasVideo ? (
         <video
           ref={ref}
-          src={pickJamVideoUrl(track) ?? undefined}
+          src={videoUrl ? jamVideoStillSrc(videoUrl) : undefined}
           muted
           playsInline
-          preload={eager ? "auto" : "metadata"}
+          preload={jamVideoPreload(parts, false)}
           aria-hidden="true"
           tabIndex={-1}
           data-jam-stage-video=""
@@ -325,12 +306,19 @@ function StageTile({
           aria-hidden="true"
           data-jam-stage-art=""
           className={cn(
-            "absolute inset-x-0 top-0 bottom-[20cqmin] flex flex-col items-center justify-center gap-[6cqmin] motion-safe:transition-opacity motion-safe:duration-[var(--duration-base)]",
+            "absolute inset-0 flex flex-col items-center justify-center gap-[5cqmin] pb-[9cqmin] motion-safe:transition-opacity motion-safe:duration-[var(--duration-base)]",
+            tile.ink,
             dimmed && "opacity-40",
           )}
         >
-          <look.icon className={cn("h-[34cqmin] w-[34cqmin] shrink-0", TILE_LOOK[track.instrument].glyph)} strokeWidth={1.75} aria-hidden />
-          <TileLevel track={track} clock={clock} barClassName={look.bar} />
+          <PersonMark
+            avatarUrl={resolveAvatarUrl(track.authorAvatarUrl)}
+            name={track.authorName ?? person}
+            fill={look.fill}
+            initialFill={tile.solid}
+            icon={<look.icon className="h-[58%] w-[58%]" strokeWidth={2} />}
+          />
+          <TileLevel track={track} clock={clock} />
         </span>
       )}
       {soloed && (
@@ -345,21 +333,17 @@ function StageTile({
       {soloed && <span aria-hidden="true" className="pointer-events-none absolute inset-0 ring-[3px] ring-inset ring-accent" />}
       {/* the keyboard's ring is its own layer: a box-shadow on the button is painted under a full-size video */}
       <span aria-hidden="true" className="pointer-events-none absolute inset-0 z-[1] opacity-0 ring-2 ring-inset ring-focus-ring group-focus-visible/tile:opacity-100" />
-      <span
+      <TileCaption
         data-jam-stage-chip=""
-        title={`${instrumentName}, ${person}`}
-        className="absolute bottom-1.5 left-1.5 flex max-w-[calc(100%-0.75rem)] items-center gap-1.5 rounded-full bg-media-scrim/75 py-0.5 pl-1.5 pr-2 text-[11px] font-bold text-on-media backdrop-blur-sm @min-[15rem]/tile:bottom-2 @min-[15rem]/tile:left-2 @min-[15rem]/tile:py-1 @min-[15rem]/tile:pl-2 @min-[15rem]/tile:pr-2.5 @min-[15rem]/tile:text-xs"
-      >
-        <span aria-hidden="true" className={cn("h-2.5 w-2.5 shrink-0 rounded-full", look.fill)} />
-        <look.icon className="hidden h-3 w-3 shrink-0 @min-[10rem]/tile:block" aria-hidden />
-        <span data-jam-stage-instrument="" className="hidden shrink-0 font-medium opacity-80 @min-[15rem]/tile:inline">
-          {instrumentName}
-          {" · "}
-        </span>
-        <span data-jam-stage-person="" className="truncate">
-          {person}
-        </span>
-      </span>
+        tone={hasVideo ? "media" : "ground"}
+        mark={
+          <span aria-hidden="true" className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-full @min-[16rem]/tile:h-5 @min-[16rem]/tile:w-5", look.fill)}>
+            <look.icon className="h-[58%] w-[58%]" strokeWidth={2} />
+          </span>
+        }
+        name={person}
+        label={track.label?.trim() || instrumentName.toLocaleLowerCase()}
+      />
     </button>
   );
 }
@@ -368,18 +352,16 @@ function StageTile({
  * The loudness of one take as a strip of bars, the middle one under the song clock. Written
  * straight to the bars' transforms when the peak under the clock changes, so it costs a
  * handful of style writes a second and no re-render, and no analyser node sits on the audio
- * graph. Where motion is not wanted it is the whole take as a still picture.
+ * graph. Where motion is not wanted it is the whole take as a still picture. A silent stretch
+ * is one baseline (`lib/jam-tile.css`), not a row of dots.
  */
-function TileLevel({ track, clock, barClassName }: { track: JamTrack; clock: JamClock; barClassName: string }) {
+function TileLevel({ track, clock }: { track: JamTrack; clock: JamClock }) {
   const reduced = usePrefersReducedMotion();
-  const bars = useRef<(HTMLSpanElement | null)[]>([]);
+  const strip = useRef<HTMLSpanElement | null>(null);
   const paint = useCallback((values: readonly number[]) => {
-    values.forEach((value, index) => {
-      const bar = bars.current[index];
-      if (bar) {
-        bar.style.transform = `scaleY(${(0.07 + 0.93 * value).toFixed(3)})`;
-      }
-    });
+    if (strip.current) {
+      paintLevelStrip(strip.current, values);
+    }
   }, []);
   const { peaks, offsetMs, trimStartMs, trimEndMs, durationMs } = track;
   useEffect(() => {
@@ -400,28 +382,20 @@ function TileLevel({ track, clock, barClassName }: { track: JamTrack; clock: Jam
     });
   }, [clock, paint, reduced, peaks, offsetMs, trimStartMs, trimEndMs, durationMs]);
   return (
-    <span data-jam-stage-level="" className="flex h-[20cqmin] items-end justify-center gap-[clamp(1px,1cqmin,4px)] overflow-hidden">
-      {Array.from({ length: LEVEL_BARS }, (_, index) => (
-        <span
-          key={index}
-          ref={(node) => {
-            bars.current[index] = node;
-          }}
-          className={cn(
-            "h-full w-[clamp(2px,1.8cqmin,8px)] origin-bottom rounded-full opacity-90 motion-safe:transition-transform motion-safe:duration-100 motion-safe:ease-linear",
-            barClassName,
-          )}
-          style={{ transform: "scaleY(0.07)" }}
-        />
-      ))}
-    </span>
+    <LevelStrip
+      ref={strip}
+      count={LEVEL_BARS}
+      data-jam-stage-level=""
+      className="flex h-[14cqmin] min-h-4 max-h-10 max-w-[88%] overflow-hidden [--jam-level-gap:clamp(1px,1cqmin,4px)] [--jam-level-w:clamp(2px,1.8cqmin,8px)]"
+    />
   );
 }
 
-/** "Teu baixo aqui": the part the song asks for, as a dashed tile in that instrument's colour. */
+/** "Teu baixo aqui": the part the song asks for, a dashed tile in that instrument's ink on a neutral ground, so it reads as a slot and never as a part. */
 function MissingTile({ instrument, place, onRecord }: { instrument: JamInstrument; place: CSSProperties; onRecord: () => void }) {
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[instrument];
+  const tile = jamTileLook(instrument);
   const label = t(`jam.stage.slot.${instrument}` as MessageKey);
   return (
     <button
@@ -432,14 +406,15 @@ function MissingTile({ instrument, place, onRecord }: { instrument: JamInstrumen
       style={place}
       className={cn(
         TILE_BASE,
-        look.wash,
-        "group/slot grid place-items-center transition-colors duration-[var(--duration-base)] hover:bg-accent-soft motion-reduce:transition-none",
+        "group/slot grid place-items-center bg-surface-2 text-text transition-colors duration-[var(--duration-base)] hover:bg-surface-3 motion-reduce:transition-none",
       )}
     >
-      <span aria-hidden="true" className={cn("pointer-events-none absolute inset-0 border-2 border-dashed border-current", TILE_LOOK[instrument].glyph)} />
+      <span aria-hidden="true" className={cn("pointer-events-none absolute inset-1.5 rounded-[var(--radius-card)] border-2 border-dashed @min-[10rem]/tile:inset-2.5", tile.dashed)} />
       <span aria-hidden="true" className="relative flex max-w-[86%] flex-col items-center gap-[4cqmin]">
-        <look.icon className={cn("h-[26cqmin] w-[26cqmin] shrink-0", TILE_LOOK[instrument].glyph)} strokeWidth={1.75} aria-hidden />
-        <span className="flex items-center gap-1.5 text-center text-xs font-bold leading-tight text-text @min-[10rem]/tile:text-sm">
+        <span className={cn("grid h-[22cqmin] min-h-7 w-[22cqmin] min-w-7 max-h-14 max-w-14 place-items-center rounded-full", look.fill)}>
+          <look.icon className="h-[55%] w-[55%]" strokeWidth={2} aria-hidden />
+        </span>
+        <span className="flex items-center gap-1.5 text-center text-xs font-bold leading-tight @min-[10rem]/tile:text-sm">
           <span className="line-clamp-2">{label}</span>
         </span>
       </span>
@@ -447,8 +422,8 @@ function MissingTile({ instrument, place, onRecord }: { instrument: JamInstrumen
   );
 }
 
-/** "+3": the recordings past the eighth tile. */
-function MoreTile({ count, place }: { count: number; place: CSSProperties }) {
+/** "+3": the recordings past the eighth tile, with a stack of the instruments behind it. */
+function MoreTile({ count, instruments, place }: { count: number; instruments: readonly JamInstrument[]; place: CSSProperties }) {
   const { t } = useTranslation();
   return (
     <div
@@ -456,11 +431,19 @@ function MoreTile({ count, place }: { count: number; place: CSSProperties }) {
       role="img"
       aria-label={t("jam.stage.more", { count, countLabel: count })}
       style={place}
-      className="[container:tile/size] grid min-h-0 min-w-0 place-items-center bg-surface-2"
+      className="[container:tile/size] min-h-0 min-w-0"
     >
-      <span aria-hidden="true" className="font-display text-[26cqmin] font-extrabold leading-none text-text-secondary">
-        +{count}
-      </span>
+      <MoreBody
+        count={count}
+        dots={instruments.slice(0, 3).map((instrument) => {
+          const look = JAM_INSTRUMENT_LOOK[instrument];
+          return (
+            <StackDot key={instrument} fill={look.fill}>
+              <look.icon className="h-3 w-3" strokeWidth={2.25} aria-hidden />
+            </StackDot>
+          );
+        })}
+      />
     </div>
   );
 }

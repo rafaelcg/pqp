@@ -67,6 +67,29 @@ const WAV = (() => {
   return Buffer.from(encodeWav([samples], sr));
 })();
 
+/** One second of a 96x54 test pattern (VP8), so a tile has a real frame to show without a media server. */
+const STILL_WEBM = Buffer.from(
+  "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",
+  "base64",
+);
+
+/** Serves STILL_WEBM the way a bucket does, with byte ranges: a media element asks for them. */
+async function serveStill(route: Route): Promise<void> {
+  const range = /bytes=(\d+)-(\d*)/.exec(route.request().headers().range ?? "");
+  const base = { "access-control-allow-origin": "*", "accept-ranges": "bytes", "content-type": "video/webm" };
+  if (!range) {
+    return route.fulfill({ status: 200, body: STILL_WEBM, headers: { ...base, "content-length": String(STILL_WEBM.length) } });
+  }
+  const from = Number(range[1]);
+  const to = Math.min(STILL_WEBM.length - 1, range[2] ? Number(range[2]) : STILL_WEBM.length - 1);
+  const body = STILL_WEBM.subarray(from, to + 1);
+  return route.fulfill({
+    status: 206,
+    body,
+    headers: { ...base, "content-length": String(body.length), "content-range": `bytes ${from}-${to}/${STILL_WEBM.length}` },
+  });
+}
+
 interface Calls {
   list: URL[];
   detail: string[];
@@ -296,6 +319,38 @@ test.describe("a song", () => {
       }
       await page.unroute(/\/api\/public\/jams\/[0-9a-f-]{36}$/);
     }
+  });
+
+  test("a song of nine parts shows a frame of every video before the first press, and loads no audio", async ({ page }) => {
+    const nine = song(
+      SONG_A,
+      "Nove",
+      Array.from({ length: 9 }, (_, i) => [["drums", "guitar", "vocals", "keys", "bass", "other"][i % 6]!, `P${i}`] as [string, string]),
+      [],
+    );
+    const calls = await mockApi(page, { songs: [nine] });
+    await page.route(/\/api\/public\/jams\/[0-9a-f-]{36}$/, async (route) =>
+      route.fulfill({
+        json: {
+          song: nine,
+          tracks: nine.parts.map((part, index) => ({
+            ...track(`n-${index}`, part.instrument, part.person.name),
+            videoUrl: `/e2e-media/n-${index}.webm`,
+            videoContentType: "video/webm",
+          })),
+          mediaExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        },
+      }),
+    );
+    await page.route("**/e2e-media/*.webm", serveStill);
+    await page.goto(`/jam/m/${SONG_A}`);
+    await expect(page.locator("[data-jam-tile] video")).toHaveCount(9);
+    // every tile has its picture (it used to be the first four, and the rest showed initials until play)
+    await expect(page.locator('[data-jam-tile][data-jam-tile-shown="true"]')).toHaveCount(9, { timeout: 15_000 });
+    const ready = await page.locator("[data-jam-tile] video").evaluateAll((nodes) => nodes.map((node) => (node as HTMLVideoElement).readyState));
+    expect(ready.every((state) => state >= 2)).toBe(true);
+    // and nothing played, so the audio was not fetched
+    expect(calls.media).toHaveLength(0);
   });
 
   test("a song that is not public says so", async ({ page }) => {

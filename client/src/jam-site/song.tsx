@@ -7,6 +7,7 @@ import type { JamInstrumentName } from "@/lib/jam-intent";
 import { noteJamPlay } from "./api";
 import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
+import { SongCover } from "./art";
 import { asInstrument, type Instrument } from "./instruments";
 import { createPublicPlayer, warmJamEngine, type PublicPlayer } from "./player";
 import { Link, mainOrigin, useJamRoute } from "./router";
@@ -54,7 +55,7 @@ function OriginCard({ origin }: { origin: NonNullable<PublicJamSongDetail["song"
       )}
       <div className="min-w-0 flex-1 leading-tight">
         <p className="truncate font-bold">{origin.name}</p>
-        <p className="text-[13px] text-text-tertiary">{origin.slug ? jt("origin.community") : jt("origin.server")}</p>
+        <p className="text-[13px] text-text-secondary">{origin.slug ? jt("origin.community") : jt("origin.server")}</p>
       </div>
       {origin.slug && (
         <a href={`${main}/c/${origin.slug}`} className={button("secondary")}>
@@ -194,7 +195,8 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
 
       {fromApp && <FromAppNotice body={appRecord ? jt("fromApp.record") : jt("fromApp.body")} />}
 
-      <div className="mt-4 flex items-end gap-4 sm:gap-6">
+      <div className="mt-4 flex items-center gap-4 sm:gap-5">
+        <SongCover title={song.title} coverUrl={song.coverUrl} className="h-16 w-16 sm:h-24 sm:w-24" />
         <div className="min-w-0 flex-1">
         {song.origin && (
           <p className="flex items-center gap-2 text-[15px] font-bold text-text-secondary" data-jam-origin-line="">
@@ -211,19 +213,20 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
         <h1 className="mt-1 break-words font-display text-[clamp(2.25rem,6vw,4rem)] font-extrabold leading-[1] tracking-[-0.025em]">
           {song.title}
         </h1>
-        <p className="mt-2 text-[15px] text-text-tertiary">
-          {song.artist ? <><span className="whitespace-nowrap">{song.artist}</span> · </> : null}
-          <span className="whitespace-nowrap">{jt("song.startedBy", { who })}</span> · <span className="whitespace-nowrap">{ago(song.publishedAt, locale)}</span> · <span className="whitespace-nowrap">{jt("card.plays", { count: song.plays, countLabel: compactCount(song.plays, locale) })}</span>
+        <p className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[15px] sm:gap-x-2 text-text-secondary" data-jam-meta="">
+          {[
+            ...(song.artist ? [song.artist] : []),
+            jt("song.startedBy", { who }),
+            ago(song.publishedAt, locale),
+            jt("card.plays", { count: song.plays, countLabel: compactCount(song.plays, locale) }),
+          ].map((part, index) => (
+            // the separator belongs to the item that follows it, so a wrapped line never ends on one
+            <span key={index} className={cn("whitespace-nowrap", index > 0 && "sm:before:mr-2 sm:before:content-['·']")}>
+              {part}
+            </span>
+          ))}
         </p>
         </div>
-        {song.coverUrl && (
-          <img
-            src={song.coverUrl}
-            alt={jt("art.cover", { title: song.title })}
-            data-jam-cover=""
-            className="h-16 w-16 shrink-0 rounded-[var(--radius-card)] object-cover sm:h-24 sm:w-24"
-          />
-        )}
       </div>
 
       <div className="mt-6" data-jam-stagewrap="">

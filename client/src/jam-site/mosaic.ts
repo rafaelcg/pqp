@@ -269,3 +269,12 @@ export function layoutCoversBox(layout: MosaicLayout): boolean {
   }
   return seen.size === layout.columns.length * layout.rows.length;
 }
+
+/** The area of each cell in the box's own units (column and row weights), in the layout's cell order. */
+export function cellAreas(layout: MosaicLayout): number[] {
+  const span = (weights: readonly number[], from: number, count: number) =>
+    weights.slice(from - 1, from - 1 + count).reduce((sum, weight) => sum + weight, 0);
+  return layout.cells.map(
+    (cell) => span(layout.columns, cell.col, cell.colSpan) * span(layout.rows, cell.row, cell.rowSpan),
+  );
+}

@@ -177,18 +177,36 @@ the selected one) and pressing it again clears it; the song panel clears any oth
 first, so the tile is always "only this". A recording with a video shows it,
 `object-fit: cover`, muted (the sound is the mix), on the engine's video follower
 (`attachVideo`: the file's time is the song's time minus the take's offset). A recording
-without one is a flat tile tinted with its instrument's colour (a token mixed into the
-surface, never a solid fill), a large glyph of the instrument and a strip of its own level
-under it: the take's precomputed `peaks` around the song clock (`levelStrip`), written
-straight to 29 bars when the peak under the clock changes (no analyser node, no re-render,
-no cost), and the whole take as a still picture under reduced motion. Every tile has the
-chip with the person and the instrument's dot, and dims when its lane is muted or another
-lane is soloed. A part the song asks for ("Falta voz") is one dashed tile in that
-instrument's colour, "Tua voz aqui", only for somebody who may add it, and it opens the
-studio on that instrument. The stage can go full screen. Because every song with a take has
-a stage, the header is always the compact one (a 56 px cover, the title, and the play
-button beside it); only a song with no take yet (its author's empty song) keeps the full
-header. The lane carries no thumbnail. Spec: `e2e/jam-stage.spec.ts`.
+without one is a person on the instrument's own ground: their picture (or their initial)
+as the biggest thing on the tile, the instrument's badge on it, and a strip of the take's
+own level under it (`levelStrip`: the precomputed `peaks` around the song clock, written
+straight to 29 bars when the peak under the clock changes, no analyser node, no re-render;
+the whole take as a still picture under reduced motion). A silent stretch of the strip is
+one baseline, not a row of dots. Every tile has a small caption with the person and the
+instrument's mark (a dark pill over a video, plain text on a flat ground; the name goes
+below 120 px of tile), and dims when its lane is muted or another lane is soloed.
+
+**One tile look for the app and the public site.** The ground, ink, caption, level strip,
+person mark and "+N" tile are `lib/jam-tile-look.ts` and `lib/jam-tile-parts.tsx` (and
+`lib/jam-tile.css`), drawn by this stage and by `jam-site/` alike. The colours are the
+OPAQUE `--color-tile-<instrument>` and `--color-tile-<instrument>-ink` tokens, a deep tint
+of the hue on the dark theme and a pastel on the light one, which the bench measures (ink
+on ground 3:1, text on ground 4.5:1). Nothing on a tile is a translucent wash: several
+washes of different hues on one dark ground turn to mud, and on a light page they were
+charcoal blocks. `other` is a neutral on purpose, so five hues and one that says "none of
+those". "+N" is the number with a stack of the instruments behind it, not a grey box.
+
+A part the song asks for ("Falta voz") is one dashed tile on a neutral ground with the
+instrument's ink on the outline, "Tua voz aqui", only for somebody who may add it, and it
+opens the studio on that instrument; it never takes a larger cell than a recording. A video
+before the first play shows its first frame (`jamVideoPreload`, `jamVideoStillSrc` in
+`lib/jam-video-source.ts`: a small song buffers, a big one loads metadata and one frame per
+part, none is ever `preload=none`). The stage can go full screen. Because every song with a
+take has a stage, the header is always the compact one, ONE row: a 48 px cover, the title
+over "Original · iniciada por ti" (whole; the band is the lanes below, so no avatar stack
+repeats it), then two round icon buttons (send to chat, edit song), the play button with the
+clock under it and the menu; only a song with no take yet (its author's empty song) keeps
+the full header. The lane carries no thumbnail. Spec: `e2e/jam-stage.spec.ts`.
 
 **One lane layout** (`JamLaneFrame`, the song's lanes and the studio's review). Wide
 (the band is 40rem or more across, a container query because the song panel is a

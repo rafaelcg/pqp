@@ -77,20 +77,24 @@ export function Header() {
 
 export function Footer() {
   const origin = mainOrigin();
+  const link = "rounded-sm hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
   return (
-    <footer className="mt-20 border-t border-border">
-      <div className={cn(CONTAINER, "flex flex-wrap items-center gap-x-6 gap-y-2 py-8 text-sm text-text-tertiary")}>
+    <footer className="mt-16 border-t border-border">
+      <div className={cn(CONTAINER, "flex flex-col gap-3 py-8 text-sm text-text-secondary sm:flex-row sm:items-center sm:gap-x-6")}>
         <span>{jt("footer.line")}</span>
         <span className="flex-1 max-sm:hidden" />
-        <a className="rounded-sm hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" href={`${origin}/`}>
-          {jt("footer.pqp")}
-        </a>
-        <a className="rounded-sm hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" href={`${origin}/terms`}>
-          {jt("footer.terms")}
-        </a>
-        <a className="rounded-sm hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" href={`${origin}/privacy`}>
-          {jt("footer.privacy")}
-        </a>
+        {/* the three links are one unit: on a phone they stay on one line under the sentence, never one orphaned word */}
+        <nav className="flex flex-wrap gap-x-6 gap-y-2" aria-label={jt("footer.line")}>
+          <a className={link} href={`${origin}/`}>
+            {jt("footer.pqp")}
+          </a>
+          <a className={link} href={`${origin}/terms`}>
+            {jt("footer.terms")}
+          </a>
+          <a className={link} href={`${origin}/privacy`}>
+            {jt("footer.privacy")}
+          </a>
+        </nav>
       </div>
     </footer>
   );

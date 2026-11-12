@@ -67,6 +67,23 @@ export const COLOR_TOKEN_GROUPS: readonly TokenGroup[] = [
     ],
   },
   {
+    id: "jam-tiles",
+    tokens: [
+      "--color-tile-guitar",
+      "--color-tile-guitar-ink",
+      "--color-tile-bass",
+      "--color-tile-bass-ink",
+      "--color-tile-drums",
+      "--color-tile-drums-ink",
+      "--color-tile-vocals",
+      "--color-tile-vocals-ink",
+      "--color-tile-keys",
+      "--color-tile-keys-ink",
+      "--color-tile-other",
+      "--color-tile-other-ink",
+    ],
+  },
+  {
     id: "state",
     tokens: [
       "--color-focus-ring",

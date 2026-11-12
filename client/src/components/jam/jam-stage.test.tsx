@@ -247,12 +247,12 @@ describe("the stage's mosaic", () => {
     expect(tilesOf(withVideo).map((tile) => tile.getAttribute("data-jam-stage-tile"))).toEqual(["id-0", "id-1", "id-2"]);
   });
 
-  it("names the person on a chip with the instrument's colour as a dot, and says 'you' for the viewer", () => {
+  it("names the person on a small caption with the instrument's mark, and says 'you' for the viewer", () => {
     const { stage } = render(2, { viewerId: "author-1" });
     const chips = [...stage.querySelectorAll("[data-jam-stage-chip]")];
-    expect(chips.map((chip) => chip.querySelector("[data-jam-stage-person]")!.textContent)).toEqual(["Pessoa 0", "you"]);
-    // a tile big enough also says the instrument in words
-    expect(chips.map((chip) => chip.querySelector("[data-jam-stage-instrument]")!.textContent)).toEqual(["Guitar · ", "Bass · "]);
+    expect(chips.map((chip) => chip.querySelector("[data-jam-caption-person]")!.textContent)).toEqual(["Pessoa 0", "you"]);
+    // a tile big enough also says the instrument in words, after the name
+    expect(chips.map((chip) => chip.querySelector("[data-jam-caption-label]")!.textContent)).toEqual([" · guitar", " · bass"]);
     expect(chips[0]!.querySelector("span[aria-hidden]")!.className).toMatch(/bg-inst-guitar/);
   });
 
@@ -319,12 +319,15 @@ describe("a tile is the solo button", () => {
 });
 
 describe("a tile with no video", () => {
-  it("is tinted with the instrument's colour (a token mixed into the surface), with a large glyph, never a solid fill", () => {
+  it("sits on the instrument's own OPAQUE ground token (never a translucent wash), with the person and the instrument's badge on it", () => {
     const { stage } = render(1, { videoEvery: 0 });
     const tile = stage.querySelector('[data-jam-stage-tile="id-0"]')!;
-    expect(tile.className).toContain("color-mix(in_oklab,var(--color-inst-guitar)_30%,var(--color-surface-2))");
-    expect(tile.className).not.toMatch(/bg-inst-/);
+    expect(tile.className).toContain("bg-tile-guitar");
+    expect(tile.className).not.toMatch(/color-mix|bg-inst-|\/\d+\b/);
+    expect(tile.querySelector("[data-jam-person]")).not.toBeNull();
     expect(tile.querySelector("svg")).not.toBeNull();
+    // the ink of the strip is the tile's own
+    expect(tile.querySelector("[data-jam-stage-art]")!.className).toContain("text-tile-guitar-ink");
   });
 
   it("has a level strip whose bars follow the take's peaks at the song clock, and move when the clock does", () => {
@@ -335,10 +338,10 @@ describe("a tile with no video", () => {
     const scale = (bar: HTMLElement) => Number(/scaleY\(([\d.]+)\)/.exec(bar.style.transform)![1]);
     act(() => emit(1000));
     // the song is at 1 s of 5: peaks are 1 s each, so the middle bar is the second peak (0.8)
-    expect(scale(bars[14]!)).toBeCloseTo(0.07 + 0.93 * 0.8, 2);
+    expect(scale(bars[14]!)).toBeCloseTo(0.14 + 0.86 * 0.8, 2);
     const before = bars.map(scale);
     act(() => emit(3000));
-    expect(scale(bars[14]!)).toBeCloseTo(0.07 + 0.93 * 0.9, 2);
+    expect(scale(bars[14]!)).toBeCloseTo(0.14 + 0.86 * 0.9, 2);
     expect(bars.map(scale)).not.toEqual(before);
   });
 
@@ -364,11 +367,10 @@ describe("a tile with no video", () => {
     expect(listeners.size).toBe(0);
     const bars = [...stage.querySelectorAll<HTMLElement>("[data-jam-stage-level] > span")];
     const before = bars.map((bar) => bar.style.transform);
-    expect(before.some((value) => value !== "scaleY(0.07)")).toBe(true);
+    expect(before.some((value) => value !== "scaleY(0.000)")).toBe(true);
     act(() => emit(3000));
     expect(bars.map((bar) => bar.style.transform)).toEqual(before);
-    // the transitions are motion-safe only
-    expect(bars[0]!.className).toContain("motion-safe:transition-transform");
+    // the easing lives in `lib/jam-tile.css` under `prefers-reduced-motion: no-preference` only
   });
 
   it("stops listening to the clock when it leaves", () => {
@@ -388,7 +390,7 @@ describe("the part the song asks for", () => {
     expect(stage.querySelectorAll("[data-jam-stage-tile]")).toHaveLength(3);
     const slot = stage.querySelector<HTMLButtonElement>('[data-jam-stage-slot="bass"]')!;
     expect(slot.textContent).toBe("Your bass here");
-    expect(slot.querySelector(".border-dashed")!.className).toContain("var(--color-inst-bass)");
+    expect(slot.querySelector(".border-dashed")!.className).toContain("border-tile-bass-ink");
     // it is a tile of the grid like the others: four tiles now
     expect(tilesOf(stage)).toHaveLength(4);
     act(() => slot.click());
