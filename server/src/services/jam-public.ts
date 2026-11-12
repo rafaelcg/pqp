@@ -92,7 +92,7 @@ const counters = {
   published: 0,
   standaloneCreated: 0,
   unpublished: 0,
-  removedByOperator: 0,
+  takenDown: 0,
   autoHidden: 0,
   reportsFiled: 0,
   likes: 0,
@@ -1704,7 +1704,7 @@ export async function adminUnpublishJam(
     return true;
   });
   if (changed) {
-    counters.removedByOperator += 1;
+    counters.takenDown += 1;
     if (song?.author_id) {
       notifyJamPublic(song.author_id, {
         kind: "removed",
