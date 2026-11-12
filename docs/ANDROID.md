@@ -3701,14 +3701,13 @@ connection check on that screen is most wanted.
 
 The phone half of **jam** (`docs/JAM.md`, `docs/JAM_ENGINE.md`): see it, hear
 it, react to it. A `jam` channel holds songs; a song is a pile of stems, one per
-person; the phone plays the in-mix stems together. **Recording and adding a
-track are not here**: where the web says "Gravar por cima" the song screen
-opens a calm sheet saying recording is on the computer for now, with the song's
-link to copy or share, in the place the real record button will take
-(`JamPermissions.CAN_RECORD_HERE` is the seam). Code is `app/.../jam/`; iOS drew
-the same scope (`docs/IOS.md`), and where a choice was arbitrary (the tile
-sizes, "falta voz", the unread rule, the audition) Android follows it so the two
-phones agree.
+person; the phone plays the in-mix stems together, and **records a part of its
+own** ("Gravar minha parte" on a song, "Gravar" on the wall for a first take of
+a new song; see "Recording a part" below). Code is `app/.../jam/` (the studio is
+`jam/record/`); iOS drew the playing scope (`docs/IOS.md`), and where a choice
+was arbitrary (the tile sizes, "falta voz", the unread rule, the audition)
+Android follows it so the two phones agree. Not here: recording a camera video
+(the studio is audio only), editing a cover, and the public jam site.
 
 ### Invisible without the flag
 
@@ -3828,6 +3827,143 @@ declared delay (`UNDECLARED_AAC_PRIMING`); with the delay declared the platform
 already removed it and doing it again would move the stem the other way. After
 the fix every format above measures 0. Unlike iOS, MP3 is exact here and WebM
 opens.
+
+### Recording a part
+
+A full-screen studio (`JamStudioScreen`, state in `JamStudioViewModel`, hardware
+behind `Duplex`) over the song or the wall, in the web studio's order and words:
+what you play (the six instruments, the ones the song asks for marked), the
+headphones, a count-in, one big red button, then the take is played back WITH
+the band while you nudge it earlier or later, record it again, or send it.
+Starting a new song asks its name, artist and who may join first (`JamStartSheet`)
+and creates the song only when its first take is sent (a nonce makes a retry land
+on one song; a take thrown away removes a song made for it while it is still
+empty, `DELETE ?ifEmpty=true`). The files are `jam/record/`:
+
+| File | What it holds |
+|---|---|
+| `JamDuplex` | One `AudioTrack` (the count-in and the band) and one `AudioRecord` (the microphone, `UNPROCESSED` where supported, never `VOICE_COMMUNICATION`, which echo-cancels against the band and disturbs a call), on two threads, keeping every `getTimestamp` either stream gives. |
+| `JamTakePlacement` | The arithmetic below. Pure. |
+| `JamLatency`, `JamSignals` | The calibration: sweeps and claps, cross-correlation and onset detection, judging and choosing. Pure. |
+| `JamRoute`, `JamLatencyStore` | The audio route (output and input device type and name, sample rate) and the calibrations stored per route. |
+| `JamTakeRenderer` | What the output plays as a function of the stream frame: pre-roll, count-in clicks, then the band through the real `JamMixer`. |
+| `JamFlac` | The upload format (below). |
+| `JamTakeStore` | A finished take on disk until it is sent. |
+| `JamPostApi` | The three upload steps, and the song create. |
+
+**Where a take lands (`JamTakePlacement`).** The web has one `AudioContext`, so the
+backing and the capture are stamped in one unit and only the round trip is guessed.
+A phone has two streams on two clocks, so their relation is measured:
+`AudioTrack.getTimestamp` says at what monotonic nanosecond an OUTPUT frame is
+presented, `AudioRecord.getTimestamp` at what nanosecond an INPUT frame was
+captured. Each stream's stamps are folded into the nanosecond its frame 0 sits at
+(the median of `nanos - frame/rate` over the stamps nearest the frame that matters,
+so a late poll or an earlier under-run moves nothing), and the take's first sample is
+
+    offsetMs = fromMs + (captureAnchor - playbackAnchor) - p0/rate - correction
+
+with `fromMs` the song time at the band's transport zero, `p0` the output frame the
+band starts on (after the count-in), and `correction` the one thing a platform gets
+wrong and cannot be asked: some audio HALs leave a stage out of a capture or output
+timestamp, by a constant that is stable on one route and different on another. It is
+measured, never taken from what the phone reports about its own latency. Then the
+web's rules, unchanged: the offset is made a whole millisecond by dropping fewer
+than a millisecond of leading samples, `trimStartMs = clamp(fromMs - offsetMs, 0,
+duration)` hides the count-in and whatever was recorded before the band started (a
+trim hides, it never moves), `trimEndMs 0`, and the worked example of the contract
+(1 bar count-in, 23 ms round trip: `offsetMs -2023, trimStartMs 2023`) is a test.
+
+**The calibration is required** before the first take on a route, and the record
+button is not offered without one. Two measurements: *Medir agora* (loopback: ten
+sweeps play out of the phone and are found in the microphone; with headphones, one
+cup is held against the microphone) and *Bater no ritmo* (twelve clicks, the person
+claps or taps the phone on each; the median is their own habit too, as on the web),
+and a typed number (also what a nudge becomes with *Usar esse ajuste nas próximas*).
+Either measurement is `lag = where the sound was in the capture - where the
+timestamps said it would be`, taken through the same two streams and the same fit a
+take uses, so what it absorbs is exactly what a take needs. The window is 150 ms
+before to 500 ms after the prediction with the sweeps 700 ms apart, so a pulse can
+never be mistaken for its neighbour; the earliest strong peak wins (a wall's echo is
+louder and later); a result that found fewer than half the pulses, or whose spread is
+large, is "low" and is neither stored nor used. Stored in `SharedPreferences` under
+the route's key, one result per method, so a failed re-measure never replaces a good
+one. A route that changes (headphones in, Bluetooth on) is a new key and asks again.
+The route is previewed from `AudioManager` (and `getAudioDevicesForAttributes` on
+Android 13) and read again from the live streams the moment they run.
+
+**Format.** `audio/flac`, 16-bit mono at 48 kHz: it is in `JAM_AUDIO_CONTENT_TYPES`,
+it is what the web uploads, and it is the one format every client decodes without
+moving a sample (iOS cannot open WebM or Ogg; MP3 and AAC move the audio by a codec-
+and platform-dependent amount, `JamCodecAlignmentTest`). The platform has no FLAC
+muxer (`MediaMuxer` writes MP4, WebM and Ogg), so `JamFlac` is a port of the web's
+hand-written encoder (CONSTANT, FIXED 0..4 with partitioned Rice, VERBATIM), streamed
+a block at a time from the mapped capture file. `JamFlacTest` decodes what it writes
+with an independent decoder (every CRC, every sample), and `ffmpeg` reads the same
+bytes bit-exact. Ten minutes is about 15 to 25 MB, under the 32 MiB ceiling; a take
+stops itself five seconds before ten minutes.
+
+**What keeps a take from being lost or wrong.**
+
+- **In a call, it does nothing**, and says so ("Sai da call pra gravar"): recording
+  opens the microphone and the speaker the call is using, and the call's audio is
+  not touched. A call that connects under a recording stops it and keeps what was
+  played.
+- **A finished take is on disk before the review shows** (`JamTakeStore`: the raw
+  capture, and the placement and the nudge in a sidecar) and leaves only when it is
+  sent or thrown away. Leaving the studio asks (keep for later / discard); the app
+  being killed, the phone dying or the person leaving costs a tap: the next studio
+  for that song (or that channel's new song, with its draft) opens in the review.
+- **A take cut short is kept** when at least a second of it can be heard: audio focus
+  lost (a navigation prompt, another player), the headphones pulled (`BECOMING_NOISY`),
+  the app left (a microphone cannot be held in the background without a foreground
+  service, which this does not add), the microphone silenced by the system
+  (`AudioRecordingCallback.isClientSilenced`), the route changed, the stream died.
+  Shorter than that is dropped and the person is told.
+- **A send is retried safely.** The ticket and the upload of a take are kept for the
+  life of the studio and a retry reuses them, so a claim whose answer was lost and is
+  sent again returns the same track instead of making a second.
+- **Speaker and Bluetooth** are warned about ("Bota o fone", "Fone Bluetooth atrasa
+  demais") and allowed: a speaker bleeds the band into the take, a Bluetooth route has
+  a delay that changes from session to session and that no stored calibration holds.
+- A silent take is flagged before it is sent, a route that changed during the take or
+  that was not calibrated says so on the review, and the microphone permission is asked
+  when the studio opens, with *Abrir configurações* for a refusal that stuck.
+
+**Tested without a phone** (`jam/record/`, 100+ cases): `JamRecordPlacementTest` runs a
+simulated phone (`SimulatedWorld`: an output and an input with their own latency, two
+streams that start apart, and timestamps that are wrong by a constant) through the real
+count-in, calibration, placement and mixer, with a player who plays along perfectly,
+and reads where each click of the band comes out of the MIXER: within 0.3 ms for three
+very different simulated phones (8 to 130 ms of output latency, stamp errors of -45 to
++60 ms), and exactly the calibration's absence (20.5 ms early) without it.
+`JamStudioViewModelTest` drives the whole state machine against the same world.
+
+**Not verifiable off a device.** How good any real phone's `getTimestamp` is, the
+spread of a real speaker-to-microphone loopback, Bluetooth, a wired headset, a call
+actually arriving, the system silencing a microphone, and the capture clock drifting
+from the playback clock over a ten minute take (reported by `JamTakePlacement.driftPpm`,
+not corrected). The first take on a new model of phone is the test of it, and the
+calibration card exists so that person can fix it in seven seconds and a nudge can
+teach the route.
+
+### Covers and colours
+
+A song's `coverUrl` (a presigned GET that changes on every read and expires) is drawn
+on the wall's tile and the song's header over the instrument-coloured plate and its
+waveform, which are what show while it loads and what stays if it cannot be had. The
+image is cached under `JamSongSummary.coverKey` (the song and the picture's PATH, the
+contract's "the key inside it never changes for a given picture"), in Coil's memory and
+disk caches, never under the URL: a song read again, a frame arriving or a new
+signature twelve hours on is the same key, and a replaced cover is a new one. A cover
+beats the poster frame the app would pick out of a video for the tile (and a song
+that has one never reads a video for it), and the playing video still beats a cover in
+the header.
+
+The instrument colours are the web's tokens (`--color-inst-*`, `--color-on-inst`,
+`client/src/index.css`): guitar yellow, bass blue, drums orange, vocals pink, keys cyan,
+other lilac, carried by `JamInstrumentColors` and pinned to the CSS by
+`JamRecordContractTest`, which parses the tokens and converts them again. The guitar
+was the app's lime and is yellow now, so a guitar lane never reads as one more button.
 
 ### The song screen
 

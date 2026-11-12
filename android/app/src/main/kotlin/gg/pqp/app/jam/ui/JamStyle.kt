@@ -11,8 +11,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import gg.pqp.app.R
 import gg.pqp.app.jam.JamInstrument
+import gg.pqp.app.jam.JamInstrumentColors
 import gg.pqp.app.jam.JamNeed
-import gg.pqp.app.ui.theme.Palette
 import gg.pqp.app.ui.theme.PqpIcons
 import kotlin.math.max
 import kotlin.math.min
@@ -20,27 +20,23 @@ import kotlin.math.pow
 
 /*
  * The look of jam, in the app's own tokens. Nothing here invents a visual
- * system: the grounds, borders and type come from the theme, and the lime is
- * `Palette.Signal`. The only new colours are one per instrument, from the
- * approved design (lime guitar, blue bass, orange drums, pink voice) with a
- * teal for keys and a warm grey for "other", the same six the iOS client draws.
+ * system: the grounds, borders and type come from the theme. The only new
+ * colours are one per instrument, and they are the web's: `--color-inst-*` in
+ * `client/src/index.css` (guitar yellow, bass blue, drums orange, vocals pink,
+ * keys cyan, other lilac), carried by `JamInstrumentColors` and pinned to the
+ * CSS by `JamInstrumentColorsTest`. The guitar is yellow and not the app's
+ * lime, so a guitar lane never reads as one more "do this" button.
  *
  * A tile is the instrument's colour with INK text on it, in both themes: the
  * colour is the thing being drawn, so it does not follow the page's light or
  * dark. Everything around the tiles sits on the theme's own surfaces.
  */
 
-/** Ink for text and waveforms drawn on an instrument-coloured tile. */
-val JamInk = Color(0xFF090E12)
+/** Ink for text and waveforms drawn on an instrument-coloured tile (`--color-on-inst`). */
+val JamInk = Color(JamInstrumentColors.INK)
 
-fun JamInstrument.color(): Color = when (this) {
-    JamInstrument.Guitar -> Palette.Signal
-    JamInstrument.Bass -> Color(0xFF7DB8F2)
-    JamInstrument.Drums -> Color(0xFFF2A34A)
-    JamInstrument.Vocals -> Color(0xFFE8A3D6)
-    JamInstrument.Keys -> Color(0xFF70D1CC)
-    JamInstrument.Other -> Color(0xFFCCC7B3)
-}
+/** The instrument's identity colour: badges, lanes, waveforms and tiles all read it from here. */
+fun JamInstrument.color(): Color = Color(JamInstrumentColors.of(this))
 
 fun JamInstrument.icon(): ImageVector = when (this) {
     JamInstrument.Guitar -> PqpIcons.InstrumentGuitar

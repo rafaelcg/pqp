@@ -259,10 +259,5 @@ object JamPermissions {
     /** A song goes away by its author or a moderator. */
     fun canDeleteSong(viewer: JamSongViewer): Boolean = viewer.isAuthor || viewer.canModerate
 
-    /**
-     * Whether this build offers a record button or says "recording is on the
-     * computer". Today there is none, so it never records; the seam is here so
-     * the real button replaces the sheet and not a screen.
-     */
-    const val CAN_RECORD_HERE = false
+    // Who may RECORD is `JamRecordRules.gate` (the flag, storage, the join mode and the server's `addableInstruments`).
 }
