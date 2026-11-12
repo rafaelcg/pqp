@@ -22,6 +22,8 @@ import { loadJamPublicWaiting } from "@/lib/jam-public-store";
 export interface JamPublicationState {
   /** The first read is out. */
   loading: boolean;
+  /** The last read failed for a reason that may pass (no connection, a server error): the song's state is unknown, not "never published". */
+  lookupFailed: boolean;
   /** The song was never published, or the read said it could not be shown. */
   publication: JamPublication | null;
   busy: boolean;
@@ -36,6 +38,7 @@ export function useJamPublication(songId: string, active: boolean): JamPublicati
   const [publication, setPublication] = useState<JamPublication | null>(null);
   const [loading, setLoading] = useState(active);
   const [busy, setBusy] = useState(false);
+  const [lookupFailed, setLookupFailed] = useState(false);
   const [error, setError] = useState<JamPublicErrorKind | null>(null);
   const live = useRef(true);
   const forSong = useRef(songId);
@@ -57,11 +60,14 @@ export function useJamPublication(songId: string, active: boolean): JamPublicati
       if (live.current && forSong.current === asked) {
         setPublication(answer.publication);
         setError(null);
+        setLookupFailed(false);
       }
     } catch (failure) {
-      // Not somebody the answer is for (404), or no answer: nothing to show.
-      if (live.current && forSong.current === asked && jamPublicErrorKind(failure) === "gone") {
-        setPublication(null);
+      if (live.current && forSong.current === asked) {
+        // Not somebody the answer is for (404): nothing to show. Any other failure leaves the state unknown.
+        const gone = jamPublicErrorKind(failure) === "gone";
+        if (gone) setPublication(null);
+        setLookupFailed(!gone);
       }
     } finally {
       if (live.current && forSong.current === asked) {
@@ -73,6 +79,7 @@ export function useJamPublication(songId: string, active: boolean): JamPublicati
   useEffect(() => {
     setPublication(null);
     setError(null);
+    setLookupFailed(false);
     setLoading(active);
     void refresh();
   }, [refresh, active]);
@@ -106,6 +113,7 @@ export function useJamPublication(songId: string, active: boolean): JamPublicati
 
   return {
     loading,
+    lookupFailed,
     publication,
     busy,
     error,

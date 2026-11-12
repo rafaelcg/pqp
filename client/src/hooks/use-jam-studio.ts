@@ -105,6 +105,8 @@ export interface UseJamStudioArgs {
    * public jam (`POST /api/jam-public/songs`) rather than a channel's.
    */
   publicTake?: boolean;
+  /** The song's public state could not be read yet: a take waits (a retry is offered) instead of posting without its consent. */
+  publicUnknown?: boolean;
   standalone?: boolean;
 }
 
@@ -624,6 +626,11 @@ export function useJamStudio(args: UseJamStudioArgs) {
     if (!take || !edits || phaseRef.current === "done" || posting.current) {
       return;
     }
+    if (args.publicUnknown) {
+      setPhase("posting");
+      setPostError("network");
+      return;
+    }
     posting.current = true;
     postAbort.current = new AbortController();
     // The identity this post is made under: its answers are not written into the
@@ -728,7 +735,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
     } finally {
       posting.current = false;
     }
-  }, [take, edits, songId, draft, detached, channelId, instrument, replaceTake, wantsReplace, standalone, publicTake, shareVideo]);
+  }, [take, edits, songId, draft, detached, channelId, instrument, replaceTake, wantsReplace, standalone, publicTake, shareVideo, args.publicUnknown]);
 
   /**
    * Post the take as a song of its own (the one it was recorded over is gone).

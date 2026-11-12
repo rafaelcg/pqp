@@ -113,9 +113,21 @@ export function JamStudio({
   const songIsPublic =
     publicMe.enabled &&
     (publicAccess || ["live", "review", "hidden"].includes(publication.publication?.status ?? ""));
+  // A channel song whose public state could not be read yet: a take posted now could miss its consent.
+  const publicUnknown =
+    publicMe.enabled && !publicAccess && song !== null && (publication.loading || publication.lookupFailed);
+  const refreshPublication = publication.refresh;
+  useEffect(() => {
+    if (!publication.lookupFailed) {
+      return;
+    }
+    const timer = window.setTimeout(() => void refreshPublication(), 4000);
+    return () => window.clearTimeout(timer);
+  }, [publication.lookupFailed, refreshPublication]);
   const outsideTake = publicAccess && song !== null && song.channelId === null && !canSwitchMix;
   const studio = useJamStudio({
     publicTake: songIsPublic,
+    publicUnknown,
     standalone: publicAccess && song === null,
     channelId,
     songId: song?.id ?? null,

@@ -52,13 +52,16 @@ export function useConsentAnswer(answer: (songId: string, choice: JamPublicConse
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  async function choose(songId: string, choice: JamPublicConsent) {
+  /** True when the answer was taken; on a failure the error is shown and the caller leaves its controls as they were. */
+  async function choose(songId: string, choice: JamPublicConsent): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
       await answer(songId, choice);
+      return true;
     } catch (failure) {
       setError(t(`jam.public.error.${jamPublicErrorKind(failure)}` as MessageKey));
+      return false;
     } finally {
       setBusy(false);
     }

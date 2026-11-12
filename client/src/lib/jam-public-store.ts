@@ -159,14 +159,18 @@ export function loadJamPublicWaiting(): Promise<void> {
 
 /** Answer for my parts in a song. The request leaves the list at once; a failure puts it back. */
 export async function answerConsent(songId: string, choice: JamPublicConsent): Promise<void> {
-  const before = waiting;
+  const mine = epoch;
+  const taken = waiting.consents.find((one) => one.songId === songId);
   waiting = { ...waiting, consents: waiting.consents.filter((one) => one.songId !== songId) };
   emit();
   try {
     await answerJamConsent(songId, choice);
   } catch (error) {
-    waiting = { ...waiting, consents: before.consents };
-    emit();
+    // Another account may have taken over while this was out (`resetJamPublic`): its lists are not ours to touch.
+    if (mine === epoch && taken && !waiting.consents.some((one) => one.songId === songId)) {
+      waiting = { ...waiting, consents: [taken, ...waiting.consents] };
+      emit();
+    }
     throw error;
   }
 }

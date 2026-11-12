@@ -1,7 +1,8 @@
 import type { JamInstrument } from "@pqp/shared";
 import { ArrowLeft } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { ReportDialog, type ReportTarget } from "@/components/chat/report-dialog";
+import type { ReportTarget } from "@/components/chat/report-dialog";
+import { ReportDialog } from "@/components/deferred-panels";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 import { fetchJamSong } from "@/lib/jam-api";
@@ -107,7 +108,16 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
         intentRef.current = intent;
         if (intent && intent.kind === "song" && intent.act === "like") {
           // The heart somebody pressed before they had an account, once, now.
-          await likePublicJam(songId, true).catch(() => undefined);
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            if (cancelled) return;
+            try {
+              await likePublicJam(songId, true);
+              break;
+            } catch {
+              // A transient failure: the heart is idempotent, so try again (the person can always press it).
+              await new Promise((resolve) => setTimeout(resolve, 800));
+            }
+          }
         }
         if (!cancelled) setLoad("ready");
       } catch (failure) {

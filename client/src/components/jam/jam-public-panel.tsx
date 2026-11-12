@@ -1,7 +1,8 @@
 import type { JamPublicSongForViewer, JamSongSummary, JamTrack } from "@pqp/shared";
 import { Flag, Globe, Heart, Link2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ReportDialog, type ReportTarget } from "@/components/chat/report-dialog";
+import type { ReportTarget } from "@/components/chat/report-dialog";
+import { ReportDialog } from "@/components/deferred-panels";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { useJamPublication } from "@/hooks/use-jam-publication";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -236,9 +237,11 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
             current={myAnswer && myAnswer !== "pending" ? myAnswer : undefined}
             busy={consent.busy}
             onChoose={(choice) =>
-              void consent.choose(song.id, choice).then(() => {
-                setChanging(false);
-                void state.refresh();
+              void consent.choose(song.id, choice).then((taken) => {
+                if (taken) {
+                  setChanging(false);
+                  void state.refresh();
+                }
               })
             }
           />

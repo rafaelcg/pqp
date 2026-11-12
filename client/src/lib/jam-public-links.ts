@@ -13,7 +13,12 @@ export function parsePublicJamPath(pathname: string): PublicJamRoute | null {
   if (!match) {
     return null;
   }
-  const raw = decodeURIComponent(match[1]!).toLowerCase();
+  let raw: string;
+  try {
+    raw = decodeURIComponent(match[1]!).toLowerCase();
+  } catch {
+    return null;
+  }
   if (raw === "new") {
     return { kind: "new" };
   }

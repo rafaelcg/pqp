@@ -295,7 +295,7 @@ test.describe.serial("public jams in the app", () => {
       await expect(member.locator("[data-jam-public-shelf]")).toHaveCount(0);
       await expect(member.locator("[data-jam-waiting]")).toHaveCount(0);
       await expect(member.locator("[data-jam-section-title]")).toHaveCount(0);
-      await member.goto(`/app/jam/${seed.riff}?lang=en`);
+      await member.goto("/app/jam/0b8f1c52-3e0a-4a55-9c1e-6a1f0c2d9e77?lang=en");
       await expect(member.locator("[data-jam-public-view]")).toContainText("Public jams are not live yet.", { timeout: 25_000 });
       await member.context().close();
 
