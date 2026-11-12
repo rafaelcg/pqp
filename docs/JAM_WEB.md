@@ -156,17 +156,39 @@ header (a cover, the title, the people), and **the band**, whose sticky
 header holds play and pause right over the lanes: one lane per track as a clip on the song's ONE timeline,
 a ruler to click to jump, and a playhead line in every lane.
 
-**The stage.** A song with at least one in-mix recording that has a video opens on a
-stage (`JamStage`): one 16:9 tile per such recording at real size, full width of the
-panel, no taller than about 55vh (so the lanes stay in view on a laptop). One video
-is one large tile, two sit side by side, three in a row, four as two by two, then an
-even grid. Each tile is muted (the sound is the mix), follows the song clock with the
-engine's video follower (`attachVideo`: the file's time is the song's time minus the
-take's offset), carries a chip with the person's name and the instrument's colour as
-a dot, and dims when its lane is muted or another lane is "Só essa". The stage can go
-full screen. With a stage the header is compact (a 56 px cover, the title, and the
-play button beside it); a song with no video keeps the full header (a 120 px cover)
-and the play button above the lanes. The lane carries no thumbnail.
+**The stage is a mosaic of the band.** Every song with at least one in-mix recording
+opens on one rectangle (`JamStage`) divided among ALL of its in-mix recordings, with a
+video or without. `lib/jam-mosaic.ts` is the arithmetic, pure and unit-tested: an
+INTEGER grid (so the tiles cover the stage exactly, no gap, no overlap) chosen from the
+tile count and the stage's aspect, which is 16:9 on a panel 720 px or wider, 4:3 from 480
+to 720 (the roughly 540 px side panel of a laptop) and square on a phone, capped at about
+55vh. One tile is the whole stage; two are halves (stacked when the stage is taller than
+wide); three are one big and two small (the big one left on a wide stage, on top on a tall
+one) or three in a line, whichever puts every tile nearest a comfortable shape; four are
+two by two; five and six are 3x2 (2x3 when tall); seven to nine are 3x3; past nine the
+first eight and a "+N" tile. The 2 px gutter is the grid's CSS `gap`. When cells differ in
+size, tiles with a video take the larger ones first, then a take with sound only, then the
+"your part here" tile. The tiles stay in the document in the band's own order (the
+lanes', and the keyboard's) and are only placed on the grid, because moving a `<video>`
+in the document pauses it.
+
+A tile is a button: it solos its track ("Só essa", `aria-pressed`, a ring and a badge on
+the selected one) and pressing it again clears it; the song panel clears any other solo
+first, so the tile is always "only this". A recording with a video shows it,
+`object-fit: cover`, muted (the sound is the mix), on the engine's video follower
+(`attachVideo`: the file's time is the song's time minus the take's offset). A recording
+without one is a flat tile tinted with its instrument's colour (a token mixed into the
+surface, never a solid fill), a large glyph of the instrument and a strip of its own level
+under it: the take's precomputed `peaks` around the song clock (`levelStrip`), written
+straight to 29 bars when the peak under the clock changes (no analyser node, no re-render,
+no cost), and the whole take as a still picture under reduced motion. Every tile has the
+chip with the person and the instrument's dot, and dims when its lane is muted or another
+lane is soloed. A part the song asks for ("Falta voz") is one dashed tile in that
+instrument's colour, "Tua voz aqui", only for somebody who may add it, and it opens the
+studio on that instrument. The stage can go full screen. Because every song with a take has
+a stage, the header is always the compact one (a 56 px cover, the title, and the play
+button beside it); only a song with no take yet (its author's empty song) keeps the full
+header. The lane carries no thumbnail. Spec: `e2e/jam-stage.spec.ts`.
 
 **One lane layout** (`JamLaneFrame`, the song's lanes and the studio's review). Wide
 (the band is 40rem or more across, a container query because the song panel is a
