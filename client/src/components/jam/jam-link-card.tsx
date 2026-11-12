@@ -209,7 +209,9 @@ export function JamLinkCardSkeleton({ observe }: { observe?: (element: Element |
 function NavigatingCard({ song }: { song: JamSongSummary }) {
   const navigate = useNavigate();
   // The song's own address (its channel and server from the song, not from the pasted text).
-  const path = jamSongRoutePath(song.serverId, song.channelId, song.id);
+  // A card is only built for a channel song (`jam-share-card.ts` refuses the rest).
+  const path =
+    song.serverId && song.channelId ? jamSongRoutePath(song.serverId, song.channelId, song.id) : "/app";
   const onOpen = useCallback(
     (event: MouseEvent<HTMLAnchorElement>) => {
       // Let the browser keep its own new-tab and copy-link gestures.

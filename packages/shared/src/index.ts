@@ -30,6 +30,7 @@ export * from "./polls.js";
 export * from "./feedback.js";
 export * from "./forums.js";
 export * from "./jam.js";
+export * from "./jam-public.js";
 export * from "./forward.js";
 export * from "./friends.js";
 export * from "./gifs.js";

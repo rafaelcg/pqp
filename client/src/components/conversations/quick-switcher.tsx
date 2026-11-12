@@ -96,14 +96,22 @@ export function QuickSwitcher({
   const jamSongs = useJamSongSearch(jamChannelId, query, open);
   const songs = useMemo<readonly SwitcherSong[]>(
     () =>
-      jamSongs.map((song) => ({
-        id: song.id,
-        title: song.title,
-        artist: song.artist,
-        channelId: song.channelId,
-        serverId: song.serverId,
-        coverUrl: song.coverUrl,
-      })),
+      // A channel's search only ever answers songs of that channel; the null
+      // place is a standalone public jam's (`jam-public.ts`), never listed here.
+      jamSongs.flatMap((song) =>
+        song.channelId && song.serverId
+          ? [
+              {
+                id: song.id,
+                title: song.title,
+                artist: song.artist,
+                channelId: song.channelId,
+                serverId: song.serverId,
+                coverUrl: song.coverUrl,
+              },
+            ]
+          : [],
+      ),
     [jamSongs],
   );
   const items = useMemo(

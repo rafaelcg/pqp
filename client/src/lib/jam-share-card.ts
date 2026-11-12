@@ -72,6 +72,10 @@ async function read(songId: string): Promise<JamCardData | null> {
   if (song.trackCount === 0 || detail.tracks.every((track) => !track.inMix)) {
     return null;
   }
+  // A standalone public jam (no channel) is not a channel card.
+  if (!song.serverId || !song.channelId) {
+    return null;
+  }
   const config = await ensureJamConfig(song.serverId);
   if (!config.enabled) {
     return null;
