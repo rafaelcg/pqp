@@ -4,9 +4,8 @@ import { useHead } from "./head";
 import { HomePage } from "./home";
 import { Link, mainOrigin, useJamRoute } from "./router";
 import { jamPath } from "./route";
-import { Page, Wordmark, CONTAINER } from "./shell";
+import { Page, Wordmark, CONTAINER, ThemeToggle } from "./shell";
 import { SongPage } from "./song";
-import { setBrightness, useBrightness } from "./theme";
 import { button, Skeleton } from "./ui";
 import { useJamConfig } from "./use-jam-data";
 import { cn } from "./util";
@@ -18,19 +17,12 @@ import { cn } from "./util";
  */
 
 function SoonPage() {
-  const brightness = useBrightness();
   useHead({ title: jt("soon.metaTitle"), description: jt("soon.body"), noindex: true });
   return (
     <div className="flex min-h-dvh flex-col bg-surface-0 text-text" data-jam-soon="">
       <div className={cn(CONTAINER, "flex h-16 items-center justify-between")}>
         <Wordmark />
-        <button
-          type="button"
-          onClick={() => setBrightness(brightness === "dark" ? "light" : "dark")}
-          className={cn(button("ghost"), "px-3")}
-        >
-          {jt("theme.toggle")}
-        </button>
+        <ThemeToggle />
       </div>
       <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-6 pb-24">
         <h1 className="font-display text-[clamp(2.25rem,8vw,3.5rem)] font-extrabold leading-[1.02] tracking-[-0.025em]">

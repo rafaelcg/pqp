@@ -1,5 +1,5 @@
-import { MoonIcon as Moon, SunIcon as Sun } from "./icons";
-import type { ReactNode } from "react";
+import { MoonIcon as Moon, SunIcon as Sun, XIcon } from "./icons";
+import { useEffect, useState, type ReactNode } from "react";
 import { jt } from "@/lib/i18n/jam-site";
 import { useAsk } from "./auth-sheet";
 import { Link, mainOrigin, useJamRoute } from "./router";
@@ -20,7 +20,7 @@ export function Wordmark({ className }: { className?: string }) {
   );
 }
 
-function ThemeToggle() {
+export function ThemeToggle() {
   const brightness = useBrightness();
   const next = brightness === "dark" ? "light" : "dark";
   return (
@@ -110,6 +110,43 @@ export function Page({ children }: { children: ReactNode }) {
         {children}
       </main>
       <Footer />
+    </div>
+  );
+}
+
+/**
+ * What the public page says when the app sent somebody back (`?from=app`,
+ * `lib/jam-intent.ts`): recording in the app is on its way. Dismissable, and it
+ * takes the marker off the address so a reload does not bring it back.
+ */
+export function FromAppNotice({ body }: { body: string }) {
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("from") === "app") {
+        url.searchParams.delete("from");
+        window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+      }
+    } catch {
+      // The notice just stays on the address; nothing breaks.
+    }
+  }, []);
+  if (!open) return null;
+  return (
+    <div className="mt-3 flex items-start gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 py-3 pl-4 pr-2" role="status" data-jam-from-app="">
+      <div className="min-w-0 flex-1">
+        <p className="font-bold">{jt("fromApp.title")}</p>
+        <p className="mt-0.5 text-sm text-text-secondary">{body}</p>
+      </div>
+      <button
+        type="button"
+        onClick={() => setOpen(false)}
+        aria-label={jt("sheet.close")}
+        className={cn(buttonClass.base, buttonClass.icon, "h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11")}
+      >
+        <XIcon className="h-4 w-4" aria-hidden />
+      </button>
     </div>
   );
 }

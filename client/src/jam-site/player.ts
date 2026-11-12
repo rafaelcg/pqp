@@ -47,12 +47,15 @@ export function warmJamEngine(): Promise<SessionModule> {
  * and start it (a play button on the home). The engine is one object for the
  * whole page, so the song page picks up the context this made.
  */
-export function unlockAudioInGesture(): void {
+export function unlockAudioInGesture(): boolean {
   if (sessionModule) {
     sessionModule.unlockJamAudio();
-  } else {
-    void warmJamEngine();
+    return true;
   }
+  // The engine's code is not here yet: nothing could be unlocked in this click,
+  // so the caller must not promise a start it cannot make. The song opens paused.
+  void warmJamEngine();
+  return false;
 }
 
 export type PlayerPhase ="idle" | "loading" | "ready" | "error";
@@ -75,6 +78,12 @@ export interface PublicPlayer {
   subscribe(listener: () => void): () => void;
   /** Song time being heard, ms. Cheap; read it in an animation frame. */
   position(): number;
+  /**
+   * Call `listener` once per animation frame while the song plays (a few times a
+   * second under reduced motion). ONE loop serves every listener, so nine tiles
+   * and the lanes cost one `requestAnimationFrame`, not ten.
+   */
+  onFrame(listener: () => void): () => void;
   /**
    * Play or pause. Call it from the click or key press itself: the engine's
    * audio is unlocked in that very task.
@@ -115,8 +124,46 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
   let starting = false;
   let parked = 0;
 
+  const frameListeners = new Set<() => void>();
+  let frameRaf = 0;
+  let frameTimer: ReturnType<typeof setInterval> | null = null;
+  const runFrames = () => {
+    for (const listener of frameListeners) listener();
+  };
+  const stopFrames = () => {
+    if (frameRaf) cancelAnimationFrame(frameRaf);
+    frameRaf = 0;
+    if (frameTimer) clearInterval(frameTimer);
+    frameTimer = null;
+  };
+  /** Keep the loop running exactly while something listens and the song plays. */
+  const syncFrames = () => {
+    const wanted = state.playing && frameListeners.size > 0 && !disposed;
+    if (!wanted) {
+      stopFrames();
+      return;
+    }
+    if (frameRaf || frameTimer) return;
+    let reduced = false;
+    try {
+      reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    } catch {
+      reduced = false;
+    }
+    if (reduced) {
+      frameTimer = setInterval(runFrames, 250);
+      return;
+    }
+    const loop = () => {
+      runFrames();
+      frameRaf = requestAnimationFrame(loop);
+    };
+    frameRaf = requestAnimationFrame(loop);
+  };
+
   const emit = () => {
     for (const listener of listeners) listener();
+    syncFrames();
   };
   const set = (patch: Partial<PlayerState>) => {
     state = { ...state, ...patch };
@@ -220,6 +267,14 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
     position() {
       return engine && state.stemsReady ? engine.player.positionMs() : parked;
     },
+    onFrame(listener) {
+      frameListeners.add(listener);
+      syncFrames();
+      return () => {
+        frameListeners.delete(listener);
+        syncFrames();
+      };
+    },
     toggle() {
       // In the task of the gesture, before anything is awaited.
       sessionModule?.unlockJamAudio();
@@ -252,6 +307,8 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
     },
     dispose() {
       disposed = true;
+      stopFrames();
+      frameListeners.clear();
       unsubscribeClock?.();
       unsubscribeClock = null;
       const held = engine;

@@ -31,7 +31,7 @@ function Seek({ player }: { player: PublicPlayer }) {
       label.current.textContent = clock(position);
     }
   }, [player, duration]);
-  useClockDraw(player, state.playing, draw);
+  useClockDraw(player, draw);
 
   const commit = (value: number) => {
     player.seek(value);
@@ -55,6 +55,13 @@ function Seek({ player }: { player: PublicPlayer }) {
         aria-valuetext={`${clock(drag ?? player.position())} / ${clock(state.durationMs)}`}
         data-jam-seek=""
         className="jam-seek order-5 h-11 min-w-0 basis-full md:order-none md:h-6 md:basis-auto md:flex-1"
+        onKeyDown={(event) => {
+          // Five seconds an arrow, a seventh of the song a page key; Home and End are the range's own.
+          const step = event.key === "ArrowRight" || event.key === "ArrowUp" ? 5000 : event.key === "ArrowLeft" || event.key === "ArrowDown" ? -5000 : event.key === "PageUp" ? duration / 7 : event.key === "PageDown" ? -duration / 7 : 0;
+          if (step === 0) return;
+          event.preventDefault();
+          player.seek(Math.max(0, Math.min(duration, player.position() + step)));
+        }}
         onPointerDown={() => {
           dragging.current = true;
         }}
@@ -116,7 +123,7 @@ export function SongTransport({
   }, [player]);
 
   return (
-    <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-3 md:flex-nowrap md:gap-x-4" data-jam-transport="">
+    <div className="relative mt-4 flex flex-wrap items-center gap-x-3 gap-y-3 md:flex-nowrap md:gap-x-4" data-jam-transport="">
       <button
         type="button"
         onClick={toggle}
@@ -172,7 +179,10 @@ export function SongTransport({
         {shared ?? ""}
       </p>
       {shared && (
-        <p className="order-7 basis-full text-right text-sm font-semibold text-text-secondary" aria-hidden="true">
+        <p
+          className="pointer-events-none absolute right-0 top-full z-10 mt-2 max-w-full truncate rounded-full bg-surface-3 px-3 py-1.5 text-sm font-semibold text-text shadow-[var(--shadow-2)]"
+          aria-hidden="true"
+        >
           {shared}
         </p>
       )}

@@ -7,6 +7,8 @@
  *
  *   ?jam=<songId>&record=1[&instrument=bass]   "record a part on this jam"
  *   ?jam=<songId>                              "take me to this jam"
+ *   ?jam=<songId>&act=like                     "like this jam" (the heart, signed out)
+ *   ?jam=<songId>&act=report[&track=<trackId>] "report this jam", or one part of it
  *   ?jam=new                                   "let me start a jam"
  *
  * TWO CARRIERS. On the hosted site the public pages live on `jam.pqp.gg` and
@@ -32,14 +34,24 @@ export type JamInstrumentName = "guitar" | "bass" | "drums" | "vocals" | "keys" 
 
 const INSTRUMENTS: readonly string[] = ["guitar", "bass", "drums", "vocals", "keys", "other"];
 
+export type JamAct = "like" | "report";
+
 export type JamIntent =
   | { kind: "new" }
-  | { kind: "song"; songId: string; record: boolean; instrument: JamInstrumentName | null };
+  | {
+      kind: "song";
+      songId: string;
+      record: boolean;
+      instrument: JamInstrumentName | null;
+      /** What else the person tried before sign-up: like it, or report it (or one part of it). */
+      act?: JamAct | null;
+      trackId?: string | null;
+    };
 
 const KEY = "pqp:pending-jam";
 export const JAM_INTENT_TTL_MS = 60 * 60 * 1000;
 /** The query parameters this intent is read from, for the URL clean-up. */
-export const JAM_INTENT_PARAMS = ["jam", "record", "instrument"] as const;
+export const JAM_INTENT_PARAMS = ["jam", "record", "instrument", "act", "track"] as const;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -60,11 +72,15 @@ export function jamIntentFromSearch(search: string): JamIntent | null {
     return null;
   }
   const record = params.get("record") === "1";
+  const act = !record && (params.get("act") === "like" || params.get("act") === "report") ? (params.get("act") as JamAct) : null;
+  const track = act === "report" ? (params.get("track")?.trim().toLowerCase() ?? "") : "";
   return {
     kind: "song",
     songId: raw,
     record,
     instrument: record ? instrumentOf(params.get("instrument")) : null,
+    act,
+    trackId: UUID.test(track) ? track : null,
   };
 }
 
@@ -78,6 +94,11 @@ export function jamIntentQuery(intent: JamIntent): string {
     params.set("record", "1");
     if (intent.instrument) {
       params.set("instrument", intent.instrument);
+    }
+  } else if (intent.act) {
+    params.set("act", intent.act);
+    if (intent.act === "report" && intent.trackId) {
+      params.set("track", intent.trackId);
     }
   }
   return params.toString();
@@ -93,6 +114,8 @@ function encode(intent: JamIntent): string {
     return "new";
   }
   if (!intent.record) {
+    if (intent.act === "like") return `${intent.songId}:like`;
+    if (intent.act === "report") return intent.trackId ? `${intent.songId}:report:${intent.trackId}` : `${intent.songId}:report`;
     return intent.songId;
   }
   return intent.instrument
@@ -104,16 +127,19 @@ function decode(value: string): JamIntent | null {
   if (value === "new") {
     return { kind: "new" };
   }
-  const [songId = "", flag, instrument] = value.split(":");
+  const [songId = "", flag, extra] = value.split(":");
   if (!UUID.test(songId)) {
     return null;
   }
   const record = flag === "record";
+  const act: JamAct | null = !record && (flag === "like" || flag === "report") ? flag : null;
   return {
     kind: "song",
     songId: songId.toLowerCase(),
     record,
-    instrument: record ? instrumentOf(instrument) : null,
+    instrument: record ? instrumentOf(extra) : null,
+    act,
+    trackId: act === "report" && extra && UUID.test(extra) ? extra.toLowerCase() : null,
   };
 }
 
@@ -214,5 +240,6 @@ export function jamReturnPath(intent: JamIntent): string {
       params.set("instrument", intent.instrument);
     }
   }
+  // like and report have nothing to say on the public page: it just opens the song.
   return `/jam/m/${intent.songId}?${params.toString()}`;
 }

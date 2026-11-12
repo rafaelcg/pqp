@@ -91,6 +91,11 @@ html[data-jam-site][data-theme="light"] {
   border-radius: 4px;
 }
 
+/* A spotlit tile's ring, over the picture, in the instrument's own colour. */
+[data-jam-tile][data-spotlit="true"]::after {
+  box-shadow: inset 0 0 0 3px var(--jam-ring, var(--color-accent));
+}
+
 /* A <dialog> opened with showModal() is centred by the UA; the sheet places it. */
 [data-jam-sheet]:not([open]) {
   display: none;

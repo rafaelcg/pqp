@@ -33,14 +33,32 @@ describe("the URL", () => {
       songId: ID,
       record: false,
       instrument: null,
+      act: null,
+      trackId: null,
     });
     expect(jamIntentFromSearch(`?jam=${ID}&record=1&instrument=bass`)).toEqual({
       kind: "song",
       songId: ID,
       record: true,
       instrument: "bass",
+      act: null,
+      trackId: null,
     });
     expect(jamIntentFromSearch("?jam=new")).toEqual({ kind: "new" });
+  });
+
+  it("carries a like and a report, and the part a report names", () => {
+    const track = "5c4b3a29-1807-4f6e-9d5c-3b2a19087f6e";
+    expect(jamIntentFromSearch(`?jam=${ID}&act=like`)).toMatchObject({ act: "like", trackId: null });
+    expect(jamIntentFromSearch(`?jam=${ID}&act=report&track=${track}`)).toMatchObject({ act: "report", trackId: track });
+    // a track means nothing without a report, and a bad one is dropped
+    expect(jamIntentFromSearch(`?jam=${ID}&act=like&track=${track}`)).toMatchObject({ trackId: null });
+    expect(jamIntentFromSearch(`?jam=${ID}&act=report&track=nope`)).toMatchObject({ act: "report", trackId: null });
+    const intent = { kind: "song", songId: ID, record: false, instrument: null, act: "report", trackId: track } as const;
+    expect(jamIntentFromSearch(new URL(jamIntentHref(intent), "https://x").search)).toEqual(intent);
+    const storage = memory();
+    stashJamIntent(storage, intent);
+    expect(takeJamIntent(storage)).toEqual(intent);
   });
 
   it("refuses anything that is not our shape", () => {
@@ -56,7 +74,7 @@ describe("the URL", () => {
   });
 
   it("writes the app URL a sign-up button points at, and it reads back", () => {
-    const intent = { kind: "song", songId: ID, record: true, instrument: "keys" } as const;
+    const intent = { kind: "song", songId: ID, record: true, instrument: "keys", act: null, trackId: null } as const;
     const href = jamIntentHref(intent, "https://pqp.gg");
     expect(href).toBe(`https://pqp.gg/app?jam=${ID}&record=1&instrument=keys`);
     expect(jamIntentFromSearch(new URL(href).search)).toEqual(intent);

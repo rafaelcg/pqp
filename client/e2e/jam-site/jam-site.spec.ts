@@ -122,22 +122,23 @@ test.describe("the home", () => {
       }
     });
     await page.goto("/jam");
-    await expect(page.locator("[data-jam-card]")).toHaveCount(3);
+    // The hero is the first song; it is not repeated in the grid under it.
+    await expect(page.locator("[data-jam-card]")).toHaveCount(2);
     await expect(page.locator("[data-jam-hero]")).toBeVisible();
     // The hero is the first song with a part; the dashed square says what is missing.
     await expect(page.locator("[data-jam-hero]")).toContainText("Falta um baixo.");
     await page.waitForTimeout(500);
     expect(mediaRequests).toEqual([]);
     expect(calls.media).toEqual([]);
-    // Likes show only above one: the song with 48 shows them, the two with 1 do not.
-    await expect(page.locator('[data-jam-card] [aria-label*="curtida"]')).toHaveCount(1);
-    await expect(page.locator('[data-jam-card] [aria-label*="curtida"]')).toContainText("48");
+    // Likes show only above one: the hero (48) shows them, the two cards (1 like each) do not.
+    await expect(page.locator('[data-jam-hero] [aria-label*="curtida"]')).toContainText("48");
+    await expect(page.locator('[data-jam-card] [aria-label*="curtida"]')).toHaveCount(0);
   });
 
   test("the tabs ask the server for the sort and filter the page for the rest", async ({ page }) => {
     const calls = await mockApi(page);
     await page.goto("/jam");
-    await expect(page.locator("[data-jam-card]")).toHaveCount(3);
+    await expect(page.locator("[data-jam-card]")).toHaveCount(2);
     await page.locator('[data-jam-tab="needs"]').click();
     await expect(page.locator("[data-jam-card]")).toHaveCount(2);
     await page.locator('[data-jam-tab="done"]').click();
@@ -156,7 +157,7 @@ test.describe("the home", () => {
     const second = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Segunda página", [["vocals", "Lia"]], []);
     const calls = await mockApi(page, { page2: [second] });
     await page.goto("/jam");
-    await expect(page.locator("[data-jam-card]")).toHaveCount(4);
+    await expect(page.locator("[data-jam-card]")).toHaveCount(3);
     expect(calls.list.some((url) => url.searchParams.get("cursor") === "c2")).toBe(true);
     await expect(page.locator("[data-jam-more]")).toHaveCount(0);
   });
@@ -169,9 +170,9 @@ test.describe("the home", () => {
     const second = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Segunda página", [["vocals", "Lia"]], []);
     const calls = await mockApi(page, { page2: [second] });
     await page.goto("/jam");
-    await expect(page.locator("[data-jam-card]")).toHaveCount(3);
+    await expect(page.locator("[data-jam-card]")).toHaveCount(2);
     await page.locator("[data-jam-more]").click();
-    await expect(page.locator("[data-jam-card]")).toHaveCount(4);
+    await expect(page.locator("[data-jam-card]")).toHaveCount(3);
     expect(calls.list.some((url) => url.searchParams.get("cursor") === "c2")).toBe(true);
     await expect(page.locator("[data-jam-more]")).toHaveCount(0);
   });
@@ -240,6 +241,31 @@ test.describe("a song", () => {
     await expect(page.locator("[data-jam-solo]")).toContainText("Só Leco");
     await page.locator("[data-jam-solo-exit]").click();
     await expect(page.locator("[data-jam-solo]")).toHaveCount(0);
+  });
+
+  test("a focused tile shows a ring drawn over its picture", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    const tile = page.locator("[data-jam-tile]").first();
+    await expect(tile).toBeVisible();
+    await page.keyboard.press("Shift");
+    await tile.focus();
+    const shadow = await tile.evaluate((node) => getComputedStyle(node, "::after").boxShadow);
+    expect(shadow).not.toBe("none");
+  });
+
+  test("the play button on the home opens the song and starts it", async ({ page }) => {
+    await mockApi(page);
+    // The engine's code is fetched when the page is idle; wait for it so the click can unlock the audio.
+    const warmed = page.waitForResponse((response) => /jam-session/.test(response.url()), { timeout: 20_000 });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-card]")).toHaveCount(2);
+    await warmed;
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(1000);
+    await page.locator(`[data-jam-card] [data-jam-play="${SONG_B}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`/jam/m/${SONG_B}$`));
+    await expect(page.locator("[data-jam-toggle]")).toHaveAttribute("data-playing", "true", { timeout: 15_000 });
   });
 
   test("lays out one to nine parts as a mosaic that covers its box", async ({ page }) => {
@@ -366,8 +392,8 @@ test.describe("the host mount", () => {
     const host = new URL(baseURL!);
     const jam = `http://jam.localhost:${host.port}`;
     await page.goto(`${jam}/`);
-    await expect(page.locator("[data-jam-card]")).toHaveCount(3);
-    await page.locator("[data-jam-card]").first().getByRole("link", { name: "Minuano", exact: true }).click();
+    await expect(page.locator("[data-jam-card]")).toHaveCount(2);
+    await page.locator("[data-jam-hero]").getByRole("link", { name: "Abrir a música" }).click();
     await expect(page).toHaveURL(`${jam}/m/${SONG_A}`);
     await expect(page.locator("[data-jam-song]")).toBeVisible();
   });

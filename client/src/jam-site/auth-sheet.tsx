@@ -24,6 +24,8 @@ export interface Ask {
   kind: AskKind;
   songId?: string;
   instrument?: JamInstrumentName | null;
+  /** The part a "report this part" is about. */
+  trackId?: string;
 }
 
 interface AskContext {
@@ -43,6 +45,8 @@ function intentFor(request: Ask): JamIntent {
     songId: request.songId,
     record: request.kind === "record",
     instrument: request.kind === "record" ? (request.instrument ?? null) : null,
+    act: request.kind === "like" ? "like" : request.kind === "report" || request.kind === "reportPart" ? "report" : null,
+    trackId: request.kind === "reportPart" ? (request.trackId ?? null) : null,
   };
 }
 

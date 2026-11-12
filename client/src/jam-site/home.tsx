@@ -8,9 +8,9 @@ import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
 import { INSTRUMENT_LOOK, INSTRUMENTS, asInstrument, inkMix, type Instrument } from "./instruments";
 import { unlockAudioInGesture, warmJamEngine } from "./player";
-import { Link, useJamRoute } from "./router";
+import { Link, navigateTo, useJamRoute } from "./router";
 import { jamPath } from "./route";
-import { CONTAINER } from "./shell";
+import { CONTAINER, FromAppNotice } from "./shell";
 import { Badge } from "./tiles";
 import { button, focusRing, Skeleton } from "./ui";
 import { useFeatured, useJamList, type JamTab } from "./use-jam-data";
@@ -75,12 +75,17 @@ function PlayButton({ song, size, label }: { song: PublicJamSong; size: "card" |
   return (
     <Link
       href={path}
-      state={{ autoplay: true }}
       aria-label={label}
       data-jam-play={song.id}
       onPointerEnter={() => void warmJamEngine()}
       onFocus={() => void warmJamEngine()}
-      onClick={() => unlockAudioInGesture()}
+      onClick={(event) => {
+        // Only ask the song page to start when the audio could be unlocked in THIS click.
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        const unlocked = unlockAudioInGesture();
+        navigateTo(path, { state: unlocked ? { autoplay: true } : null });
+      }}
       className={cn(
         "relative z-10 grid shrink-0 place-items-center rounded-full transition-[transform,background-color] duration-[var(--duration-fast)] motion-reduce:transition-none",
         focusRing,
@@ -97,7 +102,7 @@ function PlayButton({ song, size, label }: { song: PublicJamSong; size: "card" |
 function Card({ song }: { song: PublicJamSong }) {
   const path = useSongPath()(song);
   return (
-    <article data-jam-card={song.id} className="group relative flex min-w-0 flex-col">
+    <article data-jam-card={song.id} className="group relative flex min-w-0 flex-col [contain-intrinsic-size:auto_22rem] [content-visibility:auto]">
       <div className="overflow-hidden rounded-[var(--radius-panel)]">
         <SongArt song={song} variant="card" />
       </div>
@@ -129,8 +134,7 @@ function CardSkeleton() {
   );
 }
 
-function Hero() {
-  const { song, status } = useFeatured();
+function Hero({ song, status }: { song: PublicJamSong | null; status: "loading" | "ready" | "error" }) {
   const path = useSongPath();
   const locale = detectLocale();
   if (status === "loading") {
@@ -275,6 +279,7 @@ export function HomePage() {
   const [tab, setTab] = useState<JamTab>("top");
   const [need, setNeed] = useState<Instrument | null>(null);
   const list = useJamList(tab, need);
+  const featured = useFeatured();
   const sentinel = useRef<HTMLDivElement | null>(null);
   const fromApp = useJamRoute().search.get("from") === "app";
 
@@ -301,18 +306,27 @@ export function HomePage() {
     return () => observer.disconnect();
   }, [more, status, loadMore, list.songs.length]);
 
-  const cards = useMemo(() => list.songs.map((song) => <Card key={song.id} song={song} />), [list.songs]);
+  // The engine's code (not a byte of audio) is fetched once the page is idle, so a
+  // play press finds it loaded and can unlock the audio inside the click itself.
+  useEffect(() => {
+    const idle = (window as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+    const handle = idle ? idle(() => void warmJamEngine()) : window.setTimeout(() => void warmJamEngine(), 1500);
+    return () => {
+      const cancel = (window as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
+      if (idle && cancel) cancel(handle);
+      else window.clearTimeout(handle);
+    };
+  }, []);
+
+  // The hero is the first of Em alta: it is not shown twice on that tab.
+  const shown = useMemo(() => (tab === "top" && featured.song ? list.songs.filter((song) => song.id !== featured.song!.id) : list.songs), [tab, featured.song, list.songs]);
+  const cards = useMemo(() => shown.map((song) => <Card key={song.id} song={song} />), [shown]);
 
   return (
     <div className={CONTAINER}>
       <h1 className="sr-only">{jt("meta.homeTitle")}</h1>
-      {fromApp && (
-        <div className="mt-6 rounded-[var(--radius-card)] border border-border bg-surface-1 px-4 py-3" role="status" data-jam-from-app="">
-          <p className="font-bold">{jt("fromApp.title")}</p>
-          <p className="mt-0.5 text-sm text-text-secondary">{jt("fromApp.start")}</p>
-        </div>
-      )}
-      <Hero />
+      {fromApp && <FromAppNotice body={jt("fromApp.start")} />}
+      <Hero song={featured.song} status={featured.status} />
       <div className="mt-10 sm:mt-14">
         <Tabs tab={tab} onTab={setTab} need={need} onNeed={setNeed} />
       </div>

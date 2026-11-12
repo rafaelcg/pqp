@@ -41,7 +41,7 @@ function PersonMark({ track }: { track: PublicJamTrack }) {
   const [broken, setBroken] = useState(false);
   const Icon = look.icon;
   return (
-    <span className="relative grid aspect-square h-12 place-items-center @min-[8rem]/face:h-16 @min-[13rem]/face:h-20 @min-[18rem]/face:h-24">
+    <span className="relative -mt-5 grid aspect-square h-10 place-items-center @min-[8rem]/face:mt-0 @min-[8rem]/face:h-16 @min-[13rem]/face:h-20 @min-[18rem]/face:h-24">
       {track.person.avatarUrl && !broken ? (
         <img
           src={track.person.avatarUrl}
@@ -52,62 +52,44 @@ function PersonMark({ track }: { track: PublicJamTrack }) {
           className="h-full w-full rounded-full object-cover"
         />
       ) : (
-        <span aria-hidden="true" className={cn("grid h-full w-full place-items-center rounded-full font-display text-xl font-extrabold @min-[13rem]/face:text-3xl", look.fill)}>
+        <span aria-hidden="true" className={cn("grid h-full w-full place-items-center rounded-full font-display text-lg font-extrabold @min-[8rem]/face:text-xl @min-[13rem]/face:text-3xl", look.fill)}>
           {Array.from(name)[0]?.toUpperCase() ?? "?"}
         </span>
       )}
-      <span aria-hidden="true" className={cn("absolute -bottom-1 -right-1 grid h-7 w-7 place-items-center rounded-full ring-2 ring-media-scrim", look.fill)}>
-        <Icon className="h-4 w-4" strokeWidth={2} />
+      <span aria-hidden="true" className={cn("absolute -bottom-1 -right-1 grid h-5 w-5 place-items-center rounded-full ring-2 ring-media-scrim @min-[8rem]/face:h-7 @min-[8rem]/face:w-7", look.fill)}>
+        <Icon className="h-3 w-3 @min-[8rem]/face:h-4 @min-[8rem]/face:w-4" strokeWidth={2} />
       </span>
     </span>
   );
 }
 
-function PartFace({ track, player, playing }: { track: PublicJamTrack; player: PublicPlayer; playing: boolean }) {
+function PartFace({ track, player, covered }: { track: PublicJamTrack; player: PublicPlayer; covered: boolean }) {
   const instrument = asInstrument(track.instrument);
   const scale = useMemo(() => levelScale(track.peaks), [track.peaks]);
   const paint = useCallback(
     (apply: (values: readonly number[]) => void) => {
       const draw = () => apply(windowBars(track, player.position(), LEVEL_BARS, scale));
       draw();
-      const off = player.subscribe(draw);
-      let raf = 0;
-      let timer: ReturnType<typeof setInterval> | null = null;
-      if (playing) {
-        const reduce = (() => {
-          try {
-            return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-          } catch {
-            return false;
-          }
-        })();
-        if (reduce) {
-          timer = setInterval(draw, 250);
-        } else {
-          const loop = () => {
-            draw();
-            raf = requestAnimationFrame(loop);
-          };
-          raf = requestAnimationFrame(loop);
-        }
-      }
+      const stopState = player.subscribe(draw);
+      // Nothing to move under a video that is showing.
+      const stopFrames = covered ? () => undefined : player.onFrame(draw);
       return () => {
-        off();
-        if (raf) cancelAnimationFrame(raf);
-        if (timer) clearInterval(timer);
+        stopState();
+        stopFrames();
       };
     },
-    [track, player, scale, playing],
+    [track, player, scale, covered],
   );
   return (
     <div className={cn("@container/face absolute inset-0 flex flex-col items-center justify-center gap-3", tileGround(instrument))}>
       <PersonMark track={track} />
-      <LiveBars instrument={instrument} count={LEVEL_BARS} paint={paint} className="hidden h-[14%] min-h-6 max-h-10 @min-[7rem]/face:flex" />
+      <LiveBars instrument={instrument} count={LEVEL_BARS} paint={paint} className="hidden h-[14%] min-h-6 max-h-10 @min-[10rem]/face:flex" />
     </div>
   );
 }
 
 function PartTile({
+  index,
   track,
   player,
   playing,
@@ -117,6 +99,7 @@ function PartTile({
   eager,
   onSelect,
 }: {
+  index: number;
   track: PublicJamTrack;
   player: PublicPlayer;
   playing: boolean;
@@ -146,16 +129,18 @@ function PartTile({
       aria-pressed={spotlit}
       aria-label={jt("tile.listen", { name, instrument: partLabel(track).toLowerCase() })}
       data-jam-tile={track.id}
+      data-jam-tile-index={index}
       data-jam-tile-kind={videoUrl ? "video" : "audio"}
       data-spotlit={spotlit ? "true" : undefined}
       className={cn(
         "@container/tile group/tile absolute inset-0 block h-full w-full cursor-pointer overflow-hidden bg-media-scrim text-left outline-none",
-        "focus-visible:z-10 focus-visible:shadow-[inset_0_0_0_3px_var(--color-accent)]",
+        // The ring is a layer ABOVE the picture: a box-shadow on the button is painted under the video.
+        "after:pointer-events-none after:absolute after:inset-0 after:z-10 after:content-[''] focus-visible:after:shadow-[inset_0_0_0_3px_var(--color-accent)]",
         dimmed && "grayscale brightness-[0.5]",
       )}
-      style={spotlit ? { boxShadow: `inset 0 0 0 3px var(${look.token})` } : undefined}
+      style={spotlit ? ({ "--jam-ring": `var(${look.token})` } as React.CSSProperties) : undefined}
     >
-      <PartFace track={track} player={player} playing={playing} />
+      <PartFace track={track} player={player} covered={shown} />
       {videoUrl && (
         <video
           ref={video}
@@ -194,7 +179,7 @@ function NeedTile({ instrument, onClick }: { instrument: Instrument; onClick: ()
       data-jam-need-tile={instrument}
       className={cn(
         "@container/need group/need absolute inset-0 grid h-full w-full cursor-pointer place-items-center text-center text-on-media outline-none",
-        "focus-visible:shadow-[inset_0_0_0_3px_var(--color-accent)]",
+        "after:pointer-events-none after:absolute after:inset-0 after:z-10 after:content-[''] focus-visible:after:shadow-[inset_0_0_0_3px_var(--color-accent)]",
         tileGround(instrument),
       )}
     >
@@ -257,6 +242,7 @@ export function SongStage({
           ) : (
             <PartTile
               key={item.track.id}
+              index={index}
               track={item.track}
               player={player}
               playing={state.playing}

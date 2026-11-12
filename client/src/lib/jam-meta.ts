@@ -170,7 +170,7 @@ export function renderJamHead(
   const generic = HOME_TEXT[options.locale];
   const canonical =
     target.kind === "song" ? `https://jam.pqp.gg/m/${target.songId}` : "https://jam.pqp.gg/";
-  if (target.kind === "song" && song) {
+  if (target.kind === "song" && song && enabled) {
     const text = jamSongCardText(song, options.locale);
     const image = imageOf(song.coverUrl, options.fallbackImage);
     const card: Card = {

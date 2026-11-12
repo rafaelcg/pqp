@@ -6,7 +6,7 @@ import { asInstrument, inkMix, INSTRUMENT_LOOK, type Instrument } from "./instru
 import { laneBars } from "./levels";
 import type { PublicPlayer } from "./player";
 import { Badge } from "./tiles";
-import { useClockDraw, usePlayerState } from "./use-player";
+import { useClockDraw } from "./use-player";
 import { cn, instrumentName, partLabel, personLabel } from "./util";
 
 /**
@@ -55,7 +55,7 @@ function Wave({ track, durationMs, player }: { track: PublicJamTrack; durationMs
       <svg
         viewBox={`0 0 100 ${H}`}
         preserveAspectRatio="none"
-        className="absolute inset-0 h-full w-full [clip-path:inset(0_calc(100%-var(--p,0%))_0_0)]"
+        className="absolute inset-0 h-full w-full [clip-path:inset(0_calc(100%_-_var(--p,0%))_0_0)]"
         aria-hidden="true"
       >
         <path d={path} fill="currentColor" />
@@ -80,13 +80,12 @@ export function SongLanes({
   spot: number | null;
   onReport: (trackId: string) => void;
 }) {
-  const state = usePlayerState(player);
   const root = useRef<HTMLDivElement | null>(null);
   const total = Math.max(1, durationMs);
   const draw = useCallback(() => {
     root.current?.style.setProperty("--p", `${Math.min(100, (player.position() / total) * 100)}%`);
   }, [player, total]);
-  useClockDraw(player, state.playing, draw);
+  useClockDraw(player, draw);
 
   return (
     <section aria-labelledby="jam-lanes-title" data-jam-lanes="">

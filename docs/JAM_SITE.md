@@ -16,11 +16,15 @@ website. It is dark until the runtime flag `jam_public` is turned on.
 It is **its own HTML entry**, not a route of the app: `client/jam-site/index.html`
 and `src/jam-site/entry.tsx`, emitted as `dist/jam-site/index.html`. It loads no
 Clerk, no router, no app shell, no socket, no service worker registration and no
-analytics tag. A signed-out visitor downloads React, the site (about 20 kB
-gzipped), a shared chunk, and the app's CSS (66 kB gzipped, the cost of the
-shared tokens: a jam-only Tailwind entry is a follow-up). The jam engine is
+analytics tag. A signed-out visitor downloads about 100 kB of JavaScript
+gzipped (React, the site at about 22 kB, one shared chunk) and the app's CSS (66
+kB gzipped, the cost of the shared tokens: a jam-only Tailwind entry is a
+follow-up). The site draws its own eighteen icons (`src/jam-site/icons.tsx`)
+instead of loading the app's whole icon chunk, and React sits in a chunk of its
+own (`react-core` in `vite.config.ts`) so it is not dragged in with the icons.
+The jam engine is
 fetched when a song page opens (its JavaScript, not any audio) so the first play
-press can unlock the audio inside the gesture.
+press can unlock the audio inside the gesture (the home fetches it when idle).
 
 The Pages middleware (`client/functions/_middleware.ts`, `handleJam`) is what maps
 the addresses to the page, because `_redirects` cannot key on a hostname. It
@@ -28,6 +32,10 @@ fetches `/jam-site/` from the asset binding and writes the head
 (`src/lib/jam-meta.ts`). The Vite dev and preview servers do the same rewrite
 (`jamSiteRouting` in `vite.config.ts`), so `localhost:5173/jam` and
 `jam.localhost:5173` behave like the real thing.
+
+Verified with `wrangler pages dev` (4.149.0, the CI version) against a seeded API:
+the host mount, `/jam`, a song's head, `noindex`, HEAD, and an unrelated page of
+`jam.pqp.gg` passing through.
 
 **Hostname step still owed (not done in the PR):** add `jam.pqp.gg` as a custom
 domain on the Pages project `pqp` (DNS and the Pages dashboard). Until then the
@@ -85,7 +93,9 @@ continues to `/app` with an intent (`src/lib/jam-intent.ts`):
 | Intent | URL | Meaning |
 |---|---|---|
 | record | `/app?jam=<songId>&record=1[&instrument=bass]` | record a part on this public jam |
-| song | `/app?jam=<songId>` | take me to this jam (like, report) |
+| song | `/app?jam=<songId>` | take me to this jam |
+| like | `/app?jam=<songId>&act=like` | like this jam once I am in |
+| report | `/app?jam=<songId>&act=report[&track=<trackId>]` | report this jam, or the one part `track` names |
 | new | `/app?jam=new` | let me start a jam |
 
 The URL is the carrier because the hosted pages live on `jam.pqp.gg` and the app
@@ -109,6 +119,9 @@ once.
   with `record: true`, open the studio on `instrument` when the viewer may record
   it (`viewer.addableInstruments`), else on the first addable one. A public take
   needs `publicConsent` (`yes` or `audio_only`) on the add-track request;
+- `act: "like"` / `act: "report"` (with `trackId` for one part): do it after the
+  song is open (`PUT /api/jam-public/songs/:songId/like`, or the report sheet that
+  posts `POST /api/jam-public/reports` with `songId` and `trackId`);
 - `kind: "new"`: open the start sheet that calls `POST /api/jam-public/songs`.
 
 `JAM_INTENT_PARAMS` is the list of query parameters to strip from the address

@@ -7,43 +7,22 @@ export function usePlayerState(player: PublicPlayer): PlayerState {
   return useSyncExternalStore(subscribe, player.getState, player.getState);
 }
 
-export function prefersReducedMotion(): boolean {
-  try {
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Call `draw` whenever the clock moves: every animation frame while the song
  * plays (a few times a second under reduced motion), and once on every change
  * of the player (a seek, a pause, a solo) while it does not. `draw` writes to
  * the DOM; it must not set React state per frame.
  */
-export function useClockDraw(player: PublicPlayer, playing: boolean, draw: () => void): void {
+export function useClockDraw(player: PublicPlayer, draw: () => void): void {
   useEffect(() => {
     draw();
-    const off = player.subscribe(draw);
-    let raf = 0;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    if (playing) {
-      if (prefersReducedMotion()) {
-        timer = setInterval(draw, 250);
-      } else {
-        const loop = () => {
-          draw();
-          raf = requestAnimationFrame(loop);
-        };
-        raf = requestAnimationFrame(loop);
-      }
-    }
+    const stopState = player.subscribe(draw);
+    const stopFrames = player.onFrame(draw);
     return () => {
-      off();
-      if (raf) cancelAnimationFrame(raf);
-      if (timer) clearInterval(timer);
+      stopState();
+      stopFrames();
     };
-  }, [player, playing, draw]);
+  }, [player, draw]);
 }
 
 /**

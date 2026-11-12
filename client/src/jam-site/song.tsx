@@ -1,6 +1,6 @@
 import type { PublicJamSongDetail } from "@pqp/shared";
 import { ArrowLeftIcon as ArrowLeft, FlagIcon as Flag } from "./icons";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { jt } from "@/lib/i18n/jam-site";
 import { detectLocale } from "@/lib/locale";
 import type { JamInstrumentName } from "@/lib/jam-intent";
@@ -11,7 +11,7 @@ import { asInstrument, type Instrument } from "./instruments";
 import { createPublicPlayer, warmJamEngine, type PublicPlayer } from "./player";
 import { Link, mainOrigin, useJamRoute } from "./router";
 import { jamCanonicalUrl, jamPath } from "./route";
-import { CONTAINER } from "./shell";
+import { CONTAINER, FromAppNotice } from "./shell";
 import { SongLanes } from "./song-lanes";
 import { SongStage } from "./song-stage";
 import { SongTransport } from "./song-transport";
@@ -73,6 +73,9 @@ function OriginCard({ origin }: { origin: NonNullable<PublicJamSongDetail["song"
 function Loaded(props: { detail: PublicJamSongDetail; refresh: () => Promise<PublicJamSongDetail | null>; fromApp: boolean; appRecord: boolean }) {
   const { detail, refresh } = props;
   const [player, setPlayer] = useState<PublicPlayer | null>(null);
+  // Read once, at the first render: the effect below runs twice under strict mode, and the
+  // first run clears the marker so a reload does not start the song again.
+  const [autoplay] = useState(() => (window.history.state as { autoplay?: boolean } | null)?.autoplay === true);
   useEffect(() => {
     const made = createPublicPlayer({
       tracks: detail.tracks,
@@ -83,7 +86,7 @@ function Loaded(props: { detail: PublicJamSongDetail; refresh: () => Promise<Pub
     setPlayer(made);
     void warmJamEngine();
     // The home's play button sent us here to start it.
-    if ((window.history.state as { autoplay?: boolean } | null)?.autoplay) {
+    if (autoplay) {
       window.history.replaceState(null, "");
       made.toggle();
     }
@@ -109,13 +112,25 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
   const [shared, setShared] = useState<string | null>(null);
 
 
+  const lastSpot = useRef<number | null>(null);
   const select = useCallback(
     (index: number | null) => {
+      if (index === null && spot !== null) {
+        lastSpot.current = spot;
+      }
       setSpot(index);
       player.setSolo(index === null ? null : (tracks[index]?.id ?? null));
     },
-    [player, tracks],
+    [player, tracks, spot],
   );
+
+  // Leaving the spotlight from the keyboard (Escape, the pill's x) puts focus back on the tile.
+  useEffect(() => {
+    if (spot !== null || lastSpot.current === null) return;
+    const tile = document.querySelector<HTMLElement>(`[data-jam-tile-index="${lastSpot.current}"]`);
+    lastSpot.current = null;
+    if (tile && (document.activeElement === document.body || !document.activeElement)) tile.focus({ preventScroll: true });
+  }, [spot]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -177,12 +192,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
         {jt("song.back")}
       </Link>
 
-      {fromApp && (
-        <div className="mt-3 rounded-[var(--radius-card)] border border-border bg-surface-1 px-4 py-3" role="status" data-jam-from-app="">
-          <p className="font-bold">{jt("fromApp.title")}</p>
-          <p className="mt-0.5 text-sm text-text-secondary">{appRecord ? jt("fromApp.record") : jt("fromApp.body")}</p>
-        </div>
-      )}
+      {fromApp && <FromAppNotice body={appRecord ? jt("fromApp.record") : jt("fromApp.body")} />}
 
       <div className="mt-4 flex items-end gap-4 sm:gap-6">
         <div className="min-w-0 flex-1">
@@ -244,7 +254,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
           durationMs={duration}
           player={player}
           spot={spot}
-          onReport={() => ask({ kind: "reportPart", songId: song.id })}
+          onReport={(trackId) => ask({ kind: "reportPart", songId: song.id, trackId })}
         />
         <aside className="flex flex-col gap-6">
           {song.origin && (
