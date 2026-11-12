@@ -203,13 +203,19 @@ describe("an entry the apps origin does not serve", () => {
 
   it("never takes down a frame that already said hello", async () => {
     let answer!: (result: { kind: "missing"; status: number }) => void;
+    let signal!: AbortSignal;
     const { iframe, controller } = mount({
-      probeEntry: () => new Promise((resolve) => (answer = resolve)),
+      probeEntry: (_url, s) => {
+        signal = s;
+        return new Promise((resolve) => (answer = resolve));
+      },
     });
     vi.spyOn(iframe!.contentWindow!, "postMessage").mockImplementation(() => {});
     post(iframe!.contentWindow!, HELLO);
     await flush();
     expect(controller.status.kind).toBe("ready");
+    // a stalled probe is not left running once the frame works
+    expect(signal.aborted).toBe(true);
     answer({ kind: "missing", status: 404 });
     await flush();
     expect(controller.status.kind).toBe("ready");

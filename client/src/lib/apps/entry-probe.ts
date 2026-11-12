@@ -28,6 +28,14 @@ export type EntryProbeResult =
 
 export type EntryProbe = (url: string, signal: AbortSignal) => Promise<EntryProbeResult>;
 
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
 export async function probeAppEntry(
   url: string,
   signal: AbortSignal,
@@ -47,6 +55,10 @@ export async function probeAppEntry(
     });
     // the status is all that is wanted; the body is the frame's to load
     void response.body?.cancel().catch(() => {});
+    // Pages' own redirect (`/index.html` to `/`) stays on the apps origin. An answer that ended anywhere else is
+    // not the apps origin speaking, so it says nothing either way (the frame, which follows the same redirect
+    // under its own sandbox and the page's frame-src, is left to the hello timeout).
+    if (response.redirected && !sameOrigin(response.url, url)) return { kind: "unknown" };
     return response.ok ? { kind: "ok" } : { kind: "missing", status: response.status };
   } catch {
     return { kind: "unknown" };

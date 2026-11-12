@@ -198,6 +198,8 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
       // an opaque origin cannot be named as a target, so '*' (the receiver
       // checks `event.source`, and only the frame's window is listening)
       frame.contentWindow.postMessage({ pqp: "app-port", platformApi: APP_PLATFORM_API }, "*", [channel.port2]);
+      // the frame is working: whatever the probe would still say changes nothing
+      probe.abort();
       setStatus({ kind: "ready" });
     });
   }
