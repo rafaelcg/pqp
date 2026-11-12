@@ -201,6 +201,366 @@
         }
       }
     },
+    "Add my part" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar minha parte"
+          }
+        }
+      }
+    },
+    "Adjust the timing" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustar o tempo"
+          }
+        }
+      }
+    },
+    "Anybody on the server records on top" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qualquer pessoa do servidor grava por cima"
+          }
+        }
+      }
+    },
+    "Artist (leave empty if it is yours)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Artista (deixa vazio se for tua)"
+          }
+        }
+      }
+    },
+    "asked for" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pedido pela música"
+          }
+        }
+      }
+    },
+    "Back to automatic" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar ao automático"
+          }
+        }
+      }
+    },
+    "Back to the recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar pra gravação"
+          }
+        }
+      }
+    },
+    "Bluetooth headphones add too much delay to record. The recording may land out of time. Wired fixes it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fone Bluetooth atrasa demais pra gravar. A gravação pode sair fora do tempo. Com fio resolve."
+          }
+        }
+      }
+    },
+    "Calibrate" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calibrar"
+          }
+        }
+      }
+    },
+    "Calibrate again" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calibrar de novo"
+          }
+        }
+      }
+    },
+    "Could not hear the taps. Tap harder on every click, or skip." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra ouvir as batidas. Bate mais forte em cada clique, ou pula."
+          }
+        }
+      }
+    },
+    "Could not measure it properly. Try again closer to the speaker, or skip." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra medir direito. Tenta de novo mais perto do alto-falante, ou pula."
+          }
+        }
+      }
+    },
+    "Count in before starting" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contar antes de começar"
+          }
+        }
+      }
+    },
+    "Delay corrected by %lld ms" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atraso corrigido em %lld ms"
+          }
+        }
+      }
+    },
+    "Discard the recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descartar a gravação"
+          }
+        }
+      }
+    },
+    "Discard this recording?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descartar essa gravação?"
+          }
+        }
+      }
+    },
+    "Easy, that is a lot at once. Try again in a moment." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calma, é muita coisa de uma vez. Tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "e.g. In Bloom" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ex.: In Bloom"
+          }
+        }
+      }
+    },
+    "e.g. Nirvana" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ex.: Nirvana"
+          }
+        }
+      }
+    },
+    "Estimated delay %lld ms" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atraso estimado em %lld ms"
+          }
+        }
+      }
+    },
+    "Estimated delay %lld ms. If your part lands out of time, calibrate." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atraso estimado em %lld ms. Se a tua parte ficar fora do tempo, calibra."
+          }
+        }
+      }
+    },
+    "For wired headphones. Clap or hit a muted string on every click." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pra fone com fio. Bate palma ou toca a corda abafada em cada clique."
+          }
+        }
+      }
+    },
+    "Four clicks, then the band comes in." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quatro cliques e a banda entra."
+          }
+        }
+      }
+    },
+    "Four clicks, then the band comes in. It changes nothing in the song." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quatro cliques e a banda entra. Não muda nada na música."
+          }
+        }
+      }
+    },
+    "Get ready" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prepara"
+          }
+        }
+      }
+    },
+    "Getting your recording ready" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparando a tua gravação"
+          }
+        }
+      }
+    },
+    "Give the song a name." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dá um nome pra música."
+          }
+        }
+      }
+    },
+    "Go to the studio" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ir pro estúdio"
+          }
+        }
+      }
+    },
+    "Headphones on" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fone ligado"
+          }
+        }
+      }
+    },
+    "Headphones set · %lld ms" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fone ajustado · %lld ms"
+          }
+        }
+      }
+    },
+    "Hold a headphone cup against the microphone, or measure on the speaker, so the microphone hears the clicks." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encosta o fone no microfone, ou mede no alto-falante, pro microfone ouvir os cliques."
+          }
+        }
+      }
+    },
+    "It has not been sent to the band yet." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ela ainda não foi mandada pra banda."
+          }
+        }
+      }
+    },
+    "Keep recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continuar gravando"
+          }
+        }
+      }
+    },
+    "Keep the recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar a gravação"
+          }
+        }
+      }
+    },
+    "Leave the call to record" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sai da call pra gravar"
+          }
+        }
+      }
+    },
+    "Listen to the band" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvir a banda"
+          }
+        }
+      }
+    },
     "%lld songs" : {
       "localizations" : {
         "en" : {
@@ -671,6 +1031,76 @@
         }
       }
     },
+    "Measure now" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medir agora"
+          }
+        }
+      }
+    },
+    "Measure your headphones' delay?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medir o atraso do teu fone?"
+          }
+        }
+      }
+    },
+    "measured by tapping along" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "medido batendo no ritmo"
+          }
+        }
+      }
+    },
+    "measured with the microphone" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "medido pelo microfone"
+          }
+        }
+      }
+    },
+    "Measuring. Stay quiet for a few seconds." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medindo. Fica quieto uns segundos."
+          }
+        }
+      }
+    },
+    "Move earlier" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mais cedo"
+          }
+        }
+      }
+    },
+    "Move later" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mais tarde"
+          }
+        }
+      }
+    },
     "Mute, deafen and volume per person." : {
       "localizations" : {
         "pt-BR" : {
@@ -697,6 +1127,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Falta alguém"
+          }
+        }
+      }
+    },
+    "New song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Música nova"
+          }
+        }
+      }
+    },
+    "No connection. Check your internet and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem conexão. Confere a internet e tenta de novo."
+          }
+        }
+      }
+    },
+    "No headphones" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem fone"
+          }
+        }
+      }
+    },
+    "No microphone found." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não achei nenhum microfone."
           }
         }
       }
@@ -761,6 +1231,46 @@
         }
       }
     },
+    "On top of %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Por cima de %@"
+          }
+        }
+      }
+    },
+    "Only me" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só eu"
+          }
+        }
+      }
+    },
+    "Only some instruments" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só alguns instrumentos"
+          }
+        }
+      }
+    },
+    "Only you record on this song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só tu grava nessa música"
+          }
+        }
+      }
+    },
     "Open this on a computer, put your headphones on and play along. Your take lines up by itself and shows up here as soon as it is done." : {
       "localizations" : {
         "pt-BR" : {
@@ -801,12 +1311,32 @@
         }
       }
     },
+    "Pick at least one instrument." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolhe pelo menos um instrumento."
+          }
+        }
+      }
+    },
     "Play" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tocar"
+          }
+        }
+      }
+    },
+    "Play along with the band. Hit the square when you are done." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toca junto com a banda. Aperta o quadrado quando acabar."
           }
         }
       }
@@ -851,12 +1381,52 @@
         }
       }
     },
+    "Put your headphones on and hit the red button. The band plays in your ears and your recording lands in time." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bota o fone e aperta o botão vermelho. A banda toca no teu ouvido e a tua gravação já cai no tempo."
+          }
+        }
+      }
+    },
     "ready" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "pronta"
+          }
+        }
+      }
+    },
+    "Record" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar"
+          }
+        }
+      }
+    },
+    "Record a song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar uma música"
+          }
+        }
+      }
+    },
+    "Record again" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar de novo"
           }
         }
       }
@@ -871,12 +1441,122 @@
         }
       }
     },
+    "Record the first part" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar a primeira parte"
+          }
+        }
+      }
+    },
+    "Record the first song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar a primeira música"
+          }
+        }
+      }
+    },
+    "Recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravando"
+          }
+        }
+      }
+    },
+    "Recording %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravando %@"
+          }
+        }
+      }
+    },
     "Recording is on the computer for now" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Por enquanto, gravar é no computador"
+          }
+        }
+      }
+    },
+    "Recording is paused on this server." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar tá pausado neste servidor."
+          }
+        }
+      }
+    },
+    "Recording needs you to leave the call. Leave the call, then come back here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pra gravar tu precisa sair da call. Sai da call e volta aqui."
+          }
+        }
+      }
+    },
+    "Send anyway" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mandar assim mesmo"
+          }
+        }
+      }
+    },
+    "Send as a new song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mandar como música nova"
+          }
+        }
+      }
+    },
+    "Send to the band" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mandar pra banda"
+          }
+        }
+      }
+    },
+    "Sending to the band" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mandando pra banda"
+          }
+        }
+      }
+    },
+    "Sent. Your part is in the song." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mandado. Tua parte já tá na música."
           }
         }
       }
@@ -921,12 +1601,92 @@
         }
       }
     },
+    "Some tracks of the band do not play on iPhone yet, so you will not hear them while you record." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algumas faixas da banda ainda não tocam no iPhone, então tu não vai ouvir elas enquanto grava."
+          }
+        }
+      }
+    },
+    "Somebody deleted this song. Your recording is safe: send it as a new song, or discard it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alguém excluiu essa música. Tua gravação tá guardada: manda como música nova, ou descarta."
+          }
+        }
+      }
+    },
     "Somebody took it down while you were in it." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Alguém tirou do ar enquanto tu tava nela."
+          }
+        }
+      }
+    },
+    "Something interrupted the recording before anything was recorded. Record again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algo interrompeu a gravação antes de gravar qualquer coisa. Grava de novo."
+          }
+        }
+      }
+    },
+    "Something interrupted the recording, like a call. What you played up to then is kept: listen to it and send it, or record again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algo interrompeu a gravação, tipo uma ligação. O que tu tocou até ali foi guardado: ouve e manda, ou grava de novo."
+          }
+        }
+      }
+    },
+    "Song name" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nome da música"
+          }
+        }
+      }
+    },
+    "Sound takes a moment to leave your headphones and come back through the microphone. We measure that delay once and subtract it from your recording, so your part lands in time with nothing to cut. It is remembered for this headset and this microphone." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O som demora um pouco pra sair do fone e voltar pelo microfone. A gente mede esse atraso uma vez e desconta da tua gravação, pra tua parte cair no tempo sem tu cortar nada. Fica guardado pra esse fone e esse microfone."
+          }
+        }
+      }
+    },
+    "Sounds good?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ficou bom?"
+          }
+        }
+      }
+    },
+    "Stop and discard the recording?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parar e descartar a gravação?"
           }
         }
       }
@@ -1761,6 +2521,26 @@
         }
       }
     },
+    "Tap along instead" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bater no ritmo"
+          }
+        }
+      }
+    },
+    "Tap along with every click." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bate no ritmo de cada clique."
+          }
+        }
+      }
+    },
     "Terms of Service" : {
       "localizations" : {
         "pt-BR" : {
@@ -1781,12 +2561,162 @@
         }
       }
     },
+    "That was too short. Keep playing a little longer." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ficou curto demais. Toca um pouco mais."
+          }
+        }
+      }
+    },
+    "The band" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A banda"
+          }
+        }
+      }
+    },
+    "The band plays in your ears and your recording lands in time." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A banda toca no teu ouvido e a tua gravação cai no tempo."
+          }
+        }
+      }
+    },
+    "The band will leak into the microphone. Plug in headphones, or record anyway." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A banda vai vazar pro microfone. Liga um fone, ou grava assim mesmo."
+          }
+        }
+      }
+    },
+    "The file came out too large." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O arquivo ficou grande demais."
+          }
+        }
+      }
+    },
+    "The first track of a new song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A primeira faixa de uma música nova"
+          }
+        }
+      }
+    },
+    "The headphones or the audio output changed before anything was recorded. Check them and record again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O fone ou a saída de áudio mudou antes de gravar qualquer coisa. Confere e grava de novo."
+          }
+        }
+      }
+    },
+    "The headphones or the audio output changed, so the recording stopped. What you played up to then is kept: listen to it and send it, or record again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O fone ou a saída de áudio mudou, então a gravação parou. O que tu tocou até ali foi guardado: ouve e manda, ou grava de novo."
+          }
+        }
+      }
+    },
+    "The measurements disagree with each other by more than expected." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As medidas discordam entre si mais do que devia."
+          }
+        }
+      }
+    },
+    "The microphone did not pick anything up. Send it anyway?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O microfone não captou nada. Mandar mesmo assim?"
+          }
+        }
+      }
+    },
+    "The microphone is blocked. Allow it in Settings and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O microfone tá bloqueado. Libera nos Ajustes e tenta de novo."
+          }
+        }
+      }
+    },
+    "The microphone stopped working before anything was recorded. Check it and record again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O microfone parou de funcionar antes de gravar qualquer coisa. Confere ele e grava de novo."
+          }
+        }
+      }
+    },
+    "The microphone stopped working, so the recording stopped. What you played up to then is kept: listen to it and send it, or record again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O microfone parou de funcionar e a gravação parou. O que tu tocou até ali foi guardado: ouve e manda, ou grava de novo."
+          }
+        }
+      }
+    },
+    "The name can be %lld characters at most." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O nome pode ter no máximo %lld letras."
+          }
+        }
+      }
+    },
     "The people who run pqp took this community down. The room itself has not changed and everyone inside carries on as normal; only the public page and the directory listing are gone." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quem cuida do pqp tirou esta comunidade do ar. A sala em si não mudou e quem está dentro continua usando normal, só a página pública e o diretório sumiram."
+          }
+        }
+      }
+    },
+    "The phone ran out of space and the recording stopped." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O celular ficou sem espaço e a gravação parou."
           }
         }
       }
@@ -2011,12 +2941,72 @@
         }
       }
     },
+    "This recording has no sound" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa gravação está sem som"
+          }
+        }
+      }
+    },
+    "This server cannot store recordings yet." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse servidor ainda não guarda gravações."
+          }
+        }
+      }
+    },
     "This server's rules blocked it." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "As regras desse servidor bloquearam."
+          }
+        }
+      }
+    },
+    "This song has no room for more tracks." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa música lotou de faixas."
+          }
+        }
+      }
+    },
+    "This song is closed. Only whoever started it records on it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa música tá fechada. Só quem começou grava nela."
+          }
+        }
+      }
+    },
+    "This song is closed to new recordings." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa música tá fechada pra novas gravações."
+          }
+        }
+      }
+    },
+    "This song is not looking for that instrument." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa música não tá procurando esse instrumento."
           }
         }
       }
@@ -2187,6 +3177,56 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esperando conexão"
+          }
+        }
+      }
+    },
+    "What are you looking for?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O que tu tá procurando?"
+          }
+        }
+      }
+    },
+    "What are you playing?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O que tu vai tocar?"
+          }
+        }
+      }
+    },
+    "What you have recorded so far is lost." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O que tu gravou até agora vai embora."
+          }
+        }
+      }
+    },
+    "Who can join" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem pode entrar"
+          }
+        }
+      }
+    },
+    "Wireless audio" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Áudio sem fio"
           }
         }
       }
@@ -11237,6 +12277,16 @@
         }
       }
     },
+    "You already sent too many tracks to this song." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu já mandou faixas demais nessa música."
+          }
+        }
+      }
+    },
     "You and %@ are friends now" : {
       "localizations" : {
         "pt-BR" : {
@@ -11333,6 +12383,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agora você pode falar. Ligue o microfone quando quiser."
+          }
+        }
+      }
+    },
+    "You cannot record on this song right now." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não pode gravar nessa música agora."
           }
         }
       }
@@ -11467,6 +12527,26 @@
         }
       }
     },
+    "You pick the ones still missing" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu escolhe quais ainda faltam"
+          }
+        }
+      }
+    },
+    "You start the song. Hit the red button and play it your way. Whoever comes next records on top." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu começa a música. Aperta o botão vermelho e toca do teu jeito. Quem vier depois grava por cima."
+          }
+        }
+      }
+    },
     "You turned nudges off. Turn them back on in Settings." : {
       "localizations" : {
         "pt-BR" : {
@@ -11483,6 +12563,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você vai precisar de um novo convite para voltar."
+          }
+        }
+      }
+    },
+    "Your recording is already playing with the band, in time. If you like it, send it to the band." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tua gravação já tá tocando com a banda, no tempo. Se curtiu, manda pra banda."
           }
         }
       }

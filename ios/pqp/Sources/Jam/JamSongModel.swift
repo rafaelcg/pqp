@@ -31,6 +31,9 @@ final class JamSongModel {
     /// A track whose download failed (offline, expired link): a retry is one tap.
     private(set) var downloadFailed = false
     private(set) var notice: String?
+    /// `GET /api/jam/config`, read when the screen opens: whether this server
+    /// takes recordings at all.
+    private(set) var config: JamConfig = .off
     private(set) var busyVotes: Set<String> = []
     /// Bumped when the playhead is moved from outside the tick (a scrub), so
     /// the clock redraws while paused.
@@ -110,6 +113,44 @@ final class JamSongModel {
     func volume(_ id: String) -> Double { volumes[id] ?? 1 }
     func isAuditioned(_ track: JamTrack) -> Bool { auditioning[track.instrument] == track.id }
 
+    /// Why this viewer cannot record here, or nil when they can.
+    var cannotRecord: JamRecordEligibility.Reason? {
+        JamRecordEligibility.cannotRecord(config: config, addable: viewer.addableInstruments, joinMode: song.joinMode)
+    }
+
+    /// The studio for this song: the band is what plays now (in the mix), the
+    /// instrument is the one the song asks for.
+    func makeRecordModel() -> JamRecordModel {
+        let mine = tracks.filter { $0.authorId == viewerId }
+        let pick = JamRecordEligibility.pickInstrument(song: song, addable: viewer.addableInstruments, mine: mine)
+        return JamRecordModel(
+            channel: channel, server: server, destination: .song(song),
+            band: JamMixRules.ordered(JamMixRules.activeTracks(tracks, auditioning: [:])),
+            addable: viewer.addableInstruments, instrument: pick ?? .guitar
+        )
+    }
+
+    /// The studio is about to open: nothing plays under it, and the audio
+    /// session goes back to whoever had it, so the studio takes it clean.
+    func suspendForRecording() {
+        pause()
+        audioSession.deactivate()
+        JamNowPlaying.clear()
+    }
+
+    /// The studio closed: read the song again (a take may have been added) and
+    /// carry on.
+    func resumeAfterRecording() async {
+        // The screen may have been left (and `stop` run) while the studio was
+        // up: start it again rather than syncing an engine that was torn down.
+        if !started, let session {
+            await start(session: session)
+            return
+        }
+        await load()
+        await syncEngine()
+    }
+
     var canSetMix: Bool { JamPermissions.canSetMix(viewer) }
     var canDeleteSong: Bool { JamPermissions.canDeleteSong(viewer) }
     func canDelete(_ track: JamTrack) -> Bool {
@@ -133,7 +174,9 @@ final class JamSongModel {
         }
         engine.onInterruption = { [weak self] in self?.engineStopped() }
         observeSystem()
+        async let configAnswer = session.api.jamConfig(serverId: server.id)
         await load()
+        config = await configAnswer
         guard mine == lifecycle else { return }
         await syncEngine()
     }
@@ -457,6 +500,7 @@ final class JamSongModel {
     }
 
     func clearNotice() { notice = nil }
+    func say(_ text: String) { notice = text }
     func clearFresh(_ id: String) { state.fresh.remove(id) }
 
     static func message(for error: Error) -> String {

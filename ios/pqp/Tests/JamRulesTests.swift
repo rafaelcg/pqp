@@ -320,7 +320,6 @@ final class JamRulesTests: XCTestCase {
         XCTAssertTrue(JamPermissions.canDeleteTrack(theirs, viewer: mod, viewerId: "me"))
         XCTAssertTrue(JamPermissions.canDeleteSong(author))
         XCTAssertFalse(JamPermissions.canDeleteSong(other))
-        XCTAssertFalse(JamPermissions.canRecordHere, "recording is on the computer for now")
     }
 
     func testTheAudioPolicyNeverTakesTheSessionUnderACall() {

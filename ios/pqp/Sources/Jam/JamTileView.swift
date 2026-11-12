@@ -1,7 +1,11 @@
 import SwiftUI
 
-// A TILE ON THE WALL. Three kinds, the way the approved design draws them:
+// A TILE ON THE WALL. Four kinds, the way the approved design draws them:
 //
+//  - a song with a COVER shows the picture under its title, on a shade so the
+//    words read on any picture; until the picture is here (and when it never
+//    comes: offline, an address that has expired) the tile is the one it would
+//    be without a cover, so a slow download is never a gap;
 //  - a song with video shows a poster frame under its title (the hero gets the
 //    lime border);
 //  - an audio-only song is a block of its first instrument's colour drawing
@@ -22,11 +26,14 @@ struct JamTileView: View {
     let isFresh: Bool
 
     @State private var drawn = false
+    /// A cover is on screen (`JamCoverImage` says so once it has loaded).
+    @State private var hasCover = false
 
     private var need: JamNeed { JamNeed.of(song) }
     private var facts: JamTileFacts { JamTileFacts.resolve(song: song, preview: preview) }
     private var tint: Color { (JamWho.instruments(of: song).first ?? .other).color }
-    private var hasPoster: Bool { poster != nil }
+    /// A picture under the words: the cover, or a video's poster frame.
+    private var hasPoster: Bool { poster != nil || hasCover }
     private var isEmptySong: Bool { song.trackCount == 0 }
     private var isHero: Bool { size == .hero }
     /// A small tile at an accessibility text size has no room for a waveform
@@ -45,6 +52,7 @@ struct JamTileView: View {
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             background
+            JamCoverImage(songId: song.id, cover: song.cover) { hasCover = $0 != nil }
             if showsWave { waveLayer }
             if hasPoster { posterShade }
             labels
@@ -57,6 +65,7 @@ struct JamTileView: View {
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint(Text("Opens the song"))
         .accessibilityAddTraits(.isButton)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: hasCover)
         .onAppear {
             guard !drawn else { return }
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.7).delay(0.1)) { drawn = true }
@@ -67,7 +76,7 @@ struct JamTileView: View {
 
     @ViewBuilder
     private var background: some View {
-        if let poster {
+        if let poster, !hasCover {
             // An overlay on a clear base, so a fill-scaled image can never
             // widen the tile past the cell the mosaic gave it.
             Color.clear.overlay {

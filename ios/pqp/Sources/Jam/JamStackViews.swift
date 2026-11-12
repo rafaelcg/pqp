@@ -13,6 +13,8 @@ import SwiftUI
 struct JamStageView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let model: JamSongModel
+    /// The song's cover is on screen (`JamCoverImage` says so once it landed).
+    @State private var hasCover = false
 
     private var videoTracks: [JamTrack] {
         model.active.filter { model.video.player(for: $0.id) != nil }.prefix(4).map { $0 }
@@ -68,21 +70,30 @@ struct JamStageView: View {
         .background(Palette.inkDeep)
     }
 
-    /// With no video this phone can play, the song is its colour and the
+    /// With no video this phone can play, the song is its cover when it has
+    /// one, and otherwise (and until the cover is here) its colour and the
     /// shape of its sound.
     private var artwork: some View {
         ZStack(alignment: .bottomLeading) {
             LinearGradient(
                 colors: [artTint, artTint.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing
             )
-            JamWaveform(
-                values: JamPeaks.mixEnvelope(tracks: model.active, bars: 64),
-                color: Palette.ink.opacity(0.85),
-                barWidth: 4, gap: 3
-            )
-            .frame(height: 84)
-            .frame(maxHeight: .infinity, alignment: .center)
-            .padding(.horizontal, 18)
+            JamCoverImage(songId: model.song.id, cover: model.song.cover) { hasCover = $0 != nil }
+            if hasCover {
+                LinearGradient(
+                    colors: [.clear, Palette.inkDeep.opacity(0.7)], startPoint: .center, endPoint: .bottom
+                )
+                .allowsHitTesting(false)
+            } else {
+                JamWaveform(
+                    values: JamPeaks.mixEnvelope(tracks: model.active, bars: 64),
+                    color: Palette.ink.opacity(0.85),
+                    barWidth: 4, gap: 3
+                )
+                .frame(height: 84)
+                .frame(maxHeight: .infinity, alignment: .center)
+                .padding(.horizontal, 18)
+            }
             if hasUnplayableVideo {
                 Label("The video does not play on iPhone yet", systemImage: "video.slash")
                     .font(JamFont.text(12, .semibold))
@@ -102,7 +113,8 @@ struct JamStageView: View {
             }
             .padding(14)
         }
-        .frame(height: 190)
+        .frame(height: hasCover ? 240 : 190)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: hasCover)
     }
 }
 

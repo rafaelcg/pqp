@@ -3,9 +3,9 @@ import UIKit
 
 // The look of jam, in the app's own tokens. Nothing here invents a visual
 // system: the grounds, borders, type and the lime are `Palette` and
-// `Typography`; the only new colours are one per instrument, taken from the
-// approved design (`JamNoApp`: lime guitar, blue bass, orange drums, pink
-// voice) with a teal for keys and a warm grey for "other".
+// `Typography`; the only new colours are one per instrument, the same hues as
+// the web's `--color-inst-*` tokens (yellow guitar, blue bass, orange drums,
+// pink vocals, cyan keys, lilac other).
 //
 // The app is dark everywhere (`PqpApp` pins `.preferredColorScheme(.dark)`),
 // so these are dark-ground colours: tiles are the instrument's colour with
@@ -50,15 +50,33 @@ enum JamFont {
 }
 
 extension JamInstrument {
-    var color: Color {
+    /// The instrument identity colours, sRGB, converted from the web's tokens
+    /// (`--color-inst-*` in `client/src/index.css`, which are oklch). They are
+    /// told apart by lightness as well as hue, from the darkest blue to the
+    /// lightest yellow, so they hold for somebody who cannot tell the hues
+    /// apart. The guitar is a warm yellow and not the app's lime on purpose:
+    /// lime is the accent, the colour of every "do this" button, and a lime
+    /// guitar lane beside a lime "Gravar" read as one more button.
+    /// `JamInstrumentColorTests` converts these back to oklch and compares them
+    /// with the web file, so a token that moves there fails here.
+    ///
+    ///     bass   oklch(0.64 0.15 255)     other  oklch(0.71 0.04 295)
+    ///     drums  oklch(0.77 0.15 55)      vocals oklch(0.82 0.12 345)
+    ///     keys   oklch(0.87 0.11 195)     guitar oklch(0.92 0.15 90)
+    var rgb: (red: Double, green: Double, blue: Double) {
         switch self {
-        case .guitar: Palette.signal
-        case .bass: Color(red: 0.49, green: 0.72, blue: 0.95)
-        case .drums: Color(red: 0.95, green: 0.64, blue: 0.29)
-        case .vocals: Color(red: 0.91, green: 0.64, blue: 0.84)
-        case .keys: Color(red: 0.44, green: 0.82, blue: 0.80)
-        case .other: Color(red: 0.80, green: 0.78, blue: 0.70)
+        case .guitar: (1.000, 0.877, 0.381)
+        case .bass: (0.275, 0.554, 0.897)
+        case .drums: (0.989, 0.595, 0.299)
+        case .vocals: (0.987, 0.643, 0.839)
+        case .keys: (0.440, 0.921, 0.920)
+        case .other: (0.638, 0.616, 0.723)
         }
+    }
+
+    var color: Color {
+        let c = rgb
+        return Color(red: c.red, green: c.green, blue: c.blue)
     }
 
     /// "guitar", for the middle of a sentence ("needs guitar").

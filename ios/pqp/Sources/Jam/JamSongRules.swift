@@ -194,9 +194,4 @@ enum JamPermissions {
 
     /// A song goes away by its author or a moderator.
     static func canDeleteSong(_ viewer: JamSongViewer) -> Bool { viewer.isAuthor || viewer.canModerate }
-
-    /// Whether this build says "recording is on the computer" or offers a
-    /// record button. Today there is none, so it never records; the seam is
-    /// here so the real button replaces the sheet and not a screen.
-    static let canRecordHere = false
 }
