@@ -7740,6 +7740,7 @@
   "jam.share.error.other": "Não foi. Tenta de novo.",
   "jam.card.playFailed": "Não deu pra tocar",
   "jam.song.band": "A banda",
+  "jam.song.bandHint": "Mudo, solo e volume de cada parte",
   "jam.song.bandCount_zero": "nenhum instrumento ainda",
   "jam.song.bandCount_one": "{countLabel} instrumento",
   "jam.song.bandCount_other": "{countLabel} instrumentos",

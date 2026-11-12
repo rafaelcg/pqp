@@ -129,7 +129,13 @@ function Wave({ track, durationMs, player }: { track: PublicJamTrack; durationMs
       className="relative h-10 w-full cursor-pointer overflow-hidden rounded-[var(--radius-control)] bg-surface-1"
       style={{ color: inkMix(instrument) }}
     >
-      <svg viewBox={`0 0 100 ${H}`} preserveAspectRatio="none" className="absolute inset-0 h-full w-full opacity-[var(--jam-wave-dim,0.38)]" aria-hidden="true">
+      {/* still to play: a plain neutral grey, not a dimmed copy of the hue (a dimmed yellow is khaki, a dimmed violet is slate) */}
+      <svg
+        viewBox={`0 0 100 ${H}`}
+        preserveAspectRatio="none"
+        className="absolute inset-0 h-full w-full text-[color-mix(in_oklab,var(--color-text)_32%,var(--color-surface-1))]"
+        aria-hidden="true"
+      >
         <path d={path} fill="currentColor" />
       </svg>
       <svg

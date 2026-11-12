@@ -563,6 +563,11 @@ export function JamSongPanel({
                 )}
               </div>
             )}
+            {collapsible && !bandOpen && detail && (
+              <p data-jam-band-hint="" className="text-[13px] leading-snug text-text-secondary">
+                {t("jam.song.bandHint")}
+              </p>
+            )}
             {!stageOn && transport}
           </div>
 

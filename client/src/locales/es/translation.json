@@ -7812,6 +7812,7 @@
   "jam.share.error.other": "No salió. Prueba de nuevo.",
   "jam.card.playFailed": "No se pudo reproducir",
   "jam.song.band": "La banda",
+  "jam.song.bandHint": "Silencio, solo y volumen de cada parte",
   "jam.song.bandCount_zero": "ningún instrumento todavía",
   "jam.song.bandCount_one": "{countLabel} instrumento",
   "jam.song.bandCount_other": "{countLabel} instrumentos",
