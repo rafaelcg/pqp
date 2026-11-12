@@ -1678,7 +1678,8 @@
     <string name="jam_rec_band">A banda</string>
     <string name="jam_rec_alone">Tu começa a música. Aperta o botão vermelho e toca do teu jeito. Quem vier depois grava por cima.</string>
     <string name="jam_rec_what">O que tu vai tocar?</string>
-    <string name="jam_rec_wanted">pedido pela música</string>
+    <string name="jam_rec_wanted">pedido</string>
+    <string name="jam_rec_route_section">Microfone e contagem</string>
     <string name="jam_rec_count_in">Contar antes de começar</string>
     <string name="jam_rec_count_in_hint">Quatro cliques e a banda entra. Não muda nada na música.</string>
     <string name="jam_rec_bpm">%d BPM</string>

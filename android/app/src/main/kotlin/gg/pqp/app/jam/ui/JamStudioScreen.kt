@@ -489,7 +489,7 @@ private fun SetupBody(model: JamStudioViewModel, ui: JamStudioUi, askMic: (Strin
             SectionLabel(stringResource(R.string.jam_rec_what))
             InstrumentPicker(model, ui)
 
-            SectionLabel(stringResource(R.string.jam_rec_title))
+            SectionLabel(stringResource(R.string.jam_rec_route_section))
             RouteSection(model, ui, measureOpen, onMeasureOpen = { measureOpen = it })
             CountInRow(model, ui)
         }
@@ -897,7 +897,7 @@ private fun LaneRow(lane: StudioLane, originMs: Double, durationMs: Double, play
         Box(
             Modifier
                 .weight(1f)
-                .height(48.dp)
+                .height(60.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(if (lane.mine) tint.copy(alpha = 0.16f) else colors.surfaceContainer)
                 .then(if (lane.mine) Modifier.border(2.dp, tint, RoundedCornerShape(12.dp)) else Modifier)
@@ -931,7 +931,7 @@ private fun LaneRow(lane: StudioLane, originMs: Double, durationMs: Double, play
                     .padding(start = with(density) { (width * start).toDp() })
                     .width(with(density) { (width * (end - start)).toDp() })
                     .fillMaxSize()
-                    .padding(vertical = 6.dp),
+                    .padding(top = 18.dp, bottom = 6.dp),
             ) {
                 JamWaveform(
                     values = bars,
@@ -1097,7 +1097,7 @@ private fun LiveLane(model: JamStudioViewModel, ui: JamStudioUi, tint: Color, sc
         Box(
             Modifier
                 .weight(1f)
-                .height(48.dp)
+                .height(60.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(tint.copy(alpha = 0.16f))
                 .border(2.dp, tint, RoundedCornerShape(12.dp))
@@ -1110,10 +1110,13 @@ private fun LiveLane(model: JamStudioViewModel, ui: JamStudioUi, tint: Color, sc
                     peaks.forEachIndexed { i, p ->
                         val x = (i * 80f) * perMs
                         if (x <= size.width) {
-                            val h = max(3.dp.toPx(), p.coerceIn(0f, 1f) * (size.height - 12.dp.toPx()))
+                            // Below the name, like the other lanes: 18 dp of label above, 6 dp of margin under.
+                            val top = 18.dp.toPx()
+                            val room = size.height - top - 6.dp.toPx()
+                            val h = max(3.dp.toPx(), p.coerceIn(0f, 1f) * room)
                             drawRoundRect(
                                 tint,
-                                topLeft = Offset(x, (size.height - h) / 2f),
+                                topLeft = Offset(x, top + (room - h) / 2f),
                                 size = Size(barW, h),
                                 cornerRadius = CornerRadius(barW / 2),
                             )
@@ -1249,7 +1252,7 @@ private fun NudgeCard(model: JamStudioViewModel, ui: JamStudioUi) {
             )
             NudgeButton(stringResource(R.string.jam_rec_later), PqpIcons.Forward, 1, model, Modifier.weight(1f).testTag("jam.studio.later"))
         }
-        Text(stringResource(R.string.jam_rec_hold_hint), style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+        Text(stringResource(R.string.jam_rec_hold_hint), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
         if (nudge != 0) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), modifier = Modifier.fillMaxWidth()) {
                 TextButton(onClick = model::resetNudge) { Text(stringResource(R.string.jam_rec_nudge_reset), maxLines = 1) }

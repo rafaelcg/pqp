@@ -1687,7 +1687,8 @@
     <string name="jam_rec_band">The band</string>
     <string name="jam_rec_alone">You start the song. Hit the red button and play your way. Whoever comes next records over it.</string>
     <string name="jam_rec_what">What will you play?</string>
-    <string name="jam_rec_wanted">asked for by the song</string>
+    <string name="jam_rec_wanted">wanted</string>
+    <string name="jam_rec_route_section">Microphone and count-in</string>
     <string name="jam_rec_count_in">Count in before starting</string>
     <string name="jam_rec_count_in_hint">Four clicks and the band comes in. It changes nothing in the song.</string>
     <string name="jam_rec_bpm">%d BPM</string>
