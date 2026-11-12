@@ -19,12 +19,10 @@
  * that survives Clerk's redirect. On a same-origin mount (`/jam`, a preview,
  * localhost) the public page also stashes directly.
  *
- * WHAT THE APP DOES WITH IT TODAY. Nothing public-jam-shaped exists in the app
- * yet, so `App` peeks the intent (never consumes it) and sends the person back
- * to the public page with `?from=app`, which says "open in the app" honestly.
- * The in-app public jam view takes the intent with `takeJamIntent` and opens
- * the song (and the studio when `record` is set). `docs/JAM_SITE.md` has the
- * full hand-over.
+ * WHAT THE APP DOES WITH IT. `App` takes the intent with `takeJamIntent` and
+ * hands it to the public jam view (`lib/jam-public-nav.ts`), which opens the
+ * song (and the studio when `record` is set, a like, a report, or the start
+ * sheet). `docs/JAM_SITE.md` has the hand-over.
  *
  * Consume-on-read, a one hour TTL, storage-denied tolerance: all as the other
  * intents, for the same reasons (an intent that outlives its action repeats).

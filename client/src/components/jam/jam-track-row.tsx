@@ -1,5 +1,5 @@
 import type { JamTrack } from "@pqp/shared";
-import { CircleMinus, CirclePlus, Ear, Headphones, MoreHorizontal, SlidersHorizontal, ThumbsUp, Trash2 } from "lucide-react";
+import { CircleMinus, CirclePlus, Ear, Flag, Headphones, MoreHorizontal, SlidersHorizontal, ThumbsUp, Trash2 } from "lucide-react";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Menu } from "@/components/ui/menu";
 import { Slider } from "@/components/ui/slider";
@@ -67,6 +67,10 @@ export interface JamTrackRowProps {
   onAdjust: () => void;
   onDelete: () => void;
   onAudition: () => void;
+  /** A public jam, somebody else's part: "Denunciar essa parte" in the lane's menu. */
+  onReport?: () => void;
+  /** This is the viewer's own outside take, waiting for the song's starter (not an alternate version). */
+  waitingForStarter?: boolean;
   onSeek: (fraction: number) => void;
 }
 
@@ -101,6 +105,8 @@ export function JamTrackRow({
   onAdjust,
   onDelete,
   onAudition,
+  onReport,
+  waitingForStarter = false,
   onSeek,
 }: JamTrackRowProps) {
   const { t } = useTranslation();
@@ -122,6 +128,7 @@ export function JamTrackRow({
     ...(canSwitchMix && track.inMix
       ? [{ id: "take-out", label: t("jam.take.takeOut"), icon: CircleMinus, onSelect: onSwitchMix }]
       : []),
+    ...(onReport ? [{ id: "report", label: t("jam.public.menu.reportPart"), icon: Flag, onSelect: onReport }] : []),
     ...(canDelete ? [{ id: "delete", label: t("jam.take.delete"), icon: Trash2, danger: true, onSelect: onDelete }] : []),
   ];
 
@@ -323,7 +330,7 @@ export function JamTrackRow({
                 data-jam-out-pill=""
                 className="pointer-events-none absolute left-1.5 top-1.5 rounded-full bg-surface-0/85 px-1.5 py-px text-[11px] font-bold text-text-secondary"
               >
-                {t("jam.take.out")}
+                {waitingForStarter ? t("jam.public.outside.badge") : t("jam.take.out")}
               </span>
             )}
             {gainWords && (

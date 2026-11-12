@@ -123,6 +123,8 @@ export interface PostTakeArgs {
   onProgress?: (progress: JamPostProgress) => void;
   signal?: AbortSignal;
   deps?: JamPostDeps;
+  /** The song is public: the person's answer for this take (`docs/JAM_PUBLIC.md`, "Consent"). */
+  publicConsent?: "yes" | "audio_only";
 }
 
 /**
@@ -202,6 +204,7 @@ async function runPost(args: PostTakeArgs): Promise<JamTrackWithSong> {
     trimEndMs: Math.round(take.trimEndMs),
     gain: take.gain,
     peaks: take.peaks,
+    ...(args.publicConsent ? { publicConsent: args.publicConsent } : {}),
   });
   state.result = result;
   onProgress?.({ stage: "done", fraction: 1 });

@@ -37,6 +37,23 @@ Verified with `wrangler pages dev` (4.149.0, the CI version) against a seeded AP
 the host mount, `/jam`, a song's head, `noindex`, HEAD, and an unrelated page of
 `jam.pqp.gg` passing through.
 
+**Nothing else lives on the host.** A Pages project has one asset set, so
+`jam.pqp.gg/download` used to answer with the whole app, indexable, a duplicate of
+`pqp.gg/download`. The middleware now answers a 301 to the same path (and query)
+on the main site for any path of a `jam.*` host that is not `/`, `/m/<id>` or a
+static file (`/assets/`, `/icons/`, `/images/`, or a name with an extension: the
+icon, the manifest, robots). `jamHostRedirect` in `src/lib/jam-meta.ts`, tested in
+`src/lib/jam-host-redirect.test.ts`. `/jam` and `/jam/m/<id>` on every other host
+are unchanged.
+
+**Fonts.** The entry imports `fonts.css` (Gabarito for headlines, Instrument Sans,
+Dela Gothic for the wordmark), so the faces are there; what the page lacked was
+the early request. A browser asks for a face only once a rendered word needs it,
+and here that is after HTML, script, catalogue and render, so the headline of the
+"not open yet" page was drawn in the Arial-metric fallback first (`font-display:
+swap`). `jam-site/index.html` now preloads the three Latin files, like the app's
+`index.html`.
+
 **Hostname step still owed (not done in the PR):** add `jam.pqp.gg` as a custom
 domain on the Pages project `pqp` (DNS and the Pages dashboard). Until then the
 site is reachable at `pqp.gg/jam`.
@@ -104,28 +121,21 @@ on `pqp.gg` (two origins, so a `localStorage` stash is invisible across them).
 `pqp:pending-jam`, one hour, consumed on read) so it survives Clerk's redirect,
 exactly like `?add=` and `?join=`.
 
-**What the app does today.** There is no public-jam view in the app yet. At
-`bootstrapReady`, `App.tsx` (the block marked "A public jam somebody came from")
-takes the intent and sends the person back to the public page with `?from=app`,
-which says honestly that recording opens in the app and is on its way. The public
-page never knows it is signed in (it loads no auth): a returning signed-in
-visitor sees the sheet and continues to `/app`, where the intent is acted on at
-once.
+**What the app does.** At `bootstrapReady`, `App.tsx` (the block marked "A public
+jam somebody came from") takes the intent and calls `openPublicJam`
+(`lib/jam-public-nav.ts`); `JamPublicHost` navigates to `/app/jam/<songId>` (or
+`/app/jam/new`) and `JamPublicView` acts on it: `record` opens the studio on
+`instrument` when `viewer.addableInstruments` allows it (else the first addable
+one), `act: "like"` likes once before the view paints, `act: "report"` opens the
+report dialog for the song or the one part, `new` opens the start sheet and the
+studio, and the take creates a standalone public jam. The intent is dropped after
+it is acted on, and `JAM_INTENT_PARAMS` are stripped from the address. The
+public page never knows it is signed in (it loads no auth): a returning
+signed-in visitor sees the sheet and continues to `/app`, where the intent is
+acted on at once. `jamReturnPath` and the site's `?from=app` notice are no
+longer used by the app and are kept for an older build still in a tab.
+`docs/JAM_PUBLIC.md` section "In the app" says what the view is made of.
 
-**What the in-app agent must pick up.** Replace that block: take the intent with
-`takeJamIntent(storage)` (or `jamIntentFromSearch(location.search)`), and
-- `kind: "song"`: open the public jam `songId` in the app (read it with
-  `GET /api/jam-public/songs/:songId`, which carries `viewer.addableInstruments`);
-  with `record: true`, open the studio on `instrument` when the viewer may record
-  it (`viewer.addableInstruments`), else on the first addable one. A public take
-  needs `publicConsent` (`yes` or `audio_only`) on the add-track request;
-- `act: "like"` / `act: "report"` (with `trackId` for one part): do it after the
-  song is open (`PUT /api/jam-public/songs/:songId/like`, or the report sheet that
-  posts `POST /api/jam-public/reports` with `songId` and `trackId`);
-- `kind: "new"`: open the start sheet that calls `POST /api/jam-public/songs`.
-
-`JAM_INTENT_PARAMS` is the list of query parameters to strip from the address
-once the intent is read.
 
 ## Sharing and SEO
 

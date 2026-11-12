@@ -54,6 +54,30 @@ export function jamTargetFromMetaPath(hostname: string, pathname: string): JamTa
   return song && UUID.test(song[1]!) ? { kind: "song", mount: "path", songId: song[1]!.toLowerCase() } : null;
 }
 
+/**
+ * Where a request to `jam.*` that is not the jam site goes: the same path on the
+ * main site, or null when the jam site answers it. The host serves the whole
+ * app's build (a Pages project has one asset set), so without this
+ * `jam.pqp.gg/download` is an indexable duplicate of `pqp.gg/download`. The
+ * site's own addresses are `/` and `/m/<id>`; a static asset (anything under
+ * `/assets/`, `/icons/`, `/images/`, or a file with an extension: the icon, the
+ * manifest, robots) is the site's too, because its page loads them from here.
+ */
+export function jamHostRedirect(where: {
+  protocol: string;
+  hostname: string;
+  port: string;
+  pathname: string;
+  search: string;
+}): string | null {
+  if (!/^jam\./i.test(where.hostname)) return null;
+  const path = where.pathname.length > 1 ? where.pathname.replace(/\/+$/, "") : where.pathname;
+  if (path === "/" || /^\/m\/[^/]+$/.test(path)) return null;
+  if (/^\/(assets|icons|images)\//.test(path) || /\/[^/]*\.[a-z0-9]{2,12}$/i.test(path)) return null;
+  const host = where.hostname.replace(/^jam\./i, "");
+  return `${where.protocol}//${host}${where.port ? `:${where.port}` : ""}${where.pathname}${where.search}`;
+}
+
 export interface JamSongMeta {
   id: string;
   title: string;

@@ -152,7 +152,15 @@ async function upload(api: string, who: string, songId: string, kind: "audio" | 
   return ticket.uploadId;
 }
 
-async function addTrack(api: string, who: string, songId: string, instrument: string, withVideo: boolean, note: number): Promise<string> {
+export async function addTrack(
+  api: string,
+  who: string,
+  songId: string,
+  instrument: string,
+  withVideo: boolean,
+  note: number,
+  extra: Record<string, unknown> = {},
+): Promise<string> {
   const audioUploadId = await upload(api, who, songId, "audio", wav(10, note));
   const videoUploadId = withVideo ? await upload(api, who, songId, "video", CLIP) : null;
   const { track } = await call<{ track: { id: string } }>(api, who, "POST", `/api/jam-songs/${songId}/tracks`, {
@@ -161,6 +169,7 @@ async function addTrack(api: string, who: string, songId: string, instrument: st
     ...(videoUploadId ? { videoUploadId } : {}),
     durationMs: 10_000,
     peaks: [0.2, 0.8, 0.5, 0.9, 0.3, 0.7, 0.4, 0.9, 0.2, 0.6],
+    ...extra,
   });
   return track.id;
 }

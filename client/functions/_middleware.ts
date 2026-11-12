@@ -29,6 +29,7 @@ import {
 } from "../src/lib/invite-meta";
 import {
   injectJamHead,
+  jamHostRedirect,
   jamTargetFromMetaPath,
   type JamSongMeta,
   type JamTarget,
@@ -945,6 +946,25 @@ async function handleRequest(context: PagesContext): Promise<Response> {
       });
     }
     return response;
+  }
+
+  // `jam.pqp.gg` is the jam site and nothing else: any other path would be
+  // answered with the whole app, an indexable copy of the main site. A
+  // permanent redirect to the same path there (`jamHostRedirect`).
+  if (context.request.method === "GET" || context.request.method === "HEAD") {
+    const away = jamHostRedirect({
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port,
+      pathname: url.pathname,
+      search: url.search,
+    });
+    if (away) {
+      return new Response(null, {
+        status: 301,
+        headers: { location: away, "cache-control": "public, max-age=3600" },
+      });
+    }
   }
 
   // The public jam site: `jam.pqp.gg/`, `/m/<id>`, and `/jam`, `/jam/m/<id>` on

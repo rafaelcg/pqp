@@ -215,11 +215,12 @@ describe("the middleware on the home", () => {
     expect(JSON.stringify(mock.mock.calls[0])).not.toMatch(/authorization|cookie/i);
   });
 
-  it("does not touch any other page of jam.pqp.gg", async () => {
+  it("sends any other page of jam.pqp.gg to the main site, with no API call", async () => {
     const mock = stubApi({});
     const onRequest = await freshMiddleware();
     const response = await onRequest(ctx("https://jam.pqp.gg/privacy"));
     expect(mock).not.toHaveBeenCalled();
-    expect(await response.text()).toContain("<head>");
+    expect(response.status).toBe(301);
+    expect(response.headers.get("location")).toBe("https://pqp.gg/privacy");
   });
 });
