@@ -105,3 +105,7 @@ packages/app-sdk/publish/
 packages/app-sdk/*.tgz
 docs-apps/.vitepress/cache/
 docs-apps/.vitepress/dist/
+
+# jam-site-seed: downloaded public-domain media (fetch-media.mjs), never committed
+tools/jam-site-seed/.media/
+tools/jam-site-seed/ATTRIBUTION.generated.md

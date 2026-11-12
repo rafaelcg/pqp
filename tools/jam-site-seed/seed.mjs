@@ -18,6 +18,12 @@
  *
  * Needs: ffmpeg, psql, and S3 (MinIO) configured on the server. Refuses any
  * API that is not on localhost.
+ *
+ * With `--media <dir>` (the directory `fetch-media.mjs` filled) the same songs
+ * are seeded with public-domain media instead: painted and photographed covers,
+ * real clips of people playing for the video parts, historical portraits as
+ * avatars, and one more song (eleven parts). Audio-only parts keep the
+ * synthetic audio on purpose. `ATTRIBUTION.md` lists every file and its licence.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
@@ -32,6 +38,8 @@ const args = Object.fromEntries(
 const API = (args.api ?? "http://localhost:3001").replace(/\/+$/, "");
 const DB = args.db ?? "postgresql://pqp:pqp@localhost:5432/pqp";
 const OUT = args.out ?? "/tmp/jam-seed";
+/** `--media <dir>`: seed with the public-domain media `fetch-media.mjs` downloaded. */
+const MEDIA = args.media ? JSON.parse(readFileSync(join(args.media, "media.json"), "utf8")) : null;
 if (!/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(API)) {
   console.error("refusing: --api must be a localhost address");
   process.exit(1);
@@ -72,13 +80,27 @@ async function ensurePeople() {
     );
     await call(suffix, "PATCH", "/api/me", { displayName: name, handle: suffix }, [200, 409]);
   }
+  if (MEDIA) {
+    // Eight of the twelve have a photograph; the rest keep the monogram, as real people do.
+    for (const [index, suffix] of Object.keys(PEOPLE).slice(0, MEDIA.portraits.length).entries()) {
+      const bytes = readFileSync(MEDIA.portraits[index]);
+      const ticket = await call(suffix, "POST", "/api/me/avatar", { contentType: "image/jpeg", byteSize: bytes.length });
+      const put = await fetch(ticket.uploadUrl, {
+        method: "PUT",
+        headers: { "content-type": "image/jpeg", "content-length": String(bytes.length) },
+        body: bytes,
+      });
+      if (!put.ok) throw new Error(`PUT avatar ${suffix}: ${put.status}`);
+      await call(suffix, "POST", "/api/me/avatar/claim", { key: ticket.key });
+    }
+  }
 }
 
 const userId = (suffix) => sql(`SELECT id FROM users WHERE clerk_id = 'dev_local_user_${suffix}'`);
 
 // ------------------------------------------------------------------- media
 
-const SECONDS = 28;
+const SECONDS = MEDIA ? MEDIA.seconds : 28;
 const esc = (expr) => expr.replace(/,/g, "\\,");
 
 /** One instrument's synthetic line. `p` shifts the pitch a little so two guitars differ. */
@@ -149,6 +171,31 @@ function audioFor(instrument, p) {
   return mediaCache.get(key);
 }
 
+/** The clip a video part of this instrument shows: a different one each time, so a band is not four copies of one drummer. */
+const clipUse = new Map();
+function clipFor(instrument) {
+  const pool = MEDIA.clips.filter((c) => c.role === instrument);
+  const from = pool.length ? pool : MEDIA.clips.filter((c) => c.role === "other");
+  const n = clipUse.get(instrument) ?? 0;
+  clipUse.set(instrument, n + 1);
+  return from[n % from.length];
+}
+
+/** A clip's own sound, for the part that carries its picture. */
+function clipAudio(clip) {
+  const key = `clip-${clip.id}`;
+  if (!mediaCache.has(key)) {
+    const file = join(OUT, `a-${key}.flac`);
+    if (!existsSync(file) || statSync(file).size === 0) {
+      ffmpeg(["-i", clip.file, "-vn", "-ac", "1", "-ar", "44100", "-c:a", "flac", file]);
+    }
+    mediaCache.set(key, { file, bytes: statSync(file).size, peaks: peaksOf(file) });
+  }
+  return mediaCache.get(key);
+}
+
+const VIDEO_TYPE = MEDIA?.format === "mp4" ? "video/mp4" : "video/webm";
+
 function videoFor(instrument, variant) {
   const key = `${instrument}-${variant}`;
   if (!mediaCache.has(key)) {
@@ -170,6 +217,10 @@ function videoFor(instrument, variant) {
 }
 
 function coverFor(n) {
+  if (MEDIA) {
+    const picked = MEDIA.covers[n % MEDIA.covers.length];
+    return { file: picked, bytes: statSync(picked).size };
+  }
   const file = join(OUT, `c-${n}.jpg`);
   if (!existsSync(file) || statSync(file).size === 0) {
     const hues = ["0x2d52b8", "0xc8621a", "0xb6558c", "0x2e9aa0", "0xc9b41c", "0x7a6aa3"];
@@ -286,11 +337,24 @@ const SONGS = [
     mode: ["open", []], origin: null,
     tracks: [T("guitar", "tchelo", { video: true }), T("bass", "gui", { video: true }), T("drums", "leco")],
   },
+  // Eleven parts, only in the real-media seed: the largest mosaic, half of it audio only.
+  ...(MEDIA
+    ? [{
+        key: "roda", title: "Roda de sábado", artist: "A Turma do Bar do Zé", starter: "bia", hoursAgo: 8, plays: 4200, likes: 305,
+        mode: ["wanted", ["bass"]], origin: { name: "Garagem do Tchê", slug: "garagem-do-tche", show: true },
+        tracks: [T("guitar", "bia", { video: true }), T("vocals", "juju", { video: true }), T("drums", "leco"), T("keys", "gui", { video: true }), T("guitar", "tchelo", { label: "violão 7 cordas" }),
+          T("vocals", "lia", { label: "coro" }), T("vocals", "mari", { label: "coro" }), T("other", "tati", { label: "sax", video: true }), T("other", "duda", { label: "pandeiro" }),
+          T("other", "zeca", { label: "acordeão", video: true }), T("other", "cris", { label: "violoncelo" })],
+        cover: 12,
+      }]
+    : []),
   // Never public: unpublished by its starter.
   { key: "despublicada", title: "Despublicada (não aparece)", starter: "leco", hoursAgo: 5, plays: 5, likes: 0, mode: ["open", []], origin: null, tracks: [T("guitar", "leco")], unpublish: true },
 ];
 
 const ids = {};
+const NO_COVER = new Set(["riff", "vento", "garoa"]);
+let nextCover = 0;
 const channelsByServer = new Map();
 
 async function ensureOrigin(starter, origin) {
@@ -325,11 +389,14 @@ async function seedSong(song, order) {
   // The starter's own part first: a song is not listed (so nobody else may add to it) until one part is public.
   const ordered = [...song.tracks].sort((a, b) => Number(b.person === song.starter) - Number(a.person === song.starter));
   for (const [index, track] of ordered.entries()) {
-    const audio = audioFor(track.instrument, 1 + ((order + index) % 4) * 0.06);
+    const clip = MEDIA && track.video ? clipFor(track.instrument) : null;
+    const audio = clip ? clipAudio(clip) : audioFor(track.instrument, 1 + ((order + index) % 4) * 0.06);
     const audioUploadId = await upload(track.person, songId, "audio", "audio/flac", audio);
     let videoUploadId = null;
     if (track.video) {
-      videoUploadId = await upload(track.person, songId, "video", "video/webm", videoFor(track.instrument, (order + index) % 3));
+      videoUploadId = clip
+        ? await upload(track.person, songId, "video", VIDEO_TYPE, { file: clip.file, bytes: statSync(clip.file).size })
+        : await upload(track.person, songId, "video", "video/webm", videoFor(track.instrument, (order + index) % 3));
     }
     const added = await call(track.person, "POST", `/api/jam-songs/${songId}/tracks`, {
       instrument: track.instrument,
@@ -370,8 +437,10 @@ async function seedSong(song, order) {
     ...(joinMode === "wanted" ? { wantedInstruments: wanted } : {}),
   });
 
-  if (song.cover !== undefined) {
-    const media = coverFor(song.cover);
+  // With real media nearly every song has a picture (a few keep the fallback tile), each a different one.
+  const coverIndex = MEDIA ? (NO_COVER.has(song.key) ? undefined : nextCover++) : song.cover;
+  if (coverIndex !== undefined) {
+    const media = coverFor(coverIndex);
     const uploadId = await upload(song.starter, songId, "cover", "image/jpeg", media);
     await call(song.starter, "PUT", `/api/jam-songs/${songId}/cover`, { uploadId });
     sql(
