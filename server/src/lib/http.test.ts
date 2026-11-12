@@ -69,6 +69,15 @@ describe("resolveCorsOrigin", () => {
     expect(resolveCorsOrigin("https://evil.example")).toBeNull();
   });
 
+  it("also answers the public Jam site origin once an allowlist exists", () => {
+    process.env.CORS_ALLOWED_ORIGINS = "https://pqp.gg";
+    delete process.env.JAM_SITE_ORIGIN;
+    expect(resolveCorsOrigin("https://jam.pqp.gg")).toBe("https://jam.pqp.gg");
+    process.env.JAM_SITE_ORIGIN = " ";
+    expect(resolveCorsOrigin("https://jam.pqp.gg")).toBeNull();
+    delete process.env.JAM_SITE_ORIGIN;
+  });
+
   it("stays permissive for requests that carry no Origin at all", () => {
     // Non-browser callers send no Origin, and CORS cannot restrict them anyway.
     process.env.CORS_ALLOWED_ORIGINS = "https://pqp.gg";
