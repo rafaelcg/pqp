@@ -65,19 +65,23 @@ function PartFace({ track, player, covered, playing }: { track: PublicJamTrack; 
     };
   }, [track, player, scale, live]);
   return (
-    <div className={cn("absolute inset-0 grid place-items-center [container:face/size]", look.tile.ground, look.tile.ink)}>
-      <PersonMark
-        avatarUrl={track.person.avatarUrl}
-        name={personLabel(track.person)}
-        fill={look.fill}
-        initialFill={look.tile.solid}
-        chip={look.tile.chip}
-        icon={<look.icon className="h-[58%] w-[58%]" strokeWidth={2} />}
-      />
+    <div className={cn("absolute inset-0 [container:face/size]", look.tile.ground, look.tile.ink)}>
+      {/* the person sits a little above the middle, in the room the caption leaves, so a strip fits under them */}
+      <div className="absolute inset-0 grid place-items-center pb-[12cqh]">
+        <PersonMark
+          avatarUrl={track.person.avatarUrl}
+          name={personLabel(track.person)}
+          fill={look.fill}
+          initialFill={look.tile.solid}
+          chip={look.tile.chip}
+          icon={<look.icon className="h-[58%] w-[58%]" strokeWidth={2} />}
+        />
+      </div>
       {live && (
         // under the person and out of the flow: the face never moves when the strip arrives. The
-        // wrapper is what is placed (`.jam-level` sets its own `position`, which beats a utility)
-        <span className="pointer-events-none absolute inset-x-0 top-[calc(50%+30cqmin)] hidden justify-center @min-[10rem]/face:flex">
+        // wrapper is what is placed (`.jam-level` sets its own `position`, which beats a utility).
+        // Only on a tile with room for it above the caption: a small one has the person and nothing else.
+        <span className="pointer-events-none absolute inset-x-0 top-[calc(44cqh+29cqmin)] hidden justify-center [@container_face_(min-width:9rem)_and_(min-height:10rem)]:flex">
           <LevelStrip ref={strip} count={LEVEL_BARS} data-jam-level-live="" className="flex h-[9cqmin] min-h-3 max-h-8" />
         </span>
       )}

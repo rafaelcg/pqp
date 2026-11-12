@@ -431,6 +431,20 @@ test.describe("what needs an account", () => {
     await expect(trigger).toBeFocused();
   });
 
+  test("a sheet closed with Escape opens again", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    for (let round = 0; round < 2; round += 1) {
+      await page.locator("[data-jam-report]").click();
+      await expect(page.locator("dialog[open]")).toContainText(/denunciar/i);
+      await page.keyboard.press("Escape");
+      await expect(page.locator("dialog[open]")).toHaveCount(0);
+    }
+    await page.locator("[data-jam-lane-menu]").first().click();
+    await page.locator("[data-jam-report-part]").click();
+    await expect(page.locator("dialog[open]")).toContainText(/denunciar/i);
+  });
+
   test("a part with no video is the person alone at rest, and gets its level strip only while the song plays", async ({ page }) => {
     await mockApi(page);
     await page.goto(`/jam/m/${SONG_A}`);

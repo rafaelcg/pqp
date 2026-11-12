@@ -314,7 +314,8 @@ function StageTile({
           aria-hidden="true"
           data-jam-stage-art=""
           className={cn(
-            "absolute inset-0 grid place-items-center motion-safe:transition-opacity motion-safe:duration-[var(--duration-base)]",
+            // a little above the middle, in the room the caption leaves, so a strip fits under the person
+            "absolute inset-0 grid place-items-center pb-[12cqh] motion-safe:transition-opacity motion-safe:duration-[var(--duration-base)]",
             tile.ink,
             dimmed && "opacity-40",
           )}
@@ -393,7 +394,8 @@ function TileLevel({ track, clock }: { track: JamTrack; clock: JamClock }) {
   return (
     // under the person and out of the flow: the face never moves when the strip arrives. The wrapper
     // is what is placed (`.jam-level` sets its own `position`, which beats a utility)
-    <span className="pointer-events-none absolute inset-x-0 top-[calc(50%+30cqmin)] flex justify-center">
+    // Only on a tile with room for it above the caption: a small one has the person and nothing else.
+    <span className="pointer-events-none absolute inset-x-0 top-[calc(44cqh+29cqmin)] hidden justify-center [@container_tile_(min-width:9rem)_and_(min-height:10rem)]:flex">
       <LevelStrip
         ref={strip}
         count={LEVEL_BARS}

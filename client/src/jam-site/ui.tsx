@@ -57,6 +57,15 @@ export function Sheet({
       dialog.close();
     }
   }, [open]);
+  // However the dialog was closed (Escape included), the owner hears it: an owner left thinking the
+  // sheet is still open would never open it again, because setting `open` to what it already is does nothing.
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    const closed = () => onClose();
+    dialog.addEventListener("close", closed);
+    return () => dialog.removeEventListener("close", closed);
+  }, [onClose]);
   return (
     <dialog
       ref={ref}

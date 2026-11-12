@@ -7785,7 +7785,7 @@
   "jam.latency.notNow": "Not now",
   "jam.needs.missingCount_one": "{countLabel} part missing",
   "jam.needs.missingCount_other": "{countLabel} parts missing",
-  "jam.song.slotHint": "{instrument} is missing. Your turn?",
+  "jam.song.slotHint": "Needs {instrument}. Your turn?",
   "jam.review.onTimeShort": "in time",
   "jam.review.editedShort": "adjusted",
   "jam.wall.songCount_one": "{countLabel} song",
