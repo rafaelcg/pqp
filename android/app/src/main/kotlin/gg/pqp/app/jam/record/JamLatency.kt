@@ -90,6 +90,10 @@ object JamLatency {
     const val LOOPBACK_FIRST_MS = 300.0
     const val LOOPBACK_PULSES = 10
 
+    /** After one strong match, the others are searched this far either side of it (ms), and a match is strong from this quality. */
+    private const val NARROW_MS = 15.0
+    private const val STRONG = 0.6
+
     /**
      * Loopback. [expectedFrames] are, for each sweep, the capture frame the
      * timestamps predict it at (output frame mapped through both anchors, with a
@@ -105,11 +109,23 @@ object JamLatency {
         minQuality: Double = 0.2,
     ): LatencyResult {
         val lags = ArrayList<Double>()
+        // The correction is one constant for the route, so once a pulse has been found strongly the others are looked for
+        // close to where it was (a direct correlation over the whole 650 ms window is about 150 million multiplies for
+        // ten pulses); a pulse not found there is searched for in the whole window as before.
+        var known: Double? = null
         for (expected in expectedFrames) {
-            val from = (expected - SEARCH_BEFORE_MS / 1000.0 * rate).toInt()
-            val to = (expected + SEARCH_AFTER_MS / 1000.0 * rate).toInt()
-            val match = JamXcorr.findPulse(captured, reference, from, to, rate) ?: continue
-            if (match.quality >= minQuality) lags += (match.position - expected) / rate * 1000.0
+            // Windows are lags in ms after the prediction: the whole one, or `known` plus or minus a few milliseconds.
+            fun search(fromLagMs: Double, toLagMs: Double) = JamXcorr.findPulse(
+                captured, reference,
+                (expected + fromLagMs / 1000.0 * rate).toInt(), (expected + toLagMs / 1000.0 * rate).toInt(), rate,
+            )
+            val narrow = known?.let { search(it - NARROW_MS, it + NARROW_MS) }?.takeIf { it.quality >= STRONG }
+            val match = narrow ?: search(-SEARCH_BEFORE_MS, SEARCH_AFTER_MS) ?: continue
+            if (match.quality >= minQuality) {
+                val lag = (match.position - expected) / rate * 1000.0
+                lags += lag
+                if (known == null && match.quality >= STRONG) known = lag
+            }
         }
         return judge(LatencyMethod.LOOPBACK, lags, expectedFrames.size, highSpread = 1.0, mediumSpread = 3.0, outlierMs = 3.0, mode = mode, now = now)
     }

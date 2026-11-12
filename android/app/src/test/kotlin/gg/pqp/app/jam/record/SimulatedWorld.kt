@@ -137,7 +137,7 @@ class FakeDuplex(
 
     override val level: Float get() = 0f
     override val captured: Long get() = if (started) captureFrames.toLong() else 0L
-    override fun livePeaks(): List<Float> = emptyList()
+    override fun livePeaks(): LivePeaks = LivePeaks.Empty
     override fun presentedOutputFrame(): Long? = if (started) streamFrames.toLong() else null
     override fun currentRoute(): JamRoute? = route
 }

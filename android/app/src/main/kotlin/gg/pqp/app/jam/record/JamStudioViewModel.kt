@@ -62,6 +62,9 @@ import kotlinx.coroutines.withContext
  *    same timestamp fit, so what the calibration absorbs is what a take needs.
  */
 
+/** An open studio: what it was launched with, and which opening it is (a reopened studio is a new view model). */
+class JamStudioSession(val launch: JamStudioLaunch, val opening: Int)
+
 /** A track of the song the band plays, as the studio gets it from the song screen: its decoded audio is already there. */
 class BackingStem(val track: JamTrack, val pcm: PcmSource, val frames: Long)
 
@@ -96,7 +99,16 @@ data class StudioLane(
 enum class StudioPhase { Setup, Measuring, Countdown, Recording, Review, Posting, Done }
 
 /** Why the studio will not record, said instead of the record button. */
-enum class StudioBlock { InCall, MicDenied, MicBusy, OutputFailed }
+enum class StudioBlock {
+    InCall,
+    MicDenied,
+    MicBusy,
+    OutputFailed,
+    ;
+
+    /** A device that would not open may open next time; a call and a refused permission clear by themselves. */
+    val retryable: Boolean get() = this == MicBusy || this == OutputFailed
+}
 
 /** A line the screen says once. */
 enum class StudioNotice {
@@ -185,6 +197,8 @@ class JamStudioViewModel(
     private val now: () -> Long = System::currentTimeMillis,
     private val newId: () -> String = { UUID.randomUUID().toString() },
     private val openPcm: (File) -> PcmSource = { MappedPcm(it) },
+    /** The signed-in account: a saved take belongs to it and to nobody else on this phone. */
+    private val ownerId: String? = null,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(
         JamStudioUi(
@@ -275,7 +289,13 @@ class JamStudioViewModel(
     /** Re-reads which devices would be used, and which measurement (if any) belongs to them. */
     fun refreshRoute() {
         val route = routes.preview()
-        _ui.update { it.copy(route = route, calibration = chooseFor(route.key)) }
+        // A device that was busy or would not open may be fine now (and a different one may be in use): try again.
+        _ui.update { it.copy(route = route, calibration = chooseFor(route.key), block = it.block.takeUnless { b -> b?.retryable == true }) }
+    }
+
+    /** "Tentar de novo" after the microphone or the output would not open. */
+    fun retryAfterBlock() {
+        _ui.update { it.copy(block = it.block.takeUnless { b -> b?.retryable == true }) }
     }
 
     private fun chooseFor(key: String): LatencyResult? {
@@ -506,7 +526,7 @@ class JamStudioViewModel(
     /** The microphone's level right now, 0..1, read in a draw lambda. */
     fun level(): Float = duplex?.level ?: 0f
 
-    fun livePeaks(): List<Float> = duplex?.livePeaks().orEmpty()
+    fun livePeaks(): LivePeaks = duplex?.livePeaks() ?: LivePeaks.Empty
 
     fun stop() {
         val u = _ui.value
@@ -593,6 +613,7 @@ class JamStudioViewModel(
             routeChanged = stamps.routeChanged,
             uncalibrated = chosen == null,
             savedAt = now(),
+            ownerId = ownerId,
         )
         takes.save(take)
         return take
@@ -601,7 +622,8 @@ class JamStudioViewModel(
     // --- review ---
 
     private fun restorePending() {
-        val saved = takes.pending(target.channelId, target.songId) ?: return
+        // Only this account's: a take is somebody's unsent recording, never the next person's on a shared phone.
+        val saved = takes.pending(target.channelId, target.songId, ownerId) ?: return
         enterReview(saved, cut = null, restored = true)
     }
 
@@ -609,12 +631,17 @@ class JamStudioViewModel(
         takePcm?.close()
         val pcm = OffsetPcm(openPcm(takes.pcm(saved.id)), saved.dropFrames.toLong())
         takePcm = pcm
-        val silent = JamTakeAudio.isSilent(pcm, 0, saved.frames, JamAlignment.frames(saved.trimStartMs))
+        // The silence check reads every heard sample (up to 28 million for a ten minute take): off the main thread, and the
+        // flag arrives a moment after the review does.
+        viewModelScope.launch {
+            val silent = withContext(default) { JamTakeAudio.isSilent(pcm, 0, saved.frames, JamAlignment.frames(saved.trimStartMs)) }
+            _ui.update { if (it.take?.id == saved.id) it.copy(silent = silent) else it }
+        }
         _ui.update {
             it.copy(
                 phase = StudioPhase.Review,
                 take = saved,
-                silent = silent,
+                silent = false,
                 cut = cut,
                 instrument = JamInstrument.fromWire(saved.instrument),
                 notice = if (restored) StudioNotice.Restored else null,
@@ -731,6 +758,8 @@ class JamStudioViewModel(
         postJob?.cancel()
         upload = null
         stopReview()
+        // Nothing plays any more: other audio that was paused or ducked for the review gets the speaker back.
+        focus.release()
         val take = _ui.value.take
         takePcm?.close()
         takePcm = null
@@ -919,7 +948,8 @@ class JamStudioViewModel(
 
     /** Leave with the take kept for later (it is on disk already). */
     fun keepAndClose() {
-        if (_ui.value.phase == StudioPhase.Countdown || _ui.value.phase == StudioPhase.Recording) cancelRecording()
+        // A recording in progress is stopped, placed and saved by [releaseAll] (kept when a second of it can be heard),
+        // never cancelled: "keep" must not be the way a take is lost.
         releaseAll()
     }
 
@@ -1003,6 +1033,7 @@ class JamStudioViewModel(
                     target = target,
                     post = SessionJamPostBackend(session),
                     takes = JamTakeStore(File(app.filesDir, "jam-takes")),
+                    ownerId = (session.phase.value as? gg.pqp.app.core.SessionPhase.Ready)?.me?.id,
                     latency = JamLatencyStore(PrefsKeyValue(app)),
                     routes = AudioRouteProbe(app),
                     newDuplex = { events -> JamDuplex(app, events) },

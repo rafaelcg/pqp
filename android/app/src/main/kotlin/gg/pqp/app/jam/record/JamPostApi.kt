@@ -10,6 +10,8 @@ import gg.pqp.app.social.postJson
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import okhttp3.MediaType.Companion.toMediaType
@@ -114,8 +116,15 @@ class SessionJamPostBackend(private val session: SessionStore) : JamPostBackend 
         val request = Request.Builder().url(ticket.uploadUrl).put(body).header("Content-Type", contentType).build()
         // The one call here that blocks: explicitly off the main thread (see `AttachmentApi.upload`).
         withContext(Dispatchers.IO) {
-            session.http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) throw IOException("Upload refused with HTTP ${response.code}")
+            val call = session.http.newCall(request)
+            // Leaving the studio cancels the coroutine, and the PUT stops with it instead of finishing a file nobody will claim.
+            val handle = coroutineContext[Job]?.invokeOnCompletion { if (it != null) call.cancel() }
+            try {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) throw IOException("Upload refused with HTTP ${response.code}")
+                }
+            } finally {
+                handle?.dispose()
             }
         }
     }

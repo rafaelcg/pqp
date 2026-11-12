@@ -105,7 +105,7 @@ class JamDuplex(context: Context, private val events: DuplexEvents) : Duplex {
     private val captureStamps = ArrayList<TimestampSample>()
     private val outputApprox = ArrayList<TimestampSample>()
     private val captureApprox = ArrayList<TimestampSample>()
-    private val peaks = ArrayList<Float>()
+    private val peaks = JamLivePeaks()
 
     @Volatile private var capturedFrames = 0L
     @Volatile private var outputFrames = 0L
@@ -125,7 +125,7 @@ class JamDuplex(context: Context, private val events: DuplexEvents) : Duplex {
     override val captured: Long get() = capturedFrames
 
     /** Loudest value per [PEAK_MS] of the capture so far, 0..1: the live waveform. */
-    override fun livePeaks(): List<Float> = synchronized(lock) { ArrayList(peaks) }
+    override fun livePeaks(): LivePeaks = peaks.snapshot()
 
     /**
      * The song position the person is HEARING now, from the output's own
@@ -166,7 +166,13 @@ class JamDuplex(context: Context, private val events: DuplexEvents) : Duplex {
         }
         record = rec
         track = out
-        captureOut = BufferedOutputStream(FileOutputStream(capture), 1 shl 16)
+        try {
+            captureOut = BufferedOutputStream(FileOutputStream(capture), 1 shl 16)
+        } catch (e: java.io.IOException) {
+            // Storage unavailable: nothing was started, and both native streams are released rather than leaked.
+            teardown()
+            return DuplexFailure.OutputFailed
+        }
         running.set(true)
         try {
             rec.startRecording()
@@ -318,7 +324,7 @@ class JamDuplex(context: Context, private val events: DuplexEvents) : Duplex {
                 bucketFrames += n
                 if (bucketFrames >= bucket) {
                     val v = (bucketPeak / 32768f).coerceIn(0f, 1f)
-                    synchronized(lock) { peaks += v }
+                    peaks.add(v)
                     bucketPeak = 0
                     bucketFrames = 0
                 }

@@ -69,6 +69,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -373,7 +374,7 @@ private fun StudioBottomBar(model: JamStudioViewModel, ui: JamStudioUi, onOpenSo
                         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("jam.studio.send"),
                     ) {
                         Text(
-                            stringResource(if (ui.silent) R.string.jam_rec_send_anyway else R.string.jam_rec_send),
+                            stringResource(if (ui.silent || ui.take?.uncalibrated == true) R.string.jam_rec_send_anyway else R.string.jam_rec_send),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                         )
@@ -484,7 +485,7 @@ private fun SetupBody(model: JamStudioViewModel, ui: JamStudioUi, askMic: (Strin
         }
 
         if (ui.block != null) {
-            BlockCard(ui.block, askMic)
+            BlockCard(ui.block, askMic, onRetry = model::retryAfterBlock)
         } else {
             SectionLabel(stringResource(R.string.jam_rec_what))
             InstrumentPicker(model, ui)
@@ -805,12 +806,28 @@ private fun StepButton(symbol: String, description: String, onClick: () -> Unit)
     ) { Text(symbol, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
 }
 
+/**
+ * A counter that moves once per display frame while [rememberFrameTick] is active. A plain object, not an Int the
+ * caller reads: the screen passes the OBJECT down and only a draw lambda (or a tiny derivation) reads [value], so a
+ * clock running at the display's rate repaints a playhead and recomposes nothing else.
+ */
+private class FrameTick {
+    var value by mutableIntStateOf(0)
+}
+
+@Composable
+private fun rememberFrameTick(active: Boolean): FrameTick {
+    val tick = remember { FrameTick() }
+    LaunchedEffect(active) { while (active) withFrameNanos { tick.value += 1 } }
+    return tick
+}
+
 /** A hold waits this long before it repeats, so a tap stays one step, and then repeats this often. */
 private const val HOLD_DELAY_NS = 400_000_000L
 private const val REPEAT_NS = 90_000_000L
 
 @Composable
-private fun BlockCard(block: StudioBlock, askMic: (String) -> Unit) {
+private fun BlockCard(block: StudioBlock, askMic: (String) -> Unit, onRetry: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val context = LocalContext.current
     val (title, body) = when (block) {
@@ -834,6 +851,11 @@ private fun BlockCard(block: StudioBlock, askMic: (String) -> Unit) {
             fontWeight = FontWeight.Bold,
         )
         Text(stringResource(body), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+        if (block.retryable) {
+            Button(onClick = onRetry, modifier = Modifier.fillMaxWidth().testTag("jam.studio.retryBlock")) {
+                Text(stringResource(R.string.jam_retry))
+            }
+        }
         if (block == StudioBlock.MicDenied) {
             Button(onClick = { askMic(Manifest.permission.RECORD_AUDIO) }, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.jam_rec_allow_mic))
@@ -963,8 +985,7 @@ private fun RecordingBody(model: JamStudioViewModel, ui: JamStudioUi) {
     val reduce = rememberReduceMotion()
     val tint = ui.instrument.color()
     // The microphone's level is read once per frame, while the screen is on, and only repaints its bar.
-    var frame by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) { while (true) withFrameNanos { frame = it.hashCode() } }
+    val tick = rememberFrameTick(active = true)
     val counting = ui.phase == StudioPhase.Countdown
     val duration = ui.durationMs
     // A take longer than the band keeps its lane on screen: the timeline stretches to hold it.
@@ -1024,7 +1045,7 @@ private fun RecordingBody(model: JamStudioViewModel, ui: JamStudioUi) {
                     modifier = Modifier.clearAndSetSemantics { contentDescription = timeLabel }.testTag("jam.studio.timer"),
                 )
                 Spacer(Modifier.height(Spacing.sm))
-                MicLevel(model, frame, tint)
+                MicLevel(model, tick, tint)
                 Spacer(Modifier.height(Spacing.md))
                 Text(
                     stringResource(R.string.jam_rec_recording, ui.instrument.label()),
@@ -1043,7 +1064,10 @@ private fun RecordingBody(model: JamStudioViewModel, ui: JamStudioUi) {
             lanes = ui.lanes,
             originMs = ui.originMs,
             durationMs = if (duration > 0) duration else scaleMs(),
-            playhead = { frame.let { if (model.transportMs < 0) null else (model.transportMs / (if (duration > 0) duration else scaleMs())).toFloat() } },
+            playhead = {
+                tick.value
+                if (model.transportMs < 0) null else (model.transportMs / (if (duration > 0) duration else scaleMs())).toFloat()
+            },
             live = { LiveLane(model, ui, tint, ::scaleMs) },
         )
     }
@@ -1066,7 +1090,7 @@ private fun RecDot(reduce: Boolean) {
 }
 
 @Composable
-private fun MicLevel(model: JamStudioViewModel, frame: Int, tint: Color) {
+private fun MicLevel(model: JamStudioViewModel, tick: FrameTick, tint: Color) {
     val colors = MaterialTheme.colorScheme
     val label = stringResource(R.string.jam_rec_level)
     Box(
@@ -1079,7 +1103,7 @@ private fun MicLevel(model: JamStudioViewModel, frame: Int, tint: Color) {
             .drawWithContent {
                 drawContent()
                 // The level is read here, at draw time: a fresh read per frame.
-                @Suppress("UNUSED_EXPRESSION") frame
+                tick.value
                 val level = model.level().coerceIn(0f, 1f)
                 drawRoundRect(tint, size = Size(size.width * level, size.height), cornerRadius = CornerRadius(size.height / 2))
             },
@@ -1104,11 +1128,19 @@ private fun LiveLane(model: JamStudioViewModel, ui: JamStudioUi, tint: Color, sc
                 .drawWithContent {
                     drawContent()
                     @Suppress("UNUSED_EXPRESSION") model.peaksTick
-                    val peaks = model.livePeaks()
+                    // A bounded snapshot (`JamLivePeaks`: a couple of thousand numbers however long the take), and never
+                    // more bars than fit: neighbours that would land on one pixel column are drawn as the loudest.
+                    val live = model.livePeaks()
+                    val peaks = live.values
                     val perMs = size.width / scaleMs().toFloat()
                     val barW = 3.dp.toPx()
-                    peaks.forEachIndexed { i, p ->
-                        val x = (i * 80f) * perMs
+                    val perBar = max(1, ((barW + 1.dp.toPx()) / (live.bucketMs * perMs)).toInt())
+                    var i = 0
+                    while (i < peaks.size) {
+                        var p = 0f
+                        for (k in i until minOf(peaks.size, i + perBar)) p = max(p, peaks[k])
+                        val x = (i * live.bucketMs.toFloat()) * perMs
+                        i += perBar
                         if (x <= size.width) {
                             // Below the name, like the other lanes: 18 dp of label above, 6 dp of margin under.
                             val top = 18.dp.toPx()
@@ -1141,10 +1173,10 @@ private fun LiveLane(model: JamStudioViewModel, ui: JamStudioUi, tint: Color, sc
 private fun ReviewBody(model: JamStudioViewModel, ui: JamStudioUi) {
     val colors = MaterialTheme.colorScheme
     val take = ui.take ?: return
-    var frame by remember { mutableIntStateOf(0) }
-    LaunchedEffect(ui.playing) { while (ui.playing) withFrameNanos { frame = it.hashCode() } }
+    val tick = rememberFrameTick(active = ui.playing)
     val duration = ui.durationMs
-    val positionText by remember(frame) { mutableStateOf(JamTime.clock(model.reviewPositionMs())) }
+    // The clock changes once a second: the frame ticker invalidates this derivation, only a new second recomposes it.
+    val positionText by remember { derivedStateOf { tick.value; JamTime.clock(model.reviewPositionMs()) } }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = Spacing.gutter, vertical = Spacing.md),
         verticalArrangement = Arrangement.spacedBy(Spacing.lg),
@@ -1171,8 +1203,11 @@ private fun ReviewBody(model: JamStudioViewModel, ui: JamStudioUi) {
             lanes = ui.lanes,
             originMs = ui.originMs,
             durationMs = duration,
-            playhead = { frame.let { if (duration > 0) (model.reviewPositionMs() / duration).toFloat() else null } },
-            onSeek = { f -> model.seekReview(f * duration) },
+            playhead = {
+                tick.value
+                if (duration > 0) (model.reviewPositionMs() / duration).toFloat() else null
+            },
+            onSeek = { f -> model.seekReview(f * duration); tick.value += 1 },
         )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
             val playLabel = stringResource(if (ui.playing) R.string.jam_pause else R.string.jam_play)

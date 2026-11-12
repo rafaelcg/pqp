@@ -28,7 +28,7 @@ interface Duplex {
     fun cancel(capture: File)
     val level: Float
     val captured: Long
-    fun livePeaks(): List<Float>
+    fun livePeaks(): LivePeaks
     fun presentedOutputFrame(): Long?
     fun currentRoute(): JamRoute?
 }

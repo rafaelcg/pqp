@@ -223,4 +223,28 @@ class JamRecordSupportTest {
         }
         assertEquals(listOf("new", "mid", "old"), store.all().map { it.id })
     }
+
+    @Test
+    fun `a take is offered only to the account that recorded it`() {
+        val store = JamTakeStore(dir())
+        store.newCapture("mine").writeBytes(ByteArray(2))
+        store.save(saved("mine", "song").copy(ownerId = "me"))
+        assertEquals("mine", store.pending("chan", "song", "me")!!.id)
+        assertNull(store.pending("chan", "song", "you"))
+        assertNull(store.pending("chan", "song", null))
+    }
+
+    @Test
+    fun `the live waveform stays bounded however long the take, and keeps the loudest of what it merges`() {
+        val peaks = JamLivePeaks()
+        // Ten minutes at 80 ms is 7,500 values: far past the bound.
+        for (i in 0 until 7_500) peaks.add(if (i == 4_000) 0.9f else 0.1f)
+        val snap = peaks.snapshot()
+        assertTrue("${snap.values.size} values", snap.values.size <= JamLivePeaks.MAX_BUCKETS + 1)
+        assertTrue("the bucket grew: ${snap.bucketMs} ms", snap.bucketMs > JamLivePeaks.BASE_MS)
+        assertEquals("a loud moment is never averaged away", 0.9f, snap.values.max(), 0.0f)
+        // The whole take is still covered: the buckets span about the whole ten minutes.
+        assertEquals(600_000.0, snap.values.size * snap.bucketMs.toDouble(), 600_000.0 * 0.05)
+        assertEquals(0, JamLivePeaks().snapshot().values.size)
+    }
 }

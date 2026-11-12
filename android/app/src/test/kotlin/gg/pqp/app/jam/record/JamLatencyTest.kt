@@ -210,4 +210,21 @@ class JamLatencyTest {
         for ((o, w) in onsets.zip(at)) assertTrue("onset $o vs $w", abs(o - w) < 100)
         assertNotEquals(0, onsets.size)
     }
+
+    @Test
+    fun `a typed or learned correction applies in either clock mode, a measurement only in its own`() {
+        val manual = JamLatency.manual(-12.0, ClockMode.TIMESTAMPS, 1L)
+        assertEquals(-12.0, JamLatency.choose(listOf(manual), ClockMode.APPROXIMATE)!!.correctionMs, 0.0)
+        assertNull(JamLatency.choose(listOf(stored(LatencyMethod.LOOPBACK, 5.0, 1)), ClockMode.APPROXIMATE))
+    }
+
+    @Test
+    fun `after one strong pulse the others are searched near it, and a pulse that moved is still found`() {
+        val expected = predicted()
+        // Nine pulses 20 ms after the prediction and the sixth 90 ms after it (outside the narrow window): the wide search finds it.
+        val frames = expected.mapIndexed { i, f -> f + if (i == 5) 4320 else 960 }
+        val r = JamLatency.analyseLoopback(heard(frames), expected.map { it.toDouble() }, ref, rate, ClockMode.TIMESTAMPS, 1L)
+        assertEquals(20.0, r.correctionMs, 0.05)
+        assertEquals("the moved pulse is an outlier, found and dropped", 9, r.accepted)
+    }
 }

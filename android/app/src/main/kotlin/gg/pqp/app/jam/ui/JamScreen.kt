@@ -31,13 +31,12 @@ import gg.pqp.app.jam.JamSongSummary
 import gg.pqp.app.jam.JamSongViewModel
 import gg.pqp.app.jam.JamWallViewModel
 import gg.pqp.app.jam.record.JamStudioLaunch
+import gg.pqp.app.jam.record.JamStudioSession
 import gg.pqp.app.jam.record.JamStudioViewModel
 import gg.pqp.app.jam.record.JamTakeStore
 import gg.pqp.app.jam.record.NewSongDraft
 import java.io.File
 
-/** An open studio: what it was launched with, and which opening it is (a reopened studio is a new view model). */
-private class StudioSession(val launch: JamStudioLaunch, val opening: Int)
 
 /**
  * A jam channel: the wall, and a song opened out of it.
@@ -83,14 +82,17 @@ fun JamScreen(
     var openings by rememberSaveable { mutableIntStateOf(0) }
     // The summary the wall already holds, so the song's header is there at once.
     var seeds by remember { mutableStateOf(emptyMap<String, JamSongSummary>()) }
-    var studio by remember { mutableStateOf<StudioSession?>(null) }
-    var studios by remember { mutableIntStateOf(0) }
+    // Held by the wall's view model (which outlives this composition), so a recreation of the activity (a language change)
+    // finds the studio it had instead of dropping a take in progress under a screen that is gone.
+    var studio by remember { mutableStateOf(wall.heldStudio) }
+    androidx.compose.runtime.SideEffect { wall.heldStudio = studio }
+    var studios by remember { mutableIntStateOf(wall.heldStudio?.opening ?: 0) }
     var startSheet by rememberSaveable { mutableStateOf(false) }
     val callActive = (context.applicationContext as PqpApplication).callActive
 
     fun openStudio(launch: JamStudioLaunch) {
         studios += 1
-        studio = StudioSession(launch, studios)
+        studio = JamStudioSession(launch, studios)
     }
 
     /** A first take of a song that does not exist yet: nothing is created until it is sent. */
@@ -135,7 +137,7 @@ fun JamScreen(
                         onRecordNew = {
                             // A first take that was recorded and not sent is still on this phone: it opens in the studio
                             // with the song it was for, instead of a sheet that would start a second one.
-                            val waiting = JamTakeStore(File(context.filesDir, "jam-takes")).pending(channelId, null)
+                            val waiting = JamTakeStore(File(context.filesDir, "jam-takes")).pending(channelId, null, viewerId)
                             val draft = waiting?.draft
                             if (draft != null) newSong(draft) else startSheet = true
                         },

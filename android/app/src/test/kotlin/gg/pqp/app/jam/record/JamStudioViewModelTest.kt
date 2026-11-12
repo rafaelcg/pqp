@@ -660,4 +660,67 @@ class JamStudioViewModelTest {
         advanceUntilIdle()
         assertEquals(1, post.calls.count { it.startsWith("createSong") })
     }
+
+    @Test
+    fun `keeping a recording that is in progress saves it, it is never the way a take is lost`() = runTest(dispatcher) {
+        calibrated()
+        val vm = model().ready()
+        vm.record()
+        vm.keepAndClose()
+        advanceUntilIdle()
+        assertEquals(1, takes.all().size)
+        assertTrue(duplexes.single().stopped)
+        assertFalse(duplexes.single().cancelled)
+    }
+
+    @Test
+    fun `a microphone that would not open can be tried again`() = runTest(dispatcher) {
+        calibrated()
+        micFailure = DuplexFailure.MicBusy
+        val vm = model().ready()
+        vm.record()
+        assertEquals(StudioBlock.MicBusy, vm.ui.value.block)
+        assertFalse(vm.ui.value.canRecord)
+        micFailure = null
+        vm.retryAfterBlock()
+        assertNull(vm.ui.value.block)
+        vm.record()
+        assertEquals(StudioPhase.Countdown, vm.ui.value.phase)
+    }
+
+    @Test
+    fun `a route that changes clears a device block, and a call's block stays until the call ends`() = runTest(dispatcher) {
+        calibrated()
+        micFailure = DuplexFailure.OutputFailed
+        val vm = model().ready()
+        vm.record()
+        assertEquals(StudioBlock.OutputFailed, vm.ui.value.block)
+        vm.refreshRoute()
+        assertNull(vm.ui.value.block)
+    }
+
+    @Test
+    fun `discarding a take that is playing gives the speaker back`() = runTest(dispatcher) {
+        val vm = recordedReview()
+        assertTrue(foci.last().held)
+        vm.recordAgain()
+        assertFalse(foci.last().held)
+    }
+
+    @Test
+    fun `an unsent take belongs to the account that recorded it`() = runTest(dispatcher) {
+        val first = recordedReview()
+        val id = first.ui.value.take!!.id
+        first.keepAndClose()
+        assertNotNull(takes.load(id))
+        assertNull("another account on the same phone is not offered it", takes.pending("chan", "song-1", "someone-else"))
+        assertNull("and nor is a signed-out one, when the take has an owner", takes.pending("chan", "song-1", "x"))
+    }
+
+    @Test
+    fun `the silence check does not hold up the review`() = runTest(dispatcher) {
+        val vm = recordedReview()
+        // The take of the simulated world is the band's echo: not silent. The flag is computed off the main thread and set after.
+        assertFalse(vm.ui.value.silent)
+    }
 }

@@ -54,6 +54,8 @@ data class SavedTake(
     val routeChanged: Boolean = false,
     val uncalibrated: Boolean = false,
     val savedAt: Long = 0L,
+    /** The account that recorded it; a take is never offered to another account on the same phone. */
+    val ownerId: String? = null,
 ) {
     /** Where a sent track will put the file's first sample: the take's own offset and the person's nudge. */
     val placedOffsetMs: Double get() = offsetMs + nudgeMs
@@ -90,8 +92,8 @@ class JamTakeStore(private val dir: File) {
             .sortedByDescending { it.savedAt }
 
     /** The take waiting for this song (or, with a null [songId], for a new song in this channel). */
-    fun pending(channelId: String, songId: String?): SavedTake? =
-        all().firstOrNull { it.channelId == channelId && it.songId == songId }
+    fun pending(channelId: String, songId: String?, ownerId: String? = null): SavedTake? =
+        all().firstOrNull { it.channelId == channelId && it.songId == songId && it.ownerId == ownerId }
 
     fun delete(id: String) {
         pcm(id).delete()
