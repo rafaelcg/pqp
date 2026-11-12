@@ -25,6 +25,7 @@ import {
   addableInstruments,
   addJamTrack,
   assertMayAddAny,
+  countJamTracks,
   createJamSong,
   deleteJamSong,
   deleteJamTrack,
@@ -243,7 +244,12 @@ const isSongAuthor = (song: { author_id: string | null }, userId: string): boole
 const seesWholeSong = (access: JamAccess, song: JamSongRow, userId: string): boolean =>
   access.kind === "channel" || (song.channel_id === null && isSongAuthor(song, userId));
 
-/** The summary to hand THIS caller, after a write that has the channel's view in hand. */
+/**
+ * The summary to hand THIS caller, after a write that has the channel's view in
+ * hand. Never the channel's view to a caller who may only see the public one:
+ * a song that stopped being readable between the access check and this read
+ * (gone, or deleted) is a 404, not a fallback to what the channel sees.
+ */
 async function summaryForCaller(
   access: JamAccess,
   song: JamSongRow,
@@ -253,7 +259,11 @@ async function summaryForCaller(
   if (seesWholeSong(access, song, userId)) {
     return channelView;
   }
-  return (await getJamSongSummaryPublicView(song.id, userId)) ?? channelView;
+  const publicView = await getJamSongSummaryPublicView(song.id, userId);
+  if (!publicView) {
+    throw new HttpError(404, JAM_NOT_FOUND);
+  }
+  return publicView;
 }
 
 /** Vote or take a vote back, and announce it when the count moved. */
@@ -333,7 +343,7 @@ export function registerJamRoutes(router: Router): void {
   router.get("/api/jam-songs/:songId", async ({ user }, { songId }) => {
     const { song, access } = await requireSong(songId!, user.id);
     const whole = seesWholeSong(access, song, user.id);
-    const [summary, tracks, voted, perms, timeout] = await Promise.all([
+    const [summary, tracks, voted, perms, timeout, counts] = await Promise.all([
       whole ? getJamSongSummary(song.id) : getJamSongSummaryPublicView(song.id, user.id),
       whole ? listJamTracks(song.id) : listJamTracksPublicView(song.id, user.id),
       access.kind === "channel" ? listVotedTrackIds(song.id, user.id) : Promise.resolve([]),
@@ -341,18 +351,20 @@ export function registerJamRoutes(router: Router): void {
       access.kind === "channel"
         ? findTimeoutForChannel(user.id, access.channel.id)
         : Promise.resolve(null),
+      // The limits count every live track, whatever this caller is shown: a
+      // count, not a second list, for the public view.
+      whole ? Promise.resolve(null) : countJamTracks(song.id, user.id),
     ]);
     // A song with no track yet is its author's alone, here as on the list.
     if (!summary || (summary.trackCount === 0 && !isSongAuthor(song, user.id))) {
       throw new HttpError(404, JAM_NOT_FOUND);
     }
-    // The limits count every live track, whatever this caller is shown.
-    const all = whole ? tracks : await listJamTracks(song.id);
-    const mine = all.filter((track) => track.authorId === user.id).length;
+    const total = counts ? counts.total : tracks.length;
+    const mine = counts ? counts.mine : tracks.filter((track) => track.authorId === user.id).length;
     const open =
       isOn(access) &&
       timeout === null &&
-      all.length < JAM_MAX_TRACKS_PER_SONG &&
+      total < JAM_MAX_TRACKS_PER_SONG &&
       mine < JAM_MAX_TRACKS_PER_AUTHOR;
     const body: JamSongDetailResponse = {
       song: summary,
@@ -488,7 +500,11 @@ export function registerJamRoutes(router: Router): void {
       throw new HttpError(400, JAM_PUBLIC_ERRORS.consentRequired);
     }
     // A take on a published song counts toward the daily public take limit.
-    const published = await isJamSongPublished(song.id);
+    // Only asked while the flag is on: with it off nothing is public, and a
+    // channel's track adds pay no extra lookup. (A take added to a published
+    // song while the flag was off stays private until the starter publishes
+    // again, which writes the missing rows: fail closed.)
+    const published = jamPublicEnabled() && (await isJamSongPublished(song.id));
     if (published) {
       await assertUnderTakeLimit(user.id);
     }
@@ -502,6 +518,17 @@ export function registerJamRoutes(router: Router): void {
       forceOutOfMix: outside,
     });
     if (!result.created) {
+      // A retry of a claim whose public row the first request did not get to
+      // write (it is idempotent, so a row already there is left alone).
+      if (published) {
+        await noteJamTrackAdded({
+          song,
+          trackId: result.track.id,
+          userId: user.id,
+          outside,
+          publicConsent: request.publicConsent,
+        });
+      }
       return {
         track: result.track,
         song: await summaryForCaller(access, song, user.id, result.song),

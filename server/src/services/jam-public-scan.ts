@@ -317,24 +317,48 @@ async function escalate(input: {
   if (!input.uploaderId) {
     return;
   }
-  try {
-    await createAutomatedInstanceReport({
-      reportedUserId: input.uploaderId,
-      placeLabel: `Jam pública · ${input.title}`,
-      reason: scanReportReason(result.labels),
-      details:
-        `Automated image scan (${result.provider}) returned ${result.status} for the ` +
-        `${input.kind === "cover" ? "cover" : "video frames"} of public jam ${input.songId}` +
-        (input.trackId ? `, track ${input.trackId}` : "") +
-        ` (object ${input.key}): ${result.labels.join(", ") || "no labels"} ` +
-        `(score ${result.score ?? "n/a"}). ` +
-        (result.status === "rejected"
-          ? "Taken off the song and held in quarantine; never public."
-          : "Not shown publicly; still in its channel."),
-    });
-  } catch (error) {
-    console.error(`[content-safety] could not file a report for ${input.key}:`, error);
+  const uploaderId = input.uploaderId;
+  // A blip of the database must not lose the queue entry: tried three times.
+  // Past that the line below is the record, and the item is still on the
+  // operator's queue (`GET /api/admin/jam-public/queue` lists flagged and
+  // rejected videos; the quarantine table holds every rejection).
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await fileScanReport(input, uploaderId, result);
+      return;
+    } catch (error) {
+      if (attempt === 2) {
+        console.error(
+          `[content-safety] REPORT NOT FILED for public jam ${input.kind} ${input.key} ` +
+            `(song ${input.songId}, ${result.status}); it is on /api/admin/jam-public/queue:`,
+          error,
+        );
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+    }
   }
+}
+
+async function fileScanReport(
+  input: { kind: "cover" | "video"; key: string; songId: string; title: string; trackId: string | null },
+  uploaderId: string,
+  result: ScanResult,
+): Promise<void> {
+  await createAutomatedInstanceReport({
+    reportedUserId: uploaderId,
+    placeLabel: `Jam pública · ${input.title}`,
+    reason: scanReportReason(result.labels),
+    details:
+      `Automated image scan (${result.provider}) returned ${result.status} for the ` +
+      `${input.kind === "cover" ? "cover" : "video frames"} of public jam ${input.songId}` +
+      (input.trackId ? `, track ${input.trackId}` : "") +
+      ` (object ${input.key}): ${result.labels.join(", ") || "no labels"} ` +
+      `(score ${result.score ?? "n/a"}). ` +
+      (result.status === "rejected"
+        ? "Taken off the song and held in quarantine; never public."
+        : "Not shown publicly; still in its channel."),
+  });
 }
 
 // ------------------------------------------------------------------ covers
@@ -371,8 +395,9 @@ async function claimCover(): Promise<ClaimedCover | null> {
   return result.rows[0] ?? null;
 }
 
-async function finishCover(claimed: ClaimedCover, verdict: Verdict, result: ScanResult): Promise<void> {
-  await getPool().query(
+/** True when this claim still held the row (a lease that expired lost it to another worker). */
+async function finishCover(claimed: ClaimedCover, verdict: Verdict, result: ScanResult): Promise<boolean> {
+  const finished = await getPool().query(
     `UPDATE jam_public_cover_scans
         SET status = $3, provider = $4, score = $5, labels = $6::jsonb, scanned_at = NOW(), claimed_at = NULL
       WHERE upload_id = $1 AND claimed_at = $2::timestamptz`,
@@ -385,6 +410,31 @@ async function finishCover(claimed: ClaimedCover, verdict: Verdict, result: Scan
       JSON.stringify(result.labels),
     ],
   );
+  return (finished.rowCount ?? 0) === 1;
+}
+
+/**
+ * Scan one image, and turn a throw (signing the URL, or anything the provider
+ * adapter did not anticipate) into an `error` verdict, which is retried: one
+ * bad item must not abort the rest of the tick or sit claimed until its lease
+ * expires.
+ */
+async function scanSafely(key: string, contentType: string): Promise<ScanResult> {
+  try {
+    return await scanImage({
+      imageUrl: presignGet(key, { ttlSeconds: SCAN_URL_TTL_SECONDS }),
+      contentType,
+    });
+  } catch (error) {
+    console.error(`[jam-public] could not scan ${key}:`, error instanceof Error ? error.message : error);
+    return {
+      status: "error",
+      provider: contentScanProvider(),
+      score: null,
+      labels: ["scan_error:unsigned"],
+      illegal: false,
+    };
+  }
 }
 
 /** One cover. Returns what happened, or null when there was nothing to do. */
@@ -398,10 +448,7 @@ export async function processOneJamCover(): Promise<Verdict | "retry" | null> {
     counters.coversUnscanned += 1;
     return "unscanned";
   }
-  const result = await scanImage({
-    imageUrl: presignGet(claimed.storage_key, { ttlSeconds: SCAN_URL_TTL_SECONDS }),
-    contentType: claimed.content_type,
-  });
+  const result = await scanSafely(claimed.storage_key, claimed.content_type);
   let verdict = verdictOf(result);
   if (verdict === "retry") {
     if (claimed.attempts < MAX_ATTEMPTS) {
@@ -414,6 +461,12 @@ export async function processOneJamCover(): Promise<Verdict | "retry" | null> {
     }
     verdict = "unscanned";
     result.labels = [...result.labels, "scan_error"];
+  }
+  // The verdict is written first, guarded by this claim: a worker whose lease
+  // expired mid-scan (and lost the row to another) changes nothing, side
+  // effects included.
+  if (!(await finishCover(claimed, verdict, result))) {
+    return "retry";
   }
   if (verdict === "rejected") {
     await quarantine({
@@ -431,7 +484,6 @@ export async function processOneJamCover(): Promise<Verdict | "retry" | null> {
       claimed.upload_id,
     ]);
   }
-  await finishCover(claimed, verdict, result);
   if (verdict === "rejected" || verdict === "flagged") {
     await escalate({
       kind: "cover",
@@ -500,13 +552,14 @@ async function claimVideo(): Promise<ClaimedVideo | null> {
   return result.rows[0] ?? null;
 }
 
+/** True when this claim still held the row. */
 async function finishVideo(
   claimed: ClaimedVideo,
   status: "passed" | "flagged" | "rejected" | "unscanned" | "skipped",
   result: ScanResult | null,
   frames: number,
-): Promise<void> {
-  await getPool().query(
+): Promise<boolean> {
+  const finished = await getPool().query(
     `UPDATE jam_public_tracks
         SET video_scan_status = $3, video_scan_provider = $4, video_scan_score = $5,
             video_scan_labels = $6::jsonb, video_scan_frames = $7, video_scanned_at = NOW(),
@@ -522,6 +575,7 @@ async function finishVideo(
       frames,
     ],
   );
+  return (finished.rowCount ?? 0) === 1;
 }
 
 async function releaseVideo(claimed: ClaimedVideo): Promise<void> {
@@ -547,14 +601,7 @@ async function scanFrames(claimed: ClaimedVideo, paths: string[]): Promise<ScanR
       await putObject(key, await readFile(path), "image/jpeg");
       keys.push(key);
     }
-    const results = await Promise.all(
-      keys.map((key) =>
-        scanImage({
-          imageUrl: presignGet(key, { ttlSeconds: SCAN_URL_TTL_SECONDS }),
-          contentType: "image/jpeg",
-        }),
-      ),
-    );
+    const results = await Promise.all(keys.map((key) => scanSafely(key, "image/jpeg")));
     counters.framesScanned += results.length;
     return combineScans(results);
   } finally {
@@ -655,6 +702,10 @@ export async function processOneJamVideo(): Promise<
       verdict = "unscanned";
       result.labels = [...result.labels, "scan_error"];
     }
+    // Written first, guarded by this claim (see the cover path).
+    if (!(await finishVideo(claimed, verdict, result, paths.length))) {
+      return "retry";
+    }
     if (verdict === "rejected") {
       await quarantine({
         key: claimed.video_key,
@@ -687,7 +738,6 @@ export async function processOneJamVideo(): Promise<
         [claimed.track_id, claimed.video_key],
       );
     }
-    await finishVideo(claimed, verdict, result, paths.length);
     if (verdict === "rejected" || verdict === "flagged") {
       await escalate({
         kind: "video",
@@ -733,12 +783,25 @@ export async function processJamPublicScans(): Promise<void> {
   if (!isStorageConfigured()) {
     return;
   }
-  for (let i = 0; i < 5; i += 1) {
-    if ((await processOneJamCover()) === null) {
-      break;
+  try {
+    for (let i = 0; i < 5; i += 1) {
+      const outcome = await processOneJamCover();
+      // A retry released its claim: the next claim would be the same cover
+      // again, so the tick ends here and the next one tries it, not this one.
+      if (outcome === null || outcome === "retry") {
+        break;
+      }
     }
+  } catch (error) {
+    counters.failures += 1;
+    console.error("[jam-public] cover scans failed:", error instanceof Error ? error.message : error);
   }
-  await processOneJamVideo();
+  try {
+    await processOneJamVideo();
+  } catch (error) {
+    counters.failures += 1;
+    console.error("[jam-public] video scan failed:", error instanceof Error ? error.message : error);
+  }
 }
 
 /**

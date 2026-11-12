@@ -2188,7 +2188,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
 
 export type JamPublicMetrics = Awaited<ReturnType<typeof jamPublicTableMetrics>> & {
   process: ReturnType<typeof jamPublicCounters> & {
-    plays: { counted: number; deduped: number; flushFailures: number };
+    plays: { counted: number; deduped: number; flushFailures: number; dropped: number };
     scans: ReturnType<typeof jamPublicScanCounters>;
   };
 };
@@ -2200,7 +2200,12 @@ export type JamPublicMetrics = Awaited<ReturnType<typeof jamPublicTableMetrics>>
 async function jamPublicMetrics(): Promise<JamPublicMetrics> {
   const perProcess = {
     ...jamPublicCounters(),
-    plays: { counted: jamPlays.counted, deduped: jamPlays.deduped, flushFailures: jamPlays.flushFailures },
+    plays: {
+      counted: jamPlays.counted,
+      deduped: jamPlays.deduped,
+      flushFailures: jamPlays.flushFailures,
+      dropped: jamPlays.dropped,
+    },
     scans: jamPublicScanCounters(),
   };
   try {

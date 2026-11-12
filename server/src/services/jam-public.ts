@@ -599,20 +599,46 @@ export async function noteJamTrackAdded(input: {
     }
     const standing = await standingOf(userId, song.server_id);
     const review: JamPublicReview = standing.young ? "pending" : "none";
-    await withTransaction(async (client) => {
-      await client.query(
+    const inserted = await withTransaction(async (client) => {
+      // The daily take limit, enforced where the take becomes public: one
+      // person's takes are counted under a lock of their own, so two adds at
+      // once cannot both be the last allowed one. The route's earlier check is
+      // the friendly 429; a take that gets past it in a race is recorded as
+      // removed from the public version (it stays in its song), never public.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+        `jam-public-take:${userId}`,
+      ]);
+      const today = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM jam_public_tracks
+          WHERE author_id = $1 AND origin = 'recorded' AND created_at > NOW() - INTERVAL '24 hours'
+            AND removed_at IS NULL`,
+        [userId],
+      );
+      const overLimit = (today.rows[0]?.count ?? 0) >= jamPublicLimits.takesPerDay();
+      const result = await client.query(
         `INSERT INTO jam_public_tracks
-           (track_id, song_id, author_id, origin, outside, review_state, video_scan_status, video_scan_key)
+           (track_id, song_id, author_id, origin, outside, review_state, video_scan_status, video_scan_key,
+            removed_at, removed_reason)
          SELECT t.id, t.song_id, t.author_id, 'recorded', $2, $3,
-                CASE WHEN t.video_key IS NULL THEN 'none' ELSE $4 END, t.video_key
+                CASE WHEN t.video_key IS NULL THEN 'none' ELSE $4 END, t.video_key,
+                CASE WHEN $5::boolean THEN NOW() END,
+                CASE WHEN $5::boolean THEN 'daily take limit' END
            FROM jam_tracks t WHERE t.id = $1
          ON CONFLICT (track_id) DO NOTHING`,
-        [trackId, input.outside, review, initialVideoStatus()],
+        [trackId, input.outside, review, initialVideoStatus(), overLimit],
       );
       if (input.publicConsent) {
         await upsertConsent(client, song.id, userId, input.publicConsent);
       }
+      if (overLimit && (result.rowCount ?? 0) > 0) {
+        counters.rateLimited.takes += 1;
+      }
+      return (result.rowCount ?? 0) > 0;
     });
+    // A retry that found the row already written counts and tells nothing again.
+    if (!inserted) {
+      return;
+    }
     counters.takesRecorded += 1;
     if (review === "pending") {
       counters.takesQueuedForReview += 1;

@@ -558,6 +558,19 @@ export async function listJamTracksPublicView(
   );
 }
 
+/** A song's live tracks counted, and how many of them are this person's (the add limits). */
+export async function countJamTracks(
+  songId: string,
+  userId: string,
+): Promise<{ total: number; mine: number }> {
+  const result = await getPool().query<{ total: number; mine: number }>(
+    `SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE author_id = $2)::int AS mine
+       FROM jam_tracks WHERE song_id = $1 AND deleted_at IS NULL`,
+    [songId, userId],
+  );
+  return result.rows[0] ?? { total: 0, mine: 0 };
+}
+
 /** The tracks (ids) of one song this person has voted for. */
 export async function listVotedTrackIds(
   songId: string,
