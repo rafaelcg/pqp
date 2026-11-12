@@ -215,6 +215,35 @@ the token to a `jam/` key, GET and HEAD with ranges only), and
 `openJamPublicMediaUrl` there is the reference implementation the tests pin. The
 Worker holds the derived secret as `JAM_PUBLIC_MEDIA_SECRET`, never the Clerk key.
 
+## In the app
+
+All of it hides behind `GET /api/jam-public/config` (`enabled`, `publishing`,
+`uploads`), read once per account (`lib/jam-public-store.ts`). Flag off or an API
+that predates it: no menu entry, no strip, no shelf, no toast.
+
+| Where | What | Code |
+|---|---|---|
+| A song's `...` menu (its starter, channel song) | "Tornar pública", a sheet that says what becomes public (audio, video when allowed, names), the show-origin switch; once public the same entry is "Música pública": status, who answered what, outside requests waiting, unpublish | `jam-public-sheet.tsx`, `hooks/use-jam-publication.ts` |
+| The Jam wall | a quiet row when songs wait for the person's answer (`/consents`) or outside takes wait for them (`/inbox`); each opens a dialog | `jam-public-waiting.tsx` |
+| A song with a part of mine, made public | the three answers (pode ir, só o áudio, não) in the song itself too | `jam-public-parts.tsx`, `jam-public-panel.tsx` |
+| The starter's song | "Pedidos de fora": outside takes listed apart from the band; "Ouvir com a banda" is the lane audition (in place of the same instrument, the rest playing), then Aceitar (`inMix: true`) or Recusar (delete) | `JamPublicRequests` |
+| `/app/jam/<songId>` | the public view: the song panel, stage, lanes and studio of the channels, held in the jam store under `publicJamKey` (not a channel id), so there is no list, no frame and no reconnect read for it. Like (the count shows above 1), plays, origin, copy link, report the song or one part, "Gravar minha parte" | `jam-public-view.tsx` |
+| `/app/jam/new` | the start sheet, then the studio; the first take creates a standalone public jam (`POST /api/jam-public/songs`) | `use-jam-studio.ts` (`standalone`) |
+| The studio on a public jam | says whether the take is public or arrives as a request, one switch for the video, sends `publicConsent` | `jam-studio.tsx` |
+| The wall, under the songs | a "Públicas" row (`sort=top`, ten, minus the channel's own) and a link to the public site; the channel's own songs get a header only when both sections exist | `jam-public-shelf.tsx` |
+| Anywhere | `jam-public-notice` frames (a nudge: read again) become one toast, with "Responder" or "Ver" | `jam-public-host.tsx` |
+
+The view is a full-screen layer over the app, mounted once by `App`
+(`JamPublicHost`), and `syncRoute` leaves the address alone while it is open.
+Opening one from anywhere is `openPublicJam` in `lib/jam-public-nav.ts`.
+
+Reports go through the ordinary report dialog (`kind: "jam_public"`). Nothing here
+needs a server change.
+
+Not in this PR: a list of all public jams inside the app (the shelf links to the
+public site), the operator's review screens (they are in the dashboard), and
+votes on public songs (the contract has none).
+
 ## Runbook
 
 ### Turn it on

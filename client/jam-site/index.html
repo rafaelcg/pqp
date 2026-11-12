@@ -15,6 +15,15 @@
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <!-- The faces are in the stylesheet (src/fonts.css, via the entry), but the
+         browser only asks for a file once a rendered word needs it, and here
+         that is the end of HTML, script, catalogue, render: the headline sat in
+         the Arial-metric fallback until then. Same three files and the same
+         reason as the app's index.html. `crossorigin` is required for a font
+         preload, or the file is fetched twice. -->
+    <link rel="preload" href="/src/assets/fonts/gabarito-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/src/assets/fonts/instrument-sans-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/src/assets/fonts/dela-gothic-one-latin.woff2" as="font" type="font/woff2" crossorigin />
     <!-- Before the bundle, so the theme is on the element for the first paint.
          Dark first: no stored choice is dark. Keep it dependency-free. -->
     <script>

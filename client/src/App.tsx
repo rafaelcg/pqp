@@ -132,6 +132,11 @@ import {
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
 import { dispatchJamFrame, dispatchJamReconnected } from "@/lib/jam-frames";
+import {
+  dispatchJamPublicNotice,
+  isJamPublicNotice,
+  jamPublicReconnected,
+} from "@/lib/jam-public-store";
 import { JamPane } from "@/components/jam/jam-pane";
 import { createJamOnce } from "@/lib/jam-create";
 import { setJamViewer } from "@/lib/jam-store";
@@ -473,10 +478,13 @@ import {
   stashConnectionCallbackFromWindow,
 } from "@/lib/connection-callback";
 import {
+  JAM_INTENT_PARAMS,
   jamIntentFromSearch,
-  jamReturnPath,
   takeJamIntent,
 } from "@/lib/jam-intent";
+import { parsePublicJamPath } from "@/lib/jam-public-links";
+import { openPublicJam } from "@/lib/jam-public-nav";
+import { JamPublicHost } from "@/components/jam/jam-public-host";
 import {
   addIntentFromSearch,
   CREATE_INTENT_PARAMS,
@@ -6063,6 +6071,14 @@ function MainAppContent({
             return;
           }
 
+          // --- public jams --- a nudge to one account ("somebody is waiting for
+          // your answer", "an outside take arrived"): not a chat frame, so it is
+          // told apart by its type and handed to the public jam store.
+          if (isJamPublicNotice(message)) {
+            dispatchJamPublicNotice(message);
+            return;
+          }
+
           // --- jam --- songs and tracks of the open jam: straight to the jam
           // store, which applies each frame by id.
           if (
@@ -6403,6 +6419,7 @@ function MainAppContent({
           dispatchForumReconnected();
           // --- jam --- the same: re-read the open wall and the sidebar counts.
           dispatchJamReconnected();
+          jamPublicReconnected();
           // Stories frames sent while the socket was down are gone; the
           // strips on screen re-read, after the same jitter.
           setTimeout(
@@ -6517,6 +6534,11 @@ function MainAppContent({
       if (connectionProviderFromPath(window.location.pathname)) {
         return;
       }
+      // A public jam is open over the app (`/app/jam/<id>`): it owns the address
+      // until it is closed, and closing puts the selection's back.
+      if (parsePublicJamPath(window.location.pathname)) {
+        return;
+      }
       const path = selectionRoutePath(target, channelId);
       if (routeRef.current === path) {
         return;
@@ -6530,7 +6552,7 @@ function MainAppContent({
   /** `syncRoute` for an address that is not a plain channel (a forum post). */
   const syncPath = useCallback(
     (path: string) => {
-      if (routeRef.current === path) {
+      if (routeRef.current === path || parsePublicJamPath(window.location.pathname)) {
         return;
       }
       routeRef.current = path;
@@ -6538,6 +6560,14 @@ function MainAppContent({
     },
     [navigate],
   );
+
+  /** A public jam was left with nothing of ours to go back to: the selection's own address comes back. */
+  const closePublicJam = useCallback(() => {
+    routeRef.current = "";
+    const path = selectionRoutePath(selection, selectedChannelId);
+    routeRef.current = path;
+    navigate(path, { replace: true });
+  }, [navigate, selection, selectedChannelId]);
 
   /**
    * --- forums --- the forum pane opened or closed a post: its own address
@@ -9988,20 +10018,20 @@ function MainAppContent({
     const params = new URLSearchParams(location.search);
     /**
      * A public jam somebody came from (jam.pqp.gg, `lib/jam-intent.ts`): the
-     * account now exists, so this is the moment the intention is acted on. There
-     * is no public-jam view in the app yet, so the person goes back to the
-     * public page, which says honestly that recording opens in the app and is on
-     * its way (`?from=app`). THE IN-APP PUBLIC JAM VIEW REPLACES THIS BLOCK: it
-     * opens the song (and the studio when `record` is set) instead of leaving.
-     * Read before the other intents and consumed here, so nothing else on this
-     * arrival is spent for a page we are about to leave, and a later visit to the
-     * app is not bounced again.
+     * account now exists, so this is the moment the intention is acted on. The
+     * public jam view (`components/jam/jam-public-host.tsx`) opens the song,
+     * and the studio, a like or a report when that is what they came for, or
+     * the start sheet for a new jam. Nothing here is spent for it: the other
+     * intents of this arrival still run.
+     *
+     * Both carriers are consumed together, so a later visit to the app does not
+     * open it again, and the query string is wiped with the other intents'
+     * below (a reload would otherwise like it twice).
      */
     const jamIntent = jamIntentFromSearch(location.search) ?? takeJamIntent(storage);
     takeJamIntent(storage);
     if (jamIntent) {
-      window.location.replace(jamReturnPath(jamIntent));
-      return;
+      openPublicJam(jamIntent);
     }
     // Both stashes are consumed unconditionally, even when the URL also carries
     // the value: leaving one behind is how an intent fires on a later visit.
@@ -10060,8 +10090,14 @@ function MainAppContent({
       params.has("add") ||
       params.has("join") ||
       waitlistIntentFromSearch(location.search) ||
-      CREATE_INTENT_PARAMS.some((name) => params.has(name))
+      CREATE_INTENT_PARAMS.some((name) => params.has(name)) ||
+      (jamIntent !== null && JAM_INTENT_PARAMS.some((name) => params.has(name)))
     ) {
+      if (jamIntent) {
+        for (const name of JAM_INTENT_PARAMS) {
+          params.delete(name);
+        }
+      }
       params.delete("claim");
       params.delete("add");
       params.delete("join");
@@ -15093,6 +15129,11 @@ function MainAppContent({
         }
       />
       <NotInServerToast />
+      <JamPublicHost
+        viewerId={user?.id ?? null}
+        ready={bootstrapReady}
+        onClosed={closePublicJam}
+      />
       <ForwardedToast
         summary={forwardedToast}
         onView={viewForwarded}

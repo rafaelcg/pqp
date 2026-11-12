@@ -1,5 +1,5 @@
 import type { JamTrack } from "@pqp/shared";
-import { CircleMinus, CirclePlus, Ear, Headphones, MoreHorizontal, SlidersHorizontal, ThumbsUp, Trash2 } from "lucide-react";
+import { CircleMinus, CirclePlus, Ear, Flag, Headphones, MoreHorizontal, SlidersHorizontal, ThumbsUp, Trash2 } from "lucide-react";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Menu } from "@/components/ui/menu";
 import { Slider } from "@/components/ui/slider";
@@ -67,6 +67,8 @@ export interface JamTrackRowProps {
   onAdjust: () => void;
   onDelete: () => void;
   onAudition: () => void;
+  /** A public jam, somebody else's part: "Denunciar essa parte" in the lane's menu. */
+  onReport?: () => void;
   onSeek: (fraction: number) => void;
 }
 
@@ -101,6 +103,7 @@ export function JamTrackRow({
   onAdjust,
   onDelete,
   onAudition,
+  onReport,
   onSeek,
 }: JamTrackRowProps) {
   const { t } = useTranslation();
@@ -122,6 +125,7 @@ export function JamTrackRow({
     ...(canSwitchMix && track.inMix
       ? [{ id: "take-out", label: t("jam.take.takeOut"), icon: CircleMinus, onSelect: onSwitchMix }]
       : []),
+    ...(onReport ? [{ id: "report", label: t("jam.public.menu.reportPart"), icon: Flag, onSelect: onReport }] : []),
     ...(canDelete ? [{ id: "delete", label: t("jam.take.delete"), icon: Trash2, danger: true, onSelect: onDelete }] : []),
   ];
 

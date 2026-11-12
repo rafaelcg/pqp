@@ -12,6 +12,7 @@ import {
   type RecordingHandle,
 } from "@/lib/jam";
 import { createJamSong, deleteJamSong, jamErrorKind, updateJamTrack, type JamErrorKind } from "@/lib/jam-api";
+import { createPublicJam } from "@/lib/jam-public-api";
 import { blockPeaks, isSilentTake, silentIn } from "@/lib/jam-take-silence";
 import { forgetCheckSkipped, isCheckSkipped, rememberCheckSkipped } from "@/lib/jam-latency-skip";
 import { replaceInMix, takeToReplace } from "@/lib/jam-mix";
@@ -98,6 +99,13 @@ export interface UseJamStudioArgs {
   canSwitchMix: boolean;
   /** The song was deleted while the studio was open (the pane saw it go). */
   songDeleted: boolean;
+  /**
+   * The take lands on a public jam: it carries the person's consent
+   * (`publicConsent`, `docs/JAM_PUBLIC.md`), and a new song is a standalone
+   * public jam (`POST /api/jam-public/songs`) rather than a channel's.
+   */
+  publicTake?: boolean;
+  standalone?: boolean;
 }
 
 const DEFAULT_BPM = 100;
@@ -108,7 +116,10 @@ const MIN_KEPT_MS = 1000;
 const AUTO_STOP_MS = JAM_TRACK_MAX_DURATION_MS - 5000;
 
 export function useJamStudio(args: UseJamStudioArgs) {
-  const { channelId, songId, backing, draft, viewerId, canSwitchMix } = args;
+  const { channelId, songId, backing, draft, viewerId, canSwitchMix, standalone = false } = args;
+  const publicTake = args.publicTake === true || standalone;
+  /** On a public jam: the recorded picture goes public too (`yes`), or only the sound (`audio_only`). */
+  const [shareVideo, setShareVideo] = useState(true);
   const [phase, setPhase] = useState<StudioPhase>("boot");
   const [engine, setEngine] = useState<JamEngine | null>(null);
   const [mic, setMic] = useState<MicState>("opening");
@@ -635,7 +646,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
           wantedInstruments: source.joinMode === "wanted" ? source.wantedInstruments : [],
           nonce: source.nonce,
         };
-        const { song } = await createJamSong(channelId, body);
+        const { song } = standalone
+          ? await createPublicJam(body).then((created) => ({ song: created.song }))
+          : await createJamSong(channelId, body);
         createdSongId.current = song.id;
         targetSong = song.id;
         putJamSongOnWall(channelId, song, asked);
@@ -672,6 +685,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
         state: job.current.state,
         onProgress: setProgress,
         signal: postAbort.current.signal,
+        ...(publicTake ? { publicConsent: job.current.take.video && !shareVideo ? ("audio_only" as const) : ("yes" as const) } : {}),
       });
       // The take is on the song from here on, whatever the optional steps below do or
       // however soon the studio closes: its song is never cleaned up as empty.
@@ -714,7 +728,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
     } finally {
       posting.current = false;
     }
-  }, [take, edits, songId, draft, detached, channelId, instrument, replaceTake, wantsReplace]);
+  }, [take, edits, songId, draft, detached, channelId, instrument, replaceTake, wantsReplace, standalone, publicTake, shareVideo]);
 
   /**
    * Post the take as a song of its own (the one it was recorded over is gone).
@@ -985,6 +999,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
     postAsNewSong,
     replaceTake,
     wantsReplace,
+    publicTake,
+    shareVideo,
+    setShareVideo,
     setWantsReplace,
     swapFailed,
     posted,

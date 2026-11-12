@@ -7,7 +7,9 @@ import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useEngineClock } from "@/hooks/use-jam-clock";
+import { useJamPublication } from "@/hooks/use-jam-publication";
 import { useJamStudio, type NewSongDraft } from "@/hooks/use-jam-studio";
+import { useJamPublicMe } from "@/lib/jam-public-store";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
 import { liveTimelineEndMs } from "@/lib/jam-live";
@@ -75,6 +77,11 @@ export interface JamStudioProps {
   onStay?: () => void;
   /** The take is on the song: go and look at it. */
   onPosted: (posted: { songId: string; trackId: string }) => void;
+  /**
+   * Opened from a public jam outside any channel: the take carries the
+   * person's consent, and a new song is a standalone public jam.
+   */
+  publicAccess?: boolean;
 }
 
 export function JamStudio({
@@ -92,6 +99,7 @@ export function JamStudio({
   leaveTick = 0,
   onStay,
   onPosted,
+  publicAccess = false,
 }: JamStudioProps) {
   const { t, locale } = useTranslation();
   const backing = useMemo(() => tracks.filter((track) => track.inMix), [tracks]);
@@ -99,7 +107,16 @@ export function JamStudio({
   if (song) {
     known.current = song;
   }
+  // A channel's song that is public asks the same of whoever records on it as a public view does.
+  const publicMe = useJamPublicMe();
+  const publication = useJamPublication(song?.id ?? "", publicMe.enabled && !publicAccess && song !== null);
+  const songIsPublic =
+    publicMe.enabled &&
+    (publicAccess || ["live", "review", "hidden"].includes(publication.publication?.status ?? ""));
+  const outsideTake = publicAccess && song !== null && song.channelId === null && !canSwitchMix;
   const studio = useJamStudio({
+    publicTake: songIsPublic,
+    standalone: publicAccess && song === null,
     channelId,
     songId: song?.id ?? null,
     backing: tracks,
@@ -722,6 +739,21 @@ export function JamStudio({
                       />
                     </div>
                   )}
+                  {studio.publicTake && (
+                    <div data-jam-public-take="" className="flex flex-col gap-1 rounded-[var(--radius-card)] bg-surface-1 px-4 py-2.5 ring-1 ring-inset ring-border">
+                      <p className="text-[13px] font-semibold leading-snug text-text-secondary">
+                        {outsideTake ? t("jam.public.studio.outside") : t("jam.public.studio.public")}
+                      </p>
+                      {studio.take?.video && (
+                        <Switch
+                          checked={studio.shareVideo}
+                          onCheckedChange={studio.setShareVideo}
+                          label={t("jam.public.studio.shareVideo")}
+                          description={t("jam.public.studio.shareVideoHint")}
+                        />
+                      )}
+                    </div>
+                  )}
                   {studio.take && studio.edits && (
                     <div data-jam-edit="" data-open={editing ? "true" : "false"} className="flex flex-col gap-3">
                       {editing ? (
@@ -772,7 +804,13 @@ export function JamStudio({
         {phase === "done" && studio.posted && (
           <DoneOverlay
             title={song ? t("jam.post.doneTitle") : t("jam.post.doneNewTitle")}
-            body={studio.swapFailed ? t("jam.post.swapFailed") : t("jam.post.doneBody")}
+            body={
+              studio.swapFailed
+                ? t("jam.post.swapFailed")
+                : outsideTake
+                  ? t("jam.public.studio.doneOutside")
+                  : t("jam.post.doneBody")
+            }
             action={t("jam.post.view")}
             onAction={() => onPosted(studio.posted!)}
           />

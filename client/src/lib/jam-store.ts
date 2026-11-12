@@ -2,6 +2,7 @@ import type { JamFrame, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/s
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { fetchJamSong, fetchJamSongs } from "@/lib/jam-api";
 import { subscribeJamFrames, subscribeJamReconnected } from "@/lib/jam-frames";
+import { resetJamPublic } from "@/lib/jam-public-store";
 import {
   EMPTY_JAM_CHANNEL,
   applyJamFrame,
@@ -48,6 +49,15 @@ let viewer: string | null = null;
  * epoch that replaced it.
  */
 let epoch = 0;
+
+/**
+ * A public jam opened from outside any channel (`/app/jam/<id>`) is held under a
+ * key that is not a channel id, so the same store, the same panel and the same
+ * studio serve it with nothing channel-shaped to ask for. It has no list, no
+ * frames and nothing to read again on a reconnect.
+ */
+export const publicJamKey = (songId: string): string => `public:${songId}`;
+export const isPublicJamKey = (key: string): boolean => key.startsWith("public:");
 
 /** The epoch now, for a caller that will write after an await (see `applyJamWrite`). */
 export function jamStoreEpoch(): number {
@@ -234,7 +244,8 @@ function wire(): void {
   });
   subscribeJamReconnected(() => {
     // One at a time with a breath between: a reconnect is when everybody asks.
-    const ids = [...channels.keys()];
+    // A public view's key is not a channel (`publicJamKey`): it has no list to read again.
+    const ids = [...channels.keys()].filter((key) => !isPublicJamKey(key));
     const mine = epoch;
     void (async () => {
       for (const channelId of ids) {
@@ -262,6 +273,7 @@ export function setJamViewer(userId: string | null): void {
     return;
   }
   viewer = userId;
+  resetJamPublic();
   resetJamStoreForTests();
   queueMicrotask(emit);
 }

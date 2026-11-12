@@ -1,5 +1,5 @@
 import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
-import { ArrowLeft, Camera, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Send, Trash2, X } from "lucide-react";
+import { ArrowLeft, Camera, Link2, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Send, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -18,6 +18,7 @@ import {
 import type { BandLane } from "@/lib/jam-clip";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cannotRecordReason, pickInstrument } from "@/lib/jam-record";
+import { dropInboxTake } from "@/lib/jam-public-store";
 import { oneAtATime, switchTakeIn } from "@/lib/jam-mix";
 import {
   applyJamVote,
@@ -37,6 +38,8 @@ import { JamArtwork } from "./jam-artwork";
 import { JamCoverPhoto, useJamCover, type JamCoverState } from "./jam-cover";
 import { JamEditSheet } from "./jam-edit-sheet";
 import { JamSharePicker } from "./jam-share-picker";
+import { useJamPublicPanel } from "./jam-public-panel";
+import { JamPublicRequests } from "./jam-public-parts";
 import { JamLaneFrame, JamLaneIdentity, JAM_BAND_BOX } from "./jam-lane-frame";
 import { JamStage } from "./jam-stage";
 import { TrackAdjust } from "./jam-track-adjust";
@@ -71,6 +74,13 @@ export interface JamSongPanelProps {
   autoplay?: boolean;
   /** Each change is the wall's round button pressed on this song while it is open: play, or pause. */
   playNonce?: number;
+  /**
+   * Opened from outside any channel (`/app/jam/<id>`, a public jam): no votes
+   * and no chat share, but a like, a link, a report, and the song's origin.
+   */
+  publicView?: boolean;
+  /** The server this song's channel belongs to, for the publish sheet. Null outside a channel. */
+  originName?: string | null;
 }
 
 export function JamSongPanel({
@@ -86,6 +96,8 @@ export function JamSongPanel({
   freshTrackId,
   autoplay = true,
   playNonce = 0,
+  publicView = false,
+  originName = null,
 }: JamSongPanelProps) {
   const { t } = useTranslation();
   const tracks = useMemo(() => orderTracks(detail?.tracks ?? []), [detail?.tracks]);
@@ -165,6 +177,16 @@ export function JamSongPanel({
   const canManage = viewer ? viewer.isAuthor || viewer.canModerate : false;
   // The server's own rule for editing a song (its author or a moderator, and the flag on).
   const canEdit = canManage && enabled;
+  const pub = useJamPublicPanel({
+    song,
+    viewerId,
+    isStarter: viewer?.isAuthor === true,
+    tracks,
+    publicView,
+    originName,
+  });
+  const requestTakes = tracks.filter((track) => pub.pendingTakeIds.has(track.id));
+  const [requestBusy, setRequestBusy] = useState<string | null>(null);
   const first = pickInstrument(song, addable, mine);
   const missingSlots =
     need.kind === "missing" ? need.instruments.filter((instrument) => !tracks.some((one) => one.instrument === instrument)) : [];
@@ -246,6 +268,8 @@ export function JamSongPanel({
 
   // A song with nothing in it yet is its author's alone, so a link to it would lead nowhere.
   const canShare = !isEmpty && song.trackCount > 0;
+  // In a public view the share button copies the address anybody can open; a chat card needs a channel.
+  const shareAction = pub.copyLink ?? (() => setSharing(true));
   const manageItems: ContextMenuItemDef[] =
     canManage && enabled
       ? [
@@ -267,8 +291,9 @@ export function JamSongPanel({
         ]
       : [];
   const songMenu: ContextMenuItemDef[] = [
-    ...(canShare ? [{ id: "share", label: t("jam.share.title"), icon: Send, onSelect: () => setSharing(true) }] : []),
-    ...(canShare && manageItems.length > 0 ? [{ id: "share-sep", label: "", separator: true }] : []),
+    ...(canShare && !publicView ? [{ id: "share", label: t("jam.share.title"), icon: Send, onSelect: () => setSharing(true) }] : []),
+    ...pub.menuItems,
+    ...((canShare || pub.menuItems.length > 0) && manageItems.length > 0 ? [{ id: "share-sep", label: "", separator: true }] : []),
     ...manageItems,
   ];
 
@@ -302,15 +327,15 @@ export function JamSongPanel({
     <button
       type="button"
       data-jam-share-open=""
-      onClick={() => setSharing(true)}
-      aria-label={t("jam.share.title")}
+      onClick={shareAction}
+      aria-label={pub.copyLink ? t("jam.public.menu.copyLink") : t("jam.share.title")}
       className={cn(
         "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-3.5 text-xs font-bold text-text outline-none ring-1 ring-border sm:h-8 transition-[background-color,transform] duration-[var(--duration-fast)] hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96]",
         stageOn && "max-sm:w-9 max-sm:justify-center max-sm:px-0",
       )}
     >
-      <Send className="h-3.5 w-3.5" aria-hidden />
-      <span className={cn(stageOn && "max-sm:sr-only")}>{t("jam.share.title")}</span>
+      {pub.copyLink ? <Link2 className="h-3.5 w-3.5" aria-hidden /> : <Send className="h-3.5 w-3.5" aria-hidden />}
+      <span className={cn(stageOn && "max-sm:sr-only")}>{pub.copyLink ? t("jam.public.menu.copyLink") : t("jam.share.title")}</span>
     </button>
   ) : null;
 
@@ -401,6 +426,7 @@ export function JamSongPanel({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 sm:px-5">
+        {pub.strip && <div className="-mx-3 sm:-mx-5">{pub.strip}</div>}
         {isEmpty ? (
           <div
             data-jam-empty-song=""
@@ -431,6 +457,33 @@ export function JamSongPanel({
             loading={!detail}
           />
         )}
+        <JamPublicRequests
+          takes={requestTakes}
+          auditioning={playback.audition}
+          playing={playing}
+          busyId={requestBusy}
+          onListen={(track) => {
+            if (playback.audition === track.id) {
+              playback.setAudition(null);
+              return;
+            }
+            playback.setAudition(track.id);
+            if (!playing) playback.toggle();
+          }}
+          onAccept={(track) => {
+            setRequestBusy(track.id);
+            void serial(() =>
+              guard(async () => {
+                const answer = await updateJamTrack(track.id, { inMix: true });
+                writeFrame({ type: "jam-track-updated", channelId, song: answer.song, track: answer.track });
+                dropInboxTake(track.id);
+                if (playback.audition === track.id) playback.setAudition(null);
+                pub.refreshPublication();
+              }),
+            ).finally(() => setRequestBusy(null));
+          }}
+          onDecline={(track) => setPendingDelete(track)}
+        />
         <section className="mt-1" aria-labelledby={`band-${song.id}`}>
           <div
             className={cn(
@@ -464,7 +517,7 @@ export function JamSongPanel({
               <div className={cn("relative", laneRoom, JAM_BAND_BOX)}>
                 <Ruler timeline={timeline} onSeek={seekFraction} />
                 <ul className="flex flex-col gap-1" aria-label={t("jam.song.tracks")}>
-                  {tracks.map((track, index) => {
+                  {tracks.filter((track) => !pub.pendingTakeIds.has(track.id)).map((track, index) => {
                     const lane = playback.lanes[track.id] ?? { muted: false, solo: false, volume: 1 };
                     const isMine = viewerId !== null && track.authorId === viewerId;
                     return (
@@ -480,7 +533,8 @@ export function JamSongPanel({
                         voted={votedIds.has(track.id)}
                         canSwitchMix={canManage && enabled}
                         canDelete={isMine || canManage}
-                        canVote={enabled}
+                        canVote={enabled && !publicView}
+                        onReport={!isMine && pub.reportTrack ? () => pub.reportTrack?.(track.id) : undefined}
                         auditioning={playback.audition === track.id}
                         loading={playback.stemStatus[track.id] === "loading"}
                         failed={playback.stemStatus[track.id] === "error"}
@@ -606,7 +660,8 @@ export function JamSongPanel({
         )}
       </footer>
 
-      {canShare && <JamSharePicker song={song} open={sharing} onClose={() => setSharing(false)} />}
+      {canShare && !publicView && <JamSharePicker song={song} open={sharing} onClose={() => setSharing(false)} />}
+      {pub.overlays}
       {canEdit && (
         <JamEditSheet
           open={editing}
@@ -630,6 +685,7 @@ export function JamSongPanel({
           if (adjustingId === track.id) setAdjustingId(null);
           void guard(async () => {
             await deleteJamTrack(track.id);
+            dropInboxTake(track.id);
             // When it was the song's last take the server took the song with it (if nobody
             // added one meanwhile): the reads below are what say which it was, so a take that
             // arrived in between is never taken for a deleted song.

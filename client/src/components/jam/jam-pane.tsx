@@ -43,6 +43,8 @@ import "./jam.css";
 import { coverGradient } from "./jam-art";
 import { useElementWidth } from "./jam-bars";
 import { JamHowToDialog, JamHowToHero } from "./jam-howto";
+import { JamPublicShelf, useJamPublicShelf } from "./jam-public-shelf";
+import { JamPublicWaitingStrip } from "./jam-public-waiting";
 import { JamSongPanel } from "./jam-song-panel";
 import { JamStartSheet, type JamStartResult } from "./jam-start-sheet";
 import { JamStudio } from "./jam-studio";
@@ -445,6 +447,13 @@ export function JamPane({
     knownIds.current = null;
   }, [channelId]);
 
+  // The public jams, one quiet row under the channel's own songs. When it shows, the
+  // channel's songs get a header of their own so the two read as two places.
+  const ownIds = useMemo(() => new Set(songs.map((song) => song.id)), [songs]);
+  const publicShelf = useJamPublicShelf(ownIds);
+  const showShelf = publicShelf.length > 0;
+  const titledSections = showShelf && songs.length > 0;
+
   const sections: JamWallSection[] = useMemo(
     () => [{ id: "server", songs: filterSongs(songs, filter) }],
     [songs, filter],
@@ -767,6 +776,7 @@ export function JamPane({
             {t("jam.wall.paused")}
           </p>
         )}
+        <JamPublicWaitingStrip />
         {config.loaded && config.enabled && !config.uploads && (
           <p role="status" className="mx-3 mt-3 rounded-[var(--radius-card)] bg-warning-soft px-3.5 py-3 text-sm text-on-warning-soft sm:mx-5">
             {t("jam.wall.uploadsOff")}
@@ -853,6 +863,11 @@ export function JamPane({
           {!loading && !failed && !empty &&
             sections.map((section) => (
               <section key={section.id} aria-label={t("jam.wall.songs")}>
+                {titledSections && (
+                  <h2 data-jam-section-title="" className="mb-2.5 font-display text-lg font-extrabold text-text">
+                    {t("jam.public.shelf.ownTitle")}
+                  </h2>
+                )}
                 {shown.length === 0 ? (
                   <p className="grid min-h-[30vh] place-items-center text-center text-sm text-text-secondary">
                     {t("jam.wall.emptyFilter")}
@@ -896,6 +911,7 @@ export function JamPane({
                 )}
               </section>
             ))}
+          {!loading && !failed && <JamPublicShelf songs={publicShelf} titled={titledSections} />}
           </div>
         </div>
       </section>
@@ -920,6 +936,7 @@ export function JamPane({
             freshTrackId={freshTrackId}
             autoplay={openAutoplay}
             playNonce={playNonce}
+            originName={server.name}
             onRecord={(instrument, chosen) => openStudio({ mode: "over", songId: openSong.id, instrument, chosen })}
             onPlayingChange={setOpenPlaying}
             onClose={() => {
