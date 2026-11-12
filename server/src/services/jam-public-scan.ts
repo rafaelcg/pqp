@@ -7,6 +7,7 @@ import {
   JAM_PUBLIC_VIDEO_FRAMES_MAX,
   JAM_VIDEO_MAX_BYTES,
 } from "@pqp/shared";
+import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
 import {
   deleteObject,
@@ -268,15 +269,18 @@ function verdictOf(result: ScanResult): Verdict | "retry" {
   }
 }
 
-async function quarantine(input: {
-  key: string;
-  kind: "cover" | "video";
-  songId: string;
-  trackId: string | null;
-  uploaderId: string | null;
-  result: ScanResult;
-}): Promise<void> {
-  await getPool().query(
+async function quarantine(
+  input: {
+    key: string;
+    kind: "cover" | "video";
+    songId: string;
+    trackId: string | null;
+    uploaderId: string | null;
+    result: ScanResult;
+  },
+  db: Pick<PoolClient, "query"> = getPool(),
+): Promise<void> {
+  await db.query(
     `INSERT INTO jam_public_quarantine
        (storage_key, kind, song_id, track_id, uploader_id, scan_provider, scan_score, scan_labels)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
@@ -395,22 +399,74 @@ async function claimCover(): Promise<ClaimedCover | null> {
   return result.rows[0] ?? null;
 }
 
-/** True when this claim still held the row (a lease that expired lost it to another worker). */
+/**
+ * Write the verdict and, for a rejection, every consequence of it, in ONE
+ * transaction guarded by this claim. True when this claim still held the row
+ * (a lease that expired lost it to another worker, which then changes
+ * nothing). Either the verdict and the quarantine both land, or neither does
+ * and the row is claimed again when the lease lapses: a rejected object is
+ * never left recorded as rejected and outside the quarantine. Database work
+ * only, no network, inside the transaction.
+ */
+async function finishInTransaction(
+  run: (client: PoolClient) => Promise<boolean>,
+): Promise<boolean> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    if (!(await run(client))) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function finishCover(claimed: ClaimedCover, verdict: Verdict, result: ScanResult): Promise<boolean> {
-  const finished = await getPool().query(
-    `UPDATE jam_public_cover_scans
-        SET status = $3, provider = $4, score = $5, labels = $6::jsonb, scanned_at = NOW(), claimed_at = NULL
-      WHERE upload_id = $1 AND claimed_at = $2::timestamptz`,
-    [
-      claimed.upload_id,
-      claimed.claim,
-      verdict,
-      result.provider,
-      result.score,
-      JSON.stringify(result.labels),
-    ],
-  );
-  return (finished.rowCount ?? 0) === 1;
+  return finishInTransaction(async (client) => {
+    const finished = await client.query(
+      `UPDATE jam_public_cover_scans
+          SET status = $3, provider = $4, score = $5, labels = $6::jsonb, scanned_at = NOW(), claimed_at = NULL
+        WHERE upload_id = $1 AND claimed_at = $2::timestamptz`,
+      [
+        claimed.upload_id,
+        claimed.claim,
+        verdict,
+        result.provider,
+        result.score,
+        JSON.stringify(result.labels),
+      ],
+    );
+    if ((finished.rowCount ?? 0) !== 1) {
+      return false;
+    }
+    if (verdict === "rejected") {
+      await quarantine(
+        {
+          key: claimed.storage_key,
+          kind: "cover",
+          songId: claimed.song_id,
+          trackId: null,
+          uploaderId: claimed.uploader_id,
+          result,
+        },
+        client,
+      );
+      // Off the song everywhere: a rejected picture is not shown in its channel
+      // either. The ledger row stays (the quarantine holds its object).
+      await client.query(`DELETE FROM jam_song_covers WHERE song_id = $1 AND upload_id = $2`, [
+        claimed.song_id,
+        claimed.upload_id,
+      ]);
+    }
+    return true;
+  });
 }
 
 /**
@@ -467,22 +523,6 @@ export async function processOneJamCover(): Promise<Verdict | "retry" | null> {
   // effects included.
   if (!(await finishCover(claimed, verdict, result))) {
     return "retry";
-  }
-  if (verdict === "rejected") {
-    await quarantine({
-      key: claimed.storage_key,
-      kind: "cover",
-      songId: claimed.song_id,
-      trackId: null,
-      uploaderId: claimed.uploader_id,
-      result,
-    });
-    // Off the song everywhere: a rejected picture is not shown in its channel
-    // either. The ledger row stays (the quarantine holds its object).
-    await getPool().query(`DELETE FROM jam_song_covers WHERE song_id = $1 AND upload_id = $2`, [
-      claimed.song_id,
-      claimed.upload_id,
-    ]);
   }
   if (verdict === "rejected" || verdict === "flagged") {
     await escalate({
@@ -552,30 +592,60 @@ async function claimVideo(): Promise<ClaimedVideo | null> {
   return result.rows[0] ?? null;
 }
 
-/** True when this claim still held the row. */
+/** As `finishCover`: the verdict and a rejection's consequences, one transaction, under the claim. */
 async function finishVideo(
   claimed: ClaimedVideo,
   status: "passed" | "flagged" | "rejected" | "unscanned" | "skipped",
   result: ScanResult | null,
   frames: number,
 ): Promise<boolean> {
-  const finished = await getPool().query(
-    `UPDATE jam_public_tracks
-        SET video_scan_status = $3, video_scan_provider = $4, video_scan_score = $5,
-            video_scan_labels = $6::jsonb, video_scan_frames = $7, video_scanned_at = NOW(),
-            video_claimed_at = NULL
-      WHERE track_id = $1 AND video_claimed_at = $2::timestamptz`,
-    [
-      claimed.track_id,
-      claimed.claim,
-      status,
-      result?.provider ?? null,
-      result?.score ?? null,
-      JSON.stringify(result?.labels ?? []),
-      frames,
-    ],
-  );
-  return (finished.rowCount ?? 0) === 1;
+  return finishInTransaction(async (client) => {
+    const finished = await client.query(
+      `UPDATE jam_public_tracks
+          SET video_scan_status = $3, video_scan_provider = $4, video_scan_score = $5,
+              video_scan_labels = $6::jsonb, video_scan_frames = $7, video_scanned_at = NOW(),
+              video_claimed_at = NULL
+        WHERE track_id = $1 AND video_claimed_at = $2::timestamptz`,
+      [
+        claimed.track_id,
+        claimed.claim,
+        status,
+        result?.provider ?? null,
+        result?.score ?? null,
+        JSON.stringify(result?.labels ?? []),
+        frames,
+      ],
+    );
+    if ((finished.rowCount ?? 0) !== 1) {
+      return false;
+    }
+    if (status === "rejected" && result) {
+      const held = {
+        kind: "video" as const,
+        songId: claimed.song_id,
+        trackId: claimed.track_id,
+        uploaderId: claimed.author_id,
+        result,
+      };
+      await quarantine({ key: claimed.video_key, ...held }, client);
+      // The MP4 copy is the same picture: held with it.
+      if (claimed.video_mp4_key) {
+        await quarantine({ key: claimed.video_mp4_key, ...held }, client);
+      }
+      // Off the track everywhere, the channel included, the MP4 copy too; the
+      // audio stays. The quarantine holds the objects, so no sweep deletes them
+      // before their time. A transcode still running finds its reservation gone
+      // and does not confirm (`jam-video-transcode.ts` confirms on the key).
+      await client.query(
+        `UPDATE jam_tracks
+            SET video_key = NULL, video_content_type = NULL, video_bytes = NULL,
+                video_mp4_key = NULL, video_mp4_content_type = NULL, video_mp4_bytes = NULL
+          WHERE id = $1 AND video_key = $2`,
+        [claimed.track_id, claimed.video_key],
+      );
+    }
+    return true;
+  });
 }
 
 async function releaseVideo(claimed: ClaimedVideo): Promise<void> {
@@ -705,38 +775,6 @@ export async function processOneJamVideo(): Promise<
     // Written first, guarded by this claim (see the cover path).
     if (!(await finishVideo(claimed, verdict, result, paths.length))) {
       return "retry";
-    }
-    if (verdict === "rejected") {
-      await quarantine({
-        key: claimed.video_key,
-        kind: "video",
-        songId: claimed.song_id,
-        trackId: claimed.track_id,
-        uploaderId: claimed.author_id,
-        result,
-      });
-      // The MP4 copy is the same picture: held with it.
-      if (claimed.video_mp4_key) {
-        await quarantine({
-          key: claimed.video_mp4_key,
-          kind: "video",
-          songId: claimed.song_id,
-          trackId: claimed.track_id,
-          uploaderId: claimed.author_id,
-          result,
-        });
-      }
-      // Off the track everywhere, the channel included, the MP4 copy too; the
-      // audio stays. The quarantine holds the objects, so no sweep deletes them
-      // before their time. A transcode still running finds its reservation gone
-      // and does not confirm (`jam-video-transcode.ts` confirms on the key).
-      await getPool().query(
-        `UPDATE jam_tracks
-            SET video_key = NULL, video_content_type = NULL, video_bytes = NULL,
-                video_mp4_key = NULL, video_mp4_content_type = NULL, video_mp4_bytes = NULL
-          WHERE id = $1 AND video_key = $2`,
-        [claimed.track_id, claimed.video_key],
-      );
     }
     if (verdict === "rejected" || verdict === "flagged") {
       await escalate({
