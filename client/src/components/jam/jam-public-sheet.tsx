@@ -105,7 +105,7 @@ export function JamPublicSheet({ open, onClose, songId, viewerId, songTitle, ori
                 </ul>
                 <p>{t("jam.public.sheet.consent")}</p>
                 {hasOrigin && (
-                  <div className="rounded-[var(--radius-card)] bg-surface-2 px-3.5 py-1">
+                  <div className="rounded-[var(--radius-card)] bg-surface-2 px-2 py-1">
                     <Switch
                       checked={showOriginDraft}
                       onCheckedChange={setShowOriginDraft}
@@ -156,19 +156,22 @@ export function JamPublicSheet({ open, onClose, songId, viewerId, songTitle, ori
       <DialogBody>
         <div className="flex flex-col gap-4 text-sm leading-snug text-text-secondary" data-jam-public-sheet="on">
           <p role="status" className="text-text" data-jam-public-status={pub.status}>
-            {pub.status === "live" && !pub.listed ? t("jam.public.status.liveUnlisted") : t(`jam.public.status.${pub.status}` as MessageKey)}
+            {pub.status === "live" && pub.listed ? (
+              <a
+                href={publicUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="font-semibold text-accent underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                {t("jam.public.status.live")}
+              </a>
+            ) : pub.status === "live" ? (
+              t("jam.public.status.liveUnlisted")
+            ) : (
+              t(`jam.public.status.${pub.status}` as MessageKey)
+            )}
           </p>
           {pub.status === "live" && !pub.listed && <p>{t("jam.public.manage.notListed")}</p>}
-          {pub.status === "live" && pub.listed && (
-            <a
-              href={publicUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="w-fit font-semibold text-accent underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-            >
-              {t("jam.public.manage.open")}
-            </a>
-          )}
 
           {parts.length > 0 && (
             <section aria-labelledby="jam-public-parts" className="flex flex-col gap-1.5">
@@ -201,14 +204,8 @@ export function JamPublicSheet({ open, onClose, songId, viewerId, songTitle, ori
             </section>
           )}
 
-          {pub.pendingTakes > 0 && (
-            <p data-jam-public-pending-takes="">
-              {t("jam.public.manage.pendingTakes", { count: pub.pendingTakes, countLabel: pub.pendingTakes })}
-            </p>
-          )}
-
           {pub.hasOrigin && originName !== null && (
-            <div className="rounded-[var(--radius-card)] bg-surface-2 px-3.5 py-1">
+            <div className="rounded-[var(--radius-card)] bg-surface-2 px-2 py-1">
               <Switch
                 checked={pub.showOrigin}
                 busy={busy}

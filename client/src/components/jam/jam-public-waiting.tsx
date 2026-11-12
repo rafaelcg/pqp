@@ -32,16 +32,24 @@ export function JamPublicWaitingStrip() {
     <>
       {waiting.consents.length > 0 && (
         <p className={row} role="status" data-jam-waiting="consent">
-          <span className="min-w-0">{t("jam.public.waiting.consents", { count: waiting.consents.length, countLabel: waiting.consents.length })}</span>
-          <Button size="sm" variant="secondary" onClick={() => setConsentOpen(true)} data-jam-waiting-open="consent">
+          <span className="min-w-0">
+            {waiting.consents.length === 1
+              ? t("jam.public.waiting.consentOne", { title: waiting.consents[0]!.title })
+              : t("jam.public.waiting.consents", { count: waiting.consents.length, countLabel: waiting.consents.length })}
+          </span>
+          <Button size="sm" variant="secondary" className="pointer-coarse:h-11" onClick={() => setConsentOpen(true)} data-jam-waiting-open="consent">
             {t("jam.public.waiting.answer")}
           </Button>
         </p>
       )}
       {waiting.inbox.length > 0 && (
         <p className={row} role="status" data-jam-waiting="inbox">
-          <span className="min-w-0">{t("jam.public.waiting.takes", { count: waiting.inbox.length, countLabel: waiting.inbox.length })}</span>
-          <Button size="sm" variant="secondary" onClick={() => setInboxOpen(true)} data-jam-waiting-open="inbox">
+          <span className="min-w-0">
+            {waiting.inbox.length === 1
+              ? t("jam.public.waiting.takeOne", { title: waiting.inbox[0]!.songTitle })
+              : t("jam.public.waiting.takes", { count: waiting.inbox.length, countLabel: waiting.inbox.length })}
+          </span>
+          <Button size="sm" variant="secondary" className="pointer-coarse:h-11" onClick={() => setInboxOpen(true)} data-jam-waiting-open="inbox">
             {t("jam.public.waiting.see")}
           </Button>
         </p>

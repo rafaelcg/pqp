@@ -308,7 +308,11 @@ export function JamSongPanel({
     ...manageItems,
   ];
 
-  const recordLabel = isEmpty
+  // An outside take is a request: the button says so, and a line under it says who decides.
+  const outsideRecord = publicView && viewer?.isAuthor !== true && song.channelId === null;
+  const recordLabel = outsideRecord
+    ? t("jam.public.outside.sendPart")
+    : isEmpty
     ? t("jam.song.recordFirst")
     : first && need.kind === "missing" && need.instruments.includes(first)
       ? t(`jam.song.recordAs.${first}` as MessageKey)
@@ -658,7 +662,8 @@ export function JamSongPanel({
             type="button"
             data-jam-record-over=""
             onClick={() => onRecord(first, need.kind === "missing")}
-            className="group relative flex h-14 w-full items-center justify-center gap-2.5 overflow-hidden rounded-full bg-accent text-base font-extrabold [@media(max-height:32rem)]:h-11 text-on-accent shadow-[var(--shadow-2)] outline-none transition-[transform,box-shadow] duration-[var(--duration-fast)] hover:shadow-[var(--shadow-3)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 motion-safe:hover:scale-[1.01] active:scale-[0.98]"
+            data-public-dock={publicView ? "" : undefined}
+            className="group relative flex h-14 w-full data-[public-dock]:sm:mx-auto data-[public-dock]:sm:max-w-sm items-center justify-center gap-2.5 overflow-hidden rounded-full bg-accent text-base font-extrabold [@media(max-height:32rem)]:h-11 text-on-accent shadow-[var(--shadow-2)] outline-none transition-[transform,box-shadow] duration-[var(--duration-fast)] hover:shadow-[var(--shadow-3)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 motion-safe:hover:scale-[1.01] active:scale-[0.98]"
           >
             <span className="grid h-8 w-8 place-items-center rounded-full bg-on-accent text-accent transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-safe:group-hover:scale-110">
               <Mic className="h-4 w-4" aria-hidden />
@@ -672,6 +677,11 @@ export function JamSongPanel({
               {t(`jam.song.cannot.${reason}` as MessageKey)}
             </p>
           )
+        )}
+        {outsideRecord && reason === null && first && (
+          <p data-jam-outside-hint="" className="text-center text-[13px] leading-snug text-text-secondary [text-wrap:pretty]">
+            {t("jam.public.outside.sendHint")}
+          </p>
         )}
       </footer>
 

@@ -175,16 +175,8 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
   // ---- the quiet lines under the title ---------------------------------------
   const lines: ReactNode[] = [];
   if (me.enabled && isStarter && on && publication) {
-    // Parts in the mix: an outside request is a question for the starter, not somebody who has answered.
-    const inMixParts = publication.parts.filter((part) => part.inMix);
-    const answered = inMixParts.filter((part) => part.consent !== "pending").length;
+    // One fact and the way in. Who answered is in the sheet; the outside requests are listed below the stage.
     const bits = [t(`jam.public.status.short.${publication.status}` as MessageKey)];
-    if (publication.status === "live" && inMixParts.length > 1) {
-      bits.push(t("jam.public.manage.answered", { done: answered, total: inMixParts.length }));
-    }
-    if (publication.pendingTakes > 0) {
-      bits.push(t("jam.public.manage.pendingTakesShort", { count: publication.pendingTakes, countLabel: publication.pendingTakes }));
-    }
     lines.push(
       <p key="status" data-jam-public-line="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-semibold text-text-secondary">
         <Globe className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -193,7 +185,7 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
           type="button"
           onClick={() => setSheetOpen(true)}
           data-jam-public-manage=""
-          className="rounded-sm font-bold text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="inline-flex min-h-8 items-center rounded-full bg-surface-2 px-3 text-xs font-bold text-text outline-none ring-1 ring-border transition-colors duration-[var(--duration-fast)] hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:min-h-11"
         >
           {t("jam.public.menu.manageShort")}
         </button>

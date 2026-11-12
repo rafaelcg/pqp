@@ -34,13 +34,13 @@ export function JamConsentChoices({
   const { t } = useTranslation();
   return (
     <div role="group" aria-label={t("jam.public.consent.legend")} className={cn("flex flex-wrap items-center gap-2", className)}>
-      <Button size="sm" variant={current === undefined || current === "yes" ? "default" : "secondary"} aria-pressed={pick("yes")} disabled={busy} onClick={() => onChoose("yes")} data-jam-consent="yes">
+      <Button size="sm" className="pointer-coarse:h-11" variant={current === "yes" ? "default" : "secondary"} aria-pressed={pick("yes")} disabled={busy} onClick={() => onChoose("yes")} data-jam-consent="yes">
         {t("jam.public.consent.yes")}
       </Button>
-      <Button size="sm" variant={current === "audio_only" ? "default" : "secondary"} aria-pressed={pick("audio_only")} disabled={busy} onClick={() => onChoose("audio_only")} data-jam-consent="audio_only">
+      <Button size="sm" className="pointer-coarse:h-11" variant={current === "audio_only" ? "default" : "secondary"} aria-pressed={pick("audio_only")} disabled={busy} onClick={() => onChoose("audio_only")} data-jam-consent="audio_only">
         {t("jam.public.consent.audioOnly")}
       </Button>
-      <Button size="sm" variant={current === "no" ? "default" : "ghost"} aria-pressed={pick("no")} disabled={busy} onClick={() => onChoose("no")} data-jam-consent="no">
+      <Button size="sm" className="pointer-coarse:h-11" variant={current === "no" ? "default" : "secondary"} aria-pressed={pick("no")} disabled={busy} onClick={() => onChoose("no")} data-jam-consent="no">
         {t("jam.public.consent.no")}
       </Button>
     </div>
@@ -131,16 +131,16 @@ export function JamPublicRequests({
                   variant="secondary"
                   aria-pressed={heard}
                   onClick={() => onListen(track)}
-                  className="gap-1.5"
+                  className="gap-1.5 pointer-coarse:h-11"
                   data-jam-request-listen=""
                 >
                   {heard && playing ? <Pause className="h-3.5 w-3.5" aria-hidden /> : <Ear className="h-3.5 w-3.5" aria-hidden />}
                   {heard && playing ? t("jam.public.requests.stop") : t("jam.public.requests.listen")}
                 </Button>
-                <Button size="sm" disabled={busy} onClick={() => onAccept(track)} data-jam-request-accept="">
+                <Button size="sm" className="pointer-coarse:h-11" disabled={busy} onClick={() => onAccept(track)} data-jam-request-accept="">
                   {t("jam.public.requests.accept")}
                 </Button>
-                <Button size="sm" variant="ghost" disabled={busy} onClick={() => onDecline(track)} data-jam-request-decline="">
+                <Button size="sm" variant="secondary" className="pointer-coarse:h-11" disabled={busy} onClick={() => onDecline(track)} data-jam-request-decline="">
                   {t("jam.public.requests.decline")}
                 </Button>
               </div>

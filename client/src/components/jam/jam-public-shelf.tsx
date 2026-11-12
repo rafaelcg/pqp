@@ -93,7 +93,7 @@ function ShelfCard({ song }: { song: PublicJamSong }) {
         <span className="truncate text-sm font-bold text-text group-hover:underline">{song.title}</span>
         <span className="truncate text-[13px] text-text-secondary">{song.artist ?? who}</span>
         {need ? (
-          <span className={cn("truncate text-[13px] font-semibold", JAM_INSTRUMENT_LOOK[need].ink)}>
+          <span className="truncate text-[13px] font-semibold text-text-secondary">
             {t(JAM_INSTRUMENT_LOOK[need].missingKey as MessageKey)}
           </span>
         ) : (
@@ -106,20 +106,34 @@ function ShelfCard({ song }: { song: PublicJamSong }) {
   );
 }
 
-/** The cover when it passed the scanner, otherwise a small square per part in its instrument's colour. */
+/**
+ * The cover when it passed the scanner. Otherwise a small square per part in its
+ * instrument's colour and a dashed one for what it still asks for, in a 2 by 2
+ * that is always the same size, so a song with one part is a quiet card and not
+ * a block of colour.
+ */
 function ShelfArt({ song }: { song: PublicJamSong }) {
-  const parts = song.parts.slice(0, 4);
+  const cells = [
+    ...song.parts.map((part) => ({ instrument: part.instrument, need: false })),
+    ...song.needs.map((instrument) => ({ instrument, need: true })),
+  ].slice(0, 4);
   return (
     <span className="relative block aspect-square w-full overflow-hidden rounded-[var(--radius-panel)] bg-surface-2 ring-1 ring-inset ring-border">
       {song.coverUrl ? (
         <img src={song.coverUrl} alt="" loading="lazy" decoding="async" draggable={false} className="absolute inset-0 h-full w-full object-cover" />
       ) : (
-        <span className={cn("grid h-full w-full gap-1.5 p-2", parts.length > 1 ? "grid-cols-2 grid-rows-2" : "grid-cols-1")}>
-          {parts.map((part, index) => {
-            const look = JAM_INSTRUMENT_LOOK[part.instrument];
+        <span className="grid h-full w-full grid-cols-2 grid-rows-2 gap-1.5 p-2">
+          {cells.map((cell, index) => {
+            const look = JAM_INSTRUMENT_LOOK[cell.instrument];
             const Icon = look.icon;
             return (
-              <span key={index} className={cn("grid place-items-center rounded-[var(--radius-control)]", look.fill)}>
+              <span
+                key={index}
+                className={cn(
+                  "grid place-items-center rounded-[var(--radius-control)]",
+                  cell.need ? cn("border-2 border-dashed border-border-strong", look.ink) : look.fill,
+                )}
+              >
                 <Icon className="h-5 w-5" aria-hidden />
               </span>
             );
