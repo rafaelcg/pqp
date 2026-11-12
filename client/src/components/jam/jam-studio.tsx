@@ -121,8 +121,9 @@ export function JamStudio({
     if (!publication.lookupFailed) {
       return;
     }
-    const timer = window.setTimeout(() => void refreshPublication(), 4000);
-    return () => window.clearTimeout(timer);
+    // Until it answers: one retry that fails must not leave the send blocked for good.
+    const timer = window.setInterval(() => void refreshPublication(), 4000);
+    return () => window.clearInterval(timer);
   }, [publication.lookupFailed, refreshPublication]);
   const outsideTake = publicAccess && song !== null && song.channelId === null && !canSwitchMix;
   const studio = useJamStudio({
