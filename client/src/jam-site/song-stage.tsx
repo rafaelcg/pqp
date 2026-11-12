@@ -136,7 +136,7 @@ function PartTile({
         "@container/tile group/tile absolute inset-0 block h-full w-full cursor-pointer overflow-hidden bg-media-scrim text-left outline-none",
         // The ring is a layer ABOVE the picture: a box-shadow on the button is painted under the video.
         "after:pointer-events-none after:absolute after:inset-0 after:z-10 after:content-[''] focus-visible:after:shadow-[inset_0_0_0_3px_var(--color-accent)]",
-        dimmed && "grayscale brightness-[0.5]",
+        dimmed && "opacity-50",
       )}
       style={spotlit ? ({ "--jam-ring": `var(${look.token})` } as React.CSSProperties) : undefined}
     >
