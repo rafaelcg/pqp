@@ -333,8 +333,11 @@ export async function runJamVideoJob(job: SpeechJob): Promise<void> {
 
     let confirmed = false;
     let confirmFailure: unknown = null;
-    const client = await getPool().connect();
+    // Acquiring the connection is inside the guard too: the object is already in
+    // the bucket, so a pool that refuses must take the same retry or give-up path.
+    let client: PoolClient | null = null;
     try {
+      client = await getPool().connect();
       await client.query("BEGIN");
       if (!(await finishSpeechJob(client, job, "done"))) {
         // Not our job any more: another worker holds it (and writes the same
@@ -356,10 +359,10 @@ export async function runJamVideoJob(job: SpeechJob): Promise<void> {
       confirmed = (updated.rowCount ?? 0) > 0;
       await client.query("COMMIT");
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => undefined);
+      await client?.query("ROLLBACK").catch(() => undefined);
       confirmFailure = error;
     } finally {
-      client.release();
+      client?.release();
     }
     if (confirmFailure) {
       // The object is in the bucket and the row does not say so: a retry

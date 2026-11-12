@@ -520,6 +520,10 @@ export async function putObjectFromFile(
     stream.destroy();
     throw new StorageError(error instanceof Error ? error.message : "Storage unreachable");
   }
+  // A response body nobody reads holds its connection (undici wants it consumed
+  // or cancelled), and a refused upload may have left the file stream open.
+  await response.body?.cancel().catch(() => undefined);
+  stream.destroy();
   if (!response.ok) {
     throw new StorageError(`Storage returned HTTP ${response.status} for PUT`);
   }

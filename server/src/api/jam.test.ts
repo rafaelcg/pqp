@@ -2303,6 +2303,28 @@ describeDb("jam channels", () => {
       expect((await detail(alice, song)).tracks[0]!.videoContentType).toBe("video/webm");
     });
 
+    it("a pool that refuses the confirm connection takes the same path: retried, and the copy deleted on give-up", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      await getPool().query(`UPDATE speech_jobs SET attempts = 2 WHERE kind = 'jam_video_transcode'`);
+      const pool = getPool();
+      const real = pool.connect.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+      const spy = vi.spyOn(pool, "connect").mockImplementation(((...args: unknown[]) =>
+        // `pool.query` connects with a callback: leave that alone. A bare `connect()` is the confirm.
+        args.length > 0 ? real(...args) : Promise.reject(new Error("timeout exceeded when trying to connect"))) as never);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await runOne();
+      } finally {
+        spy.mockRestore();
+        log.mockRestore();
+      }
+      expect(await jobsOf()).toMatchObject([{ track_id: track.id, status: "failed" }]);
+      expect([...objects.keys()].some((key) => key.endsWith(".ios.mp4"))).toBe(false);
+      const row = (await getPool().query(`SELECT video_mp4_key FROM jam_tracks WHERE id = $1`, [track.id])).rows[0];
+      expect(row.video_mp4_key).toBeNull();
+    });
+
     it("a file that is not a video is a permanent failure, with no retries", async () => {
       const song = await songId(bob);
       await videoTrack(bob, song, { bytes: Buffer.from("not a video at all"), contentType: "video/mp4" });
