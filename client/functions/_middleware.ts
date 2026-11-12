@@ -28,6 +28,12 @@ import {
   inviteCodeFromMetaPath,
 } from "../src/lib/invite-meta";
 import {
+  injectJamHead,
+  jamTargetFromMetaPath,
+  type JamSongMeta,
+  type JamTarget,
+} from "../src/lib/jam-meta";
+import {
   injectMarketingHead,
   marketingPageFromMetaPath,
 } from "../src/lib/marketing-meta";
@@ -729,6 +735,144 @@ async function fetchBauPost(
 }
 
 /**
+ * The public jam site's page (`client/jam-site/index.html`), which the build
+ * emits as its own HTML entry. Pages serves it at `/jam-site/`; this is how
+ * `jam.pqp.gg/` and `/jam` on every host get it, because a static `_redirects`
+ * rule cannot key on a hostname.
+ */
+async function fetchJamShell(context: PagesContext, url: URL): Promise<Response | null> {
+  const assets = context.env.ASSETS;
+  if (!assets) {
+    return null;
+  }
+  for (const shellPath of ["/jam-site/", "/jam-site/index.html"]) {
+    try {
+      const response = await assets.fetch(new Request(new URL(shellPath, url).toString()));
+      if (response.ok && (response.headers.get("content-type") ?? "").includes("text/html")) {
+        return response;
+      }
+    } catch {
+      // Try the next spelling.
+    }
+  }
+  return null;
+}
+
+/** The public jam flag, or null when it could not be read. */
+async function fetchJamEnabled(apiOrigin: string): Promise<boolean | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${apiOrigin}/api/public/jams/config`, {
+      signal: controller.signal,
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as { enabled?: unknown };
+    return body.enabled === true;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** One public song, "missing" for a 404 (not public, or the flag is off), null when it could not be read. */
+async function fetchJamSong(apiOrigin: string, songId: string): Promise<JamSongMeta | "missing" | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    const response = await fetch(
+      `${apiOrigin}/api/public/jams/${encodeURIComponent(songId)}`,
+      { signal: controller.signal, headers: { accept: "application/json" } },
+    );
+    // The flag off answers the 401 an unknown path gets; both read as "no".
+    if (response.status === 404 || response.status === 401) {
+      return "missing";
+    }
+    if (!response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as { song?: Partial<JamSongMeta> & { parts?: unknown; needs?: unknown } };
+    const song = body.song;
+    if (!song || typeof song.id !== "string" || typeof song.title !== "string") {
+      return null;
+    }
+    const startedBy = (song.startedBy ?? { name: "", handle: null }) as JamSongMeta["startedBy"];
+    return {
+      id: song.id,
+      title: song.title,
+      artist: typeof song.artist === "string" ? song.artist : null,
+      coverUrl: typeof song.coverUrl === "string" ? song.coverUrl : null,
+      needs: Array.isArray(song.needs) ? song.needs.filter((n): n is string => typeof n === "string") : [],
+      parts: Array.isArray(song.parts)
+        ? (song.parts as Array<{ instrument?: unknown; person?: { name?: unknown } }>)
+            .filter((part) => typeof part.instrument === "string" && typeof part.person?.name === "string")
+            .map((part) => ({ instrument: part.instrument as string, person: { name: part.person!.name as string } }))
+        : [],
+      startedBy: {
+        name: typeof startedBy.name === "string" ? startedBy.name : "",
+        handle: typeof startedBy.handle === "string" ? startedBy.handle : null,
+      },
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * `jam.pqp.gg/`, `jam.pqp.gg/m/<id>`, `/jam` and `/jam/m/<id>`: the jam site's
+ * own page with the head written for the song. Every failure serves the page as
+ * it is (its own head says `noindex`): a card that unfurls generically is a bad
+ * day, a live song that looks dead is worse.
+ */
+async function handleJam(context: PagesContext, url: URL, target: JamTarget): Promise<Response> {
+  const shell = await fetchJamShell(context, url);
+  if (!shell) {
+    return context.next();
+  }
+  const apiOrigin = await resolveApiOrigin(context);
+  if (!apiOrigin) {
+    return shell;
+  }
+  const locale = preferredLocale(url.search, context.request.headers.get("accept-language"));
+  // The cards are written in Portuguese and English; Spanish readers get English.
+  const cardLocale = locale === "pt-BR" ? "pt-BR" : "en";
+  let song: JamSongMeta | null = null;
+  let enabled: boolean;
+  if (target.kind === "song") {
+    const found = await fetchJamSong(apiOrigin, target.songId);
+    if (found === null) {
+      return shell;
+    }
+    song = found === "missing" ? null : found;
+    enabled = song !== null;
+  } else {
+    const flag = await fetchJamEnabled(apiOrigin);
+    if (flag === null) {
+      return shell;
+    }
+    enabled = flag;
+  }
+  const html = await shell.text();
+  const injected = injectJamHead(
+    html,
+    { target, song, enabled },
+    { locale: cardLocale, fallbackImage: `${url.origin}/images/og-image.jpg` },
+  );
+  const response = rewritten(shell, injected.html);
+  if (injected.noindex) {
+    response.headers.set("x-robots-tag", "noindex, nofollow");
+    response.headers.set("cache-control", "no-store");
+  }
+  return response;
+}
+
+/**
  * The rewritten response, with the caching a per-URL, per-language document
  * needs. Shared by both surfaces because the answer is the same for both:
  * anything in front of this must not reuse one page's bytes for another's URL.
@@ -801,6 +945,15 @@ async function handleRequest(context: PagesContext): Promise<Response> {
       });
     }
     return response;
+  }
+
+  // The public jam site: `jam.pqp.gg/`, `/m/<id>`, and `/jam`, `/jam/m/<id>` on
+  // any host. Its own HTML entry, with the song's head written in.
+  if (context.request.method === "GET") {
+    const jam = jamTargetFromMetaPath(url.hostname, url.pathname);
+    if (jam) {
+      return handleJam(context, url, jam);
+    }
   }
 
   // `/app/*`, minus the invite door: per-account, behind a login, nothing an
@@ -1125,8 +1278,11 @@ async function answerHead(context: PagesContext): Promise<Response> {
  * fall-throughs, because it wraps all of them.
  */
 export async function onRequest(context: PagesContext): Promise<Response> {
-  if (context.request.method === "HEAD" && isCardPath(new URL(context.request.url).pathname)) {
-    return answerHead(context);
+  if (context.request.method === "HEAD") {
+    const probe = new URL(context.request.url);
+    if (isCardPath(probe.pathname) || jamTargetFromMetaPath(probe.hostname, probe.pathname)) {
+      return answerHead(context);
+    }
   }
   const response = await handleRequest(context);
   if (context.request.method !== "GET") {

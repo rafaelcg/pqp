@@ -1,0 +1,114 @@
+/*
+ * The public jam site's own rules, on top of the app's tokens (`index.css`).
+ * Role tokens only: the bench (`bench/theme-tokens.mjs`) refuses a colour
+ * literal here as anywhere else.
+ */
+
+/* The app's frame is a fixed-height shell with a decorative wash on the body.
+   This is a scrolling document with none of that. */
+html[data-jam-site],
+html[data-jam-site] body,
+html[data-jam-site] #root {
+  height: auto;
+  min-height: 100%;
+}
+
+html[data-jam-site] body {
+  background-image: none;
+  overscroll-behavior: auto;
+}
+
+html[data-jam-site] h1,
+html[data-jam-site] h2 {
+  letter-spacing: -0.02em;
+}
+
+/* How strongly an instrument's colour is pulled toward the text colour where it
+   draws a line on the page: a pale yellow needs more help on a light page. */
+html[data-jam-site] {
+  --jam-ink-mix: 80%;
+  --jam-wave-dim: 0.38;
+}
+
+html[data-jam-site][data-theme="light"] {
+  --jam-ink-mix: 54%;
+  --jam-wave-dim: 0.34;
+}
+
+/* The seek bar: a thin track that fills with the accent, a thumb that is there
+   for a finger and a key but quiet while the song plays. */
+.jam-seek {
+  --p: 0%;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  touch-action: pan-y;
+}
+
+.jam-seek::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--color-text) var(--p),
+    var(--color-surface-3) var(--p)
+  );
+}
+
+.jam-seek::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-surface-3);
+}
+
+.jam-seek::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-text);
+}
+
+.jam-seek::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--color-text);
+}
+
+.jam-seek::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--color-text);
+}
+
+.jam-seek:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+/* A <dialog> opened with showModal() is centred by the UA; the sheet places it. */
+[data-jam-sheet]:not([open]) {
+  display: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-jam-sheet][open] > div {
+    animation: jam-sheet-in var(--duration-base) var(--ease-emphasized);
+  }
+}
+
+@keyframes jam-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

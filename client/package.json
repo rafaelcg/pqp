@@ -20,6 +20,7 @@
     "e2e:camera-sync": "playwright test -c playwright.camera-sync.config.ts",
     "e2e:share-fast-start": "playwright test -c playwright.share-fast-start.config.ts",
     "e2e:jam": "playwright test -c playwright.jam.config.ts",
+    "e2e:jam-site": "playwright test -c playwright.jam-site.config.ts",
     "bench:tokens": "node bench/theme-tokens.mjs",
     "bench": "node bench/theme-tokens.mjs && node bench/theme-runtime.mjs",
     "bench:runtime": "node bench/theme-runtime.mjs",
