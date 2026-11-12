@@ -1,17 +1,18 @@
 /**
  * What a part of a song looks like when it has no video, ONE table for both
  * places that draw a mosaic: the public site (`jam-site/`) and the app's song
- * view (`components/jam/jam-stage.tsx`). Before this there were two, and they
- * disagreed: the site's tiles were the instrument's colour at 14% over the
- * media black, the app's were 30% over a panel grey, and neither read as the
- * same product (on a light page the site's were charcoal blocks).
+ * view (`components/jam/jam-stage.tsx`).
  *
- * The colours are OPAQUE role tokens (`--color-tile-*`, `index.css`), made once
- * per theme: a deep tint of the hue on the dark theme, a pastel on the light
- * one, each with an ink that clears 3:1 on it, and the page's text colour
- * clears 4.5:1 on every ground (the bench measures both). Nothing here is a
- * translucent wash: several washes of different hues on one dark ground turn
- * to mud, which is the bug this replaces.
+ * The ground is ONE neutral token (`--color-tile`, `index.css`) for every
+ * instrument. It used to be a tint of the instrument's hue, first translucent
+ * (14% and 30% washes, which disagreed between the two places) and then opaque
+ * (deep tints and pastels, which still put six muddy colours side by side on
+ * one page and scored 5.5 to 6 on colour three rounds running). Now the hue
+ * lives only where it identifies: the chip, the glyph, the level strip, the
+ * initial and a dashed outline, all in the instrument's INK
+ * (`--color-tile-<instrument>-ink`: the pale end on the dark theme, the deep
+ * end on the light one, each clearing 3:1 on the ground; the bench measures it
+ * for every instrument in every look).
  *
  * Class strings are written out in full because Tailwind finds a class by
  * reading the source text.
@@ -19,23 +20,28 @@
 export type JamTileInstrument = "guitar" | "bass" | "drums" | "vocals" | "keys" | "other";
 
 export interface JamTileLook {
-  /** The flat ground of a part with no video. */
+  /** The flat neutral ground of a part with no video: the same for every instrument. */
   ground: string;
   /** The glyph, the level strip and a dashed outline: a text colour (`currentColor`). */
   ink: string;
   /** The dashed outline of an empty slot. */
   dashed: string;
-  /** A solid disc in the ink with the ground as its letter: a person with no picture, readable on their own ground. */
+  /** The initial of a person with no picture: their ink on a neutral disc. */
   solid: string;
+  /** A hairline in the ink around the instrument's chip, so a pale chip (yellow, cyan) keeps its edge on a pale light-theme tile. */
+  chip: string;
 }
 
+const GROUND = "bg-tile";
+const DISC = "bg-tile-disc";
+
 export const JAM_TILE_LOOK: Record<JamTileInstrument, JamTileLook> = {
-  guitar: { ground: "bg-tile-guitar", ink: "text-tile-guitar-ink", dashed: "border-tile-guitar-ink", solid: "bg-tile-guitar-ink text-tile-guitar" },
-  bass: { ground: "bg-tile-bass", ink: "text-tile-bass-ink", dashed: "border-tile-bass-ink", solid: "bg-tile-bass-ink text-tile-bass" },
-  drums: { ground: "bg-tile-drums", ink: "text-tile-drums-ink", dashed: "border-tile-drums-ink", solid: "bg-tile-drums-ink text-tile-drums" },
-  vocals: { ground: "bg-tile-vocals", ink: "text-tile-vocals-ink", dashed: "border-tile-vocals-ink", solid: "bg-tile-vocals-ink text-tile-vocals" },
-  keys: { ground: "bg-tile-keys", ink: "text-tile-keys-ink", dashed: "border-tile-keys-ink", solid: "bg-tile-keys-ink text-tile-keys" },
-  other: { ground: "bg-tile-other", ink: "text-tile-other-ink", dashed: "border-tile-other-ink", solid: "bg-tile-other-ink text-tile-other" },
+  guitar: { ground: GROUND, ink: "text-tile-guitar-ink", dashed: "border-tile-guitar-ink", solid: `${DISC} text-tile-guitar-ink`, chip: "outline outline-1 -outline-offset-1 outline-tile-guitar-ink/40" },
+  bass: { ground: GROUND, ink: "text-tile-bass-ink", dashed: "border-tile-bass-ink", solid: `${DISC} text-tile-bass-ink`, chip: "outline outline-1 -outline-offset-1 outline-tile-bass-ink/40" },
+  drums: { ground: GROUND, ink: "text-tile-drums-ink", dashed: "border-tile-drums-ink", solid: `${DISC} text-tile-drums-ink`, chip: "outline outline-1 -outline-offset-1 outline-tile-drums-ink/40" },
+  vocals: { ground: GROUND, ink: "text-tile-vocals-ink", dashed: "border-tile-vocals-ink", solid: `${DISC} text-tile-vocals-ink`, chip: "outline outline-1 -outline-offset-1 outline-tile-vocals-ink/40" },
+  keys: { ground: GROUND, ink: "text-tile-keys-ink", dashed: "border-tile-keys-ink", solid: `${DISC} text-tile-keys-ink`, chip: "outline outline-1 -outline-offset-1 outline-tile-keys-ink/40" },
+  other: { ground: GROUND, ink: "text-tile-other-ink", dashed: "border-tile-other-ink", solid: `${DISC} text-tile-other-ink`, chip: "outline outline-1 -outline-offset-1 outline-tile-other-ink/40" },
 };
 
 /** An instrument id a newer server may send: anything unknown is "other". */

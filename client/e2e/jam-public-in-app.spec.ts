@@ -23,6 +23,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { bandOpenByDefault } from "./jam-band-open";
 import { E2E_ADMIN_TOKEN } from "../playwright.config";
 import { FAKE_MIC_WAV } from "../playwright.jam.config";
 import { addTrack, materialise, seedJamShare, type JamShareSeed } from "./jam-share-seed";
@@ -62,6 +63,7 @@ async function openAs(browser: Browser, suffix: string, route: string, viewport 
     colorScheme: "dark",
     permissions: ["microphone", "camera"],
   });
+  await bandOpenByDefault(context);
   const page = await context.newPage();
   await page.addInitScript((value) => {
     localStorage.setItem("pqp:dev-user-suffix", value);

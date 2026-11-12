@@ -1,14 +1,17 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { jamTileLook, JAM_TILE_LOOK, placeItemsOnCells } from "./jam-tile-look";
 import { levelHeight, levelTransform } from "./jam-tile-parts";
 import { cellAreas, mosaicLayout } from "../jam-site/mosaic";
 
 describe("the one tile look", () => {
-  it("has an opaque ground token and an ink for every instrument, and no translucent wash", () => {
+  it("has ONE neutral ground for every instrument and an ink of its own, and no translucent wash", () => {
     for (const look of Object.values(JAM_TILE_LOOK)) {
-      expect(look.ground).toMatch(/^bg-tile-[a-z]+$/);
+      expect(look.ground).toBe("bg-tile");
       expect(look.ink).toMatch(/^text-tile-[a-z]+-ink$/);
-      expect(`${look.ground} ${look.ink} ${look.dashed}`).not.toMatch(/color-mix|\/\d+/);
+      expect(`${look.ground} ${look.ink} ${look.dashed} ${look.solid}`).not.toMatch(/color-mix|\/\d+/);
     }
   });
 
@@ -17,9 +20,38 @@ describe("the one tile look", () => {
     expect(jamTileLook("bass")).toBe(JAM_TILE_LOOK.bass);
   });
 
-  it("gives no two instruments the same ground", () => {
-    const grounds = Object.values(JAM_TILE_LOOK).map((look) => look.ground);
-    expect(new Set(grounds).size).toBe(grounds.length);
+  it("tells instruments apart by ink alone: no two share one", () => {
+    const inks = Object.values(JAM_TILE_LOOK).map((look) => look.ink);
+    expect(new Set(inks).size).toBe(inks.length);
+  });
+});
+
+describe("the six instrument fills", () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.css"), "utf8");
+  const fill = (name: string): [number, number, number] => {
+    const match = new RegExp(`--color-inst-${name}:\\s*oklch\\(([\\d.]+)\\s+([\\d.]+)\\s+([\\d.]+)\\)`).exec(css);
+    if (!match) throw new Error(`no fill for ${name}`);
+    return [Number(match[1]), Number(match[2]), Number(match[3])];
+  };
+  const lab = ([l, c, h]: [number, number, number]) => [l, c * Math.cos((h * Math.PI) / 180), c * Math.sin((h * Math.PI) / 180)] as const;
+  const distance = (a: [number, number, number], b: [number, number, number]) => {
+    const [l1, a1, b1] = lab(a);
+    const [l2, a2, b2] = lab(b);
+    return Math.hypot(l1 - l2, a1 - a2, b1 - b2) * 100;
+  };
+  const names = ["guitar", "bass", "drums", "vocals", "keys", "other"];
+
+  it("gives `other` a colour of its own, not a grey that reads as disabled", () => {
+    const [, chroma] = fill("other");
+    expect(chroma).toBeGreaterThan(0.1);
+  });
+
+  it("keeps every pair of fills apart (OKLab, x100), `other` included", () => {
+    for (let i = 0; i < names.length; i += 1) {
+      for (let j = i + 1; j < names.length; j += 1) {
+        expect(distance(fill(names[i]!), fill(names[j]!)), `${names[i]} vs ${names[j]}`).toBeGreaterThanOrEqual(13);
+      }
+    }
   });
 });
 

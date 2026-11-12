@@ -117,6 +117,7 @@ export function PersonMark({
   name,
   fill,
   initialFill,
+  chip,
   icon,
   className,
 }: {
@@ -124,14 +125,16 @@ export function PersonMark({
   name: string;
   /** The instrument's solid fill class (with its dark ink): the badge. */
   fill: string;
-  /** The disc of an initial, when it should not be the badge's colour (the ink on the tile's ground reads on a pastel). */
+  /** The disc of an initial: a neutral disc with the instrument's ink for the letter (`JamTileLook.solid`). */
   initialFill?: string;
+  /** A hairline around the badge in the instrument's ink (`JamTileLook.chip`). */
+  chip?: string;
   icon: ReactNode;
   className?: string;
 }) {
   const [broken, setBroken] = useState(false);
   return (
-    <span className={join("relative grid aspect-square h-[44cqmin] min-h-10 max-h-44 place-items-center", className)} data-jam-person="">
+    <span className={join("relative grid aspect-square h-[50cqmin] min-h-10 max-h-48 place-items-center", className)} data-jam-person="">
       {avatarUrl && !broken ? (
         <img
           src={avatarUrl}
@@ -142,11 +145,11 @@ export function PersonMark({
           className="h-full w-full rounded-full object-cover"
         />
       ) : (
-        <span aria-hidden="true" className={join("grid h-full w-full place-items-center rounded-full font-display text-[14cqmin] font-extrabold leading-none", initialFill ?? fill)}>
+        <span aria-hidden="true" className={join("grid h-full w-full place-items-center rounded-full font-display text-[21cqmin] font-extrabold leading-none", initialFill ?? fill)}>
           {Array.from(name)[0]?.toUpperCase() ?? "?"}
         </span>
       )}
-      <span aria-hidden="true" className={join("absolute -bottom-0.5 -right-0.5 grid h-[26%] min-h-5 w-[26%] min-w-5 place-items-center rounded-full ring-2 ring-surface-0", fill)}>
+      <span aria-hidden="true" className={join("absolute -bottom-0.5 -right-0.5 grid h-[26%] min-h-5 w-[26%] min-w-5 place-items-center rounded-full ring-2 ring-tile", fill, chip)}>
         {icon}
       </span>
     </span>

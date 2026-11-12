@@ -1,13 +1,13 @@
 import type { CSSProperties, ReactNode } from "react";
-import { LevelStrip, MoreBody, PersonMark, StackDot, TileCaption } from "@/lib/jam-tile-parts";
+import { MoreBody, PersonMark, StackDot, TileCaption } from "@/lib/jam-tile-parts";
 import { INSTRUMENT_LOOK, type Instrument } from "./instruments";
 import type { MosaicLayout } from "./mosaic";
 import { cn } from "./util";
 
 /**
  * The pieces a mosaic is made of, shared by the song page (live: video, a level
- * that moves with the song) and the home's small pictures (still: a square in
- * the instrument's colour). The colours, the caption, the level strip and the
+ * that moves with the song) and the home's small pictures (still: a face on a
+ * neutral square). The ground, the caption, the level strip and the
  * "+N" tile are `lib/jam-tile-parts.tsx` and `lib/jam-tile-look.ts`, the same
  * ones the app's song view draws with.
  */
@@ -82,7 +82,7 @@ export function Badge({ instrument, className }: { instrument: Instrument; class
   return (
     <span
       aria-hidden="true"
-      className={cn("grid shrink-0 place-items-center rounded-full", look.fill, className)}
+      className={cn("grid shrink-0 place-items-center rounded-full", look.fill, look.tile.chip, className)}
     >
       <Icon className="h-[55%] w-[55%]" strokeWidth={2} />
     </span>
@@ -91,18 +91,17 @@ export function Badge({ instrument, className }: { instrument: Instrument; class
 
 /**
  * The still stand-in for a part on a list: the person (their picture, or an
- * initial) on the instrument's own ground with a strip of the song's own peaks,
- * so a card is a row of faces and no two squares of it are the same.
+ * initial) alone on the neutral tile, the instrument's chip on it. A card is at
+ * rest by definition, so it draws NO level strip (a strip belongs to a song
+ * that is playing), which leaves the face the one thing to look at.
  */
 export function StillTile({
   instrument,
-  bars,
   name,
   avatarUrl,
   caption = false,
 }: {
   instrument: Instrument;
-  bars: readonly number[];
   name: string;
   avatarUrl: string | null;
   /** The person's name, drawn as a caption when the picture is large enough to read it. */
@@ -111,18 +110,16 @@ export function StillTile({
   const look = INSTRUMENT_LOOK[instrument];
   const Icon = look.icon;
   return (
-    // the container is the tile; the column that centres the person is its child, so its own gaps can use the tile's units
-    <div aria-hidden="true" className={cn("absolute inset-0 [container:tile/size]", look.tile.ground, look.tile.ink)}>
-      <div className="flex h-full w-full flex-col items-center justify-center gap-[5cqmin] pb-[6cqmin]">
+    // the container is the tile; the person is centred in it, so its sizes can use the tile's units
+    <div aria-hidden="true" className={cn("absolute inset-0 grid place-items-center [container:tile/size]", look.tile.ground, look.tile.ink)}>
       <PersonMark
         avatarUrl={avatarUrl}
         name={name}
         fill={look.fill}
         initialFill={look.tile.solid}
+        chip={look.tile.chip}
         icon={<Icon className="h-[58%] w-[58%]" strokeWidth={2} />}
       />
-      <LevelStrip count={bars.length} values={bars} className="hidden h-[10cqmin] max-h-6 [--jam-level-gap:3px] @min-[7rem]/tile:flex" />
-      </div>
       {caption && (
         <span className="hidden @min-[9rem]/tile:contents">
           <TileCaption mark={<Badge instrument={instrument} className="h-4 w-4" />} name={name} tone="ground" />
@@ -136,7 +133,7 @@ export function StillTile({
 export function NeedStill({ instrument, label }: { instrument: Instrument; label?: string }) {
   const look = INSTRUMENT_LOOK[instrument];
   return (
-    <div aria-hidden="true" className="@container/tile absolute inset-0 grid place-items-center bg-surface-2">
+    <div aria-hidden="true" className="@container/tile absolute inset-0 grid place-items-center bg-surface-1">
       {/* the dashed outline is the hero's; a small card slot is a quiet neutral tile with the badge */}
       {label && <span className={cn("pointer-events-none absolute inset-[7%] rounded-[var(--radius-card)] border-2 border-dashed", look.tile.dashed)} />}
       <span className="relative flex flex-col items-center gap-2 px-2 text-center">

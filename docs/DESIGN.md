@@ -56,6 +56,7 @@ The role set, as defined today:
 | Code | `code-bg`, `code-text` |
 | Media | `on-media`, `on-media-muted`, `media-scrim` (a caption drawn over a picture: dark in every theme, like the picture) |
 | Jam instruments | `inst-bass`, `inst-other`, `inst-drums`, `inst-vocals`, `inst-keys`, `inst-guitar`, and `on-inst` (the dark label on any of them). Identities, not chrome: the same fills in light and dark. Told apart by lightness (steps of 0.05 or more) as well as hue, each with its own icon (`lib/jam-instruments.ts`), and measured by the bench |
+| Jam tiles | `tile` (the one neutral ground of a mosaic part with no video, an alias of `surface-2`), `tile-disc` (the disc of an initial), and `tile-<instrument>-ink` (the glyph, the level strip, the initial and a dashed outline: pale on dark, deep on light). The ground is never tinted per instrument; the bench measures every ink on `tile` and `tile-disc` in every look |
 | State | `focus-ring`, `ring-offset`, `selection`, `indicator` |
 
 #### The text ladder

@@ -386,11 +386,73 @@ test.describe("what needs an account", () => {
       ["[data-jam-report-part]", "denunciar"],
       ["[data-jam-start]", "começar uma jam"],
     ] as const) {
+      // a part's report is in its lane's menu, not a flag on the row
+      if (selector === "[data-jam-report-part]") {
+        await page.locator("[data-jam-lane-menu]").first().click();
+      }
       await page.locator(selector).first().click();
       await expect(page.locator("dialog[open]")).toContainText(new RegExp(text, "i"));
       await page.getByRole("button", { name: "Agora não" }).click();
       await expect(page.locator("dialog[open]")).toHaveCount(0);
     }
+  });
+
+  test("a lane's report is in its own menu, reachable by keyboard, and no row carries a flag", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    const lanes = page.locator("[data-jam-lane]");
+    await expect(lanes).toHaveCount(2);
+    // the menu is closed, so no report button is on the page at all
+    await expect(page.locator("[data-jam-report-part]")).toHaveCount(0);
+    const trigger = page.locator("[data-jam-lane-menu]").first();
+    await expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    // Enter opens it and puts the keyboard on the item
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const item = page.locator("[data-jam-report-part]");
+    await expect(item).toHaveCount(1);
+    await expect(item).toBeFocused();
+    // Escape closes it and gives the keyboard back to the button
+    await page.keyboard.press("Escape");
+    await expect(item).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    // ArrowDown opens it too, a press outside closes it, and Enter on the item asks for an account
+    await page.keyboard.press("ArrowDown");
+    await expect(item).toBeFocused();
+    await page.locator("h1").click();
+    await expect(item).toHaveCount(0);
+    await trigger.click();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("dialog[open]")).toContainText(/denunciar/i);
+    await page.getByRole("button", { name: "Agora não" }).click();
+    // the sheet closes and the keyboard is back on the button that opened the menu
+    await expect(trigger).toBeFocused();
+  });
+
+  test("a part with no video is the person alone at rest, and gets its level strip only while the song plays", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    const tiles = page.locator("[data-jam-tile]");
+    await expect(tiles).toHaveCount(2);
+    await expect(page.locator("[data-jam-tile] [data-jam-person]").first()).toBeVisible();
+    await expect(page.locator("[data-jam-level]")).toHaveCount(0);
+    const toggle = page.locator("[data-jam-toggle]");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("data-playing", "true", { timeout: 15_000 });
+    const strip = page.locator("[data-jam-level-live]").first();
+    await expect(strip).toBeVisible();
+    // drawn on its tile, under the person
+    const tile = page.locator("[data-jam-tile]").first();
+    const within = await tile.boundingBox();
+    const stripBox = await strip.boundingBox();
+    const person = await tile.locator("[data-jam-person]").boundingBox();
+    expect(stripBox!.y).toBeGreaterThanOrEqual(person!.y + person!.height - 2);
+    expect(stripBox!.y + stripBox!.height).toBeLessThanOrEqual(within!.y + within!.height);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("data-playing", "false");
+    await expect(page.locator("[data-jam-level]")).toHaveCount(0);
   });
 
   test("starting a jam carries ?jam=new", async ({ page }) => {

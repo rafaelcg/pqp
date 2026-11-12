@@ -17,7 +17,8 @@ import { cn, partLabel, personLabel } from "./util";
  * THE MOSAIC of a song: every public part is a tile. A part with a video is
  * its video (a muted `<video>` that follows the song clock through the engine);
  * a part without one is a person: their picture (or initial) large on the
- * instrument's own ground, with a level meter that moves with the song. When
+ * neutral ground with the instrument's chip, and a level meter under them
+ * while the song plays. When
  * the song still asks for somebody, a dashed tile says so and opens the record
  * sheet; it never takes a larger cell than a recorded part. Tap a tile to hear
  * only that part, large, with the band small beside it; Escape or the pill's x
@@ -37,40 +38,49 @@ type Item =
   | { kind: "part"; track: PublicJamTrack }
   | { kind: "need"; instrument: Instrument };
 
-function PartFace({ track, player, covered }: { track: PublicJamTrack; player: PublicPlayer; covered: boolean }) {
+/**
+ * A part with no video: the person, centred and large, on the neutral tile. At
+ * rest that is ALL there is (no strip: a flat line under a face read as a broken
+ * waveform). While the song plays a strip of the part's own loudness appears
+ * under them, and goes again on pause. The player's frame loop already slows
+ * itself under reduced motion, and the bars only ease when motion is allowed.
+ */
+function PartFace({ track, player, covered, playing }: { track: PublicJamTrack; player: PublicPlayer; covered: boolean; playing: boolean }) {
   const instrument = asInstrument(track.instrument);
   const look = INSTRUMENT_LOOK[instrument];
   const scale = useMemo(() => levelScale(track.peaks), [track.peaks]);
   const strip = useRef<HTMLSpanElement | null>(null);
+  // Nothing to draw under a video that is showing, and nothing at rest.
+  const live = playing && !covered;
   useEffect(() => {
     const element = strip.current;
-    if (!element) return;
+    if (!element || !live) return;
     const draw = () => paintLevelStrip(element, windowBars(track, player.position(), LEVEL_BARS, scale));
     draw();
     const stopState = player.subscribe(draw);
-    // Nothing to move under a video that is showing.
-    const stopFrames = covered ? () => undefined : player.onFrame(draw);
+    const stopFrames = player.onFrame(draw);
     return () => {
       stopState();
       stopFrames();
     };
-  }, [track, player, scale, covered]);
+  }, [track, player, scale, live]);
   return (
-    <div className={cn("absolute inset-0 [container:face/size]", look.tile.ground, look.tile.ink)}>
-      <div className="flex h-full w-full flex-col items-center justify-center gap-[5cqmin] pb-[9cqmin]">
+    <div className={cn("absolute inset-0 grid place-items-center [container:face/size]", look.tile.ground, look.tile.ink)}>
       <PersonMark
         avatarUrl={track.person.avatarUrl}
         name={personLabel(track.person)}
         fill={look.fill}
         initialFill={look.tile.solid}
+        chip={look.tile.chip}
         icon={<look.icon className="h-[58%] w-[58%]" strokeWidth={2} />}
       />
-      <LevelStrip
-        ref={strip}
-        count={LEVEL_BARS}
-        className="hidden h-[11cqmin] min-h-4 max-h-9 @min-[10rem]/face:flex"
-      />
-      </div>
+      {live && (
+        // under the person and out of the flow: the face never moves when the strip arrives. The
+        // wrapper is what is placed (`.jam-level` sets its own `position`, which beats a utility)
+        <span className="pointer-events-none absolute inset-x-0 top-[calc(50%+30cqmin)] hidden justify-center @min-[10rem]/face:flex">
+          <LevelStrip ref={strip} count={LEVEL_BARS} data-jam-level-live="" className="flex h-[9cqmin] min-h-3 max-h-8" />
+        </span>
+      )}
     </div>
   );
 }
@@ -143,7 +153,7 @@ function PartTile({
       )}
       style={spotlit ? ({ "--jam-ring": `var(${look.token})` } as React.CSSProperties) : undefined}
     >
-      <PartFace track={track} player={player} covered={shown} />
+      <PartFace track={track} player={player} covered={shown} playing={playing} />
       {videoUrl && (
         <video
           ref={video}
@@ -192,7 +202,7 @@ function NeedTile({ instrument, onClick }: { instrument: Instrument; onClick: ()
       onClick={onClick}
       data-jam-need-tile={instrument}
       className={cn(
-        "@container/need group/need absolute inset-0 grid h-full w-full cursor-pointer place-items-center bg-surface-2 text-center text-text outline-none transition-colors hover:bg-surface-3 motion-reduce:transition-none",
+        "@container/need group/need absolute inset-0 grid h-full w-full cursor-pointer place-items-center bg-surface-1 text-center text-text outline-none transition-colors hover:bg-surface-2 motion-reduce:transition-none",
         "after:pointer-events-none after:absolute after:inset-0 after:z-10 after:content-[''] focus-visible:after:shadow-[inset_0_0_0_3px_var(--color-accent)]",
       )}
     >
