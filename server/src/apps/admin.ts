@@ -6,6 +6,7 @@ import { isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { publishAppsChanged } from "./changed.js";
 import { operatorReleased } from "./availability.js";
+import { servedByThisBuild, type ServedAnswer } from "./served.js";
 import { endSessionRow } from "./sessions.js";
 
 /**
@@ -20,6 +21,8 @@ import { endSessionRow } from "./sessions.js";
  *    `current_version` to an unreviewed version of a live app is refused the
  *    same way. The refusal is a 409 `not-reviewed` and the dashboard shows it
  *    as the reason under a switch that was never enabled (mock 05 state 3).
+ *    The same write is refused with 409 `version-not-served` when the version
+ *    is a `repo` one this build's apps site does not serve (`./served.ts`).
  *  - `apps.community_unlocked`: the explicit safety decision for one app.
  *  - `apps.default_operator_enabled`: "released on every server that has not
  *    decided": a server with no row (or NULL) counts as released, an explicit
@@ -159,6 +162,8 @@ export interface AppVersionView {
   version: string;
   source: string;
   isCurrent: boolean;
+  /** Whether the apps site of this build serves this version (`./served.ts`). */
+  served: ServedAnswer;
   reviewStatus: string;
   reviewChecklist: Record<string, unknown>;
   reviewedBy: string | null;
@@ -182,6 +187,11 @@ export interface AppAdminView {
   currentApproved: boolean;
   /** Why the live and global switches cannot be turned on, or null. */
   goLiveBlocker: "not-reviewed" | null;
+  /**
+   * Whether the apps site of this build serves the CURRENT version. `not-served`
+   * on a live app means every frame of it is a 404: move `currentVersion`.
+   */
+  currentServed: ServedAnswer;
   category: string | null;
   /**
    * Servers the operator's release reaches: an explicit ON, plus, with the
@@ -418,6 +428,7 @@ async function loadApps(db: Queryable, onlyId?: string): Promise<AppAdminView[]>
       version: row.version as string,
       source: row.source as string,
       isCurrent,
+      served: servedByThisBuild(appId, row.version as string, row.source as string),
       reviewStatus: row.review_status as string,
       reviewChecklist: (row.review_checklist ?? {}) as Record<string, unknown>,
       reviewedBy: (row.reviewed_by as string | null) ?? null,
@@ -454,6 +465,7 @@ async function loadApps(db: Queryable, onlyId?: string): Promise<AppAdminView[]>
       currentVersion: (row.current_version as string | null) ?? null,
       currentApproved: approved,
       goLiveBlocker: approved ? null : "not-reviewed",
+      currentServed: list.find((v) => v.isCurrent)?.served ?? "unknown",
       category: current?.manifest.category ?? null,
       serversOn: onByApp.get(id)?.on ?? 0,
       serversOwnerOff: onByApp.get(id)?.ownerOff ?? 0,
@@ -812,6 +824,21 @@ async function reviewStatusOf(
   return rows[0]?.review_status ?? null;
 }
 
+async function versionSourceOf(
+  client: PoolClient,
+  appId: string,
+  version: string | null,
+): Promise<string | null> {
+  if (version === null) {
+    return null;
+  }
+  const { rows } = await client.query<{ source: string }>(
+    `SELECT source FROM app_versions WHERE app_id = $1 AND version = $2`,
+    [appId, version],
+  );
+  return rows[0]?.source ?? null;
+}
+
 /** `PUT /api/admin/apps`. */
 export async function operatorSetApp(
   input: z.infer<typeof setAppSchema>,
@@ -846,6 +873,24 @@ export async function operatorSetApp(
       const review = await reviewStatusOf(client, input.appId, next.current_version);
       if (review !== "approved") {
         throw new HttpError(409, "not-reviewed");
+      }
+    }
+
+    // And only on a version the apps site of this build serves (`./served.ts`): a
+    // live app on any other is a 404 in every frame. Asked only of a write that
+    // PUTS the app on the version (moves it there, makes it live, turns it on for
+    // everybody), so switching an app that is already stranded off, or moving it
+    // to a version that is served, is never refused. A rollback is a move to an
+    // older version that is still built from `apps/`; one that is not would
+    // strand the app the same way and is refused like any other.
+    const entersVersion =
+      next.current_version !== before.current_version ||
+      (next.status === "live" && before.status !== "live") ||
+      (next.global_enabled && !before.global_enabled);
+    if (standsOnVersion && entersVersion) {
+      const source = await versionSourceOf(client, input.appId, next.current_version);
+      if (servedByThisBuild(input.appId, next.current_version, source) === "not-served") {
+        throw new HttpError(409, "version-not-served");
       }
     }
 

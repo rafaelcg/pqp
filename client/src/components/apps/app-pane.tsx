@@ -102,7 +102,8 @@ function errorKey(status: Extract<AppFrameStatus, { kind: "error" }>): MessageKe
         return "apps.pane.errorJoin";
     }
   }
-  if (status.reason === "bad-entry") return "apps.pane.errorUnavailable";
+  // nothing the app did: the apps origin does not serve this version (or the entry is elsewhere)
+  if (status.reason === "bad-entry" || status.reason === "entry-unavailable") return "apps.pane.errorUnavailable";
   return "apps.pane.error";
 }
 

@@ -1481,7 +1481,8 @@
         h("button", { type: "button", class: "btn warn", "data-id": "disable:" + app.id, "aria-disabled": canDisable ? null : "true",
           onclick: function () { if (canDisable) askDisableEverywhere(app); }, text: "Desligar em todos" })
       ]),
-      h("p", { class: "foot", style: "font-size:13px", text: M.appSummary(app, serverCount()) })
+      h("p", { class: "foot", style: "font-size:13px", text: M.appSummary(app, serverCount()) }),
+      strandedNote(app)
     ]));
 
     // Servers.
@@ -1502,6 +1503,17 @@
     body.appendChild(reviewCard(app));
     body.appendChild(communityCard(app));
     body.appendChild(historyCard(app));
+  }
+
+  // A live app pinned to a version the apps site no longer serves opens a white page for everybody:
+  // say it on the app itself, with the fix one click away.
+  function strandedNote(app) {
+    var note = M.strandedVersion(app);
+    if (!note) return null;
+    return h("div", { class: "row-between", role: "alert", "data-id": "stranded:" + app.id }, [
+      h("p", { class: "sw-reason blocked", style: "font-size:13px;max-width:640px", text: note.text }),
+      note.offer ? h("button", { type: "button", class: "btn primary", text: "Tornar atual a v" + note.offer, onclick: function () { setCurrentVersion(app.id, note.offer); } }) : null
+    ]);
   }
 
   function renderServerRows() {
@@ -1574,6 +1586,7 @@
         h("div", { class: "version-head" }, [
           h("b", { text: "v" + v.version }),
           v.isCurrent ? h("span", { class: "badge accent", text: "atual" }) : h("button", { type: "button", class: "ghost small", text: "Tornar atual", onclick: function () { setCurrentVersion(app.id, v.version); } }),
+          v.served === "not-served" ? h("span", { class: "badge bad", title: "O site dos apps deste deploy não serve essa versão: um app nela abre uma tela branca.", text: "fora do site" }) : null,
           h("span", { class: "foot", text: v.reviewedAt ? "revisada " + ago(v.reviewedAt) + (v.reviewedBy ? " por " + v.reviewedBy.replace(/^moderator:.*/, "moderador") : "") : "ainda sem revisão" })
         ]),
         h("div", { class: "checks" }, items),
