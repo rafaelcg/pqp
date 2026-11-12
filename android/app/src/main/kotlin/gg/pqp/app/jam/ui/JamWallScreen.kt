@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -26,6 +27,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,7 +62,9 @@ import gg.pqp.app.R
 import gg.pqp.app.jam.JamBand
 import gg.pqp.app.jam.JamBands
 import gg.pqp.app.jam.JamSongSummary
+import gg.pqp.app.jam.JamRecordRules
 import gg.pqp.app.jam.JamTileInfo
+import gg.pqp.app.jam.RecordGate
 import gg.pqp.app.jam.JamTileSize
 import gg.pqp.app.jam.JamWallFilter
 import gg.pqp.app.jam.JamWallUiState
@@ -67,6 +74,7 @@ import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.pqpTopBarColors
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
+import kotlinx.coroutines.launch
 import kotlin.math.max
 
 /** Two columns on a phone, and a column of at most this width on anything wider. */
@@ -87,14 +95,41 @@ fun JamWallScreen(
     shared: JamSharedScope?,
     onBack: () -> Unit,
     onOpenSong: (JamSongSummary) -> Unit,
+    /** The record button and the empty wall's call to action: start a song with a first recording. */
+    onRecordNew: () -> Unit,
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val reduce = rememberReduceMotion()
     // Tiles that already settled in this visit: scrolling one back into view must not play its entrance again.
     val settled = remember { HashSet<String>() }
+    val snackbars = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    // Starting a song is the flag and storage, nothing else the client can know: the server checks the permission to post.
+    val gate = JamRecordRules.gateNewSong(state.config)
+    val blockedText = when ((gate as? RecordGate.Blocked)?.reason) {
+        RecordGate.Reason.Off -> stringResource(R.string.jam_rec_cannot_off)
+        RecordGate.Reason.UploadsOff -> stringResource(R.string.jam_rec_cannot_uploads_off)
+        else -> stringResource(R.string.jam_rec_cannot_other)
+    }
+    val record: () -> Unit = {
+        if (gate == RecordGate.Open) onRecordNew() else scope.launch { snackbars.showSnackbar(blockedText) }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbars) },
+        floatingActionButton = {
+            // Only where the server says jam is on: an unflagged server looks exactly as it did.
+            if (state.phase == JamWallUiState.Phase.Ready && state.config.enabled) {
+                val label = stringResource(R.string.jam_wall_record)
+                ExtendedFloatingActionButton(
+                    onClick = record,
+                    icon = { Icon(PqpIcons.Mic, contentDescription = null) },
+                    text = { Text(stringResource(R.string.jam_wall_record_short), fontWeight = FontWeight.Bold) },
+                    modifier = Modifier.testTag("jam.wall.record").semantics { contentDescription = label },
+                )
+            }
+        },
         topBar = {
             Column {
                 TopAppBar(
@@ -166,7 +201,7 @@ fun JamWallScreen(
                         onRefresh = model::refresh,
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        EmptyWall()
+                        EmptyWall(onRecord = record, canRecord = state.config.enabled)
                     }
                     else -> PullToRefreshBox(
                         isRefreshing = state.refreshing,
@@ -249,7 +284,7 @@ private fun Mosaic(
 
         LazyColumn(
             state = listState,
-            contentPadding = PaddingValues(start = gutter, end = gutter, top = Spacing.xs, bottom = Spacing.xxl + Spacing.xl),
+            contentPadding = PaddingValues(start = gutter, end = gutter, top = Spacing.xs, bottom = Spacing.xxl * 3),
             verticalArrangement = Arrangement.spacedBy(Gap),
             modifier = Modifier.fillMaxSize().testTag("jam.list"),
         ) {
@@ -360,7 +395,7 @@ private fun Footer(state: JamWallUiState, onRetry: () -> Unit) {
 }
 
 @Composable
-private fun EmptyWall() {
+private fun EmptyWall(onRecord: () -> Unit, canRecord: Boolean) {
     Column(
         Modifier
             .fillMaxSize()
@@ -392,6 +427,14 @@ private fun EmptyWall() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
+        if (canRecord) {
+            Spacer(Modifier.height(Spacing.lg))
+            Button(onClick = onRecord, modifier = Modifier.testTag("jam.empty.record")) {
+                Icon(PqpIcons.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.jam_empty_cta), fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 

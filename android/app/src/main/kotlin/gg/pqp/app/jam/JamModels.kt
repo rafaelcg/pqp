@@ -158,8 +158,21 @@ data class JamSongSummary(
     val contributors: List<JamContributor>? = null,
     /** For a wanted song, the wanted instruments nobody has a live track for yet; empty for every other mode. */
     val missingInstruments: List<@Serializable(with = JamInstrumentSerializer::class) JamInstrument>? = null,
+    /**
+     * The song's cover picture: a presigned GET minted when the summary was built (so every read carries a different
+     * signature and it expires), or null when the song has none or the server predates covers. The picture's
+     * IDENTITY is the URL's path (everything before `?`, `jam.ts` "A SONG'S COVER"); see [coverKey].
+     */
+    val coverUrl: String? = null,
 ) {
     val updatedAtMs: Long get() = parseJamInstant(updatedAt)
+
+    /**
+     * What a cover is cached under: the song and the picture's own path, never the signed URL. The signature changes on
+     * every read and expires after hours; the key inside the path never changes for one picture and changes with a new
+     * one, so replacing the cover is a new key and re-reading the song is the same key.
+     */
+    val coverKey: String? get() = coverUrl?.takeIf { it.isNotBlank() }?.let { "jam-cover:$id:${it.substringBefore('?')}" }
     val createdAtMs: Long get() = parseJamInstant(createdAt)
 
     /** True when this summary carries the whole preview (a server that has it), so a tile needs no detail read for it. */

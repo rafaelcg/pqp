@@ -103,11 +103,14 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
 import gg.pqp.app.core.Backend
+import gg.pqp.app.jam.JamConfig
 import gg.pqp.app.jam.JamNeed
 import gg.pqp.app.jam.JamNotice
 import gg.pqp.app.jam.JamPeaks
 import gg.pqp.app.jam.JamPermissions
 import gg.pqp.app.jam.JamPlayhead
+import gg.pqp.app.jam.JamRecordRules
+import gg.pqp.app.jam.RecordGate
 import gg.pqp.app.jam.JamSongSummary
 import gg.pqp.app.jam.JamSongUi
 import gg.pqp.app.jam.JamSongViewModel
@@ -115,6 +118,7 @@ import gg.pqp.app.jam.JamStemStatus
 import gg.pqp.app.jam.JamTrack
 import gg.pqp.app.jam.JamWho
 import gg.pqp.app.jam.jamSongLink
+import gg.pqp.app.jam.record.JamStudioLaunch
 import gg.pqp.app.onboarding.ui.rememberReduceMotion
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
@@ -132,8 +136,9 @@ import kotlinx.coroutines.launch
  * scrub (drag or tap any waveform, or the bar above the play button), mute, solo
  * and volume per track (local to this phone), competing takes you can hear in
  * place of the mix's and vote on, the in-mix switch for the song's author or a
- * moderator, and delete where the contract allows it. Where the web says
- * "Gravar por cima" this build says, calmly, that recording is on the computer.
+ * moderator, and delete where the contract allows it. "Gravar minha parte" opens
+ * the studio (`JamStudioScreen`) over this screen: the song and its decoded band
+ * stay alive underneath, which is what the studio plays against.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -146,6 +151,10 @@ fun JamSongScreen(
     seed: JamSongSummary?,
     shared: JamSharedScope?,
     viewerId: String?,
+    /** What this server says about jam (the flag and storage), for the record button. */
+    config: JamConfig,
+    /** The studio opens over this screen, with the band as it is decoded here. */
+    onRecord: (JamStudioLaunch) -> Unit,
     onBack: () -> Unit,
 ) {
     val ui by model.ui.collectAsStateWithLifecycle()
@@ -153,7 +162,14 @@ fun JamSongScreen(
     val snackbars = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
-    var recordSheet by remember { mutableStateOf(false) }
+    val gettingBandText = stringResource(R.string.jam_rec_getting_band)
+    val blockedTexts = mapOf(
+        RecordGate.Reason.Off to stringResource(R.string.jam_rec_cannot_off),
+        RecordGate.Reason.UploadsOff to stringResource(R.string.jam_rec_cannot_uploads_off),
+        RecordGate.Reason.Closed to stringResource(R.string.jam_rec_cannot_closed),
+        RecordGate.Reason.Other to stringResource(R.string.jam_rec_cannot_other),
+    )
+    fun blockedText(reason: RecordGate.Reason) = blockedTexts.getValue(reason)
     var confirmSong by remember { mutableStateOf(false) }
     var confirmTrack by remember { mutableStateOf<JamTrack?>(null) }
     var menu by remember { mutableStateOf(false) }
@@ -256,7 +272,17 @@ fun JamSongScreen(
                         haptics.performHapticFeedback(if (ui.playing) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn)
                         model.togglePlay()
                     },
-                    onRecord = { recordSheet = true },
+                    onRecord = {
+                        // Whether, and why not, is the contract's: the flag, storage and what the server says this person may add.
+                        val state = ui.state
+                        val gate = state?.let { JamRecordRules.gate(config, it.song, it.viewer) }
+                        val launch = if (gate == RecordGate.Open) model.studioLaunch() else null
+                        when {
+                            launch != null -> onRecord(launch)
+                            gate is RecordGate.Blocked -> scope.launch { snackbars.showSnackbar(blockedText(gate.reason)) }
+                            else -> scope.launch { snackbars.showSnackbar(gettingBandText) }
+                        }
+                    },
                 )
             }
         },
@@ -279,19 +305,6 @@ fun JamSongScreen(
         }
     }
 
-    if (recordSheet) {
-        RecordOnComputerSheet(
-            link = link,
-            onCopy = {
-                copyLink(context, link)
-                // The sheet gives way so the confirmation is not hidden under it.
-                recordSheet = false
-                scope.launch { snackbars.showSnackbar(copiedText) }
-            },
-            onShare = { shareLink(context, link) },
-            onDismiss = { recordSheet = false },
-        )
-    }
     if (confirmSong) {
         ConfirmDialog(
             title = stringResource(R.string.jam_delete_song_title),
@@ -466,6 +479,10 @@ private fun SongHeader(
         if (envelope.any { it > 0 } && draw.value < 1f) draw.animateTo(1f, tween(700, easing = FastOutSlowInEasing))
     }
     val shape = RoundedCornerShape(22.dp)
+    // A cover is the picture of the song while no video is on stage: the plate and the waveform are under it until it
+    // arrives (and stay if it cannot be had), and the playing video still wins the header, since that is the point of it.
+    var coverStatus by remember(song.coverKey) { mutableStateOf(if (song.coverKey == null) JamCoverStatus.None else JamCoverStatus.Loading) }
+    val hasCover = tracks.isEmpty() && coverStatus == JamCoverStatus.Ready
     Box(
         modifier
             .jamSongBounds(shared, song.id)
@@ -481,7 +498,11 @@ private fun SongHeader(
                 ),
             )
         } else {
-            JamWaveform(
+            if (song.coverKey != null) {
+                JamCoverImage(song, onStatus = { coverStatus = it })
+                if (hasCover) JamCoverScrim()
+            }
+            if (!hasCover) JamWaveform(
                 values = envelope,
                 color = JamInk.copy(alpha = 0.78f),
                 playedColor = JamInk,
@@ -492,7 +513,7 @@ private fun SongHeader(
                 modifier = Modifier.fillMaxWidth().fillMaxSize(0.5f).padding(top = 20.dp, start = 18.dp, end = 18.dp),
             )
         }
-        val textColor = if (tracks.isEmpty()) JamInk else Color.White
+        val textColor = if (tracks.isEmpty() && !hasCover) JamInk else Color.White
         Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
             Text(
                 text = song.title,
@@ -1107,67 +1128,5 @@ private fun ScrubBar(model: JamSongViewModel, durationMs: Double, description: S
                     drawRect(colors.primary, size = androidx.compose.ui.geometry.Size(size.width * fraction, size.height))
                 },
         )
-    }
-}
-
-// ------------------------------------------------------------------ record sheet
-
-/**
- * "Gravar por cima", for now: recording is on the computer. A calm sheet with the
- * song's link to copy or share, in the place the real record button will take.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RecordOnComputerSheet(link: String, onCopy: () -> Unit, onShare: () -> Unit, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("jam.recordSheet")) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = Spacing.xl).padding(bottom = Spacing.xl).navigationBarsPadding(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.md),
-        ) {
-            Box(
-                Modifier.size(64.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(PqpIcons.Computer, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp))
-            }
-            Text(
-                stringResource(R.string.jam_record_title),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                stringResource(R.string.jam_record_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                text = link,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .padding(horizontal = Spacing.md, vertical = Spacing.sm)
-                    .testTag("jam.recordSheet.link"),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onCopy, modifier = Modifier.weight(1f).testTag("jam.recordSheet.copy")) {
-                    Icon(PqpIcons.Copy, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.jam_copy_link))
-                }
-                OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f).testTag("jam.recordSheet.share")) {
-                    Icon(PqpIcons.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.jam_share_link))
-                }
-            }
-        }
     }
 }

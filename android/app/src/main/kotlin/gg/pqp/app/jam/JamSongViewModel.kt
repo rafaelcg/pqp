@@ -16,6 +16,8 @@ import gg.pqp.app.jam.audio.JamPlayer
 import gg.pqp.app.jam.audio.JamStemLoader
 import gg.pqp.app.jam.audio.JamStemSpec
 import gg.pqp.app.jam.audio.JamVideoStage
+import gg.pqp.app.jam.record.BackingStem
+import gg.pqp.app.jam.record.JamStudioLaunch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -496,6 +498,38 @@ class JamSongViewModel(
                 notice(JamNotice.DeleteFailed)
             }
         }
+    }
+
+    // --- recording ---
+
+    /**
+     * What the studio needs to record over this song: the in-mix stems as they are already decoded here (the studio never
+     * downloads or decodes anything, and never closes them), who may add what, and the instruments the song asks for.
+     * Null while the band is still being prepared: the record button waits for it, because a take recorded over a band
+     * that is not all there would be placed against a mix the person never heard.
+     */
+    fun studioLaunch(): JamStudioLaunch? {
+        val ui = _ui.value
+        val state = ui.state ?: return null
+        val inMix = JamMixRules.activeTracks(state.tracks, emptyMap())
+        if (inMix.any { results[it.id] == null }) return null
+        val backing = inMix.mapNotNull { track ->
+            (results[track.id] as? JamStemLoader.Result.Ready)?.let { BackingStem(track, it.pcm, it.frames) }
+        }
+        val addable = state.viewer.addableInstruments
+        if (addable.isEmpty()) return null
+        // Nothing of the song keeps playing under the studio: it owns the speaker while it is open.
+        if (ui.playing) pause()
+        return JamStudioLaunch(
+            channelId = channelId,
+            songId = songId,
+            songTitle = state.song.title,
+            draft = null,
+            backing = backing,
+            addable = addable,
+            wanted = JamRecordRules.wanted(state.song),
+            initialInstrument = JamRecordRules.firstChoice(addable, state.song),
+        )
     }
 
     // --- housekeeping ---
