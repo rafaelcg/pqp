@@ -1104,6 +1104,9 @@ CREATE INDEX IF NOT EXISTS idx_voice_note_listens_listened
 --                    message_attachment_voice.playback_key
 --   party_question   reserved for watch party voice questions; nothing
 --                    enqueues or claims it yet
+--   community_home_captions  subtitles of a Baú video, keyed by post_id (below)
+--   jam_video_transcode      the MP4 copy of a Jam camera video, keyed by
+--                            track_id (in the jam block)
 --
 -- Enqueued in the same transaction as the message that carries the note
 -- (`services/speech-jobs.ts`), or by the lazy request route, so a crash
@@ -7702,6 +7705,70 @@ CREATE TABLE IF NOT EXISTS jam_tracks (
   CONSTRAINT jam_tracks_peaks_check
     CHECK (jsonb_typeof(peaks) = 'array' AND jsonb_array_length(peaks) <= 400)
 );
+
+-- The MP4 copy of a camera video, for the players that cannot play WebM (iOS,
+-- Safari). Made by the worker (`speech_jobs` kind `jam_video_transcode`,
+-- services/jam-video-transcode.ts), never by a request. Three nullable columns:
+-- RESERVE, UPLOAD, CONFIRM, like a voice note's playback copy. `video_mp4_key`
+-- is written BEFORE the object is PUT, so a delete that reads keys after that
+-- point (the sweep, a channel, a server, an account) removes it, or finds it
+-- not there yet; `video_mp4_content_type` is written last and is the only
+-- thing a read looks at, so a half-made copy is never offered. All three NULL
+-- is the state of every track that exists today and of one the worker has not
+-- reached: the read then offers the recorded file, exactly as before.
+ALTER TABLE jam_tracks ADD COLUMN IF NOT EXISTS video_mp4_key TEXT;
+ALTER TABLE jam_tracks ADD COLUMN IF NOT EXISTS video_mp4_content_type TEXT;
+ALTER TABLE jam_tracks ADD COLUMN IF NOT EXISTS video_mp4_bytes BIGINT;
+
+-- The worker's job for it is a `speech_jobs` row keyed by the TRACK, the same
+-- shape the Baú's captions job took for a post: the column and the kind are
+-- added here, after `jam_tracks` exists, because speech_jobs is created long
+-- before it. The constraint rewrites are guarded so a boot that finds them in
+-- place takes no lock on the table.
+ALTER TABLE speech_jobs ADD COLUMN IF NOT EXISTS track_id UUID
+  REFERENCES jam_tracks(id) ON DELETE CASCADE;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'speech_jobs'::regclass
+       AND conname = 'speech_jobs_kind_check'
+       AND pg_get_constraintdef(oid) LIKE '%jam_video_transcode%'
+  ) THEN
+    ALTER TABLE speech_jobs DROP CONSTRAINT IF EXISTS speech_jobs_kind_check;
+    ALTER TABLE speech_jobs ADD CONSTRAINT speech_jobs_kind_check CHECK (
+      kind IN ('voice_note', 'voice_transcode', 'party_question', 'community_home_captions',
+               'jam_video_transcode')
+    );
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'speech_jobs'::regclass
+       AND conname = 'speech_jobs_check'
+       AND pg_get_constraintdef(oid) LIKE '%track_id%'
+  ) THEN
+    ALTER TABLE speech_jobs DROP CONSTRAINT IF EXISTS speech_jobs_check;
+    ALTER TABLE speech_jobs ADD CONSTRAINT speech_jobs_check CHECK (
+      kind = 'party_question' OR attachment_id IS NOT NULL OR post_id IS NOT NULL
+        OR track_id IS NOT NULL
+    );
+  END IF;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+-- One transcode job per track EVER, the enqueue's dedupe (and what the
+-- backfill sweep checks against). The row cascades with the track.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_speech_jobs_kind_track
+  ON speech_jobs (kind, track_id) WHERE track_id IS NOT NULL;
+
+-- The backfill's scan (`enqueueMissingJamVideoTranscodes`): live videos with no
+-- copy, newest first. Small by construction, so the scan that finds nothing to
+-- queue touches few rows however many tracks the table holds.
+CREATE INDEX IF NOT EXISTS idx_jam_tracks_video_pending
+  ON jam_tracks (created_at DESC)
+  WHERE video_key IS NOT NULL AND video_mp4_content_type IS NULL AND deleted_at IS NULL;
 
 -- Every track of a song, deleted or not: the cascade's key read and the
 -- ON DELETE CASCADE from jam_songs (the partial index below cannot answer

@@ -50,6 +50,7 @@ import { sweepClientPlatforms } from "./services/client-platforms.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
 import { sweepEmptyJamSongs, sweepJamMedia } from "./services/jam.js";
+import { enqueueMissingJamVideoTranscodes } from "./services/jam-video-transcode.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
@@ -428,6 +429,11 @@ export function startColdJobs(): ColdJobs {
     every(JAM_MEDIA_SWEEP_INTERVAL_MS, "jam-media", async () => {
       await sweepEmptyJamSongs();
       await sweepJamMedia();
+    }),
+    // The MP4 copy of camera videos recorded before it existed, ten at a time
+    // at most (`BACKFILL_QUEUE_CAP`): rows only, claimed by a worker with ffmpeg.
+    every(JAM_MEDIA_SWEEP_INTERVAL_MS, "jam-video-backfill", async () => {
+      await enqueueMissingJamVideoTranscodes();
     }),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
     // Refilled cluster rate-limit buckets carry no information. Rows, not

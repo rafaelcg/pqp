@@ -5,6 +5,7 @@ import type { JamLaneMix } from "@/hooks/use-jam-playback";
 import { useElementWidth } from "./jam-bars";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
+import { pickJamVideoUrl } from "@/lib/jam-video-source";
 import { cn } from "@/lib/utils";
 
 /**
@@ -177,7 +178,7 @@ function StageTile({
     >
       <video
         ref={ref}
-        src={track.videoUrl ?? undefined}
+        src={pickJamVideoUrl(track) ?? undefined}
         muted
         playsInline
         preload={eager ? "auto" : "metadata"}

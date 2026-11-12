@@ -64,11 +64,26 @@ interface RunResult {
     /** How far MediaRecorder's start event was from the measured time zero, ms. */
     timestampGuessErrorMs: number;
     bytes: number;
+    /** The first bytes of the file as hex: `ftyp` at offset 4 is an MP4, an EBML header a WebM. */
+    headHex: string;
+    /** Why the content method was not used (see `VideoAlignment.reason`); absent when it was. */
+    reason: string | null;
+    /** What the capture lost, and how long the take and the file's audio are, for a failure to explain itself. */
+    gapFrames: number;
+    inputDroppedMs: number | null;
+    captureTruncated: boolean;
+    takeSamples: number;
+    fileAudioSamples: number | null;
+    zeroFrame: number;
   };
 }
 
-async function runTake(page: import("@playwright/test").Page, withCamera: boolean): Promise<RunResult> {
-  return page.evaluate(async (withCamera) => {
+async function runTake(
+  page: import("@playwright/test").Page,
+  withCamera: boolean,
+  videoMimeType?: string,
+): Promise<RunResult> {
+  return page.evaluate(async ({ withCamera, videoMimeType }) => {
     const { jam, pulseTrain, sweep, findAll, locate, tap } = window.jamTest;
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const engine = await jam.JamEngine.create();
@@ -115,7 +130,14 @@ async function runTake(page: import("@playwright/test").Page, withCamera: boolea
     // with a camera the recorder starts MediaRecorder first and awaits it; leave room
     if (withCamera) f0 += 2 * sr;
     const fromMs = 2000;
-    const rec = await engine.record({ fromMs, countIn, latency: cal, camera, captureStartFrame: f0 - countFrames });
+    const rec = await engine.record({
+      fromMs,
+      countIn,
+      latency: cal,
+      camera,
+      captureStartFrame: f0 - countFrames,
+      ...(videoMimeType ? { videoMimeType } : {}),
+    });
     const until = (f0 + 5.2 * sr) / sr;
     while (ctx.currentTime < until) await sleep(100);
     const take = await rec.stop();
@@ -171,6 +193,7 @@ async function runTake(page: import("@playwright/test").Page, withCamera: boolea
     let video: RunResult["video"] = null;
     if (take.video) {
       let zeroCheckMs: number | null = null;
+      let fileAudioSamples: number | null = null;
       try {
         const fileAudio = (await ctx.decodeAudioData(await take.video.blob.arrayBuffer())).getChannelData(0);
         // The take is padded with silence back to the camera's first frame (the
@@ -178,6 +201,7 @@ async function runTake(page: import("@playwright/test").Page, withCamera: boolea
         // musician. The fake mic repeats every second: search only +-300 ms.
         const at = Math.round(5 * sr);
         const pad = Math.round(0.3 * sr);
+        fileAudioSamples = fileAudio.length;
         const excerpt = fileAudio.subarray(at, at + 2 * sr);
         const m = locate(take.samples.subarray(at - pad, at + 2 * sr + pad), excerpt);
         if (m) zeroCheckMs = ((m.position - pad) / sr) * 1000;
@@ -194,6 +218,16 @@ async function runTake(page: import("@playwright/test").Page, withCamera: boolea
         timestampGuessErrorMs:
           ((take.video.alignment.timestampGuess - take.video.alignment.zeroFrame) / sr) * 1000,
         bytes: take.video.blob.size,
+        headHex: Array.from(new Uint8Array(await take.video.blob.slice(0, 12).arrayBuffer()))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join(""),
+        reason: take.video.alignment.reason ?? null,
+        gapFrames: take.gapFrames,
+        inputDroppedMs: take.inputDroppedMs,
+        captureTruncated: take.captureTruncated,
+        takeSamples: take.samples.length,
+        fileAudioSamples,
+        zeroFrame: take.video.alignment.zeroFrame,
       };
     }
     await engine.destroy();
@@ -210,7 +244,7 @@ async function runTake(page: import("@playwright/test").Page, withCamera: boolea
       playbackScheduleErrorsSamples,
       video,
     };
-  }, withCamera);
+  }, { withCamera, videoMimeType });
 }
 
 test("a take recorded over the backing lands on the backing, and plays back on it", async ({ page }) => {
@@ -239,8 +273,35 @@ test("with a camera: the take still lands, and the video's time zero is the take
   for (const e of r.placementErrorsMs) expect(Math.abs(e)).toBeLessThan(0.05);
   expect(r.video).not.toBeNull();
   expect(r.video!.bytes).toBeGreaterThan(10_000);
-  expect(r.video!.method).toBe("content");
+  // The default is WebM on Chromium: see VIDEO_MIME_PREFERENCE for why not MP4.
+  expect(r.video!.mimeType).toMatch(/^video\/webm/);
+  expect(r.video!.headHex.startsWith("1a45dfa3")).toBe(true);
+  // `reason` says why when it falls back (the message is the failure's explanation).
+  expect(r.video!.method, JSON.stringify(r.video)).toBe("content");
   // the file's audio is Opus/AAC with its own codec delay; a frame is 33 ms
+  expect(r.video!.zeroCheckMs).not.toBeNull();
+  expect(Math.abs(r.video!.zeroCheckMs!)).toBeLessThan(10);
+});
+
+// The same take with the camera recorded as MP4 (H.264 + AAC), which is what
+// Safari records and what a Chromium that supports it can. Not the default
+// (see VIDEO_MIME_PREFERENCE and av-skew.spec.ts); here to prove that WHEN a
+// browser records MP4 the take still lands and the content method still finds
+// the file's time zero. Skipped where the browser cannot record that type.
+test("with a camera recorded as MP4: the file is an MP4 and the content method still finds its time zero", async ({ page }) => {
+  const type = "video/mp4;codecs=avc1.42E01E,mp4a.40.2";
+  const supported = await page.evaluate((t) => MediaRecorder.isTypeSupported(t), type);
+  test.skip(!supported, "this Chromium cannot record H.264 + AAC in MP4");
+  const r = await runTake(page, true, type);
+  // eslint-disable-next-line no-console -- the measured numbers are the output
+  console.log("[jam] with camera, MP4", JSON.stringify(r, null, 1));
+  expect(r.calibration.confidence).toBe("high");
+  for (const e of r.placementErrorsMs) expect(Math.abs(e)).toBeLessThan(0.05);
+  expect(r.video).not.toBeNull();
+  expect(r.video!.bytes).toBeGreaterThan(10_000);
+  expect(r.video!.mimeType).toMatch(/^video\/mp4/);
+  expect(r.video!.headHex.slice(8, 16)).toBe("66747970"); // "ftyp"
+  expect(r.video!.method, JSON.stringify(r.video)).toBe("content");
   expect(r.video!.zeroCheckMs).not.toBeNull();
   expect(Math.abs(r.video!.zeroCheckMs!)).toBeLessThan(10);
 });

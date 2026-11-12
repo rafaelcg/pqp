@@ -1,6 +1,10 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   jamConfigSchema,
   jamFrameSchema,
@@ -109,6 +113,24 @@ const { jamKeysForChannels, jamKeysForServer, jamKeysForUser } = await import(
   "../services/jam-keys.js"
 );
 const { postChannelMessage } = await import("../ws/chat.js");
+const { claimSpeechJobs } = await import("../services/speech-jobs.js");
+const { runnableSpeechJobKinds, runSpeechJobsTick, waitForJamVideoJobForTests } = await import(
+  "../services/speech-worker.js"
+);
+const { isJamTranscodeAvailable, resetJamTranscodeAvailabilityForTests } = await import(
+  "../speech/video-transcode.js"
+);
+const jamTranscodeHere = await isJamTranscodeAvailable();
+const {
+  enqueueJamVideoTranscode,
+  enqueueMissingJamVideoTranscodes,
+  jamVideoJobMetrics,
+  resetJamVideoJobMetricsForTests,
+  runJamVideoJob,
+  setJamVideoConverterForTests,
+} = await import("../services/jam-video-transcode.js");
+const { jamVideoMetrics } = await import("../services/jam-video-metrics.js");
+const { getAdminMetrics, resetAdminMetricsCache } = await import("../services/metrics.js");
 
 // ------------------------------------------------------------ fake storage
 
@@ -117,7 +139,7 @@ interface StoredObject {
   body: Buffer;
 }
 const objects = new Map<string, StoredObject>();
-const storage = { failDeletes: false, deleted: [] as string[] };
+const storage = { failDeletes: false, failPuts: false, deleted: [] as string[] };
 let s3: Server;
 const BUCKET = "jam-test";
 
@@ -126,6 +148,11 @@ function startFakeS3(): Promise<string> {
     const url = new URL(req.url ?? "/", "http://localhost");
     const key = decodeURIComponent(url.pathname.replace(`/${BUCKET}/`, ""));
     if (req.method === "PUT") {
+      if (storage.failPuts) {
+        req.resume();
+        res.writeHead(500).end();
+        return;
+      }
       const chunks: Buffer[] = [];
       req.on("data", (chunk: Buffer) => chunks.push(chunk));
       req.on("end", () => {
@@ -368,6 +395,7 @@ describeDb("jam channels", () => {
     await resetSharedRateLimit("jam-upload");
     objects.clear();
     storage.failDeletes = false;
+    storage.failPuts = false;
     storage.deleted.length = 0;
     stubs.frames.length = 0;
     await getPool().query(
@@ -2066,5 +2094,415 @@ describeDb("jam channels", () => {
     const frames = takeFrames();
     expect(frames).toHaveLength(1);
     expect((frames[0] as { song: JamSongSummary }).song.title).toBe("Depois");
+  });
+
+  // ------------------------------------------- the MP4 copy of a camera video
+  //
+  // iOS and Safari cannot play WebM, so the worker makes an H.264 + AAC copy
+  // (`services/jam-video-transcode.ts`). The conversion itself is pinned on
+  // real ffmpeg by `speech/video-transcode.test.ts`; here ffmpeg is replaced
+  // by a converter that writes known bytes, so this runs wherever Postgres
+  // does, and what it pins is the plumbing: the job is queued with the track,
+  // the copy is reserved, uploaded and confirmed in that order, a read offers
+  // it only once confirmed, every delete path takes it away, and a failure is
+  // counted and logged instead of swallowed.
+  describe("the MP4 copy of a camera video", () => {
+    const WEBM = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.from("a webm, as far as the demuxer sniff goes")]);
+    const COPY = Buffer.from("the mp4 copy");
+
+    async function videoTrack(
+      as: Actor,
+      song: string,
+      options: { bytes?: Buffer; contentType?: string } = {},
+    ): Promise<JamTrack> {
+      const audioUploadId = await upload(as, song, "audio");
+      const videoUploadId = await upload(as, song, "video", {
+        contentType: options.contentType ?? "video/webm",
+        bytes: options.bytes ?? WEBM,
+      });
+      const reply = await call<{ track: JamTrack }>(as, "POST", `/api/jam-songs/${song}/tracks`, {
+        instrument: "guitar",
+        audioUploadId,
+        videoUploadId,
+        durationMs: 30_000,
+      });
+      expect(reply.status, JSON.stringify(reply.body)).toBe(201);
+      return reply.body.track;
+    }
+
+    const jobsOf = async () =>
+      (
+        await getPool().query<{ track_id: string; status: string; attempts: number; last_error: string | null }>(
+          `SELECT track_id::text AS track_id, status, attempts, last_error
+             FROM speech_jobs WHERE kind = 'jam_video_transcode' ORDER BY id`,
+        )
+      ).rows;
+
+    /** Claim the one due job and run it, the way a worker tick does. */
+    async function runOne() {
+      const [job] = await claimSpeechJobs(["jam_video_transcode"], 1);
+      expect(job, "a job was due").toBeDefined();
+      await runJamVideoJob(job!);
+      return job!;
+    }
+
+    beforeEach(async () => {
+      await getPool().query(`DELETE FROM speech_jobs`);
+      resetJamVideoJobMetricsForTests();
+      setJamVideoConverterForTests(async (_in, out) => {
+        await writeFile(out, COPY);
+      });
+    });
+    afterEach(() => {
+      setJamVideoConverterForTests(null);
+    });
+
+    it("queues one conversion with a track that has a video, and none for one that does not", async () => {
+      const song = await songId(bob);
+      await trackId(bob, song, "bass"); // audio only
+      expect(await jobsOf()).toEqual([]);
+      const track = await videoTrack(carol, song);
+      expect(await jobsOf()).toEqual([
+        { track_id: track.id, status: "queued", attempts: 0, last_error: null },
+      ]);
+    });
+
+    it("reads as the recorded file until the copy is confirmed, then lists the copy first", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      // Before: what every client has always seen, plus the list.
+      expect(track.videoContentType).toBe("video/webm");
+      expect(track.videoSources).toEqual([
+        { url: track.videoUrl, contentType: "video/webm", bytes: WEBM.length },
+      ]);
+
+      await runOne();
+
+      const after = (await detail(alice, song)).tracks[0]!;
+      expect(after.videoContentType).toBe("video/mp4");
+      expect(after.videoBytes).toBe(COPY.length);
+      expect(after.videoUrl).toMatch(/\.ios\.mp4\?/);
+      expect(after.videoSources).toEqual([
+        { url: after.videoUrl, contentType: "video/mp4", bytes: COPY.length },
+        { url: expect.stringMatching(/\.webm\?/), contentType: "video/webm", bytes: WEBM.length },
+      ]);
+      // The object is really there, with the right type, beside the original.
+      const copyKey = [...objects.keys()].find((key) => key.endsWith(".ios.mp4"));
+      expect(copyKey).toBeDefined();
+      expect(objects.get(copyKey!)).toMatchObject({ type: "video/mp4", body: COPY });
+      expect(copyKey!.startsWith(`jam/${serverId}/`)).toBe(true);
+      expect(await jobsOf()).toEqual([
+        { track_id: track.id, status: "done", attempts: 1, last_error: null },
+      ]);
+      expect(jamVideoJobMetrics()).toMatchObject({ transcoded: 1, failed: 0 });
+      // The operator's read, from the database.
+      expect(await jamVideoMetrics()).toMatchObject({
+        videos: 1,
+        withCopy: 1,
+        failed: 0,
+        waiting: 0,
+        jobs24h: { made: 1, skipped: 0, failed: 0 },
+      });
+    });
+
+    it("a half-made copy is never offered: the key is on the row before the type is", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      // Fail the upload: the object store refuses the PUT of the copy.
+      storage.failPuts = true;
+      const [job] = await claimSpeechJobs(["jam_video_transcode"], 1);
+      await runJamVideoJob(job!);
+      storage.failPuts = false;
+      const reserved = (
+        await getPool().query<{ video_mp4_key: string | null; video_mp4_content_type: string | null }>(
+          `SELECT video_mp4_key, video_mp4_content_type FROM jam_tracks WHERE id = $1`,
+          [track.id],
+        )
+      ).rows[0]!;
+      expect(reserved.video_mp4_key).toMatch(/\.ios\.mp4$/);
+      expect(reserved.video_mp4_content_type).toBeNull();
+      const read = (await detail(alice, song)).tracks[0]!;
+      expect(read.videoContentType).toBe("video/webm");
+      expect(read.videoSources).toHaveLength(1);
+      // Back in the queue with a backoff, one attempt spent, and the reason kept.
+      expect(await jobsOf()).toMatchObject([{ status: "queued", attempts: 1 }]);
+      expect(jamVideoJobMetrics()).toMatchObject({ retried: 1, failed: 0 });
+      // The sweep reads the reserved key too, so a half-made copy is never leaked.
+      expect(await jamKeysForServer(serverId)).toContain(reserved.video_mp4_key);
+    });
+
+    it("gives up after three attempts, visibly: a counter, a log line and the operator's number", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      setJamVideoConverterForTests(async () => {
+        throw new Error("ffmpeg exited 1: Invalid data found when processing input");
+      });
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await getPool().query(`UPDATE speech_jobs SET attempts = 2 WHERE kind = 'jam_video_transcode'`);
+        await runOne();
+        expect(log.mock.calls.map((call) => String(call[0])).join("\n")).toMatch(
+          /jamVideo\.transcode\.failed trackId=\S+ attempt=3 next=gave-up reason=ffmpeg exited 1/,
+        );
+      } finally {
+        log.mockRestore();
+      }
+      expect(await jobsOf()).toMatchObject([{ track_id: track.id, status: "failed" }]);
+      expect(jamVideoJobMetrics()).toMatchObject({ failed: 1 });
+      expect(await jamVideoMetrics()).toMatchObject({ videos: 1, withCopy: 0, failed: 1, waiting: 0 });
+      // On the operator's endpoint, where the dashboard and the alerts read it.
+      resetAdminMetricsCache();
+      expect((await getAdminMetrics()).jamVideo).toMatchObject({ videos: 1, failed: 1 });
+      // The track still lists, with the recorded file: nothing was lost.
+      expect((await detail(alice, song)).tracks[0]!.videoContentType).toBe("video/webm");
+    });
+
+    it("a copy that reached the bucket but could not be confirmed is deleted when the job gives up", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      await getPool().query(`UPDATE speech_jobs SET attempts = 2 WHERE kind = 'jam_video_transcode'`);
+      // The confirm transaction dies on the UPDATE that would make the copy readable.
+      const pool = getPool();
+      const real = pool.connect.bind(pool) as (...args: unknown[]) => Promise<{
+        query: (...args: unknown[]) => Promise<unknown>;
+        release: (...args: unknown[]) => void;
+      }>;
+      const spy = vi.spyOn(pool, "connect").mockImplementation(((...args: unknown[]) => {
+        // `pool.query` itself connects with a callback: leave that alone.
+        if (args.length > 0) return real(...args);
+        return real().then((client) => {
+          const query = client.query;
+          const release = client.release;
+          client.query = ((...queryArgs: unknown[]) =>
+            typeof queryArgs[0] === "string" && queryArgs[0].includes("video_mp4_content_type = 'video/mp4'")
+              ? Promise.reject(new Error("connection terminated"))
+              : query.apply(client, queryArgs)) as never;
+          // The client goes back into the pool: give it back as it was, or the next test inherits the failure.
+          client.release = ((...releaseArgs: unknown[]) => {
+            client.query = query;
+            client.release = release;
+            return release.apply(client, releaseArgs);
+          }) as never;
+          return client;
+        });
+      }) as never);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await runOne();
+      } finally {
+        spy.mockRestore();
+        log.mockRestore();
+      }
+      expect(await jobsOf()).toMatchObject([{ track_id: track.id, status: "failed" }]);
+      // The object is gone and nothing names it any more.
+      expect([...objects.keys()].some((key) => key.endsWith(".ios.mp4"))).toBe(false);
+      const row = (
+        await getPool().query(`SELECT video_mp4_key, video_mp4_content_type FROM jam_tracks WHERE id = $1`, [track.id])
+      ).rows[0];
+      expect(row).toEqual({ video_mp4_key: null, video_mp4_content_type: null });
+      expect((await detail(alice, song)).tracks[0]!.videoContentType).toBe("video/webm");
+    });
+
+    it("a pool that refuses the confirm connection takes the same path: retried, and the copy deleted on give-up", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      await getPool().query(`UPDATE speech_jobs SET attempts = 2 WHERE kind = 'jam_video_transcode'`);
+      const pool = getPool();
+      const real = pool.connect.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+      const spy = vi.spyOn(pool, "connect").mockImplementation(((...args: unknown[]) =>
+        // `pool.query` connects with a callback: leave that alone. A bare `connect()` is the confirm.
+        args.length > 0 ? real(...args) : Promise.reject(new Error("timeout exceeded when trying to connect"))) as never);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await runOne();
+      } finally {
+        spy.mockRestore();
+        log.mockRestore();
+      }
+      expect(await jobsOf()).toMatchObject([{ track_id: track.id, status: "failed" }]);
+      expect([...objects.keys()].some((key) => key.endsWith(".ios.mp4"))).toBe(false);
+      const row = (await getPool().query(`SELECT video_mp4_key FROM jam_tracks WHERE id = $1`, [track.id])).rows[0];
+      expect(row.video_mp4_key).toBeNull();
+    });
+
+    it("a file that is not a video is a permanent failure, with no retries", async () => {
+      const song = await songId(bob);
+      await videoTrack(bob, song, { bytes: Buffer.from("not a video at all"), contentType: "video/mp4" });
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await runOne();
+      } finally {
+        log.mockRestore();
+      }
+      expect(await jobsOf()).toMatchObject([{ status: "failed", attempts: 1, last_error: "unsupported-container" }]);
+      expect(jamVideoJobMetrics()).toMatchObject({ failed: 1, retried: 0 });
+    });
+
+    it("a video that is not in the bucket any more is a visible failure too", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      const key = (
+        await getPool().query<{ video_key: string }>(`SELECT video_key FROM jam_tracks WHERE id = $1`, [track.id])
+      ).rows[0]!.video_key;
+      objects.delete(key);
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await runOne();
+      } finally {
+        log.mockRestore();
+      }
+      expect(await jobsOf()).toMatchObject([{ status: "failed", last_error: "object-missing" }]);
+    });
+
+    it("a track deleted while its copy was encoding leaves no object behind", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      setJamVideoConverterForTests(async (_in, out) => {
+        await writeFile(out, COPY);
+        // The author deletes the take while ffmpeg is still working.
+        await getPool().query(`UPDATE jam_tracks SET deleted_at = NOW() WHERE id = $1`, [track.id]);
+      });
+      await runOne();
+      expect([...objects.keys()].some((key) => key.endsWith(".ios.mp4"))).toBe(false);
+      const row = (
+        await getPool().query(`SELECT video_mp4_content_type FROM jam_tracks WHERE id = $1`, [track.id])
+      ).rows[0];
+      expect(row.video_mp4_content_type).toBeNull();
+    });
+
+    it("the sweep deletes the copy with the original, and every cascade names it", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      await runOne();
+      const keys = (
+        await getPool().query<{ video_key: string; video_mp4_key: string }>(
+          `SELECT video_key, video_mp4_key FROM jam_tracks WHERE id = $1`,
+          [track.id],
+        )
+      ).rows[0]!;
+      expect(await jamKeysForChannels([jamId])).toEqual(expect.arrayContaining([keys.video_key, keys.video_mp4_key]));
+      expect(await jamKeysForServer(serverId)).toEqual(expect.arrayContaining([keys.video_key, keys.video_mp4_key]));
+      expect(await jamKeysForUser(bob.id)).toEqual(expect.arrayContaining([keys.video_key, keys.video_mp4_key]));
+
+      await getPool().query(`UPDATE jam_tracks SET deleted_at = NOW() - INTERVAL '2 days' WHERE id = $1`, [track.id]);
+      storage.deleted.length = 0;
+      await sweepJamMedia();
+      expect(storage.deleted).toEqual(expect.arrayContaining([keys.video_key, keys.video_mp4_key]));
+      expect(objects.has(keys.video_mp4_key)).toBe(false);
+    });
+
+    it("deleting the song or the track takes its queued job with it", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      expect(await jobsOf()).toHaveLength(1);
+      await getPool().query(`DELETE FROM jam_tracks WHERE id = $1`, [track.id]);
+      expect(await jobsOf()).toEqual([]);
+    });
+
+    // The worker's own loop, the lane and the poller's claim; only where this
+    // process could claim it (ffmpeg with libx264), which is what the next test
+    // pins from the other side.
+    it.skipIf(!jamTranscodeHere)("is claimed and run by the worker's tick, in a lane of its own", async () => {
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      expect(await runSpeechJobsTick()).toBe(1);
+      await waitForJamVideoJobForTests();
+      expect(await jobsOf()).toEqual([{ track_id: track.id, status: "done", attempts: 1, last_error: null }]);
+      expect((await detail(alice, song)).tracks[0]!.videoContentType).toBe("video/mp4");
+    });
+
+    // No stand-in for ffmpeg: a real WebM, converted by the real worker code,
+    // served by the real read. The time-zero claim is pinned in
+    // `speech/video-transcode.test.ts`; this is the whole path around it.
+    it.skipIf(!jamTranscodeHere)("converts a real WebM and serves the MP4 a phone can play", async (context) => {
+      const dir = await mkdtemp(joinPath(tmpdir(), "pqp-jam-e2e-"));
+      let webm: Buffer;
+      try {
+        const out = joinPath(dir, "in.webm");
+        const made = spawnSync(
+          process.env.FFMPEG_PATH?.trim() || "ffmpeg",
+          ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=160x90:r=30:d=1", "-f", "lavfi", "-i", "sine=f=440:d=1", "-c:v", "libvpx", "-c:a", "libopus", out],
+          { stdio: "ignore" },
+        );
+        if (made.status !== 0) {
+          context.skip();
+          return;
+        }
+        webm = await readFile(out);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+      setJamVideoConverterForTests(null);
+      const song = await songId(bob);
+      await videoTrack(bob, song, { bytes: webm });
+      await runOne();
+      const read = (await detail(alice, song)).tracks[0]!;
+      expect(read.videoContentType).toBe("video/mp4");
+      const copy = await fetch(read.videoUrl!);
+      expect(copy.status).toBe(200);
+      const bytes = Buffer.from(await copy.arrayBuffer());
+      expect(bytes.toString("latin1", 4, 8)).toBe("ftyp");
+      expect(bytes.length).toBe(read.videoBytes);
+      expect(read.videoSources).toHaveLength(2);
+      expect(jamVideoJobMetrics()).toMatchObject({ transcoded: 1, failed: 0 });
+    });
+
+    it("a process without ffmpeg's libx264 never claims the job", async () => {
+      const before = process.env.FFMPEG_PATH;
+      process.env.FFMPEG_PATH = "/nonexistent/ffmpeg";
+      resetJamTranscodeAvailabilityForTests();
+      try {
+        expect(await runnableSpeechJobKinds()).not.toContain("jam_video_transcode");
+      } finally {
+        if (before === undefined) delete process.env.FFMPEG_PATH;
+        else process.env.FFMPEG_PATH = before;
+        resetJamTranscodeAvailabilityForTests();
+      }
+    });
+
+    it("the backfill rests after a pass that found nothing, since a new video queues its own job", async () => {
+      expect(await enqueueMissingJamVideoTranscodes()).toBe(0); // no tracks: the backlog is over
+      const song = await songId(bob);
+      const track = await videoTrack(bob, song);
+      await getPool().query(`DELETE FROM speech_jobs`); // as if it were recorded before
+      expect(await enqueueMissingJamVideoTranscodes()).toBe(0); // resting: not even looked at
+      resetJamVideoJobMetricsForTests(); // (the rest is cleared with the counters, for tests)
+      expect(await enqueueMissingJamVideoTranscodes()).toBe(1);
+      expect((await jobsOf()).map((row) => row.track_id)).toEqual([track.id]);
+      // A full queue is not "nothing to do": it does not rest.
+      expect(await enqueueMissingJamVideoTranscodes(10, 1)).toBe(0);
+      const second = await videoTrack(bob, song);
+      await getPool().query(`DELETE FROM speech_jobs WHERE track_id = $1`, [second.id]);
+      await runOne();
+      expect(await enqueueMissingJamVideoTranscodes(10, 1)).toBe(1);
+    });
+
+    it("the backfill queues the videos recorded before the copy existed, newest first, a few at a time", async () => {
+      const song = await songId(bob);
+      const made: JamTrack[] = [];
+      for (let i = 0; i < 4; i++) {
+        made.push(await videoTrack(bob, song));
+      }
+      // Recorded "before": no job rows, and the creation times spread out.
+      await getPool().query(`DELETE FROM speech_jobs`);
+      for (const [i, one] of made.entries()) {
+        await getPool().query(`UPDATE jam_tracks SET created_at = NOW() - ($2 || ' hours')::interval WHERE id = $1`, [
+          one.id,
+          String(10 - i),
+        ]);
+      }
+      // A cap of two: the newest two, and nothing more while they wait.
+      expect(await enqueueMissingJamVideoTranscodes(10, 2)).toBe(2);
+      expect((await jobsOf()).map((row) => row.track_id).sort()).toEqual([made[3]!.id, made[2]!.id].sort());
+      expect(await enqueueMissingJamVideoTranscodes(10, 2)).toBe(0);
+      // They finish, and the next two follow; one that has a copy is left alone.
+      await runOne();
+      await runOne();
+      expect(await enqueueMissingJamVideoTranscodes(10, 2)).toBe(2);
+      expect(await jobsOf()).toHaveLength(4);
+      expect(await enqueueMissingJamVideoTranscodes(10, 2)).toBe(0);
+      // Idempotent against the real flow too: the unique index.
+      expect(await enqueueJamVideoTranscode(getPool(), made[0]!.id)).toBe(false);
+    });
   });
 });

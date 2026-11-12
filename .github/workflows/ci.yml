@@ -304,6 +304,13 @@ jobs:
       - name: Build server
         run: pnpm --filter @pqp/server build
 
+      # A real ffmpeg (with libx264, AAC, libvpx and libopus: Ubuntu's has all
+      # four) for the tests that convert media. The Jam camera video's MP4
+      # copy is pinned by finding a flash and a click again in the output
+      # (`speech/video-transcode.test.ts`); without ffmpeg those tests skip.
+      - name: Install ffmpeg
+        run: command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+
       - name: Test server (shard ${{ matrix.shard }}/3)
         run: pnpm --filter @pqp/server test --shard=${{ matrix.shard }}/3
         env:

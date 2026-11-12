@@ -52,7 +52,7 @@ Lower-level pieces are exported too (`JamPlayer`, `JamInput`,
 | Server field | Engine | Meaning |
 |---|---|---|
 | audio object | `upload.audio` | FLAC, 16-bit, mono, at the recording context's rate (48 kHz in practice) |
-| video object | `upload.video` | WebM (VP9/VP8 + Opus) or MP4 on Safari; its own audio is never played |
+| video object | `upload.video` | WebM (VP9/VP8 + Opus) or MP4 on Safari; its own audio is never played. The server adds an MP4 copy for iOS (see "Camera video formats and the MP4 copy") |
 | `offset_ms` | `offsetMs` | song time of the buffer's FIRST sample. May be negative. Always a whole number of ms (see below) |
 | `trim_start_ms` | `trimStartMs` | ms hidden at the buffer's head, measured from the buffer's start |
 | `trim_end_ms` | `trimEndMs` | ms hidden at the buffer's TAIL, measured back from the buffer's end (0 = untrimmed) |
@@ -203,6 +203,64 @@ or more of wasm for what is, here, the easy 90 % of the format. It is
 verified bit-exact against ffmpeg's decoder in the unit tests (skipped where
 ffmpeg is missing) and against all three browsers above.
 
+## Camera video formats and the MP4 copy
+
+Chrome records the camera as WebM (VP9/VP8 + Opus), Safari as MP4 (H.264 +
+AAC). iOS and Safari cannot play WebM, so every camera video recorded in
+Chrome was blank on an iPhone. Two parts, both measured.
+
+**Why Chrome still records WebM.** The engine places the video by finding the
+file's DECODED audio inside the take (`alignVideoAudio`) and calling that the
+video's time zero. That is right only when the file's decoded audio and its
+picture agree on time zero. `e2e/jam/av-skew.spec.ts` records one scene (a
+canvas that flashes, a click, both at the same AudioContext instant) as WebM
+and as MP4 and reads the files back with ffmpeg:
+
+| Playwright's Chromium 151, macOS, 2026-11-12 | audio onset minus flash |
+|---|---|
+| WebM (VP8 + Opus), 6 takes in two runs | about -14 and -9 ms (the rig's own half frame) |
+| MP4 (H.264 + AAC), 6 takes in two runs | about +27 and +19 ms |
+
+So Chrome's MP4 has its sound 28 to 41 ms later against its picture than the
+WebM has: AAC's encoder priming (44 ms with this encoder) is in the file's
+audio, and the fragmented MP4 has no edit list to say so. Aligned by content,
+that file puts the picture about a frame early, and our own zero check cannot
+see it (it measures the file against itself: -0.2 ms for WebM, -0.9 ms for
+MP4). The priming belongs to the platform's AAC encoder (AudioToolbox, Media
+Foundation, ffmpeg), so it cannot be a constant to subtract. Hence
+`VIDEO_MIME_PREFERENCE` puts WebM first and MP4 is for browsers that record
+nothing else (Safari; whether its MP4 carries the priming in an edit list, as
+Apple's muxers do, is not measured; the rig is Chromium's today). A forced
+MP4 take is still pinned by `jam.spec.ts` (the file is an MP4, the content
+method lands, quality 1.0), and `startVideoRecording` drops a recorder that
+fails as it starts for the next type. Not measured: Windows and Linux encoders,
+and Safari itself.
+
+**The copy for iOS** is made by the worker from the WebM, where the time zero
+can be carried over exactly: `server/src/speech/video-transcode.ts`; the job and
+its rules are in `docs/JAM.md` ("The MP4 copy of a camera video"). The test
+generates a WebM with a flash and a click (once with the audio starting 120 ms
+after the picture), converts it and finds both again: the same frame, the same
+sample to within the lossy encoder's smear, the same duration. An 80 ms audio
+shift makes it fail.
+
+**The content method's flake.** `jam.spec.ts` failed once on main CI on
+2026-11-11 with `method: "timestamp"`, `quality: 0`, the timestamp guess 107 ms
+late. The excerpt used to be the earliest loudest window that fitted the take
+BY THE GUESS. A fake microphone with a bar of sound once a second makes many
+windows equally loud, so the earliest sat a few ms into the take; with the
+guess late, the true position was BEFORE the take's first sample, the needle
+hung off the haystack, the correlation collapsed to about zero and the
+alignment fell back to the very guess that was wrong. Whether it happened
+depended on where the camera's start fell against the take's start and on
+which windows the codec's noise made loudest, hence a pass on re-run. It is a
+unit test now (`misc.test.ts`: the bar at 40 phases, all failing on the old
+code, none on the new). The excerpt must fit the take with
+the search window to spare, and the alignment carries a `reason` (`short`,
+`no-window`, `no-match`, `weak`, `decode-failed`) so a fallback explains itself
+in the e2e output. It did not reproduce under CPU load on a laptop (6 of 6
+passed), which fits: it is phase, not load.
+
 ## Per-browser caveats
 
 **Chrome** (and Electron, which is Chrome; its permission handler already
@@ -216,9 +274,11 @@ grants `media`)
   `track.stats.latency` is in milliseconds (the spec types it
   DOMHighResTimeStamp) and said 0.64 ms for the fake device.
 - MediaRecorder's MP4 output came back EMPTY in about half of a run of short
-  takes in Playwright's Chromium, while WebM never did. The camera is
-  therefore recorded as WebM on Chrome. Re-test MP4 on real Chrome before
-  switching back.
+  takes on 2026-11-09. Cause found on 2026-11-12: Chromium's MP4 recorder
+  fails at start (`Internal Error`) when it is given `audioBitsPerSecond`
+  with a 44.1 kHz stereo microphone; without that option it records. Fixed
+  (`startOne` in `video-take.ts`). The camera is still recorded as WebM on
+  Chrome, for a different reason: see "Camera video formats and the MP4 copy".
 - `voiceIsolation: false` is requested; older builds ignore it.
 - The int16 to float mapping above.
 
@@ -246,9 +306,10 @@ grants `media`)
 
 - FLAC plays on iOS 11+ (AVFoundation) and on Android (MediaExtractor,
   ExoPlayer).
-- A WebM camera file does NOT play in AVFoundation; until Chrome records MP4
-  reliably, iOS needs a server-side transcode of WebM videos (or plays the
-  audio without the picture).
+- A WebM camera file does NOT play in AVFoundation, so the worker makes an
+  H.264 + AAC MP4 copy and the track read offers it first (`videoUrl`, and
+  `videoSources`); see "Camera video formats and the MP4 copy". No phone client
+  change was needed.
 - Sample-accurate multi-stem playback is native work of its own
   (`AVAudioPlayerNode.scheduleBuffer(at:)` with one shared `AVAudioTime`;
   Oboe or a single ExoPlayer with a mixing processor on Android). The rule to

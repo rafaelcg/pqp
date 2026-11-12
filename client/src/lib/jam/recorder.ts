@@ -215,6 +215,7 @@ export async function startRecording(player: JamPlayer, input: JamInput, options
           alignment = alignVideoAudio(samples, fileAudio.getChannelData(0), sr, expectedZero);
         } catch {
           /* no decodable audio in the file: keep the timestamp estimate */
+          alignment = { ...alignment, reason: "decode-failed" };
         }
         samples = shiftStart(samples, alignment.zeroFrame);
         offsetMs += (alignment.zeroFrame / sr) * 1000;
