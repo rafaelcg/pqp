@@ -1,16 +1,20 @@
 import type { PublicJamSong } from "@pqp/shared";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { jt } from "@/lib/i18n/jam-site";
 import { artCells } from "./art-cells";
 import { mosaicLayout } from "./mosaic";
-import { MosaicGrid, NeedStill, StillTile } from "./tiles";
+import { MosaicGrid, MoreStill, NeedStill, StillTile } from "./tiles";
 import { cn, instrumentName } from "./util";
 
 /**
- * A song's small picture: the cover when it has one, then a square per part and
- * a dashed one for what it still needs, laid out by the same mosaic the song
- * page uses. Nothing here touches a part's media: covers and the song's own
- * peaks only, so a list of forty songs costs no audio and no video.
+ * A song's small picture (a card, the featured hero): a square per part, in the
+ * instrument's colour with a strip of the song's own peaks, a dashed one for
+ * what it still needs and one "+N" for what did not fit, laid out by the same
+ * mosaic the song page uses. Nothing here touches a part's media: the song's
+ * own peaks only, so a list of forty songs costs no audio and no video.
+ *
+ * The cover is NOT part of it (`SongCover`, a small thumbnail beside the
+ * title): a painting drawn as one of the squares read as a part somebody played.
  */
 
 const BARS = 9;
@@ -41,33 +45,32 @@ export function SongArt({
   variant,
   className,
 }: {
-  song: Pick<PublicJamSong, "title" | "coverUrl" | "parts" | "needs" | "previewPeaks">;
+  song: Pick<PublicJamSong, "title" | "parts" | "needs" | "previewPeaks">;
   variant: "card" | "hero";
   className?: string;
 }) {
-  const { cells, extra } = useMemo(() => artCells(song, variant === "hero" ? 6 : 4), [song, variant]);
+  const cells = useMemo(() => artCells(song, variant === "hero" ? 6 : 4), [song, variant]);
   const layout = useMemo(
     () => mosaicLayout(Math.max(1, cells.length), variant === "hero" ? 1.6 : 0.8),
     [cells.length, variant],
   );
   if (cells.length === 0) {
-    return <div className={cn("aspect-square w-full bg-media-scrim", className)} />;
+    return <div className={cn("aspect-square w-full bg-surface-2", className)} />;
   }
   return (
     <div className={cn("relative", className)}>
       <MosaicGrid layout={layout} aspect={variant === "card" ? 1 : undefined}>
         {cells.map((cell, slot) => {
-          if (cell.kind === "cover") {
+          if (cell.kind === "more") {
             return (
-              <img
-                key="cover"
-                src={cell.url}
-                alt={jt("art.cover", { title: song.title })}
-                loading="lazy"
-                decoding="async"
-                draggable={false}
-                className="absolute inset-0 h-full w-full object-cover"
-              />
+              <div
+                key="more"
+                className="absolute inset-0"
+                role="img"
+                aria-label={jt("art.more", { count: cell.count })}
+              >
+                <MoreStill count={cell.count} instruments={cell.instruments} />
+              </div>
             );
           }
           if (cell.kind === "need") {
@@ -90,14 +93,40 @@ export function SongArt({
           );
         })}
       </MosaicGrid>
-      {extra > 0 && (
-        <span className="absolute right-2 top-2 rounded-full bg-media-scrim/85 px-2.5 py-1 text-xs font-extrabold text-on-media">
-          +{extra}
-        </span>
-      )}
       <span className="sr-only">
         {song.parts.map((part) => `${part.person.name} ${instrumentName(part.instrument)}`).join(", ")}
       </span>
     </div>
+  );
+}
+
+/**
+ * The song's cover as a small thumbnail (a card's title row, the hero's
+ * heading): the same small, rounded picture the song page shows at the top of
+ * the page, never a tile of the mosaic. Renders nothing without one, or when
+ * it fails to load.
+ */
+export function SongCover({
+  title,
+  coverUrl,
+  className,
+}: {
+  title: string;
+  coverUrl: string | null;
+  className?: string;
+}) {
+  const [broken, setBroken] = useState(false);
+  if (!coverUrl || broken) return null;
+  return (
+    <img
+      src={coverUrl}
+      alt={jt("art.cover", { title })}
+      loading="lazy"
+      decoding="async"
+      draggable={false}
+      onError={() => setBroken(true)}
+      data-jam-cover=""
+      className={cn("shrink-0 rounded-[var(--radius-card)] bg-surface-2 object-cover", className)}
+    />
   );
 }

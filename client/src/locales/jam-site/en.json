@@ -51,6 +51,8 @@
   "card.likes_one": "{count} like",
   "card.likes_other": "{count} likes",
   "art.cover": "Cover of {title}",
+  "art.more_one": "{count} more part",
+  "art.more_other": "{count} more parts",
   "instrument.guitar": "guitar",
   "instrument.bass": "bass",
   "instrument.drums": "drums",

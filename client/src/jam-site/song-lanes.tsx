@@ -110,7 +110,7 @@ export function SongLanes({
                 <Badge instrument={instrument} className="h-9 w-9" />
                 <div className="min-w-0 leading-tight">
                   <p className="truncate font-bold">{who}</p>
-                  <p className="truncate text-[13px] text-text-tertiary">
+                  <p className="truncate text-[13px] text-text-secondary">
                     {partLabel(track)}
                     {track.person.handle ? ` · @${track.person.handle}` : ""}
                   </p>
@@ -144,7 +144,7 @@ export function SongLanes({
             </span>
             <div className="leading-tight">
               <p className="font-bold capitalize">{instrumentName(instrument)}</p>
-              <p className="text-[13px] text-text-tertiary">{jt("lanes.missing")}</p>
+              <p className="text-[13px] text-text-secondary">{jt("lanes.missing")}</p>
             </div>
           </div>
         ))}

@@ -51,6 +51,8 @@
   "card.likes_one": "{count} curtida",
   "card.likes_other": "{count} curtidas",
   "art.cover": "Capa de {title}",
+  "art.more_one": "mais {count} parte",
+  "art.more_other": "mais {count} partes",
   "instrument.guitar": "guitarra",
   "instrument.bass": "baixo",
   "instrument.drums": "bateria",

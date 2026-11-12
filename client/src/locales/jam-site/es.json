@@ -51,6 +51,8 @@
   "card.likes_one": "{count} me gusta",
   "card.likes_other": "{count} me gusta",
   "art.cover": "Portada de {title}",
+  "art.more_one": "{count} parte más",
+  "art.more_other": "{count} partes más",
   "instrument.guitar": "guitarra",
   "instrument.bass": "bajo",
   "instrument.drums": "batería",

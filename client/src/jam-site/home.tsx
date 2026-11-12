@@ -3,7 +3,7 @@ import { HeartIcon as Heart, MicIcon as Mic, PlayIcon as Play } from "./icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { jt } from "@/lib/i18n/jam-site";
 import { detectLocale } from "@/lib/locale";
-import { SongArt } from "./art";
+import { SongArt, SongCover } from "./art";
 import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
 import { INSTRUMENT_LOOK, INSTRUMENTS, asInstrument, inkMix, type Instrument } from "./instruments";
@@ -54,14 +54,14 @@ function Meta({ song, className, stacked = false }: { song: PublicJamSong; class
   if (stacked) {
     // A card: the origin on its own line so a long server name never eats the numbers.
     return (
-      <div className={cn("min-w-0 text-[13px] leading-5 text-text-tertiary", className)}>
+      <div className={cn("min-w-0 text-[13px] leading-5 text-text-secondary", className)}>
         <p className="truncate">{origin}</p>
         {stats}
       </div>
     );
   }
   return (
-    <p className={cn("flex min-w-0 items-center gap-x-1.5 text-[13px] text-text-tertiary", className)}>
+    <p className={cn("flex min-w-0 items-center gap-x-1.5 text-[13px] text-text-secondary", className)}>
       <span className="min-w-0 truncate">{origin}</span>
       <span aria-hidden="true">·</span>
       {stats}
@@ -102,13 +102,14 @@ function PlayButton({ song, size, label }: { song: PublicJamSong; size: "card" |
 function Card({ song }: { song: PublicJamSong }) {
   const path = useSongPath()(song);
   return (
-    <article data-jam-card={song.id} className="group relative flex min-w-0 flex-col [contain-intrinsic-size:auto_22rem] [content-visibility:auto]">
+    <article data-jam-card={song.id} className="group relative flex min-w-0 flex-col">
       <div className="overflow-hidden rounded-[var(--radius-panel)]">
         <SongArt song={song} variant="card" />
       </div>
-      <div className="mt-3 flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <h3 className="line-clamp-2 text-base font-bold leading-snug">
+      <div className="mt-3 min-w-0">
+        <div className="flex items-start gap-2.5">
+          <SongCover title={song.title} coverUrl={song.coverUrl} className="mt-0.5 h-9 w-9" />
+          <h3 className="line-clamp-2 min-w-0 flex-1 text-base font-bold leading-snug">
             <Link
               href={path}
               className="rounded-sm outline-none after:absolute after:inset-0 after:z-0 after:rounded-[var(--radius-panel)] focus-visible:after:ring-2 focus-visible:after:ring-focus-ring"
@@ -116,9 +117,11 @@ function Card({ song }: { song: PublicJamSong }) {
               {song.title}
             </Link>
           </h3>
-          <Meta song={song} className="mt-0.5" stacked />
         </div>
-        <PlayButton song={song} size="card" label={jt("home.play", { title: song.title })} />
+        <div className="mt-1 flex items-end gap-2">
+          <Meta song={song} className="flex-1" stacked />
+          <PlayButton song={song} size="card" label={jt("home.play", { title: song.title })} />
+        </div>
       </div>
     </article>
   );
@@ -157,7 +160,10 @@ function Hero({ song, status }: { song: PublicJamSong | null; status: "loading" 
         <SongArt song={song} variant="hero" />
       </div>
       <div className="min-w-0">
-        <p className="text-sm font-semibold text-text-tertiary">{jt("home.featured")}</p>
+        <div className="flex items-center gap-3">
+          <SongCover title={song.title} coverUrl={song.coverUrl} className="h-12 w-12" />
+          <p className="text-sm font-semibold text-text-secondary">{jt("home.featured")}</p>
+        </div>
         <h2 className="mt-2 break-words font-display text-[clamp(2.5rem,7vw,4.25rem)] font-extrabold leading-[0.98] tracking-[-0.025em]">
           {song.title}
         </h2>
@@ -213,7 +219,7 @@ function Tabs({
 }) {
   return (
     <div>
-      <div role="group" aria-label={jt("tabs.label")} className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1 [scrollbar-width:none]">
+      <div role="group" aria-label={jt("tabs.label")} className="-mx-1 flex gap-0.5 overflow-x-auto px-1 pb-1 [mask-image:linear-gradient(to_right,var(--color-text)_calc(100%-1.75rem),transparent)] [scrollbar-width:none] sm:gap-1 sm:[mask-image:none]">
         {TABS.map((id) => (
           <button
             key={id}
@@ -222,9 +228,9 @@ function Tabs({
             data-jam-tab={id}
             onClick={() => onTab(id)}
             className={cn(
-              "relative h-11 shrink-0 rounded-[var(--radius-control)] px-3 text-base font-extrabold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none",
-              tab === id ? "text-text" : "text-text-tertiary hover:text-text",
-              "after:absolute after:inset-x-3 after:bottom-0 after:h-[3px] after:rounded-full",
+              "relative h-11 shrink-0 rounded-[var(--radius-control)] px-2.5 text-[15px] font-extrabold outline-none sm:px-3 sm:text-base transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none",
+              tab === id ? "text-text" : "text-text-secondary hover:text-text",
+              "after:absolute after:inset-x-2.5 after:bottom-0 sm:after:inset-x-3 after:h-[3px] after:rounded-full",
               tab === id ? "after:bg-accent" : "after:bg-transparent",
             )}
           >

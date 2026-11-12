@@ -5328,6 +5328,7 @@
   "qaUi.group.state": "Estados",
   "qaUi.group.media": "Sobre el vídeo",
   "qaUi.group.instruments": "Instrumentos",
+  "qaUi.group.jam-tiles": "Cuadros del Jam",
   "qaUi.group.soft": "Superficies suaves",
   "qaUi.soft.sample": "Texto sobre este relleno",
   "qaUi.elevation.note": "Cada nivel es una superficie, un borde y una sombra juntos. En los temas oscuros, el escalón de superficie y la línea fina hacen casi todo el trabajo.",

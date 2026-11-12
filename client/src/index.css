@@ -199,12 +199,38 @@
    * to a lime "Gravar" read as one more button.
    */
   --color-inst-bass: oklch(0.64 0.15 255);
-  --color-inst-other: oklch(0.71 0.04 295);
+  --color-inst-other: oklch(0.71 0.012 95);
   --color-inst-drums: oklch(0.77 0.15 55);
   --color-inst-vocals: oklch(0.82 0.12 345);
   --color-inst-keys: oklch(0.87 0.11 195);
   --color-inst-guitar: oklch(0.92 0.15 90);
   --color-on-inst: oklch(0.16 0.012 250);
+
+  /*
+   * JAM TILES. The ground and the ink of one part of a song's mosaic, the same
+   * in the public site and in the app's song view (`lib/jam-tile-look.ts`).
+   * OPAQUE palette shapes: a tint of the instrument's hue made once, never a
+   * translucent wash over whatever is behind it (several washes of different
+   * hues over one dark ground turn to mud, which is what the first version
+   * did). A ground is deep in the dark theme and a pastel in the light one; the
+   * ink (the glyph, the level strip, a dashed outline) is the opposite end, so
+   * both clear 3:1 on their own ground and the caption's text colour clears
+   * 4.5:1. `other` is a neutral on purpose: five hues and one that says "none
+   * of those", so no two parts of a song are the same colour unless they are
+   * the same instrument.
+   */
+  --color-tile-guitar: oklch(0.32 0.06 90);
+  --color-tile-guitar-ink: oklch(0.88 0.14 92);
+  --color-tile-bass: oklch(0.3 0.08 255);
+  --color-tile-bass-ink: oklch(0.8 0.11 255);
+  --color-tile-drums: oklch(0.32 0.08 50);
+  --color-tile-drums-ink: oklch(0.82 0.13 55);
+  --color-tile-vocals: oklch(0.31 0.08 350);
+  --color-tile-vocals-ink: oklch(0.84 0.11 350);
+  --color-tile-keys: oklch(0.3 0.06 195);
+  --color-tile-keys-ink: oklch(0.85 0.1 195);
+  --color-tile-other: oklch(0.3 0.008 95);
+  --color-tile-other-ink: oklch(0.8 0.012 95);
 
   /* The `* Fallback` names are metric-adjusted local fonts declared in
      fonts.css, so the swap to the real face barely moves the text. */
@@ -583,6 +609,20 @@
   --color-text: oklch(0.25 0.015 250);
   --color-text-secondary: oklch(0.38 0.018 250);
   --color-text-tertiary: oklch(0.45 0.02 250);
+
+  /* Jam tiles on the light page: a pastel ground and a deep ink (see the dark block). */
+  --color-tile-guitar: oklch(0.955 0.075 95);
+  --color-tile-guitar-ink: oklch(0.42 0.09 80);
+  --color-tile-bass: oklch(0.95 0.04 255);
+  --color-tile-bass-ink: oklch(0.42 0.14 258);
+  --color-tile-drums: oklch(0.95 0.045 55);
+  --color-tile-drums-ink: oklch(0.46 0.12 45);
+  --color-tile-vocals: oklch(0.955 0.04 350);
+  --color-tile-vocals-ink: oklch(0.45 0.14 352);
+  --color-tile-keys: oklch(0.95 0.04 195);
+  --color-tile-keys-ink: oklch(0.42 0.08 200);
+  --color-tile-other: oklch(0.945 0.008 95);
+  --color-tile-other-ink: oklch(0.42 0.012 95);
 
   /* The dark chartreuse is near-white in luminance and fails on a white page. */
   --color-accent: oklch(0.52 0.16 135);

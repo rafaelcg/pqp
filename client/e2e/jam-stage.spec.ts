@@ -340,7 +340,7 @@ test("a song has a stage that is a mosaic of the band: a tile per recording in t
   expect((await box(tile)).width).toBeGreaterThan(150);
   await expect(tile.locator("[data-jam-stage-chip]")).toContainText("Dev User");
   // the host recorded the drums: their own chip says "you"
-  await expect(drumsTile.locator("[data-jam-stage-person]")).toHaveText("you");
+  await expect(drumsTile.locator("[data-jam-caption-person]")).toHaveText("you");
   await expect(stage.locator("video[data-jam-stage-video]").first()).toHaveJSProperty("muted", true);
 
   // the header is the compact one for every song with a take; it holds the play button and the cover is a small mark

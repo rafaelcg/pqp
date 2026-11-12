@@ -46,6 +46,16 @@ icon, the manifest, robots). `jamHostRedirect` in `src/lib/jam-meta.ts`, tested 
 `src/lib/jam-host-redirect.test.ts`. `/jam` and `/jam/m/<id>` on every other host
 are unchanged.
 
+**Pictures the API points at.** A person's `avatarUrl` is `/api/avatars/<id>` for
+an uploaded photo: root-relative, because the server does not know its own public
+origin. `jam.pqp.gg` and `api.pqp.gg` are two origins and a production build has no
+dev proxy, so the bare path resolved against the site, 404ed, and every face in the
+mosaic was an initial. `api.ts` now resolves every root-relative address of a
+payload (the people on a song, its parts and tracks, the origin's icon, the cover)
+against `VITE_API_URL` (`resolveApiUrl`, tested in `api.test.ts`); an absolute URL
+(a signed bucket address, a Clerk picture) passes through, and with no API base
+(the API serves the page) nothing changes.
+
 **Fonts.** The entry imports `fonts.css` (Gabarito for headlines, Instrument Sans,
 Dela Gothic for the wordmark), so the faces are there; what the page lacked was
 the early request. A browser asks for a face only once a rendered word needs it,
@@ -74,15 +84,24 @@ the generic `noindex` card.
   (and a row of instrument chips that become `needs=`), **Prontas** is `new`
   keeping the songs that ask for nobody. A filtered tab reads on until it has a
   dozen to show. Cursor paging by an observer at the end of the list, with a
-  "Ver mais" button that does the same. A card's art is a small mosaic: the cover
-  (when it passed the scanner), a square per part in the instrument's colour with
-  a strip of the song's own peaks, and one dashed square per instrument still
-  asked for. Nothing on the home downloads audio or video (pinned by
+  "Ver mais" button that does the same. A card's art is a small mosaic of the
+  band: a square per part on the instrument's own ground with a strip of the
+  song's own peaks, one dashed square per instrument still asked for, and one
+  "+N" square (the number and the instruments behind it) for what did not fit.
+  **The cover is not one of the squares**: it is a small thumbnail beside the
+  title (the hero's "Em destaque" line, a card's title row), the way the song
+  page has it, because a painting drawn as a tile read as a part somebody
+  played. Nothing on the home downloads audio or video (pinned by
   `e2e/jam-site/jam-site.spec.ts`).
 - **Song.** The mosaic is the page. One tile per public part: its video when the
   payload has one (`pickJamVideoUrl`, `canPlayType`, the same function the app
-  uses), otherwise the instrument's colour with a level strip that scrolls with
-  the song clock from the track's `peaks`. A dashed tile when `needs` is not
+  uses; every video shows its first frame before the first press, a song of
+  more than four parts loading only that frame per part), otherwise the person
+  (their picture, or an initial) large on the instrument's own ground with a
+  level strip that scrolls with the song clock from the track's `peaks`. The look
+  of a tile is the app's too (`lib/jam-tile-look.ts`, `lib/jam-tile-parts.tsx`:
+  opaque `--color-tile-*` tokens, pastel on the light theme). The dashed tile
+  takes the smallest cell, never a larger one than a recorded part. A dashed tile when `needs` is not
   empty. Layouts for 1 to 9+ tiles, wide and upright (`src/jam-site/mosaic.ts`,
   pure and tested). Tap a tile to hear only that part, large, the band small
   beside it; Escape or the pill's x goes back. One play button, time, a seek

@@ -36,7 +36,7 @@ import { cn } from "@/lib/utils";
 import { ContributorStack, Equalizer } from "./jam-art";
 import { useBarCount } from "./jam-bars";
 import { JamArtwork } from "./jam-artwork";
-import { JamCoverPhoto, useJamCover, type JamCoverState } from "./jam-cover";
+import { useJamCover, type JamCoverState } from "./jam-cover";
 import { JamEditSheet } from "./jam-edit-sheet";
 import { JamSharePicker } from "./jam-share-picker";
 import { useJamPublicPanel } from "./jam-public-panel";
@@ -113,7 +113,6 @@ export function JamSongPanel({
   const [editing, setEditing] = useState(false);
   const [sharing, setSharing] = useState(false);
   const cover = useJamCover(song.coverUrl);
-  const covered = cover.src !== null && cover.status !== "failed";
   const serial = useRef(oneAtATime()).current;
   const storeEpoch = useJamStoreEpoch();
   // What an answer writes into the store carries the identity epoch of the render
@@ -245,6 +244,7 @@ export function JamSongPanel({
       onSeek={playback.seek}
       title={song.title}
       scrubber={false}
+      className="sm:flex-col sm:gap-1"
     />
   );
 
@@ -322,35 +322,34 @@ export function JamSongPanel({
   // deletes the song, and the confirm says so.
   const deletesSong = pendingDelete !== null && !declining && tracks.length === 1 && canManage;
 
+  // The song's own actions are two quiet round icon buttons beside the menu, the same size and weight as it:
+  // the header is one calm row, and the words ("Send to chat", "Edit song") are the tooltip and the menu's.
+  const iconButton =
+    "grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-secondary outline-none pointer-coarse:h-11 pointer-coarse:w-11 transition-[background-color,color] duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96] motion-reduce:transition-none";
   const editPill = canEdit ? (
     <button
       type="button"
       data-jam-edit-open=""
       onClick={() => setEditing(true)}
       aria-label={t("jam.edit.open")}
-      className={cn(
-        "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-3.5 text-xs font-bold text-text outline-none ring-1 ring-border sm:h-8 transition-[background-color,transform] duration-[var(--duration-fast)] hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96]",
-        stageOn && "max-sm:w-9 max-sm:justify-center max-sm:px-0",
-      )}
+      title={t("jam.edit.open")}
+      className={iconButton}
     >
-      <Pencil className="h-3.5 w-3.5" aria-hidden />
-      <span className={cn(stageOn && "max-sm:sr-only")}>{t("jam.edit.open")}</span>
+      <Pencil className="h-[18px] w-[18px]" aria-hidden />
     </button>
   ) : null;
 
+  const shareLabel = pub.copyLink ? t("jam.public.menu.copyLink") : t("jam.share.title");
   const sharePill = canShare ? (
     <button
       type="button"
       data-jam-share-open=""
       onClick={shareAction}
-      aria-label={pub.copyLink ? t("jam.public.menu.copyLink") : t("jam.share.title")}
-      className={cn(
-        "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-3.5 text-xs font-bold text-text outline-none ring-1 ring-border sm:h-8 transition-[background-color,transform] duration-[var(--duration-fast)] hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96]",
-        stageOn && "max-sm:w-9 max-sm:justify-center max-sm:px-0",
-      )}
+      aria-label={shareLabel}
+      title={shareLabel}
+      className={iconButton}
     >
-      {pub.copyLink ? <Link2 className="h-3.5 w-3.5" aria-hidden /> : <Send className="h-3.5 w-3.5" aria-hidden />}
-      <span className={cn(stageOn && "max-sm:sr-only")}>{pub.copyLink ? t("jam.public.menu.copyLink") : t("jam.share.title")}</span>
+      {pub.copyLink ? <Link2 className="h-[18px] w-[18px]" aria-hidden /> : <Send className="h-[18px] w-[18px]" aria-hidden />}
     </button>
   ) : null;
 
@@ -359,18 +358,10 @@ export function JamSongPanel({
       <header
         data-jam-header={stageOn ? "compact" : "full"}
         className={cn(
-          "relative isolate flex gap-2 overflow-hidden border-b border-border px-2 py-3 sm:gap-3 sm:px-4 [@media(max-height:32rem)]:py-1.5",
-          stageOn ? "flex-wrap items-start sm:items-center" : "items-start",
+          "relative flex gap-2 border-b border-border px-2 py-3 sm:px-4 [@media(max-height:32rem)]:py-1.5",
+          stageOn ? "flex-wrap items-center sm:flex-nowrap" : "items-start",
         )}
       >
-        {covered && (
-          // The cover's own colours, blurred far past reading, behind the words.
-          <span aria-hidden="true" data-jam-header-wash="" className="jam-header-wash pointer-events-none absolute inset-0 -z-10">
-            <JamCoverPhoto cover={cover} eager className="scale-125 blur-2xl saturate-150 data-[ready=true]:opacity-45" />
-            {/* the words sit on this: nearly the panel's own surface, so any cover leaves them readable */}
-            <span className="absolute inset-0 bg-gradient-to-b from-surface-1/80 via-surface-1/90 to-surface-1" />
-          </span>
-        )}
         <button
           type="button"
           onClick={onClose}
@@ -380,38 +371,35 @@ export function JamSongPanel({
           <ArrowLeft className="h-5 w-5" aria-hidden />
         </button>
         <SongCover song={song} cover={cover} tracks={detail?.tracks} playing={playing} small={stageOn} onEdit={canEdit ? () => setEditing(true) : undefined} />
-        <div className={cn("flex min-w-0 flex-1 flex-col gap-1.5", stageOn ? "basis-40" : "pt-0.5")}>
+        <div className={cn("flex min-w-0 flex-1 flex-col gap-1", stageOn ? "basis-0" : "pt-0.5")}>
           <h2
             ref={titleRef}
             tabIndex={-1}
             className={cn(
-              "font-display font-extrabold leading-[1.05] tracking-[-0.01em] text-text outline-none [overflow-wrap:anywhere] [text-wrap:balance] [@media(max-height:32rem)]:text-xl",
+              "font-display font-extrabold leading-[1.05] tracking-[-0.01em] text-text outline-none [overflow-wrap:anywhere] [text-wrap:balance]",
               stageOn ? "text-xl sm:text-2xl" : "text-2xl sm:text-4xl",
+              "[@media(max-height:32rem)]:text-xl",
             )}
           >
             {song.title}
           </h2>
+          {/* with a stage the band is the lanes below, so the header does not repeat it: the key line stays whole */}
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-semibold text-text-secondary">
-            <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-border-strong" />
-            <span className={cn("min-w-0", stageOn ? "truncate" : "basis-full sm:basis-auto")}>
+            {!stageOn && <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-border-strong" />}
+            <span className={cn("min-w-0", stageOn ? "sm:whitespace-nowrap" : "basis-full sm:basis-auto")}>
               {song.artist ?? t("jam.original")}
               <span className="max-sm:hidden"> · {viewer?.isAuthor ? t("jam.song.startedByYou") : t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}</span>
             </span>
-            {/* with a stage the pill is a pencil beside the people on a phone, so the video starts higher */}
-            {stageOn && sharePill}
-            {stageOn && editPill}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {!stageOn && sharePill}
-            {!stageOn && editPill}
-            {song.joinMode === "closed" && (
-              <span data-jam-closed-line="" className="flex items-center gap-1 text-xs text-text-secondary">
-                <Lock className="h-3 w-3 shrink-0" aria-hidden />
-                {t("jam.song.closedLine")}
-              </span>
-            )}
-          </div>
+          {song.joinMode === "closed" && (
+            <span data-jam-closed-line="" className="flex items-center gap-1 text-xs text-text-secondary">
+              <Lock className="h-3 w-3 shrink-0" aria-hidden />
+              {t("jam.song.closedLine")}
+            </span>
+          )}
         </div>
+        {sharePill}
+        {editPill}
         {stageOn && !isEmpty && (
           // The song's play button sits with its title, so the stage can have the room below.
           <div data-jam-header-transport="" className="max-sm:order-last max-sm:basis-full max-sm:pl-1">
@@ -420,12 +408,7 @@ export function JamSongPanel({
         )}
         {songMenu.length > 0 && (
           <Menu items={songMenu} align="end">
-            <button
-              type="button"
-              aria-label={t("jam.song.more")}
-              data-jam-song-menu=""
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-text-secondary outline-none hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
-            >
+            <button type="button" aria-label={t("jam.song.more")} data-jam-song-menu="" className={iconButton}>
               <MoreHorizontal className="h-5 w-5" aria-hidden />
             </button>
           </Menu>
@@ -434,7 +417,7 @@ export function JamSongPanel({
           type="button"
           onClick={onClose}
           aria-label={t("jam.song.close")}
-          className="hidden h-10 w-10 shrink-0 place-items-center rounded-full text-text-secondary outline-none hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring lg:grid"
+          className={cn(iconButton, "hidden lg:grid")}
         >
           <X className="h-5 w-5" aria-hidden />
         </button>
@@ -806,7 +789,7 @@ function SongCover({
       className={cn(
         "group relative isolate shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-surface-2 shadow-[var(--shadow-2)]",
         small
-          ? "h-12 w-12 sm:h-14 sm:w-14"
+          ? "h-12 w-12"
           : "h-[5.5rem] w-[5.5rem] sm:h-[7.5rem] sm:w-[7.5rem] [@media(max-height:32rem)]:h-16 [@media(max-height:32rem)]:w-16",
       )}
       style={{ viewTransitionName: `jam-cover-${song.id}` } as CSSProperties}

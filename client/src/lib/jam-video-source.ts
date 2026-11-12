@@ -62,3 +62,27 @@ export function pickJamVideoUrl(
   }
   return sources[0]!.url;
 }
+
+/**
+ * How a part's `<video>` is loaded BEFORE anybody presses play, so a song of
+ * nine parts shows nine pictures and not four pictures and five initials that
+ * turn into video on the first press (the mosaic used to rebuild itself on
+ * play).
+ *
+ * A song of a handful of parts buffers its first seconds (`auto`). Past that
+ * every video still loads its metadata and its first frame (`metadata` plus a
+ * `#t=0.1` fragment, which makes the browser decode that frame to paint it),
+ * which is a few hundred kilobytes a part, never the file. It is never `none`:
+ * a tile with nothing loaded has no frame to show. Once the song is playing,
+ * or its stems are decoded, every video is `auto`.
+ */
+export const JAM_VIDEO_BUFFERED_PARTS = 4;
+
+export function jamVideoPreload(parts: number, started: boolean): "auto" | "metadata" {
+  return started || parts <= JAM_VIDEO_BUFFERED_PARTS ? "auto" : "metadata";
+}
+
+/** The address to hand a still `<video>`: the same file, asking the browser to land on the first frame. Idempotent. */
+export function jamVideoStillSrc(url: string): string {
+  return url.includes("#") ? url : `${url}#t=0.1`;
+}

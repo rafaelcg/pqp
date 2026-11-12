@@ -1,3 +1,4 @@
+import { JAM_TILE_LOOK, type JamTileLook } from "@/lib/jam-tile-look";
 import { DrumIcon as Drum, GuitarIcon as Guitar, MicVocalIcon as MicVocal, MusicIcon as Music, Music2Icon as Music2, PianoIcon as Piano, type IconComponent } from "./icons";
 
 /**
@@ -27,26 +28,20 @@ export interface InstrumentLook {
   fill: string;
   /** The colour as ink on a plain surface. */
   ink: string;
-  /** The ground of a tile: the colour at a whisper over the media black. */
-  ground: string;
-  /** Bars and strokes, pulled toward the text colour so a pale yellow stays a line on a light page. */
-  bar: string;
+  /** Ground, ink, dashed outline and dot of a part's tile: the one table the app's song view draws from too. */
+  tile: JamTileLook;
   /** A dashed outline in the colour. */
   dashed: string;
   /** The CSS custom property that holds the hue, for `style`. */
   token: string;
 }
 
-const bar = (name: string) =>
-  `bg-[color-mix(in_oklab,var(--color-inst-${name})_80%,var(--color-text))] [:root[data-theme=light]_&]:bg-[color-mix(in_oklab,var(--color-inst-${name})_54%,var(--color-text))]`;
-
 export const INSTRUMENT_LOOK: Record<Instrument, InstrumentLook> = {
   guitar: {
     icon: Guitar,
     fill: "bg-inst-guitar text-on-inst",
     ink: "text-inst-guitar",
-    ground: "bg-[color-mix(in_oklab,var(--color-inst-guitar)_14%,var(--color-media-scrim))]",
-    bar: bar("guitar"),
+    tile: JAM_TILE_LOOK.guitar,
     dashed: "border-inst-guitar",
     token: "--color-inst-guitar",
   },
@@ -54,8 +49,7 @@ export const INSTRUMENT_LOOK: Record<Instrument, InstrumentLook> = {
     icon: Music2,
     fill: "bg-inst-bass text-on-inst",
     ink: "text-inst-bass",
-    ground: "bg-[color-mix(in_oklab,var(--color-inst-bass)_14%,var(--color-media-scrim))]",
-    bar: bar("bass"),
+    tile: JAM_TILE_LOOK.bass,
     dashed: "border-inst-bass",
     token: "--color-inst-bass",
   },
@@ -63,8 +57,7 @@ export const INSTRUMENT_LOOK: Record<Instrument, InstrumentLook> = {
     icon: Drum,
     fill: "bg-inst-drums text-on-inst",
     ink: "text-inst-drums",
-    ground: "bg-[color-mix(in_oklab,var(--color-inst-drums)_14%,var(--color-media-scrim))]",
-    bar: bar("drums"),
+    tile: JAM_TILE_LOOK.drums,
     dashed: "border-inst-drums",
     token: "--color-inst-drums",
   },
@@ -72,8 +65,7 @@ export const INSTRUMENT_LOOK: Record<Instrument, InstrumentLook> = {
     icon: MicVocal,
     fill: "bg-inst-vocals text-on-inst",
     ink: "text-inst-vocals",
-    ground: "bg-[color-mix(in_oklab,var(--color-inst-vocals)_14%,var(--color-media-scrim))]",
-    bar: bar("vocals"),
+    tile: JAM_TILE_LOOK.vocals,
     dashed: "border-inst-vocals",
     token: "--color-inst-vocals",
   },
@@ -81,8 +73,7 @@ export const INSTRUMENT_LOOK: Record<Instrument, InstrumentLook> = {
     icon: Piano,
     fill: "bg-inst-keys text-on-inst",
     ink: "text-inst-keys",
-    ground: "bg-[color-mix(in_oklab,var(--color-inst-keys)_14%,var(--color-media-scrim))]",
-    bar: bar("keys"),
+    tile: JAM_TILE_LOOK.keys,
     dashed: "border-inst-keys",
     token: "--color-inst-keys",
   },
@@ -90,8 +81,7 @@ export const INSTRUMENT_LOOK: Record<Instrument, InstrumentLook> = {
     icon: Music,
     fill: "bg-inst-other text-on-inst",
     ink: "text-inst-other",
-    ground: "bg-[color-mix(in_oklab,var(--color-inst-other)_14%,var(--color-media-scrim))]",
-    bar: bar("other"),
+    tile: JAM_TILE_LOOK.other,
     dashed: "border-inst-other",
     token: "--color-inst-other",
   },
