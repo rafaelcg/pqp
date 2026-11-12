@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// A new song's studio to open.
+struct JamStudioRoute: Identifiable {
+    let id = UUID()
+    /// The new song to make, or nil for a part on a song that exists.
+    let draft: JamSongDraft?
+}
+
 /// A song to open, with what the wall already knows about it.
 struct JamSongRoute: Hashable, Identifiable {
     let song: JamSongSummary
@@ -16,7 +23,8 @@ struct JamWallView: View {
 
     @State private var model: JamWallModel
     @State private var openedSong: JamSongRoute?
-    @State private var showingRecordInfo = false
+    @State private var showingNewSong = false
+    @State private var studio: JamStudioRoute?
     /// The first render staggers its tiles in; after that a tile that arrives
     /// uses the transition instead.
     @State private var hasEntered = false
@@ -47,11 +55,30 @@ struct JamWallView: View {
                 zoomSpace: zoomSpace, wall: model
             )
         }
-        .sheet(isPresented: $showingRecordInfo) {
-            JamRecordOnComputerSheet(
-                title: nil,
-                link: JamLinks.channel(serverId: model.server.id, channelId: model.channel.id)
-            )
+        .sheet(isPresented: $showingNewSong) {
+            JamNewSongSheet { draft in
+                // The sheet is closing: the studio opens after it has left.
+                Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    studio = JamStudioRoute(draft: draft)
+                }
+            }
+        }
+        .fullScreenCover(item: $studio) { route in
+            JamStudioView(
+                model: JamRecordModel(
+                    channel: model.channel, server: model.server, destination: .draft(route.draft ?? JamSongDraft()), band: [],
+                    addable: JamInstrument.allCases, instrument: .guitar
+                )
+            ) { result in
+                studio = nil
+                guard let result else { return }
+                // The song exists now: show it, with the take in it.
+                Task {
+                    await model.refresh()
+                    openedSong = JamSongRoute(song: result.song)
+                }
+            }
         }
         .task { await model.start(session: session) }
     }
@@ -81,13 +108,21 @@ struct JamWallView: View {
     private var emptyWall: some View {
         ScrollView {
             VStack(spacing: 18) {
-                EmptyState(
-                    icon: "music.note.list",
-                    title: "No songs yet",
-                    message: "A jam is a channel of songs, each built from recordings of different people playing together.",
-                    actionTitle: "Record on the computer",
-                    action: { showingRecordInfo = true }
-                )
+                if canStartSong {
+                    EmptyState(
+                        icon: "music.note.list",
+                        title: "No songs yet",
+                        message: "A jam is a channel of songs, each built from recordings of different people playing together.",
+                        actionTitle: "Record the first song",
+                        action: { showingNewSong = true }
+                    )
+                } else {
+                    EmptyState(
+                        icon: "music.note.list",
+                        title: "No songs yet",
+                        message: "A jam is a channel of songs, each built from recordings of different people playing together."
+                    )
+                }
             }
             .padding(.top, 60)
         }
@@ -140,7 +175,7 @@ struct JamWallView: View {
         var sizes = songs.enumerated().map { index, song in
             JamMosaic.desiredSize(index: index, song: song, hasVideo: JamTileFacts.resolve(song: song, preview: model.anyPreview(for: song)).hasVideo)
         }
-        sizes.append(.small)  // the "your turn" tile closes the grid
+        if canStartSong { sizes.append(.small) }  // the "your turn" tile closes the grid
         let bands = JamMosaic.bands(JamMosaic.layout(sizes: sizes, columns: columns))
         return LazyVStack(alignment: .leading, spacing: Self.gap) {
             ForEach(bands.indices, id: \.self) { b in
@@ -264,7 +299,9 @@ struct JamWallView: View {
             model.requestPreview(for: song)
         }
         .task(id: preview?.posterTrackId) {
-            guard let preview, let id = preview.posterTrackId, let url = preview.posterURL else { return }
+            // A song with a cover never reads its video for a poster: the
+            // picture is what the tile shows.
+            guard song.cover == nil, let preview, let id = preview.posterTrackId, let url = preview.posterURL else { return }
             if await JamPosterCache.shared.poster(
                 trackId: id, url: url, contentType: preview.posterContentType
             ) != nil {
@@ -276,18 +313,22 @@ struct JamWallView: View {
         .task { await model.loadMoreIfNeeded(after: song) }
     }
 
-    /// "Tua vez": the end of the grid says where recording happens, calmly.
+    /// Whether this phone may start a song here: the flag is on for the server
+    /// and storage is configured (`GET /api/jam/config`).
+    private var canStartSong: Bool { model.config.enabled && model.config.uploads }
+
+    /// "Tua vez": the end of the grid is where a song starts.
     private var recordTile: some View {
         Button {
             Haptics.selection()
-            showingRecordInfo = true
+            showingNewSong = true
         } label: {
             VStack(spacing: 8) {
                 Image(systemName: "mic")
                     .font(JamFont.text(24, .regular))
                 Text("Your turn")
                     .font(JamFont.text(14, .semibold))
-                Text("Record on the computer")
+                Text("Record a song")
                     .font(JamFont.text(11, .medium))
                     .foregroundStyle(Palette.paperMuted)
                     .multilineTextAlignment(.center)

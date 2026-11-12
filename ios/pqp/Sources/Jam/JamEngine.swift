@@ -193,6 +193,14 @@ final class JamEngine {
     /// instant, which is why it is returned.
     @discardableResult
     func play(from positionMs: Double, leadSeconds: Double = 0.12) throws -> UInt64 {
+        try play(from: positionMs, atHostTime: mach_absolute_time() + hostTicks(forSeconds: leadSeconds))
+    }
+
+    /// The same, started at a host time the caller chose: the recorder starts
+    /// the band at the host time its count-in and its capture are counted
+    /// against, so the three share one clock (`JamRecorder`).
+    @discardableResult
+    func play(from positionMs: Double, atHostTime startHost: UInt64) throws -> UInt64 {
         stopPlayers()
         let position = max(0, min(positionMs, durationMs))
         if !engine.isRunning {
@@ -201,7 +209,6 @@ final class JamEngine {
         }
         schedule(from: position)
 
-        let startHost = mach_absolute_time() + hostTicks(forSeconds: leadSeconds)
         let when = AVAudioTime(hostTime: startHost)
         for voice in voices.values { voice.player.play(at: when) }
         anchorPositionMs = position
@@ -325,22 +332,18 @@ final class JamEngine {
     /// speaker gets (`JamWebTakeAlignmentTests`).
     var outputMixer: AVAudioMixerNode { engine.mainMixerNode }
 
+    /// The engine itself, for the recorder: the microphone's tap and the
+    /// count-in's player live on the SAME engine as the stems, which is what
+    /// makes the capture and the band one clock.
+    var audioEngine: AVAudioEngine { engine }
+
     // MARK: - Host time
 
-    private static let timebase: mach_timebase_info_data_t = {
-        var info = mach_timebase_info_data_t()
-        mach_timebase_info(&info)
-        return info
-    }()
-
-    private func hostTicks(forSeconds seconds: Double) -> UInt64 {
-        let t = Self.timebase
-        return UInt64(seconds * 1_000_000_000 * Double(t.denom) / Double(t.numer))
-    }
+    private func hostTicks(forSeconds seconds: Double) -> UInt64 { JamHostClock.ticks(fromSeconds: seconds) }
 
     private func hostSeconds(from start: UInt64, to end: UInt64) -> Double {
-        guard end > start else { return -hostSeconds(from: end, to: start) }
-        let t = Self.timebase
-        return Double(end - start) * Double(t.numer) / Double(t.denom) / 1_000_000_000
+        end >= start
+            ? JamHostClock.seconds(fromTicks: end - start)
+            : -JamHostClock.seconds(fromTicks: start - end)
     }
 }
