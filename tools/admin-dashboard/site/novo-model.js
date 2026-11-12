@@ -179,6 +179,11 @@
     if (breaker && breaker.state !== "closed") {
       out.push({ tone: "bad", title: "Disjuntor do banco " + (breaker.state === "open" ? "aberto" : "testando"), detail: fmt(breaker.rejected) + " consultas recusadas", action: "ver capacidade", target: "sistema" });
     }
+    // A live app pinned to a version the apps site does not serve: everybody who opens it gets a white page.
+    var stranded = m.apps && Array.isArray(m.apps.currentVersionNotServed) ? m.apps.currentVersionNotServed : [];
+    stranded.forEach(function (s) {
+      out.push({ tone: "bad", title: s.appId + " abre uma tela branca: a v" + s.currentVersion + " não está no site dos apps", detail: "o site serve " + ((s.shipped || []).join(", ") || "nenhuma versão dele") + " · torna atual uma versão servida", action: "abrir apps", target: "apps" });
+    });
     var mod = m.moderation || {};
     var rep = mod.reports || {};
     if (num(rep.open) > 0) {
@@ -489,6 +494,25 @@
     return null;
   }
 
+  /**
+   * A live (or globally on) app whose current version the apps site of this
+   * deploy does not serve: every frame of it is the site's 404 page, a white
+   * pane under "Abrindo...". Returns null when that is not the case, otherwise
+   * the words and the version to offer instead: the newest approved one the site
+   * serves (versions come newest first), or null when there is none yet.
+   */
+  function strandedVersion(app) {
+    if (!app || app.currentServed !== "not-served") return null;
+    if (app.status !== "live" && !app.globalEnabled) return null;
+    var offer = null;
+    var list = app.versions || [];
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i].isCurrent && list[i].served === "served" && list[i].reviewStatus === "approved") { offer = list[i].version; break; }
+    }
+    var text = "A v" + app.currentVersion + " não está no site dos apps deste deploy: quem abrir o app vê uma tela branca.";
+    return { text: offer ? text + " Torna atual a v" + offer + "." : text + " Aprova uma versão servida e torna ela atual.", offer: offer };
+  }
+
   /** The line under the name: version and publisher. */
   function appSubtitle(app) {
     var by = app.publisher && app.publisher.displayName ? ", por " + app.publisher.displayName : "";
@@ -663,6 +687,7 @@
       case "community-locked": return "Comunidade pública: o app ainda não foi liberado pra comunidades.";
       case "checklist-incomplete": return "Falta marcar algum item da lista pra aprovar.";
       case "version-in-use": return "Essa versão está no ar. Tira o app do ar ou muda a versão atual antes.";
+      case "version-not-served": return "Essa versão não está no site dos apps deste deploy: o app abriria uma tela branca. Escolhe uma versão servida.";
       default: return "Não deu pra salvar. O interruptor voltou pro que estava.";
     }
   }
@@ -706,7 +731,7 @@
     hojeKpis: hojeKpis, activityHeadline: activityHeadline, costPerActive: costPerActive,
     attention: attention, systemStatus: systemStatus, groupFeedback: groupFeedback, feedDiff: feedDiff, heatmap: heatmap, funnel: funnel, sources: sources,
     activitySeries: activitySeries, adoption: adoption, ratingDistribution: ratingDistribution, liveNow: liveNow, communityBadge: communityBadge,
-    appStatus: appStatus, checklistItems: checklistItems, checklistComplete: checklistComplete, currentVersionOf: currentVersionOf,
+    appStatus: appStatus, checklistItems: checklistItems, checklistComplete: checklistComplete, currentVersionOf: currentVersionOf, strandedVersion: strandedVersion,
     appSubtitle: appSubtitle, reviewSummary: reviewSummary, globalSwitch: globalSwitch, serversText: serversText, sessionsLine: sessionsLine,
     disableConfirm: disableConfirm, communityConfirm: communityConfirm, defaultConfirm: defaultConfirm, defaultNote: defaultNote, serverReleased: serverReleased, serverRow: serverRow, initials: initials, appsWriteError: appsWriteError,
     disableFailure: disableFailure, auditText: auditText, appSummary: appSummary, LOCK_NOTE: LOCK_NOTE

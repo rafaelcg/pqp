@@ -88,6 +88,7 @@ import { userStats } from "./services/user-stats.js";
 import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
 import { startFeatureFlags } from "./lib/flags.js";
 import { startAppCatalogLoad } from "./apps/catalog.js";
+import { reportCurrentVersionsNotServed } from "./apps/served.js";
 import { startAppParticipantSweep } from "./ws/apps.js";
 import { adoptPreviousRunSeats } from "./apps/participants.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
@@ -771,6 +772,10 @@ async function main() {
   // was down) is retried in the background with a bounded backoff, and until
   // then the platform has the apps it already had.
   await startAppCatalogLoad();
+  // Then say, loudly, which live app is pinned to a version this build's apps
+  // site no longer serves (`apps.currentVersionNotServed`, `apps/served.ts`):
+  // every frame of it would be the origin's 404 page. Not awaited, never fatal.
+  void reportCurrentVersionsNotServed();
 
   // Live HLS: a restart does not stop the media box, so before anything else
   // this process ADOPTS the egresses still running for sessions it owns (a

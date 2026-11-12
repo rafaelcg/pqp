@@ -116,6 +116,9 @@ class JamWallViewModel(
     private var started = false
     private var readJob: Job? = null
 
+    /** The studio that is open over this channel, kept here because this object outlives the screen that shows it. */
+    var heldStudio: gg.pqp.app.jam.record.JamStudioSession? = null
+
     /** The page request in flight, so a refresh can cancel it (its answer would be for a wall that is gone). */
     private var pageJob: Job? = null
 

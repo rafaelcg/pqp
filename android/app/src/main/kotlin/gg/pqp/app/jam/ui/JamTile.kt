@@ -3,6 +3,7 @@ package gg.pqp.app.jam.ui
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
@@ -30,6 +31,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -118,14 +121,22 @@ fun JamTile(
     val colors = MaterialTheme.colorScheme
     val need = remember(song) { JamNeed.of(song) }
     val empty = song.trackCount == 0
-    val poster = if (preview?.hasVideo == true) rememberJamPoster(preview.posterUrl) else null
+    // A cover the author chose beats the poster frame the app would pick out of a video, so a song with one never
+    // reads a video just to draw a tile. The cover's own art (the colour and the waveform) is under it until it
+    // arrives and stays if it cannot be had.
+    var coverStatus by remember(song.coverKey) { mutableStateOf(if (song.coverKey == null) JamCoverStatus.None else JamCoverStatus.Loading) }
+    val hasCover = coverStatus == JamCoverStatus.Ready
+    val poster = if (song.coverKey == null && preview?.hasVideo == true) rememberJamPoster(preview.posterUrl) else null
     val hasPoster = poster != null
+    val picture = hasCover || hasPoster
     val ground = if (empty) colors.surfaceContainer else jamGround(song)
-    val onGround = when {
+    val onGroundTarget = when {
         empty -> colors.onSurface
-        hasPoster -> Color.White
+        picture -> Color.White
         else -> JamInk
     }
+    // The text changes colour as the picture arrives, not with a jump.
+    val onGround by animateColorAsState(onGroundTarget, tween(if (reduce) 0 else 250), label = "tile-ink")
     val shape = RoundedCornerShape(if (size == JamTileSize.Small) 18.dp else 22.dp)
 
     // Entrance: alpha and scale on one spring. Skipped under reduced motion and for tiles that were already settled.
@@ -189,6 +200,10 @@ fun JamTile(
             }
             .testTag("jam.tile.${song.id}"),
     ) {
+        if (song.coverKey != null && !empty) {
+            JamCoverImage(song, onStatus = { coverStatus = it })
+            if (hasCover) JamCoverScrim()
+        }
         if (poster != null) {
             Image(
                 bitmap = poster,
@@ -207,7 +222,7 @@ fun JamTile(
                         ),
                     ),
             )
-        } else if (!empty) {
+        } else if (!empty && !hasCover) {
             // The mix's waveform in ink across the upper part of the tile.
             JamWaveform(
                 values = JamTileInfo.envelope(song, preview),
@@ -276,7 +291,7 @@ fun JamTile(
                 )
             }
             Spacer6()
-            NeedChip(need, text = needText, onGround = onGround, empty = empty, poster = hasPoster)
+            NeedChip(need, text = needText, onGround = onGround, empty = empty, poster = picture)
         }
     }
 }

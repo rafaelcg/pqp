@@ -4,6 +4,9 @@ import { mountAppFrame, type AppFrameController } from "./frame-controller";
 import { FakeTheme, FakeTransport, baseApp, users } from "./bridge-host.fixture";
 import { ShareAudioRelay, ShareAudioSink, type SinkContext } from "./share-audio";
 
+// the entry is served: a unit test never asks the network (a dev box may have the apps origin up on 5175)
+vi.mock("./entry-probe", () => ({ probeAppEntry: async () => ({ kind: "ok" }) }));
+
 /*
  * The app's sound for a share, through a real frame controller: the relay's want reaches the app as a push, the
  * app's blocks reach the relay's sink, and a frame that is gone stops listening.

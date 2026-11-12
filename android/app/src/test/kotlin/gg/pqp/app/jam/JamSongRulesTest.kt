@@ -224,7 +224,6 @@ class JamSongRulesTest {
         assertFalse(JamPermissions.canDeleteTrack(mine, member, null))
         assertTrue(JamPermissions.canDeleteSong(author))
         assertFalse(JamPermissions.canDeleteSong(member))
-        assertFalse(JamPermissions.CAN_RECORD_HERE)
     }
 
     // --- audio focus ---

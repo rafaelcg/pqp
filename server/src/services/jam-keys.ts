@@ -39,7 +39,10 @@ export async function jamKeysForChannels(
        WHERE s.channel_id = ANY($1::uuid[])
      UNION
      SELECT t.video_key FROM jam_tracks t JOIN jam_songs s ON s.id = t.song_id
-       WHERE s.channel_id = ANY($1::uuid[]) AND t.video_key IS NOT NULL`,
+       WHERE s.channel_id = ANY($1::uuid[]) AND t.video_key IS NOT NULL
+     UNION
+     SELECT t.video_mp4_key FROM jam_tracks t JOIN jam_songs s ON s.id = t.song_id
+       WHERE s.channel_id = ANY($1::uuid[]) AND t.video_mp4_key IS NOT NULL`,
     [channelIds],
   );
   return result.rows.map((row) => row.key);
@@ -57,7 +60,10 @@ export async function jamKeysForServer(
        WHERE s.server_id = $1
      UNION
      SELECT t.video_key FROM jam_tracks t JOIN jam_songs s ON s.id = t.song_id
-       WHERE s.server_id = $1 AND t.video_key IS NOT NULL`,
+       WHERE s.server_id = $1 AND t.video_key IS NOT NULL
+     UNION
+     SELECT t.video_mp4_key FROM jam_tracks t JOIN jam_songs s ON s.id = t.song_id
+       WHERE s.server_id = $1 AND t.video_mp4_key IS NOT NULL`,
     [serverId],
   );
   return result.rows.map((row) => row.key);
@@ -73,7 +79,9 @@ export async function jamKeysForUser(
      UNION
      SELECT t.audio_key FROM jam_tracks t WHERE t.author_id = $1
      UNION
-     SELECT t.video_key FROM jam_tracks t WHERE t.author_id = $1 AND t.video_key IS NOT NULL`,
+     SELECT t.video_key FROM jam_tracks t WHERE t.author_id = $1 AND t.video_key IS NOT NULL
+     UNION
+     SELECT t.video_mp4_key FROM jam_tracks t WHERE t.author_id = $1 AND t.video_mp4_key IS NOT NULL`,
     [userId],
   );
   return result.rows.map((row) => row.key);

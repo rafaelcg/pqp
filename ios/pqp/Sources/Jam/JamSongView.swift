@@ -14,7 +14,7 @@ struct JamSongView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var model: JamSongModel
-    @State private var showingRecordInfo = false
+    @State private var studio: JamStudioRoute?
     @State private var confirmingDeleteSong = false
     @State private var trackToDelete: JamTrack?
     @State private var scrubbing = false
@@ -45,8 +45,11 @@ struct JamSongView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { transport }
         .overlay(alignment: .top) { noticeBanner }
         .jamZoomDestination(id: model.song.id, in: zoomSpace, enabled: !reduceMotion)
-        .sheet(isPresented: $showingRecordInfo) {
-            JamRecordOnComputerSheet(title: model.song.title, link: songLink)
+        .fullScreenCover(item: $studio) { _ in
+            JamStudioView(model: model.makeRecordModel()) { _ in
+                studio = nil
+                Task { await model.resumeAfterRecording() }
+            }
         }
         .confirmationDialog("Delete this song?", isPresented: $confirmingDeleteSong, titleVisibility: .visible) {
             Button("Delete song", role: .destructive) {
@@ -106,16 +109,30 @@ struct JamSongView: View {
         }
     }
 
+    /// The stage is showing a film: the cover then is a small mark beside the
+    /// title, the way the web's panel does it, and not the picture of the page.
+    private var stageIsVideo: Bool {
+        model.active.contains { model.video.player(for: $0.id) != nil }
+    }
+
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(verbatim: model.song.title)
-                .font(JamFont.title(26))
-                .foregroundStyle(Palette.paper)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(verbatim: headerLine)
-                .font(JamFont.text(14))
-                .foregroundStyle(Palette.paperMuted)
-            JamInstrumentChips(song: model.song, tracks: model.tracks)
+        HStack(alignment: .top, spacing: 12) {
+            if stageIsVideo, model.song.cover != nil {
+                JamCoverImage(songId: model.song.id, cover: model.song.cover)
+                    .frame(width: 56, height: 56)
+                    .background(Palette.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(verbatim: model.song.title)
+                    .font(JamFont.title(26))
+                    .foregroundStyle(Palette.paper)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(verbatim: headerLine)
+                    .font(JamFont.text(14))
+                    .foregroundStyle(Palette.paperMuted)
+                JamInstrumentChips(song: model.song, tracks: model.tracks)
+            }
         }
         .padding(.horizontal, Metrics.hPadding)
         .accessibilityElement(children: .contain)
@@ -202,30 +219,79 @@ struct JamSongView: View {
 
             Spacer(minLength: 8)
 
-            if !JamPermissions.canRecordHere {
+            recordButton
+        }
+        .padding(.horizontal, Metrics.hPadding)
+        .padding(.vertical, 10)
+        .background(Palette.surface.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) { Rectangle().fill(Palette.border).frame(height: 1) }
+    }
+
+    /// "Gravar minha parte": the way into the studio. When this viewer cannot
+    /// record here the same slot says why, in the web's words, instead of a
+    /// button that does nothing.
+    @ViewBuilder
+    private var recordButton: some View {
+        if model.phase == .ready {
+            if let reason = model.cannotRecord {
                 Button {
                     Haptics.selection()
-                    showingRecordInfo = true
+                    model.say(Self.reasonText(reason))
                 } label: {
-                    Label("On the computer", systemImage: "desktopcomputer")
+                    Label("Add my part", systemImage: "mic.slash")
                         .labelStyle(JamCompactLabelStyle(iconOnly: typeSize.isAccessibilitySize))
                         .lineLimit(1)
                         .font(JamFont.text(13, .semibold))
-                        .foregroundStyle(Palette.paperSubtle)
+                        .foregroundStyle(Palette.paperMuted)
                         .padding(.horizontal, 14)
                         .frame(minHeight: 44)
                         .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(Text("Record on the computer"))
+                .accessibilityLabel(Text("Add my part"))
+                .accessibilityHint(Text(Self.reasonKey(reason)))
+                .accessibilityIdentifier("jam.song.record")
+            } else {
+                Button {
+                    Haptics.selection()
+                    model.suspendForRecording()
+                    studio = JamStudioRoute(draft: nil)
+                } label: {
+                    Label(model.tracks.isEmpty ? "Record the first part" : "Add my part", systemImage: "mic.fill")
+                        .labelStyle(JamCompactLabelStyle(iconOnly: typeSize.isAccessibilitySize))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .font(JamFont.text(14, .bold))
+                        .foregroundStyle(Palette.paper)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 48)
+                        .background(Capsule().fill(Palette.danger.opacity(0.9)))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(JamTilePressStyle(reduceMotion: reduceMotion))
+                .accessibilityLabel(Text(model.tracks.isEmpty ? "Record the first part" : "Add my part"))
                 .accessibilityIdentifier("jam.song.record")
             }
         }
-        .padding(.horizontal, Metrics.hPadding)
-        .padding(.vertical, 10)
-        .background(Palette.surface.ignoresSafeArea(edges: .bottom))
-        .overlay(alignment: .top) { Rectangle().fill(Palette.border).frame(height: 1) }
+    }
+
+    static func reasonKey(_ reason: JamRecordEligibility.Reason) -> LocalizedStringKey {
+        switch reason {
+        case .off: "Recording is paused on this server."
+        case .uploadsOff: "This server cannot store recordings yet."
+        case .closed: "This song is closed. Only whoever started it records on it."
+        case .other: "You cannot record on this song right now."
+        }
+    }
+
+    static func reasonText(_ reason: JamRecordEligibility.Reason) -> String {
+        switch reason {
+        case .off: String(localized: "Recording is paused on this server.")
+        case .uploadsOff: String(localized: "This server cannot store recordings yet.")
+        case .closed: String(localized: "This song is closed. Only whoever started it records on it.")
+        case .other: String(localized: "You cannot record on this song right now.")
+        }
     }
 
     @ViewBuilder

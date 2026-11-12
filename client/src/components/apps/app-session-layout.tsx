@@ -13,6 +13,7 @@ import {
   type EndedAppSession,
 } from "@/lib/apps/app-sessions-store";
 import type { CardPerson } from "@/lib/apps/card-model";
+import type { AppFrameStatus } from "@/lib/apps/frame-controller";
 import { openPaneCapture, supportsRegionCapture } from "@/lib/apps/pane-share";
 import { ShareAudioRelay } from "@/lib/apps/share-audio";
 import { appSessionWire } from "@/lib/apps/session-wire-instance";
@@ -202,6 +203,8 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
   });
   const [error, setError] = useState<string | null>(null);
   const [sharePending, setSharePending] = useState(false);
+  /** The session whose frame failed: its pane stays up with the error (see `keepFailedPane`). */
+  const [failedPane, setFailedPane] = useState<string | null>(null);
   const paneRef = useRef<AppPaneHandle>(null);
   const joinedAs = useRef<{ sessionId: string; spectator: boolean } | null>(null);
   const ownedShare = useRef(false);
@@ -492,6 +495,7 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
 
   const onLeave = useCallback(() => {
     if (!sessionId) return;
+    setFailedPane(null);
     setLeftAt({ sessionId, at: Date.now() });
     // With the pane up, taking it down releases the seat (the frame's unmount
     // sends `app-leave`); without it (a seat the server still lists after the
@@ -524,7 +528,20 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
       .finally(() => setBusy((current) => ({ ...current, takeHost: false })));
   }, [sessionId, t]);
 
-  const paneVisible = Boolean(liveModel?.showPane && app && transport);
+  // A frame that failed (its entry is a 404, it never said hello, it navigated itself) is removed and gives its
+  // seat back, and the pane is drawn only for a seated person: without this the pane's error and its Tentar de novo
+  // would flash and vanish, leaving the person at Entrar with no word of why. So the failed pane stays, for this
+  // session, until a frame comes up (ready), the person leaves, or the session is gone. Tentar de novo mounts a new
+  // frame, which takes the seat again.
+  const keepFailedPane = failedPane !== null && failedPane === sessionId && liveModel !== null;
+  const onPaneStatus = useCallback(
+    (status: AppFrameStatus) => {
+      if (status.kind === "error" && sessionId) setFailedPane(sessionId);
+      else if (status.kind === "ready" || status.kind === "ended") setFailedPane(null);
+    },
+    [sessionId],
+  );
+  const paneVisible = Boolean((liveModel?.showPane || keepFailedPane) && app && transport);
   // How this seat was taken, fixed when the pane first shows for a session: a
   // handoff changes what the strip says, never what the person is.
   if (paneVisible && sessionId && joinedAs.current?.sessionId !== sessionId) {
@@ -737,6 +754,7 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
             onShare={setShare}
             shared={shareOn}
             shareAudio={shareAudio.current ?? undefined}
+            onStatus={onPaneStatus}
             className={cn(paneClass, dragWidth !== null && "pointer-events-none select-none")}
           />
         ) : null}

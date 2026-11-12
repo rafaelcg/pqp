@@ -2,6 +2,7 @@ import type { JamSongSummary, JamTrack } from "@pqp/shared";
 import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
+import { pickJamVideoUrl } from "@/lib/jam-video-source";
 import { barsFromPeaks, rotateBars, seededBars, songNeed, stretchBars } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
 import { bandOrder, MirrorBars } from "./jam-art";
@@ -75,7 +76,7 @@ export function JamArtwork({ song, cover, tracks, loadVideo = false, animate = f
               {videos.map((track, index) => (
                 <video
                   key={track.id}
-                  src={`${track.videoUrl}#t=3`}
+                  src={`${pickJamVideoUrl(track)}#t=3`}
                   muted
                   loop
                   playsInline

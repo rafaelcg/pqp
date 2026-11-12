@@ -1251,11 +1251,10 @@ Tests: `PhoneGapsTests`; UI journeys in `ServerUnreadUITests` and
 ## Jam: the wall and the song
 
 A `jam` channel holds songs, each a stack of recorded stems (`docs/JAM.md`, the
-wire contract in `packages/shared/src/jam.ts`). This build SEES, HEARS and
-REACTS to them; it does not record (`JamPermissions.canRecordHere` is `false`,
-and the song screen says so with a copy-link sheet where the web says "Gravar
-por cima"). Code is in `Sources/Jam/`, tests in `JamContractTests`,
-`JamRulesTests` and `JamEngineTests`.
+wire contract in `packages/shared/src/jam.ts`). This build SEES, HEARS, REACTS
+and RECORDS (audio only; "Gravar minha parte", see "Recording a part" below).
+Code is in `Sources/Jam/`, tests in `JamContractTests`, `JamRulesTests`,
+`JamEngineTests` and `JamRecordingTests`.
 
 **Invisible without the flag.** `Channel.isJam` is deliberately not part of
 `isListed`. The channel list draws a jam row only when
@@ -1321,8 +1320,97 @@ screen is then left to the call. Leaving the song stops it. A route change
 the output latency, and put back with a seek when they drift past 90 ms
 (`JamVideoSync`). MP4 only.
 
-**Not here.** Recording, adding a track, creating a song, comments, a song deep
-link (`JamLinks.song` is shaped like the forum's `/post/` link and is only as
+### Covers and colours
+
+`JamSongSummary.coverUrl` (a presigned GET, new on every read) is drawn on the
+wall tile (picture under a shade, the old coloured tile until it lands or when
+it never does) and as the song header. The identity of a picture is the SONG
+plus the PATH of the address (`JamCoverKey`): the key inside it never changes
+for one picture, a replaced cover is a new path, and the payload has no other
+version. `JamCoverRef` compares by path, so a song frame that carries a fresh
+signature changes nothing and redraws nothing. `JamCoverStore` keeps the
+bytes on disk (48 MB) and a down-sampled bitmap in memory (32 MB), fetches once,
+and leaves a failed key alone for a minute. The instrument colours are the
+web's `--color-inst-*` tokens converted to sRGB (guitar yellow, bass blue,
+drums orange, vocals pink, keys cyan, other lilac); `JamInstrumentColorTests`
+reads `client/src/index.css` and fails when they drift.
+
+### Recording a part
+
+From a song, "Gravar minha parte"; from the wall, "Gravar uma música" (a name
+and who may join, then the same studio; the song is made when the first take is
+SENT, and deleted again with `?ifEmpty=true` if the studio made it and left).
+Setup (what you play, the band's lanes and "Ouvir a banda", the headphones
+card, count-in), count-in, recording over the band's lanes with a large clock,
+review (the take plays with the band; nudge it earlier or later in 5 ms steps,
+held buttons repeat faster; record again) and send. Flow and wording follow the
+web studio. Files: `JamRecordModel` (the order of things), `JamRecorder` (the
+audio), `JamRecordingRules` and `JamLatency` (the arithmetic, pure),
+`JamStudioView` / `JamStudioParts` (screens).
+
+**One engine, one clock.** The band (`JamEngine`), the count-in (one buffer,
+a click per beat) and the microphone's tap live on ONE `AVAudioEngine`, and
+every start is a host time: the count-in at T0, the band at H0 = T0 + count-in,
+the first captured sample stamped Hc by the tap. The take is placed at
+`from + (Hc - H0) - L` where `from` is the song time the band started from (its
+earliest heard sample) and `L` the round trip; the file's first sample is
+`offsetMs` (a whole millisecond, reached by dropping fewer than one ms of
+leading samples), the count-in stays in the file and `trimStartMs = from -
+offsetMs` hides it, exactly what the web writes. A recorder lives for one take:
+the engine that recorded has its input node in the graph, so review and the
+band preview use a fresh one that never opens the microphone. The tap is
+installed from a NONISOLATED function (`JamCaptureSink.install`): a closure
+written in a main-actor method is main-actor isolated and AVAudioEngine runs it
+on its own queue, where Swift traps (the first build crashed on the first
+buffer).
+
+**Latency.** `L` is, best first: a calibration for this audio ROUTE (input and
+output UIDs and the sample rate, stored in `UserDefaults`), by loopback (sweeps
+found in the capture by cross-correlation, to a fraction of a millisecond) or by
+tapping along (wired headphones, where the microphone cannot hear the output);
+otherwise `AVAudioSession.outputLatency + inputLatency` (10 ms input assumed
+when the session reports under a millisecond), labelled low confidence. A
+stored calibration goes stale when the reported output latency moves more than
+8 ms under the same route. The sheet is "Fone ajustado · 33 ms" when measured.
+
+**Upload.** FLAC, 16-bit mono at the capture rate (`audio/flac`, in the
+contract's allowed list; lossless, so the server moves nothing), the same file
+that is heard in review. `POST uploads` (kind `audio`), `PUT` to the bucket with
+the exact `Content-Type` and the file's length, `POST tracks` (idempotent on
+`audioUploadId`; a retry reuses the ticket and the stored file). Fields:
+`offsetMs` (with the nudge), whole-ms `trimStartMs`, `trimEndMs 0`, `durationMs`,
+`gain 1`, 400 peaks, `videoUploadId null`. Not here: the camera, replacing the
+viewer's old take in the mix, trimming and volume in review.
+
+**Audio session.** `.playAndRecord`, mode `.default` (never voice chat: voice
+processing would thin an instrument and duck the band), `.defaultToSpeaker`,
+`.allowBluetoothA2DP` (not the hands-free profile), 48 kHz and a 5 ms buffer
+asked for, the previous category put back on close. While a call holds the
+session the studio does not record: "Sai da call pra gravar" (`JamRecordingGate`,
+the voice notes' rule). The route card warns about the speaker (the band leaks
+into the microphone) and about Bluetooth (100 to 300 ms that move), and allows
+recording anyway. A call, a route change (headphones out, a device joined), a
+lost microphone or a full disk stops the take and KEEPS what was captured when
+there is something to hear (a second and not silence); closing asks first while
+a take exists; a song deleted while a take waits offers "send as a new song".
+Microphone permission denied says so and opens Settings.
+
+**What only a device can say.** The simulator has no real latency (it reports
+none, and its microphone is the Mac's), so what is proved is everything above
+the hardware: `JamRecordingPlacementTests` builds takes from synthetic captures
+(a perfect player, N ms into the song, L ms of round trip, 44.1 and 48 kHz, with
+and without a count-in, a band that starts at 500 ms) with the real builder and
+checks them by the web's own formula and through this engine rendered offline,
+to one frame. Not provable without a phone: what stamp the hardware gives the
+tap's first buffer, whether `outputLatency + inputLatency` is the round trip on
+a given route (the calibration exists because it often is not), Bluetooth,
+the speaker's acoustics. Checklist for a device: record over a click track with
+wired headphones before and after "Calibrar" and check the take against the
+band on the web; repeat with the speaker and with AirPods (expect the warning
+and a take that needs a nudge); take a call mid-take; pull the headphones mid-take.
+
+**Not here.** Recording a camera, replacing the viewer's old take in the mix,
+trimming, comments, a song deep link (`JamLinks.song` is shaped like the forum's `/post/` link and is only as
 the web's own route, `/app/server/<server>/channel/<jam channel>/song/<song>`), Spanish (the app ships en and pt-BR
 only).
 

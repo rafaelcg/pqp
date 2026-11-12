@@ -140,6 +140,7 @@ import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
 import { connectionFailureCounts } from "./connections-failures.js";
 import { voiceNoteMetrics, type VoiceNoteMetrics } from "./voice-note-metrics.js";
+import { jamVideoMetrics, type JamVideoMetrics } from "./jam-video-metrics.js";
 import {
   conversationMetrics,
   type ConversationMetrics,
@@ -1068,6 +1069,14 @@ export interface AdminMetrics {
    * rather than as zero.
    */
   conversations: ConversationMetrics | null;
+  /**
+   * Jam camera videos on iOS and Safari: how many have the MP4 copy they
+   * play, how many are waiting for the worker, and how many gave up (`failed`,
+   * which belongs at zero). Read from the database, so it is the same on every
+   * replica. Null when its read failed. Field by field in
+   * `services/jam-video-metrics.ts`.
+   */
+  jamVideo: JamVideoMetrics | null;
 
   // ------------------------------------------------------------ tab detail
   // Everything below backs one tab each on the operator dashboard. It is
@@ -1351,6 +1360,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     connections,
     voiceNotes,
     conversations,
+    jamVideo,
   ] = await runWithConcurrencyLimit(
     [
     () => pool.query<{ total: string; last24h: string }>(
@@ -1455,6 +1465,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     () => voiceNoteMetrics(),
     () => conversationMetrics().catch((error: unknown) => {
       console.error("[metrics] conversation metrics failed:", error);
+      return null;
+    }),
+    () => jamVideoMetrics().catch((error: unknown) => {
+      console.error("[metrics] jam video metrics failed:", error);
       return null;
     }),
     ],
@@ -1924,6 +1938,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     },
     voiceNotes,
     conversations,
+    jamVideo,
 
     channelDetail: {
       privateText: Number(channelShape.rows[0]?.private_text ?? 0),

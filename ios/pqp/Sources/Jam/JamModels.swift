@@ -95,6 +95,22 @@ struct JamContributor: Decodable, Hashable, Sendable {
     let avatarUrl: String?
 }
 
+/// A song's cover as the payload gives it. A presigned address changes with
+/// every read (a new signature, a new expiry) while the picture does not, so
+/// equality and hashing are by the address's PATH, the key inside it, which
+/// never changes for one picture (`jam.ts`, "A SONG'S COVER"). A summary read
+/// again with a fresh signature is therefore the same value, and a song frame
+/// that changed nothing else redraws nothing.
+struct JamCoverRef: Hashable, Sendable {
+    let url: String
+
+    /// Everything before `?`.
+    var path: String { JamCoverKey.path(of: url) }
+
+    static func == (lhs: JamCoverRef, rhs: JamCoverRef) -> Bool { lhs.path == rhs.path }
+    func hash(into hasher: inout Hasher) { hasher.combine(path) }
+}
+
 struct JamSongSummary: Decodable, Identifiable, Hashable, Sendable {
     let id: String
     let channelId: String
@@ -130,6 +146,12 @@ struct JamSongSummary: Decodable, Identifiable, Hashable, Sendable {
     var contributors: [JamContributor]?
     /// For a `wanted` song, the wanted instruments with no live track yet.
     var missingInstruments: [JamInstrument]?
+    /// The song's cover: a presigned GET minted when the summary was built, so
+    /// the same picture arrives under a different query string on every read.
+    /// Never use the string as an identity: `JamCoverKey` is the identity.
+    /// Nil for a song with none and for a server that predates covers.
+    var cover: JamCoverRef?
+    var coverUrl: String? { cover?.url }
 
     /// The summary answers what a tile draws, so no detail read is needed for
     /// the waveform or the names.
@@ -142,7 +164,7 @@ struct JamSongSummary: Decodable, Identifiable, Hashable, Sendable {
         createdAt: Date = Date(), updatedAt: Date = Date(), trackCount: Int = 0,
         instruments: [JamInstrument] = [], contributorCount: Int = 0, mixDurationMs: Double? = nil,
         previewPeaks: [Double]? = nil, hasVideo: Bool? = nil, contributors: [JamContributor]? = nil,
-        missingInstruments: [JamInstrument]? = nil
+        missingInstruments: [JamInstrument]? = nil, coverUrl: String? = nil
     ) {
         self.id = id
         self.channelId = channelId
@@ -164,13 +186,14 @@ struct JamSongSummary: Decodable, Identifiable, Hashable, Sendable {
         self.hasVideo = hasVideo
         self.contributors = contributors
         self.missingInstruments = missingInstruments
+        self.cover = coverUrl.map(JamCoverRef.init)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, channelId, serverId, title, artist, joinMode, wantedInstruments, authorId
         case authorName, authorAvatarUrl, createdAt, updatedAt, trackCount, instruments
         case contributorCount, mixDurationMs
-        case previewPeaks, hasVideo, contributors, missingInstruments
+        case previewPeaks, hasVideo, contributors, missingInstruments, coverUrl
     }
 
     init(from decoder: Decoder) throws {
@@ -197,6 +220,7 @@ struct JamSongSummary: Decodable, Identifiable, Hashable, Sendable {
         hasVideo = (try? c.decodeIfPresent(Bool.self, forKey: .hasVideo)) ?? nil
         contributors = (try? c.decodeIfPresent([JamContributor].self, forKey: .contributors)) ?? nil
         missingInstruments = (try? c.decodeIfPresent([JamInstrument].self, forKey: .missingInstruments)) ?? nil
+        cover = ((try? c.decodeIfPresent(String.self, forKey: .coverUrl)) ?? nil).map(JamCoverRef.init)
     }
 }
 

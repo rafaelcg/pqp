@@ -64,6 +64,8 @@ const { upsertUser } = await import("../services/users.js");
 const { createMemoryHub, createMemoryTransport, observeBusFrames, setBusTransport } =
   await import("../lib/bus.js");
 const { APPS_BUS_TOPIC, onAppsChanged } = await import("../apps/changed.js");
+const { setShippedCatalogForTests, reportCurrentVersionsNotServed } = await import("../apps/served.js");
+const { appsMetrics } = await import("../apps/metrics.js");
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
 const WRONG_TOKEN = "ffffffffffffffffffffffffffffffff";
@@ -156,12 +158,14 @@ interface AppView {
   currentVersion: string | null;
   currentApproved: boolean;
   goLiveBlocker: string | null;
+  currentServed: string;
   serversOn: number;
   serversOwnerOff: number;
   liveSessions: number;
   versions: {
     version: string;
     isCurrent: boolean;
+    served: string;
     reviewStatus: string;
     reviewedBy: string | null;
     manifest: { name: string; category: string | null };
@@ -588,6 +592,102 @@ describeDb("operator apps routes", () => {
       expect(missing.status).toBe(404);
       const rows = (await auditRows()).filter((r) => r.action === "current-version");
       expect(rows.map((r) => r.app_version)).toEqual(["1.1.0", "1.0.0"]);
+    });
+
+    describe("a version this build's apps site does not serve (2026-11-12: Locadora live on 1.0.3, site on 1.0.6)", () => {
+      afterEach(() => setShippedCatalogForTests(null));
+
+      async function addVersion(version: string, source: "repo" | "submission" = "repo") {
+        await getPool().query(
+          `INSERT INTO app_versions (app_id, version, manifest, manifest_sha256, entry_sha256, source)
+           VALUES ('quadro', $1, $2::jsonb, $3, $3, $4)`,
+          [version, JSON.stringify({ ...manifest("quadro", "tool", "Quadro"), version }), SHA, source],
+        );
+        await approve("quadro", version);
+      }
+
+      it("is refused as a new current version, and as the version an app goes live or global on", async () => {
+        await approve("quadro");
+        await addVersion("1.1.0");
+        // this build ships 1.1.0 only: 1.0.0 is gone from the apps site
+        setShippedCatalogForTests([{ id: "quadro", version: "1.1.0" }]);
+        expect((await appOf("quadro")).currentServed).toBe("not-served");
+        expect((await appOf("quadro")).versions.map((v) => [v.version, v.served])).toEqual(
+          expect.arrayContaining([
+            ["1.0.0", "not-served"],
+            ["1.1.0", "served"],
+          ]),
+        );
+
+        const live = await asMachine<{ error: string }>("PUT", "/api/admin/apps", { appId: "quadro", status: "live" });
+        expect(live.status).toBe(409);
+        expect(live.body.error).toBe("version-not-served");
+        const global = await asMachine<{ error: string }>("PUT", "/api/admin/apps", {
+          appId: "quadro",
+          globalEnabled: true,
+        });
+        expect(global.status).toBe(409);
+        expect(global.body.error).toBe("version-not-served");
+        expect(await appOf("quadro")).toMatchObject({ status: "draft", globalEnabled: false });
+
+        // on the served version it goes live, and a move back to the gone one is refused
+        expect(
+          (await asMachine("PUT", "/api/admin/apps", { appId: "quadro", currentVersion: "1.1.0", status: "live" }))
+            .status,
+        ).toBe(200);
+        const back = await asMachine<{ error: string }>("PUT", "/api/admin/apps", {
+          appId: "quadro",
+          currentVersion: "1.0.0",
+        });
+        expect(back.status).toBe(409);
+        expect(back.body.error).toBe("version-not-served");
+        expect(await appOf("quadro")).toMatchObject({ currentVersion: "1.1.0", currentServed: "served" });
+        expect((await auditRows()).filter((r) => r.action === "current-version")).toHaveLength(1);
+      });
+
+      it("never refuses switching a stranded app off, or moving it to a served version", async () => {
+        await approve("quadro");
+        await addVersion("1.1.0");
+        await asMachine("PUT", "/api/admin/apps", { appId: "quadro", status: "live", globalEnabled: true });
+        // the next deploy's site no longer has 1.0.0, and the app is still on it
+        setShippedCatalogForTests([{ id: "quadro", version: "1.1.0" }]);
+        expect((await asMachine("PUT", "/api/admin/apps", { appId: "quadro", communityUnlocked: true })).status).toBe(200);
+        expect((await asMachine("PUT", "/api/admin/apps", { appId: "quadro", globalEnabled: false })).status).toBe(200);
+        expect((await asMachine("PUT", "/api/admin/apps", { appId: "quadro", currentVersion: "1.1.0" })).status).toBe(200);
+        expect(await appOf("quadro")).toMatchObject({ status: "live", currentVersion: "1.1.0", currentServed: "served" });
+      });
+
+      it("does not judge what the catalog cannot speak for: a submission, or an app it does not name", async () => {
+        await approve("quadro");
+        await addVersion("2.0.0", "submission");
+        setShippedCatalogForTests([{ id: "quadro", version: "1.1.0" }]);
+        expect(
+          (await asMachine("PUT", "/api/admin/apps", { appId: "quadro", currentVersion: "2.0.0", status: "live" }))
+            .status,
+        ).toBe(200);
+        expect((await appOf("quadro")).currentServed).toBe("unknown");
+        // `sala-de-jogos` is not in this catalog at all
+        await approve("sala-de-jogos");
+        expect((await asMachine("PUT", "/api/admin/apps", { appId: "sala-de-jogos", status: "live" })).status).toBe(200);
+      });
+
+      it("lists every live app on a version that is not served, on the metrics and in the boot report", async () => {
+        await approve("quadro");
+        await asMachine("PUT", "/api/admin/apps", { appId: "quadro", status: "live" });
+        setShippedCatalogForTests([{ id: "quadro", version: "1.2.0" }, { id: "quadro", version: "1.1.0" }]);
+        const expected = [{ appId: "quadro", currentVersion: "1.0.0", shipped: ["1.1.0", "1.2.0"] }];
+        expect((await appsMetrics()).currentVersionNotServed).toEqual(expected);
+        const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          expect(await reportCurrentVersionsNotServed()).toEqual(expected);
+          expect(errors.mock.calls.some((call) => String(call[0]).includes("quadro is live on 1.0.0"))).toBe(true);
+        } finally {
+          errors.mockRestore();
+        }
+        // a draft app on a gone version strands nobody
+        await asMachine("PUT", "/api/admin/apps", { appId: "quadro", status: "draft" });
+        expect((await appsMetrics()).currentVersionNotServed).toEqual([]);
+      });
     });
 
     it("sends one apps.changed hint per committed write", async () => {
