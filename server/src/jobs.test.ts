@@ -51,6 +51,15 @@ vi.mock("./services/jam-video-transcode.js", () => ({
   enqueueMissingJamVideoTranscodes: vi.fn(async () => 0),
 }));
 
+vi.mock("./services/jam-public.js", () => ({
+  sweepJamPublic: vi.fn(async () => ({ orphans: 0, playMarks: 0 })),
+}));
+
+vi.mock("./services/jam-public-scan.js", () => ({
+  processJamPublicScans: vi.fn(async () => undefined),
+  sweepJamPublicQuarantine: vi.fn(async () => 0),
+}));
+
 vi.mock("./services/soundboard.js", () => ({
   sweepSoundboardUploads: vi.fn(async () => undefined),
 }));
@@ -220,6 +229,8 @@ import { sweepHlsSessions } from "./voice/hls-cleanup.js";
 import { getPool } from "./db.js";
 import { deliverDueReminders } from "./services/bot-reminders.js";
 import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
+import { sweepJamPublic } from "./services/jam-public.js";
+import { processJamPublicScans, sweepJamPublicQuarantine } from "./services/jam-public-scan.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -235,6 +246,7 @@ import {
   FORUM_SHELL_SWEEP_INTERVAL_MS,
   HLS_SESSION_SWEEP_INTERVAL_MS,
   BAU_PAYMENTS_SWEEP_INTERVAL_MS,
+  JAM_PUBLIC_SCAN_INTERVAL_MS,
   PENDING_DELETION_SWEEP_INTERVAL_MS,
   startColdJobs,
   type ColdJobs,
@@ -323,11 +335,12 @@ describe("cold jobs", () => {
     // Locadora's account saves sweep (daily, below); 38 with the Baú+
     // payments sweep (a minute, asserted below); 39 with the jam media sweep
     // (a minute, asserted below); 40 with the jam video backfill (a minute,
-    // asserted below).
+    // asserted below); 42 with the public jams' scans (10 s) and their
+    // quarantine sweep (hourly), both asserted below.
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(40);
+    expect(jobs.count).toBe(42);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -373,6 +386,11 @@ describe("cold jobs", () => {
     // The MP4 copy backfill for camera videos recorded before it existed:
     // its own job, so a failing media sweep cannot stop it.
     expect(enqueueMissingJamVideoTranscodes).toHaveBeenCalledTimes(4);
+    // Public jams: the orphan and play-mark sweep rides the jam media job.
+    expect(sweepJamPublic).toHaveBeenCalledTimes(4);
+    // Their scans: every 10 s, no boot run, so twenty-four in four minutes.
+    expect(JAM_PUBLIC_SCAN_INTERVAL_MS).toBe(10_000);
+    expect(processJamPublicScans).toHaveBeenCalledTimes(24);
     // The bot reminders: every 30 s, no boot run, so eight in four minutes.
     expect(deliverDueReminders).toHaveBeenCalledTimes(8);
     // The apps live-session sweep: every 15 s, no boot run, so sixteen.
@@ -396,6 +414,8 @@ describe("cold jobs", () => {
     expect(sweepOrphanedAttachments).toHaveBeenCalledTimes(2);
     // The emoji quarantine sweep: hourly, no boot run.
     expect(sweepQuarantinedServerEmoji).toHaveBeenCalledTimes(1);
+    // The public jams' quarantine sweep: hourly too, no boot run.
+    expect(sweepJamPublicQuarantine).toHaveBeenCalledTimes(1);
     expect(pruneAuditLog).not.toHaveBeenCalled();
     expect(sweepLocadoraSaves).not.toHaveBeenCalled();
     // The bot people prune: every six hours, no boot run.
