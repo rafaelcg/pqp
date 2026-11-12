@@ -301,16 +301,6 @@
         }
       }
     },
-    "Could not hear the taps. Tap harder on every click, or skip." : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Não deu pra ouvir as batidas. Bate mais forte em cada clique, ou pula."
-          }
-        }
-      }
-    },
     "Could not measure it properly. Try again closer to the speaker, or skip." : {
       "localizations" : {
         "pt-BR" : {
@@ -1561,6 +1551,16 @@
         }
       }
     },
+    "Sent. Your recording is waiting as another version of the song." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mandado. Tua gravação ficou como outra versão da música."
+          }
+        }
+      }
+    },
     "Share link" : {
       "localizations" : {
         "pt-BR" : {
@@ -2527,16 +2527,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bater no ritmo"
-          }
-        }
-      }
-    },
-    "Tap along with every click." : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bate no ritmo de cada clique."
           }
         }
       }
@@ -17345,6 +17335,66 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A imagem passa pela call."
+          }
+        }
+      }
+    },
+    "Clap along with every click." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bate palma no ritmo de cada clique."
+          }
+        }
+      }
+    },
+    "Could not hear you. Clap louder on every click, or skip." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra te ouvir. Bate palma mais forte em cada clique, ou pula."
+          }
+        }
+      }
+    },
+    "Four clicks, then you play." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quatro cliques, e aí tu toca."
+          }
+        }
+      }
+    },
+    "Hit the square when you are done." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aperta o quadrado quando acabar."
+          }
+        }
+      }
+    },
+    "Listen back. If you like it, send it to the band." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouve de novo. Se curtiu, manda pra banda."
+          }
+        }
+      }
+    },
+    "Four clicks, then recording starts. It changes nothing in the song." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quatro cliques, e aí a gravação começa. Não muda nada na música."
           }
         }
       }

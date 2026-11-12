@@ -505,7 +505,7 @@ struct JamCalibrationSheet: View {
 
     private func measuring(_ method: JamCalibrator.Method) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(method == .loopback ? "Measuring. Stay quiet for a few seconds." : "Tap along with every click.")
+            Text(method == .loopback ? "Measuring. Stay quiet for a few seconds." : "Clap along with every click.")
                 .font(JamFont.title(22)).foregroundStyle(Palette.paper)
             TimelineView(.animation(minimumInterval: 1.0 / 20)) { context in
                 let total = JamCalibrator.durationSeconds(method) + 0.5
@@ -542,7 +542,7 @@ struct JamCalibrationSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(method == .loopback
                  ? "Could not measure it properly. Try again closer to the speaker, or skip."
-                 : "Could not hear the taps. Tap harder on every click, or skip.")
+                 : "Could not hear you. Clap louder on every click, or skip.")
                 .font(JamFont.text(15)).foregroundStyle(Palette.paper)
                 .fixedSize(horizontal: false, vertical: true)
             action("Try again", primary: true, id: "jam.calibrate.retry") { Task { await model.calibrate(method) } }

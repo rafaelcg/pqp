@@ -188,6 +188,10 @@ struct JamStudioView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, Metrics.hPadding)
+                // Above the fold on purpose: "too short", "microphone off" and
+                // "leave the call" are the reason the person is looking at this
+                // screen again, and at the bottom they sat behind the Record bar.
+                noticeView
 
                 JamInstrumentPicker(
                     selection: Binding(get: { model.instrument }, set: { model.instrument = $0 }),
@@ -196,7 +200,6 @@ struct JamStudioView: View {
                 if !model.band.isEmpty { bandCard }
                 JamRouteCard(route: model.route, latency: model.latency) { model.askToCalibrate() }
                 countInRow
-                noticeView
                 if model.downloadFailed { retryBand }
             }
             .padding(.top, 8)
@@ -250,7 +253,9 @@ struct JamStudioView: View {
         Toggle(isOn: $model.countInOn) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Count in before starting").font(JamFont.text(15, .semibold)).foregroundStyle(Palette.paper)
-                Text("Four clicks, then the band comes in. It changes nothing in the song.")
+                Text(model.band.isEmpty
+                     ? "Four clicks, then recording starts. It changes nothing in the song."
+                     : "Four clicks, then the band comes in. It changes nothing in the song.")
                     .font(JamFont.text(12)).foregroundStyle(Palette.paperMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -374,9 +379,12 @@ struct JamStudioView: View {
             lanes
             JamLevelMeter(level: model.level, tint: tint)
                 .padding(.horizontal, Metrics.hPadding * 2)
+            // A first track has no band to play along with or to come in.
             Text(model.phase == .countIn
-                 ? "Four clicks, then the band comes in."
-                 : "Play along with the band. Hit the square when you are done.")
+                 ? (model.band.isEmpty ? "Four clicks, then you play." : "Four clicks, then the band comes in.")
+                 : (model.band.isEmpty
+                    ? "Hit the square when you are done."
+                    : "Play along with the band. Hit the square when you are done."))
                 .font(JamFont.text(13)).foregroundStyle(Palette.paperMuted)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, Metrics.hPadding * 2)
@@ -426,7 +434,9 @@ struct JamStudioView: View {
                     Text("Sounds good?")
                         .font(JamFont.title(28)).foregroundStyle(Palette.paper)
                         .accessibilityAddTraits(.isHeader)
-                    Text("Your recording is already playing with the band, in time. If you like it, send it to the band.")
+                    Text(model.band.isEmpty
+                         ? "Listen back. If you like it, send it to the band."
+                         : "Your recording is already playing with the band, in time. If you like it, send it to the band.")
                         .font(JamFont.text(14)).foregroundStyle(Palette.paperMuted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -489,6 +499,9 @@ struct JamStudioView: View {
                         .accessibilityIdentifier("jam.studio.nudgeReset")
                 }
             }
+            // The reset button's 44 pt would push the nudge buttons down under a
+            // finger that is holding one the moment the first step appears.
+            .frame(minHeight: 44)
             HStack(spacing: 10) {
                 JamNudgeButton(title: "Move earlier", symbol: "backward.frame.fill", direction: -1) { model.nudge(by: $0) }
                 Text(verbatim: Self.nudgeText(model.edits.nudgeMs))
@@ -529,7 +542,7 @@ struct JamStudioView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 72)).foregroundStyle(Palette.signal)
                     .symbolEffect(.bounce, value: reduceMotion ? false : model.phase == .done)
-                Text("Sent. Your part is in the song.")
+                Text(model.posted?.track.inMix == false ? "Sent. Your recording is waiting as another version of the song." : "Sent. Your part is in the song.")
                     .font(JamFont.title(22)).foregroundStyle(Palette.paper)
                     .multilineTextAlignment(.center)
                     .accessibilityIdentifier("jam.studio.done")

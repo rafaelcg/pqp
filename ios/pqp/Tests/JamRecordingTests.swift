@@ -983,4 +983,15 @@ final class JamRecordingSessionTests: XCTestCase {
         XCTAssertNil(JamRecordingGate.refusal(callActive: false, category: .playAndRecord, studioOwnsSession: true))
         XCTAssertNil(JamRecordingGate.refusal(callActive: false, category: .ambient, studioOwnsSession: false))
     }
+
+    /// The voice client leaves `.playAndRecord` behind when a call ends, so the
+    /// category must not keep the studio shut after the person left the call.
+    func testALeftoverCallCategoryDoesNotKeepTheStudioShut() {
+        XCTAssertNil(JamRecordingGate.refusal(
+            callActive: false, category: .playAndRecord, studioOwnsSession: false, categoryProvesACall: false
+        ))
+        XCTAssertEqual(JamRecordingGate.refusal(
+            callActive: true, category: .playAndRecord, studioOwnsSession: false, categoryProvesACall: false
+        ), .inCall)
+    }
 }

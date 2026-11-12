@@ -207,7 +207,8 @@ final class JamRecordModel {
         let mine = lifecycle
         permission = Self.readPermission()
         refusal = JamRecordingGate.refusal(
-            callActive: callActive, category: AVAudioSession.sharedInstance().category, studioOwnsSession: false
+            callActive: callActive, category: AVAudioSession.sharedInstance().category, studioOwnsSession: false,
+            categoryProvesACall: false
         )
         if refusal == nil {
             do {
@@ -240,7 +241,8 @@ final class JamRecordModel {
             }
         } else if refusal == .inCall {
             refusal = JamRecordingGate.refusal(
-                callActive: false, category: AVAudioSession.sharedInstance().category, studioOwnsSession: false
+                callActive: false, category: AVAudioSession.sharedInstance().category, studioOwnsSession: false,
+                categoryProvesACall: false
             )
             if refusal == nil, !sessionHeld, (try? audioSession.activate()) != nil {
                 sessionHeld = true

@@ -52,9 +52,19 @@ enum JamRecordingGate {
     /// "am I seated or ringing"; the category is the same fact seen from the
     /// session's side (and the one a call started elsewhere in the process
     /// shows).
-    static func refusal(callActive: Bool, category: AVAudioSession.Category, studioOwnsSession: Bool) -> Refusal? {
+    ///
+    /// `categoryProvesACall` is false for the studio itself: the voice client
+    /// only deactivates the session when a call ends and leaves the category on
+    /// `.playAndRecord`, so after ANY call in this process the category says
+    /// "a call" for good, and the studio refused to open until the app was
+    /// killed. For the studio the app's own `callActive` is the truth, and a
+    /// call the app does not know about (a phone call) makes `activate()` throw,
+    /// which already ends in the same refusal.
+    static func refusal(
+        callActive: Bool, category: AVAudioSession.Category, studioOwnsSession: Bool, categoryProvesACall: Bool = true
+    ) -> Refusal? {
         if callActive { return .inCall }
-        if !studioOwnsSession, WatchAudioSession.wouldInterruptACall(category) { return .inCall }
+        if categoryProvesACall, !studioOwnsSession, WatchAudioSession.wouldInterruptACall(category) { return .inCall }
         return nil
     }
 }
