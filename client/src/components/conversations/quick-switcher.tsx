@@ -3,7 +3,10 @@ import { Hash, Search, Volume2 } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatBadgeCount } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
+import { JamGlyph } from "@/components/jam/jam-art";
+import { JamCoverPhoto, useJamCover } from "@/components/jam/jam-cover";
 import { Dialog } from "@/components/ui/dialog";
+import { useJamSongSearch } from "@/hooks/use-jam-song-search";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
@@ -11,6 +14,7 @@ import { takeTypeAhead } from "@/lib/type-ahead";
 import {
   quickSwitcherItems,
   type SwitcherItem,
+  type SwitcherSong,
   type SwitcherSources,
 } from "@/lib/quick-switcher";
 import { cn } from "@/lib/utils";
@@ -37,6 +41,8 @@ interface QuickSwitcherProps {
   onMessagePerson: (userId: string) => void;
   onSelectServer: (serverId: string) => void;
   onSelectChannel: (channelId: string) => void;
+  /** Open a Jam song (its own address: the Jam with the song open). */
+  onOpenJamSong?: (song: SwitcherSong) => void;
   onSearchMessages: (query: string) => void;
 }
 
@@ -55,6 +61,7 @@ export function QuickSwitcher({
   onMessagePerson,
   onSelectServer,
   onSelectChannel,
+  onOpenJamSong,
   onSearchMessages,
 }: QuickSwitcherProps) {
   const { t } = useTranslation();
@@ -80,7 +87,29 @@ export function QuickSwitcher({
     }
   }, [open]);
 
-  const items = useMemo(() => quickSwitcherItems(query, sources), [query, sources]);
+  // The open server's Jam, when it has one the person can see: its songs by title, asked of the
+  // server (which decides who sees what) once the words settle.
+  const jamChannelId = useMemo(
+    () => sources.channels.find((channel) => channel.type === "jam")?.id ?? null,
+    [sources.channels],
+  );
+  const jamSongs = useJamSongSearch(jamChannelId, query, open);
+  const songs = useMemo<readonly SwitcherSong[]>(
+    () =>
+      jamSongs.map((song) => ({
+        id: song.id,
+        title: song.title,
+        artist: song.artist,
+        channelId: song.channelId,
+        serverId: song.serverId,
+        coverUrl: song.coverUrl,
+      })),
+    [jamSongs],
+  );
+  const items = useMemo(
+    () => quickSwitcherItems(query, { ...sources, songs }),
+    [query, sources, songs],
+  );
   const rows: Row[] = useMemo(() => {
     const list: Row[] = items.map((item) => ({ type: "item", item }));
     if (searchServerName && query.trim()) {
@@ -126,6 +155,9 @@ export function QuickSwitcher({
       case "channel":
         onSelectChannel(item.id.slice("channel:".length));
         return;
+      case "song":
+        onOpenJamSong?.(item.song);
+        return;
     }
   }
 
@@ -136,6 +168,7 @@ export function QuickSwitcher({
     conversation: t("switcher.section.conversations"),
     server: t("switcher.section.servers"),
     channel: t("switcher.section.channels"),
+    song: t("switcher.section.songs"),
   };
 
   return (
@@ -347,6 +380,8 @@ function ItemBody({ item, active }: { item: SwitcherItem; active: boolean }) {
           <span className="flex h-8 w-8 shrink-0 items-center justify-center text-text-tertiary">
             {item.type === "voice" ? (
               <Volume2 className="h-4 w-4" aria-hidden="true" />
+            ) : item.type === "jam" ? (
+              <JamGlyph className="h-4 w-4" />
             ) : (
               <Hash className="h-4 w-4" aria-hidden="true" />
             )}
@@ -355,7 +390,32 @@ function ItemBody({ item, active }: { item: SwitcherItem; active: boolean }) {
           <span className="shrink-0 truncate text-xs text-text-tertiary">{item.serverName}</span>
         </>
       );
+    case "song":
+      return (
+        <>
+          <SongThumb song={item.song} />
+          <span className="flex min-w-0 flex-1 items-baseline gap-2">
+            <span className="truncate text-sm font-medium text-text">{item.song.title}</span>
+            <span className="truncate text-xs text-text-tertiary">{item.song.artist ?? t("jam.original")}</span>
+          </span>
+          <Trailing unread={0} active={active} label={t("switcher.open")} />
+        </>
+      );
   }
+}
+
+/** A song's picture at row size: its cover, else the band's colours (the same art as the wall's tile). */
+function SongThumb({ song }: { song: SwitcherSong }) {
+  const cover = useJamCover(song.coverUrl);
+  return (
+    <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-[var(--radius-tick)] bg-surface-1" aria-hidden="true">
+      {cover.src !== null && cover.status !== "failed" ? (
+        <JamCoverPhoto cover={cover} eager />
+      ) : (
+        <JamGlyph className="absolute inset-1.5 h-5 w-5" />
+      )}
+    </span>
+  );
 }
 
 function Face({

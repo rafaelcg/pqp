@@ -67,6 +67,9 @@ import { BotActionCard, BotNoticeRow } from "@/components/chat/bot-action-card";
 import { ChanceCard } from "@/components/chat/chance-card";
 import { PollCard } from "@/components/chat/poll-card";
 import { BauPostCard } from "@/components/chat/bau-post-card";
+import { JamLinkCard } from "@/components/jam/jam-link-card";
+import { selectJamCardLink, stripJamLink } from "@/lib/jam-share";
+import { useJamCard } from "@/lib/jam-share-card";
 import { ForwardCard } from "@/components/chat/forward-card";
 import { forwardCommentOf } from "@/lib/forward";
 import {
@@ -3291,7 +3294,27 @@ const MessageRow = memo(function MessageRow({
     : bauSelection && bauCardShown
       ? stripBauLink(message.body, bauSelection.link)
       : message.body;
-  const hideBodyForBauCard = shownBody === "";
+  // A Jam song pasted here is drawn as a card the same way, for a viewer the server lets
+  // read the song; anybody else keeps the link. One card per message: the Baú's comes first.
+  const jamSelection = useMemo(
+    () =>
+      message.forward || bauSelection
+        ? null
+        : selectJamCardLink(
+            message.body,
+            typeof window === "undefined" ? null : window.location.origin,
+          ),
+    [message.body, message.forward, bauSelection],
+  );
+  const { state: jamState, observe: observeJamCard } = useJamCard(jamSelection?.link ?? null, currentUserId);
+  const jamCardShown =
+    jamSelection !== null &&
+    (jamState.status === "ok" || jamState.status === "loading");
+  const bodyWithoutCard =
+    jamSelection && jamCardShown
+      ? stripJamLink(shownBody, jamSelection.link)
+      : shownBody;
+  const hideBodyForBauCard = bodyWithoutCard === "";
   const authorInfo = authors.get(message.authorId);
   // A server bot's avatar is its Breu face URL, which nobody else's can be.
   const serverBot = parseBotFaceAvatar(message.authorAvatarUrl) !== null;
@@ -4042,7 +4065,7 @@ const MessageRow = memo(function MessageRow({
                     >
                       {streamAuthor}
                       <MessageBody
-                        body={shownBody}
+                        body={bodyWithoutCard}
                         currentUsername={currentUsername}
                       />
                       {attachments.length === 0 && !message.forward && (
@@ -4085,7 +4108,13 @@ const MessageRow = memo(function MessageRow({
                   {bauSelection && (
                     <BauPostCard link={bauSelection.link} state={bauState} />
                   )}
-                  {showLinkEmbeds && message.embeds?.[0] && bauState.status !== "ok" && (
+                  {jamSelection && (
+                    <JamLinkCard link={jamSelection.link} state={jamState} observe={observeJamCard} />
+                  )}
+                  {showLinkEmbeds &&
+                    message.embeds?.[0] &&
+                    bauState.status !== "ok" &&
+                    jamState.status !== "ok" && (
                     <EmbedCard embed={message.embeds[0]} />
                   )}
                   {message.webhookEmbeds.map((embed, index) => (

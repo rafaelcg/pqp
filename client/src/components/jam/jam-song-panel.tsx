@@ -1,5 +1,5 @@
 import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
-import { ArrowLeft, Camera, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
+import { ArrowLeft, Camera, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Send, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -36,6 +36,7 @@ import { useBarCount } from "./jam-bars";
 import { JamArtwork } from "./jam-artwork";
 import { JamCoverPhoto, useJamCover, type JamCoverState } from "./jam-cover";
 import { JamEditSheet } from "./jam-edit-sheet";
+import { JamSharePicker } from "./jam-share-picker";
 import { JamLaneFrame, JamLaneIdentity, JAM_BAND_BOX } from "./jam-lane-frame";
 import { JamStage } from "./jam-stage";
 import { TrackAdjust } from "./jam-track-adjust";
@@ -97,6 +98,7 @@ export function JamSongPanel({
   const [confirmSong, setConfirmSong] = useState(false);
   const [adjustingId, setAdjustingId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const cover = useJamCover(song.coverUrl);
   const covered = cover.src !== null && cover.status !== "failed";
   const serial = useRef(oneAtATime()).current;
@@ -230,7 +232,9 @@ export function JamSongPanel({
     playback.seek(timeline.startMs + Math.min(1, Math.max(0, fraction)) * (timeline.endMs - timeline.startMs));
   };
 
-  const songMenu: ContextMenuItemDef[] =
+  // A song with nothing in it yet is its author's alone, so a link to it would lead nowhere.
+  const canShare = !isEmpty && song.trackCount > 0;
+  const manageItems: ContextMenuItemDef[] =
     canManage && enabled
       ? [
           {
@@ -250,6 +254,11 @@ export function JamSongPanel({
           { id: "delete", label: t("jam.song.delete"), icon: Trash2, danger: true, onSelect: () => setConfirmSong(true) },
         ]
       : [];
+  const songMenu: ContextMenuItemDef[] = [
+    ...(canShare ? [{ id: "share", label: t("jam.share.title"), icon: Send, onSelect: () => setSharing(true) }] : []),
+    ...(canShare && manageItems.length > 0 ? [{ id: "share-sep", label: "", separator: true }] : []),
+    ...manageItems,
+  ];
 
   const recordLabel = isEmpty
     ? t("jam.song.recordFirst")
@@ -274,6 +283,22 @@ export function JamSongPanel({
     >
       <Pencil className="h-3.5 w-3.5" aria-hidden />
       <span className={cn(stageOn && "max-sm:sr-only")}>{t("jam.edit.open")}</span>
+    </button>
+  ) : null;
+
+  const sharePill = canShare ? (
+    <button
+      type="button"
+      data-jam-share-open=""
+      onClick={() => setSharing(true)}
+      aria-label={t("jam.share.title")}
+      className={cn(
+        "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-3.5 text-xs font-bold text-text outline-none ring-1 ring-border sm:h-8 transition-[background-color,transform] duration-[var(--duration-fast)] hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96]",
+        stageOn && "max-sm:w-9 max-sm:justify-center max-sm:px-0",
+      )}
+    >
+      <Send className="h-3.5 w-3.5" aria-hidden />
+      <span className={cn(stageOn && "max-sm:sr-only")}>{t("jam.share.title")}</span>
     </button>
   ) : null;
 
@@ -321,9 +346,11 @@ export function JamSongPanel({
               <span className="max-sm:hidden"> · {viewer?.isAuthor ? t("jam.song.startedByYou") : t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}</span>
             </span>
             {/* with a stage the pill is a pencil beside the people on a phone, so the video starts higher */}
+            {stageOn && sharePill}
             {stageOn && editPill}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {!stageOn && sharePill}
             {!stageOn && editPill}
             {song.joinMode === "closed" && (
               <span data-jam-closed-line="" className="flex items-center gap-1 text-xs text-text-secondary">
@@ -562,6 +589,7 @@ export function JamSongPanel({
         )}
       </footer>
 
+      {canShare && <JamSharePicker song={song} open={sharing} onClose={() => setSharing(false)} />}
       {canEdit && (
         <JamEditSheet
           open={editing}

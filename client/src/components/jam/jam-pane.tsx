@@ -14,6 +14,7 @@ import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments
 import { isJamStudioOpen, setJamHintContext } from "@/lib/jam-hint-context";
 import { parseAppRoute } from "@/lib/app-route";
 import { jamHistoryState, jamStepOf, type JamRouteMode } from "@/lib/jam-history";
+import { takeHandoffAutoplay, useJamChatSongPlaying } from "@/lib/jam-chat-player";
 import { pickInstrument } from "@/lib/jam-record";
 import { rememberJamSeen } from "@/lib/jam-seen";
 import { releaseJamEngine, unlockJamAudio } from "@/lib/jam-session";
@@ -261,6 +262,8 @@ export function JamPane({
   const [entrance, setEntrance] = useState(true);
   /** The open song is playing: its tile dances. */
   const [openPlaying, setOpenPlaying] = useState(false);
+  /** A song a card in a conversation started: still playing on the shared engine, so its tile dances too. */
+  const chatSongPlaying = useJamChatSongPlaying();
   const [freshSongs, setFreshSongs] = useState<ReadonlySet<string>>(new Set());
   const [announcement, setAnnouncement] = useState("");
   const wallHint = useFeatureHintEnabled("jamWall");
@@ -290,7 +293,8 @@ export function JamPane({
       return;
     }
     // A link or Back opens a song and waits: only a card or its round button, or a take just posted, plays.
-    setOpenAutoplay(false);
+    // (a card in the chat that was playing this very song hands it over, and it goes on)
+    setOpenAutoplay(takeHandoffAutoplay(routeSongId));
     setOpenSongIdState(routeSongId);
     setSongGone(false);
     setSongError(false);
@@ -870,7 +874,7 @@ export function JamPane({
                         entrance={entrance}
                         fresh={freshSongs.has(tile.song.id)}
                         selected={tile.song.id === openSongId}
-                        playing={tile.song.id === openSongId && openPlaying}
+                        playing={(tile.song.id === openSongId && openPlaying) || tile.song.id === chatSongPlaying}
                         onNear={() => loadJamDetailLazy(channelId, tile.song.id)}
                         onOpen={() => openFromTile(tile.song.id, "card")}
                         onPlay={() => openFromTile(tile.song.id, "play")}

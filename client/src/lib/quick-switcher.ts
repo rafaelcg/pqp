@@ -40,7 +40,18 @@ export type SwitcherItem =
       name: string;
       type: string;
       serverName: string;
-    };
+    }
+  | { kind: "song"; id: string; song: SwitcherSong };
+
+/** What a song row needs: a Jam song the server matched for this viewer. */
+export interface SwitcherSong {
+  id: string;
+  title: string;
+  artist: string | null;
+  channelId: string;
+  serverId: string;
+  coverUrl: string | null;
+}
 
 export interface SwitcherSources {
   viewerId: string | null;
@@ -51,9 +62,15 @@ export interface SwitcherSources {
   servers: readonly { id: string; name: string; iconUrl?: string | null }[];
   channels: readonly { id: string; name: string; type: string }[];
   openServerName: string | null;
+  /**
+   * Songs of the open server's Jam that match what was typed, as the server
+   * answered for this viewer (`GET /api/channels/:id/jam-songs?q=`). Never held
+   * here beyond a query: a switcher that listed every song would be the wall.
+   */
+  songs?: readonly SwitcherSong[];
 }
 
-export const SWITCHER_LIMITS = { person: 5, conversation: 4, server: 3, channel: 5 } as const;
+export const SWITCHER_LIMITS = { person: 5, conversation: 4, server: 3, channel: 5, song: 4 } as const;
 
 /** 0 = starts with, 1 = a word starts with, 2 = contains, -1 = no match. */
 export function matchRank(haystack: string, needle: string): number {
@@ -210,5 +227,12 @@ export function quickSwitcherItems(query: string, sources: SwitcherSources): Swi
       }),
     );
 
-  return [...personItems, ...groupItems, ...serverItems, ...channelItems];
+  const songItems = (sources.songs ?? [])
+    .map((song) => ({ song, rank: bestRank([song.title, song.artist], needle) }))
+    .filter((entry) => entry.rank >= 0)
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, SWITCHER_LIMITS.song)
+    .map((entry): SwitcherItem => ({ kind: "song", id: `song:${entry.song.id}`, song: entry.song }));
+
+  return [...personItems, ...groupItems, ...serverItems, ...channelItems, ...songItems];
 }

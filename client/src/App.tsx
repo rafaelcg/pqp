@@ -281,6 +281,7 @@ import {
   type AppSessionPeople,
 } from "@/components/apps/app-session-layout";
 import { appSessionWire, appWireLink } from "@/lib/apps/session-wire-instance";
+import { registerShareSender, settleShareFrame } from "@/lib/jam-share-send";
 import {
   handleAppsFrame,
   noteAppsReconnected,
@@ -460,6 +461,7 @@ import {
   forumPostRoutePath,
   jamSongRoutePath,
   linkFollowedAt,
+  messageLinkState,
   parseAppRoute,
   pickOpenableServer,
   signedOutRedirectPath,
@@ -5482,6 +5484,9 @@ function MainAppContent({
         scheduleUnreadRefresh(false);
 
         transport.onMessage((message) => {
+          // The answer to a song sent into a channel from the Jam (it falls through:
+          // the broadcast is also an ordinary message for everybody who reads it).
+          settleShareFrame(message as { type: string; nonce?: string; reason?: string });
           if (message.type === "watch-party-waitlist-approved") {
             setWaitlistApprovals((current) =>
               current.some((card) => card.serverId === message.serverId)
@@ -8733,6 +8738,16 @@ function MainAppContent({
           } as unknown as Parameters<typeof transport.sendChat>[0]);
           return true;
         },
+      }),
+    [transport],
+  );
+  // A song's link sent into a channel from the Jam (`lib/jam-share-send.ts`): the same
+  // `message-create` frame the composer sends, answered to this socket by nonce.
+  useEffect(
+    () =>
+      registerShareSender({
+        isOnline: () => transport.getStatus() === "online",
+        send: (frame) => transport.sendChat(frame),
       }),
     [transport],
   );
@@ -15522,6 +15537,12 @@ function MainAppContent({
             void loadChannels(serverId);
           }}
           onSelectChannel={stableOnSelectChannel}
+          onOpenJamSong={(song) => {
+            setWhatsNewOpen(false);
+            navigate(jamSongRoutePath(song.serverId, song.channelId, song.id), {
+              state: messageLinkState(),
+            });
+          }}
           onSearchMessages={(query) =>
             window.dispatchEvent(
               new CustomEvent(SEARCH_MESSAGES_EVENT, { detail: { query } }),

@@ -44,6 +44,11 @@ export function getJamEngine(): Promise<JamEngine> {
   return current;
 }
 
+/** The engine, if there is one right now (and it is the current one). Never creates one. */
+export function peekJamEngine(): JamEngine | null {
+  return ready;
+}
+
 /**
  * Called from inside a click or a keypress that is about to start a song: makes
  * the engine's AudioContext (if it was not yet) and asks it to run, in the very
