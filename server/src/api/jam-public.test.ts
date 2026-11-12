@@ -952,6 +952,22 @@ describeDb("public jams", () => {
       expect(second.body.error).toBe("jam_public_rate_limited");
     });
 
+    it("public takes per day hold under a race: two adds at once never make two public takes past the limit", async () => {
+      process.env.JAM_PUBLIC_TAKES_PER_DAY = "1";
+      const song = await channelSong(alice);
+      expect((await publish(alice, song)).status).toBe(200);
+      const [one, two] = await Promise.all([
+        addTrack(eve, song, "bass", { publicConsent: "yes" }),
+        addTrack(eve, song, "drums", { publicConsent: "yes" }),
+      ]);
+      const created = [one, two].filter((reply) => reply.status === 201);
+      for (const reply of created) {
+        expect((await call(alice, "PATCH", `/api/jam-tracks/${reply.body.track.id}`, { inMix: true })).status).toBe(200);
+      }
+      const publicEve = (await publicSong(song))!.tracks.filter((track) => track.person.name === "Eve");
+      expect(publicEve).toHaveLength(1);
+    });
+
     it("likes: one per account, counted, and a per-minute budget", async () => {
       process.env.JAM_PUBLIC_LIKES_PER_MINUTE = "3";
       const song = await channelSong(alice);

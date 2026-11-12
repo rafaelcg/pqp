@@ -169,7 +169,11 @@ Per account, counted in Postgres (exact across the two API containers):
 | `JAM_PUBLIC_LIKES_PER_MINUTE` | 30 | likes and unlikes per minute (a cluster bucket) |
 | `JAM_PUBLIC_REPORTS_PER_DAY` | 20 | public jam reports per 24 h, under the existing 10 an hour report cap |
 
-Every refusal is 429 `jam_public_rate_limited`. The public routes have their own
+Every refusal is 429 `jam_public_rate_limited`. The take limit is also enforced
+where a take becomes public, under a per-account lock: a take that gets past the
+route's check in a race is recorded as removed from the public version (it stays
+in its song), never public. A take added to a published song while the flag is
+off stays private until the starter publishes again (fail closed). The public routes have their own
 address-keyed buckets under the anon backstop (config 30, list 60, song 120,
 play 30 in a burst).
 

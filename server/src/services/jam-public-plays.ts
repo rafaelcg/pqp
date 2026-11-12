@@ -34,6 +34,14 @@ const FLUSH_MS = 5_000;
 const FLUSH_MAX = 500;
 /** Memo entries kept before the memo is dropped and refilled (bounded memory). */
 const MEMO_MAX = 100_000;
+/**
+ * Plays waiting at most. Past it (a database so slow that flushes cannot keep
+ * up) a new play is dropped and counted in `dropped`: an undercount, bounded
+ * memory, and never a pile of waiting promises.
+ */
+const QUEUE_MAX = FLUSH_MAX * 10;
+/** A failed batch is put back this many times before it is let go. */
+const FLUSH_RETRIES = 3;
 
 function viewerSecret(): string {
   const raw = process.env.CLERK_SECRET_KEY || "pqp-dev-jam-public-plays";
@@ -57,7 +65,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  */
 export class JamPlayCounter {
   private memo = new Set<string>();
-  private queue = new Map<string, { songId: string; viewer: string; hour: number }>();
+  private queue = new Map<string, { songId: string; viewer: string; hour: number; tries: number }>();
   private timer: NodeJS.Timeout | null = null;
   private flushing: Promise<number> | null = null;
   /** Plays this counter actually added (rows inserted). */
@@ -65,6 +73,8 @@ export class JamPlayCounter {
   /** Requests dropped by the memo before any statement. */
   deduped = 0;
   flushFailures = 0;
+  /** Plays let go: the queue was full, or a batch failed `FLUSH_RETRIES` times. */
+  dropped = 0;
 
   /** Note a play. Never throws, never waits on the database. */
   note(songId: string, viewer: string, nowMs = Date.now()): void {
@@ -77,20 +87,33 @@ export class JamPlayCounter {
       this.deduped += 1;
       return;
     }
+    if (this.queue.size >= QUEUE_MAX) {
+      this.dropped += 1;
+      return;
+    }
     if (this.memo.size >= MEMO_MAX) {
       this.memo.clear();
     }
     this.memo.add(key);
-    this.queue.set(key, { songId: songId.toLowerCase(), viewer, hour });
-    if (this.queue.size >= FLUSH_MAX) {
+    this.queue.set(key, { songId: songId.toLowerCase(), viewer, hour, tries: 0 });
+    // One flush in flight at most: while one runs, the queue waits for the
+    // trailing timer instead of every note stacking another await on it.
+    if (this.queue.size >= FLUSH_MAX && !this.flushing) {
       void this.flush();
-    } else if (!this.timer) {
-      this.timer = setTimeout(() => {
-        this.timer = null;
-        void this.flush();
-      }, FLUSH_MS);
-      this.timer.unref?.();
+    } else {
+      this.schedule();
     }
+  }
+
+  private schedule(): void {
+    if (this.timer || this.queue.size === 0) {
+      return;
+    }
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      void this.flush();
+    }, FLUSH_MS);
+    this.timer.unref?.();
   }
 
   /** Write what is queued. Returns the plays added. One flush at a time. */
@@ -101,7 +124,8 @@ export class JamPlayCounter {
     if (this.queue.size === 0) {
       return 0;
     }
-    const batch = [...this.queue.values()];
+    const entries = [...this.queue.entries()];
+    const batch = entries.map(([, one]) => one);
     this.queue.clear();
     if (this.timer) {
       clearTimeout(this.timer);
@@ -136,8 +160,18 @@ export class JamPlayCounter {
         return added;
       } catch (error) {
         this.flushFailures += 1;
-        // The memo keeps these keys, so they are not retried: an undercount by
-        // one flush, never an overcount.
+        // Put the batch back for the next flush (a retried key is never
+        // double counted: the primary key decides), up to a few times; then
+        // let it go and free its memo keys so a later play in the same hour
+        // can count.
+        for (const [key, one] of entries) {
+          if (one.tries + 1 < FLUSH_RETRIES && this.queue.size < QUEUE_MAX) {
+            this.queue.set(key, { ...one, tries: one.tries + 1 });
+          } else {
+            this.memo.delete(key);
+            this.dropped += 1;
+          }
+        }
         console.error(
           "[jam-public] could not count plays:",
           error instanceof Error ? error.message : error,
@@ -145,6 +179,7 @@ export class JamPlayCounter {
         return 0;
       } finally {
         this.flushing = null;
+        this.schedule();
       }
     })();
     return this.flushing;
@@ -160,6 +195,7 @@ export class JamPlayCounter {
     this.counted = 0;
     this.deduped = 0;
     this.flushFailures = 0;
+    this.dropped = 0;
   }
 }
 
