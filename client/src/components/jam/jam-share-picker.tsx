@@ -55,8 +55,10 @@ export function JamSharePicker({ song, open, onClose }: { song: JamSongSummary; 
   const [query, setQuery] = useState("");
   const [attempt, setAttempt] = useState(0);
 
+  const serverId = song.serverId;
   useEffect(() => {
-    if (!open) {
+    // A standalone public jam has no server to share into.
+    if (!open || !serverId) {
       return;
     }
     let cancelled = false;
@@ -64,7 +66,7 @@ export function JamSharePicker({ song, open, onClose }: { song: JamSongSummary; 
     setLoadFailed(false);
     setRows({});
     setQuery("");
-    fetchForwardDestinations(song.serverId).then(
+    fetchForwardDestinations(serverId).then(
       (answer) => {
         if (!cancelled) {
           setPlaces(answer.channels.filter((channel) => channel.type === "text").map((channel) => ({ id: channel.id, name: channel.name })));
@@ -79,7 +81,7 @@ export function JamSharePicker({ song, open, onClose }: { song: JamSongSummary; 
     return () => {
       cancelled = true;
     };
-  }, [open, song.serverId, attempt]);
+  }, [open, serverId, attempt]);
 
   const shown = useMemo(() => {
     const needle = foldForSearch(query.replace(/^#/, ""));
@@ -88,6 +90,9 @@ export function JamSharePicker({ song, open, onClose }: { song: JamSongSummary; 
 
   const send = useCallback(
     async (place: Place) => {
+      if (!song.serverId || !song.channelId) {
+        return;
+      }
       setRows((before) => ({ ...before, [place.id]: { status: "sending" } }));
       const origin = typeof window === "undefined" ? "" : window.location.origin;
       const result = await sendShareMessage(

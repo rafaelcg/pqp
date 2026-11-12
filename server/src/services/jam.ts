@@ -44,6 +44,7 @@ import {
   presignPut,
 } from "../lib/s3.js";
 import { attachmentUrlTtlSeconds } from "./attachments.js";
+import { publicTrackSql, publicVideoSql } from "./jam-public-sql.js";
 import { enqueueJamVideoTranscode } from "./jam-video-transcode.js";
 
 /**
@@ -111,8 +112,9 @@ type Db = Pick<PoolClient, "query">;
 
 export interface JamSongRow {
   id: string;
-  channel_id: string;
-  server_id: string;
+  /** NULL for a standalone public jam (packages/shared/src/jam-public.ts). */
+  channel_id: string | null;
+  server_id: string | null;
   author_id: string | null;
   title: string;
   artist: string | null;
@@ -169,9 +171,11 @@ export async function getJamSongRow(
 export async function getJamTrackRow(
   trackId: string,
   db: Db = getPool(),
-): Promise<(JamTrackRow & { channel_id: string; server_id: string; song_author_id: string | null }) | null> {
+): Promise<
+  (JamTrackRow & { channel_id: string | null; server_id: string | null; song_author_id: string | null }) | null
+> {
   const result = await db.query<
-    JamTrackRow & { channel_id: string; server_id: string; song_author_id: string | null }
+    JamTrackRow & { channel_id: string | null; server_id: string | null; song_author_id: string | null }
   >(
     `SELECT t.*, s.channel_id, s.server_id, s.author_id AS song_author_id
        FROM jam_tracks t JOIN jam_songs s ON s.id = t.song_id
@@ -228,14 +232,34 @@ interface SongSummaryRow extends JamSongRow {
 }
 
 /**
+ * Which tracks a summary counts, and how people are named.
+ *
+ *  - `channel` (every channel read and frame): every live track, names as the
+ *    server shows them (nickname first). What this file always did.
+ *  - `public` (a caller reading through public access, packages/shared/src/
+ *    jam-public.ts): only the PUBLIC tracks plus the viewer's own (the viewer's
+ *    id is the query's `$2`), names as each account names itself, never a
+ *    server nickname, so nothing private of the channel reaches a non-member.
+ */
+export type JamSummaryView = "channel" | "public";
+
+/**
  * One query for the summaries of a set of songs (a page, or one): the author's
  * name as the server shows it (nickname first) and the live-track aggregates,
  * with a LATERAL so a page of 25 is 25 index probes on
  * `idx_jam_tracks_song`, not a scan of every track.
  */
-const SUMMARY_SELECT = `
+function summarySelect(view: JamSummaryView): string {
+  const trackFilter = view === "public" ? `AND (${publicTrackSql("t")} OR t.author_id = $2)` : "";
+  const authorName =
+    view === "public" ? "u.display_name" : "COALESCE(NULLIF(sm.nickname, ''), u.display_name)";
+  const contributorName =
+    view === "public"
+      ? "MAX(u2.display_name)"
+      : "COALESCE(NULLIF(MAX(sm2.nickname), ''), MAX(u2.display_name))";
+  return `
   SELECT ${SONG_COLUMNS},
-         COALESCE(NULLIF(sm.nickname, ''), u.display_name) AS author_name,
+         ${authorName} AS author_name,
          u.avatar_url AS author_avatar_url,
          agg.track_count, agg.instruments, agg.contributor_count,
          agg.mix_start, agg.mix_end, agg.has_video,
@@ -264,7 +288,7 @@ const SUMMARY_SELECT = `
                FILTER (WHERE t.in_mix) AS mix_end,
              BOOL_OR(t.video_key IS NOT NULL) AS has_video
         FROM jam_tracks t
-       WHERE t.song_id = s.id AND t.deleted_at IS NULL
+       WHERE t.song_id = s.id AND t.deleted_at IS NULL ${trackFilter}
     ) agg ON TRUE
     -- The preview waveform: the in-mix track with the most signal. The sum runs
     -- over at most 32 tracks x 400 numbers per song, on the rows the aggregate
@@ -272,7 +296,7 @@ const SUMMARY_SELECT = `
     LEFT JOIN LATERAL (
       SELECT t.peaks AS preview_peaks
         FROM jam_tracks t
-       WHERE t.song_id = s.id AND t.deleted_at IS NULL AND t.in_mix
+       WHERE t.song_id = s.id AND t.deleted_at IS NULL AND t.in_mix ${trackFilter}
          AND jsonb_array_length(t.peaks) > 0
        ORDER BY (SELECT COALESCE(SUM(v::float8), 0) FROM jsonb_array_elements_text(t.peaks) v) DESC,
                 t.created_at, t.id
@@ -285,17 +309,20 @@ const SUMMARY_SELECT = `
                ORDER BY c.first_at, c.author_id) AS contributors
         FROM (
           SELECT t.author_id, MIN(t.created_at) AS first_at,
-                 COALESCE(NULLIF(MAX(sm2.nickname), ''), MAX(u2.display_name)) AS name,
+                 ${contributorName} AS name,
                  MAX(u2.avatar_url) AS avatar
             FROM jam_tracks t
             JOIN users u2 ON u2.id = t.author_id
             LEFT JOIN server_members sm2 ON sm2.server_id = s.server_id AND sm2.user_id = t.author_id
-           WHERE t.song_id = s.id AND t.deleted_at IS NULL
+           WHERE t.song_id = s.id AND t.deleted_at IS NULL ${trackFilter}
            GROUP BY t.author_id
            ORDER BY MIN(t.created_at), t.author_id
            LIMIT ${JAM_PREVIEW_CONTRIBUTORS_MAX}
         ) c
     ) contrib ON TRUE`;
+}
+
+const SUMMARY_SELECT = summarySelect("channel");
 
 /**
  * At most `JAM_PREVIEW_PEAKS_MAX` values: the loudest value of each bucket, so a
@@ -317,12 +344,13 @@ export function reducePeaks(peaks: readonly number[], max = JAM_PREVIEW_PEAKS_MA
   return out;
 }
 
-function mapSong(row: SongSummaryRow): JamSongSummary {
+function mapSong(row: SongSummaryRow, view: JamSummaryView = "channel"): JamSongSummary {
   const present = new Set(row.instruments ?? []);
   return {
     id: row.id,
-    channelId: row.channel_id,
-    serverId: row.server_id,
+    // A caller reading through public access has no business with the channel.
+    channelId: view === "public" ? null : row.channel_id,
+    serverId: view === "public" ? null : row.server_id,
     title: row.title,
     artist: row.artist,
     joinMode: row.join_mode,
@@ -364,6 +392,23 @@ export async function getJamSongSummary(
     [songId],
   );
   return result.rows[0] ? mapSong(result.rows[0]) : null;
+}
+
+const PUBLIC_VIEW_SUMMARY_SELECT = summarySelect("public");
+
+/**
+ * The summary a caller with PUBLIC access reads (see `JamSummaryView`): the
+ * public tracks plus the viewer's own, account names, no channel.
+ */
+export async function getJamSongSummaryPublicView(
+  songId: string,
+  viewerId: string,
+): Promise<JamSongSummary | null> {
+  const result = await getPool().query<SongSummaryRow>(
+    `${PUBLIC_VIEW_SUMMARY_SELECT} WHERE s.id = $1 AND s.deleted_at IS NULL`,
+    [songId, viewerId],
+  );
+  return result.rows[0] ? mapSong(result.rows[0], "public") : null;
 }
 
 interface TrackJoinRow extends JamTrackRow {
@@ -474,6 +519,58 @@ export async function listJamTracks(
   return result.rows.map(mapTrack);
 }
 
+/**
+ * A song's tracks as a caller with PUBLIC access reads them: the public tracks
+ * plus the caller's own, oldest first, named as each account names itself. A
+ * public track's video URL is there only when the video itself is public; the
+ * caller's own track always carries its own media.
+ */
+export async function listJamTracksPublicView(
+  songId: string,
+  viewerId: string,
+): Promise<JamTrack[]> {
+  const result = await getPool().query<TrackJoinRow & { video_public: boolean }>(
+    `SELECT t.*, u.display_name AS author_name, u.avatar_url AS author_avatar_url,
+            (SELECT COUNT(*)::int FROM jam_track_votes v WHERE v.track_id = t.id) AS vote_count,
+            (t.author_id = $2 OR ${publicVideoSql("t")}) AS video_public
+       FROM jam_tracks t
+       JOIN jam_songs s ON s.id = t.song_id
+       JOIN users u ON u.id = t.author_id
+      WHERE t.song_id = $1 AND t.deleted_at IS NULL AND s.deleted_at IS NULL
+        AND (t.author_id = $2 OR ${publicTrackSql("t")})
+      ORDER BY t.created_at, t.id`,
+    [songId, viewerId],
+  );
+  return result.rows.map((row) =>
+    mapTrack(
+      row.video_public
+        ? row
+        : {
+            ...row,
+            video_key: null,
+            video_content_type: null,
+            video_bytes: null,
+            video_mp4_key: null,
+            video_mp4_content_type: null,
+            video_mp4_bytes: null,
+          },
+    ),
+  );
+}
+
+/** A song's live tracks counted, and how many of them are this person's (the add limits). */
+export async function countJamTracks(
+  songId: string,
+  userId: string,
+): Promise<{ total: number; mine: number }> {
+  const result = await getPool().query<{ total: number; mine: number }>(
+    `SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE author_id = $2)::int AS mine
+       FROM jam_tracks WHERE song_id = $1 AND deleted_at IS NULL`,
+    [songId, userId],
+  );
+  return result.rows[0] ?? { total: 0, mine: 0 };
+}
+
 /** The tracks (ids) of one song this person has voted for. */
 export async function listVotedTrackIds(
   songId: string,
@@ -565,7 +662,7 @@ export async function listJamSongs(input: {
   const last = page[page.length - 1];
   const more = rows.length > limit && last !== undefined;
   return {
-    songs: page.map(mapSong),
+    songs: page.map((row) => mapSong(row)),
     nextCursor: more
       ? encodeCursor({
           at: query.sort === "created" ? last.created_cursor : last.updated_cursor,
@@ -608,15 +705,24 @@ const FOLD_SQL = (expression: string): string =>
  * rows), so a deleted song is neither returned nor in the way.
  */
 async function songForNonce(
-  channelId: string,
+  channelId: string | null,
   authorId: string,
   nonce: string,
 ): Promise<JamSongSummary | null> {
-  const existing = await getPool().query<{ id: string }>(
-    `SELECT id FROM jam_songs
-      WHERE channel_id = $1 AND author_id = $2 AND client_nonce = $3 AND deleted_at IS NULL`,
-    [channelId, authorId, nonce],
-  );
+  // A standalone song (no channel) has its own unique index,
+  // `idx_jam_songs_standalone_nonce`; each branch reads the one its insert hits.
+  const existing =
+    channelId === null
+      ? await getPool().query<{ id: string }>(
+          `SELECT id FROM jam_songs
+            WHERE channel_id IS NULL AND author_id = $1 AND client_nonce = $2 AND deleted_at IS NULL`,
+          [authorId, nonce],
+        )
+      : await getPool().query<{ id: string }>(
+          `SELECT id FROM jam_songs
+            WHERE channel_id = $1 AND author_id = $2 AND client_nonce = $3 AND deleted_at IS NULL`,
+          [channelId, authorId, nonce],
+        );
   return existing.rows[0] ? getJamSongSummary(existing.rows[0].id) : null;
 }
 
@@ -629,8 +735,9 @@ async function songForNonce(
  * read it inserts once more.
  */
 export async function createJamSong(input: {
-  channelId: string;
-  serverId: string;
+  /** Both null for a standalone public jam (`services/jam-public.ts`). */
+  channelId: string | null;
+  serverId: string | null;
   authorId: string;
   request: CreateJamSongRequest;
 }): Promise<{ song: JamSongSummary; created: boolean }> {
@@ -1020,8 +1127,9 @@ export function addableInstruments(input: {
 
 // ---------------------------------------------------------------- uploads
 
-function storageKeyFor(serverId: string, songId: string, contentType: string): string {
-  return `jam/${serverId}/${songId}/${randomUUID()}${EXTENSION_BY_CONTENT_TYPE[contentType] ?? ""}`;
+function storageKeyFor(serverId: string | null, songId: string, contentType: string): string {
+  // A standalone public jam has no server: its objects live under `jam/public/`.
+  return `jam/${serverId ?? "public"}/${songId}/${randomUUID()}${EXTENSION_BY_CONTENT_TYPE[contentType] ?? ""}`;
 }
 
 /** The ceiling for a kind. */
@@ -1166,6 +1274,11 @@ export interface AddTrackInput {
   /** SEND_MESSAGES on the channel, decided by the caller. */
   canPost: boolean;
   request: AddJamTrackRequest;
+  /**
+   * Create the take OUT of the mix whatever the instrument: an outside take on
+   * a public jam is a request the starter puts in (`jam-public.ts`).
+   */
+  forceOutOfMix?: boolean;
 }
 
 /**
@@ -1318,7 +1431,8 @@ export async function addJamTrack(
         request.gain,
         JSON.stringify(request.peaks),
         // The first live take of an instrument is in the mix; later takes wait.
-        count.same === 0,
+        // An outside take on a public jam always waits for the starter.
+        !input.forceOutOfMix && count.same === 0,
       ],
     );
     trackId = inserted.rows[0]!.id;
@@ -1581,6 +1695,7 @@ export async function sweepJamMedia(): Promise<number> {
       WHERE id IN (
         SELECT id FROM jam_uploads
          WHERE claimed_at IS NULL AND created_at < NOW() - INTERVAL '${ORPHAN_GRACE}'
+           AND NOT EXISTS (SELECT 1 FROM jam_public_quarantine q WHERE q.storage_key = jam_uploads.storage_key)
          ORDER BY created_at LIMIT ${SWEEP_BATCH}
            FOR UPDATE SKIP LOCKED)
         AND claimed_at IS NULL
@@ -1614,11 +1729,14 @@ export async function sweepJamMedia(): Promise<number> {
   for (const row of purge.rows) {
     try {
       await deleteObject(row.audio_key);
-      if (row.video_key) {
+      // A video a scan rejected is evidence (jam_public_quarantine): its own
+      // sweep decides when it goes, never this one.
+      if (row.video_key && !(await isQuarantinedKey(row.video_key))) {
         await deleteObject(row.video_key);
       }
-      // The worker's MP4 copy, named on the row since before it was PUT.
-      if (row.video_mp4_key) {
+      // The worker's MP4 copy, named on the row since before it was PUT (kept,
+      // like the recording, when a scan quarantined it).
+      if (row.video_mp4_key && !(await isQuarantinedKey(row.video_mp4_key))) {
         await deleteObject(row.video_mp4_key);
       }
     } catch (error) {
@@ -1642,6 +1760,7 @@ export async function sweepJamMedia(): Promise<number> {
       WHERE u.kind = 'cover' AND u.claimed_at IS NOT NULL
         AND u.claimed_at < NOW() - INTERVAL '${ORPHAN_GRACE}'
         AND NOT EXISTS (SELECT 1 FROM jam_song_covers c WHERE c.upload_id = u.id)
+        AND NOT EXISTS (SELECT 1 FROM jam_public_quarantine q WHERE q.storage_key = u.storage_key)
       ORDER BY u.claimed_at LIMIT ${SWEEP_BATCH}`,
   );
   const goneCovers = await getPool().query<{ id: string; storage_key: string }>(
@@ -1650,6 +1769,7 @@ export async function sweepJamMedia(): Promise<number> {
        JOIN jam_songs s ON s.id = c.song_id
        JOIN jam_uploads u ON u.id = c.upload_id
       WHERE s.deleted_at IS NOT NULL AND s.deleted_at < NOW() - INTERVAL '${PURGE_GRACE}'
+        AND NOT EXISTS (SELECT 1 FROM jam_public_quarantine q WHERE q.storage_key = u.storage_key)
       ORDER BY s.deleted_at LIMIT ${SWEEP_BATCH}`,
   );
   for (const row of [...strayCovers.rows, ...goneCovers.rows]) {
@@ -1667,6 +1787,15 @@ export async function sweepJamMedia(): Promise<number> {
     done += 1;
   }
   return done;
+}
+
+/** A key a scan rejected and the quarantine holds (`jam_public_quarantine`). */
+async function isQuarantinedKey(key: string): Promise<boolean> {
+  const result = await getPool().query(
+    `SELECT 1 FROM jam_public_quarantine WHERE storage_key = $1`,
+    [key],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**

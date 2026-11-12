@@ -11,6 +11,10 @@ a client. Code: `server/src/services/jam.ts` (rows and rules),
 `server/src/api/jam-routes.ts` (who may do what), `server/src/services/jam-keys.ts`
 (object keys for the cascades), `server/src/lib/jam-config.ts` (the flag).
 
+Songs anybody can hear without an account (a channel song made public by its
+starter, or a standalone public jam with no channel) are `docs/JAM_PUBLIC.md`,
+behind their own flag, `jam_public`.
+
 Nothing is mixed on the server. Each track is its own object in the bucket; the
 client decodes them, places each one on the timeline and sums them. The server
 keeps the pieces, decides who may add one, and tells the room when something

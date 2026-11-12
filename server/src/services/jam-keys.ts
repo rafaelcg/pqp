@@ -22,6 +22,17 @@ import { getPool } from "../db.js";
  */
 type Db = Pick<PoolClient, "query">;
 
+/**
+ * Wraps a key query so a key the public jams' scan quarantined
+ * (`jam_public_quarantine`) is never handed to a delete: it is evidence, and
+ * its own sweep decides when it goes (docs/CONTENT_SAFETY.md, "Retention").
+ */
+function notQuarantined(union: string): string {
+  return `SELECT k.key FROM (${union}) k
+           WHERE k.key IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM jam_public_quarantine q WHERE q.storage_key = k.key)`;
+}
+
 const KEYS_OF_TRACKS = `t.audio_key AS key FROM jam_tracks t`;
 
 /** Objects of every song in these channels. */
@@ -33,7 +44,7 @@ export async function jamKeysForChannels(
     return [];
   }
   const result = await db.query<{ key: string }>(
-    `SELECT u.storage_key AS key FROM jam_uploads u WHERE u.channel_id = ANY($1::uuid[])
+    notQuarantined(`SELECT u.storage_key AS key FROM jam_uploads u WHERE u.channel_id = ANY($1::uuid[])
      UNION
      SELECT ${KEYS_OF_TRACKS} JOIN jam_songs s ON s.id = t.song_id
        WHERE s.channel_id = ANY($1::uuid[])
@@ -42,7 +53,7 @@ export async function jamKeysForChannels(
        WHERE s.channel_id = ANY($1::uuid[]) AND t.video_key IS NOT NULL
      UNION
      SELECT t.video_mp4_key FROM jam_tracks t JOIN jam_songs s ON s.id = t.song_id
-       WHERE s.channel_id = ANY($1::uuid[]) AND t.video_mp4_key IS NOT NULL`,
+       WHERE s.channel_id = ANY($1::uuid[]) AND t.video_mp4_key IS NOT NULL`),
     [channelIds],
   );
   return result.rows.map((row) => row.key);
@@ -54,7 +65,7 @@ export async function jamKeysForServer(
   db: Db = getPool(),
 ): Promise<string[]> {
   const result = await db.query<{ key: string }>(
-    `SELECT u.storage_key AS key FROM jam_uploads u WHERE u.server_id = $1
+    notQuarantined(`SELECT u.storage_key AS key FROM jam_uploads u WHERE u.server_id = $1
      UNION
      SELECT ${KEYS_OF_TRACKS} JOIN jam_songs s ON s.id = t.song_id
        WHERE s.server_id = $1
@@ -63,7 +74,7 @@ export async function jamKeysForServer(
        WHERE s.server_id = $1 AND t.video_key IS NOT NULL
      UNION
      SELECT t.video_mp4_key FROM jam_tracks t JOIN jam_songs s ON s.id = t.song_id
-       WHERE s.server_id = $1 AND t.video_mp4_key IS NOT NULL`,
+       WHERE s.server_id = $1 AND t.video_mp4_key IS NOT NULL`),
     [serverId],
   );
   return result.rows.map((row) => row.key);
@@ -75,13 +86,13 @@ export async function jamKeysForUser(
   db: Db = getPool(),
 ): Promise<string[]> {
   const result = await db.query<{ key: string }>(
-    `SELECT u.storage_key AS key FROM jam_uploads u WHERE u.uploader_id = $1
+    notQuarantined(`SELECT u.storage_key AS key FROM jam_uploads u WHERE u.uploader_id = $1
      UNION
      SELECT t.audio_key FROM jam_tracks t WHERE t.author_id = $1
      UNION
      SELECT t.video_key FROM jam_tracks t WHERE t.author_id = $1 AND t.video_key IS NOT NULL
      UNION
-     SELECT t.video_mp4_key FROM jam_tracks t WHERE t.author_id = $1 AND t.video_mp4_key IS NOT NULL`,
+     SELECT t.video_mp4_key FROM jam_tracks t WHERE t.author_id = $1 AND t.video_mp4_key IS NOT NULL`),
     [userId],
   );
   return result.rows.map((row) => row.key);

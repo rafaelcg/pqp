@@ -151,9 +151,10 @@ import { z } from "zod";
  *           JAM_TRACK_MAX_DURATION_MS long. MediaRecorder output fits: Opus in
  *           WebM or Ogg, AAC in MP4. Uncompressed WAV is not accepted (ten
  *           minutes of it is ~57 MB); the recorder encodes first.
- *   video   JAM_VIDEO_CONTENT_TYPES, at most JAM_VIDEO_MAX_BYTES. Not scanned,
- *           like every audio and video object in the product
- *           (`docs/CONTENT_SAFETY.md`). Chrome records WebM, which iOS and
+ *   video   JAM_VIDEO_CONTENT_TYPES, at most JAM_VIDEO_MAX_BYTES. Not scanned
+ *           in a channel, like every audio and video object in the product
+ *           (`docs/CONTENT_SAFETY.md`); a PUBLIC song's video is frame-scanned
+ *           before it is public (`jam-public.ts`, SCANNING). Chrome records WebM, which iOS and
  *           Safari cannot play, so the worker makes an H.264 + AAC MP4 copy of
  *           any camera file that is not one already (`speech_jobs` kind
  *           `jam_video_transcode`, `services/jam-video-transcode.ts`), same
@@ -166,8 +167,9 @@ import { z } from "zod";
  *           at most JAM_COVER_MAX_BYTES. The web client frames it square and
  *           sends a JPEG of `JAM_COVER_SIZE` pixels. Same three steps with a
  *           different third one: `PUT /api/jam-songs/:songId/cover` with the
- *           `uploadId` (see "A SONG'S COVER" below). Not scanned, like the
- *           avatars and server pictures (`docs/CONTENT_SAFETY.md`).
+ *           `uploadId` (see "A SONG'S COVER" below). Not scanned in a channel,
+ *           like the avatars and server pictures (`docs/CONTENT_SAFETY.md`); a
+ *           PUBLIC song's cover is scanned before it is public (`jam-public.ts`).
  *
  * An upload that is never claimed is deleted, object and ledger row, about an
  * hour later. A deleted track's objects are deleted a day after it.
@@ -523,8 +525,16 @@ export type JamContributor = z.infer<typeof jamContributorSchema>;
  */
 export const jamSongSummarySchema = z.object({
   id: uuid,
-  channelId: uuid,
-  serverId: uuid,
+  /**
+   * The jam channel, and its server. NULL ONLY for a standalone public jam
+   * (`packages/shared/src/jam-public.ts`, "WHERE A SONG LIVES"), a song that
+   * belongs to no channel, and in the summary a caller who is not a member
+   * of the song's channel reads through public access (that caller has no
+   * business with the channel). Every channel read, frame and list keeps both
+   * set: a client that only ever opens jam channels never sees a null here.
+   */
+  channelId: uuid.nullable(),
+  serverId: uuid.nullable(),
   title: z.string(),
   /** The original artist. Null means the song is an original. */
   artist: z.string().nullable(),
@@ -823,6 +833,17 @@ export const addJamTrackSchema = z
     trimEndMs: trimSchema.default(0),
     gain: gainSchema.default(1),
     peaks: peaksSchema.default([]),
+    /**
+     * The recorder's answer for the PUBLIC version of a song that is public
+     * (`packages/shared/src/jam-public.ts`, "CONSENT"): `yes` (audio and
+     * video) or `audio_only`. Stored as the recorder's consent for the whole
+     * song. Required (400 `jam_public_consent_required`) when the caller
+     * records through public access (not a member of the song's channel, or a
+     * standalone public jam); optional for a channel member, whose part stays
+     * out of the public version until they answer. Ignored on a song that is
+     * not public. Additive: an older client never sends it.
+     */
+    publicConsent: z.enum(["yes", "audio_only"]).optional(),
   })
   .refine((track) => track.trimStartMs + track.trimEndMs < track.durationMs, {
     message: JAM_ERRORS.trimInvalid,
