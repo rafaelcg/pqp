@@ -1700,7 +1700,7 @@
     <string name="jam_rec_route_bluetooth">Fone Bluetooth</string>
     <string name="jam_rec_route_speaker">Sem fone</string>
     <string name="jam_rec_route_other">Saída de som</string>
-    <string name="jam_rec_measured">Fone ajustado · %d ms</string>
+    <string name="jam_rec_measured">Atraso ajustado · %d ms</string>
     <string name="jam_rec_not_measured">Ainda sem medir</string>
     <string name="jam_rec_speaker_title">Bota o fone</string>
     <string name="jam_rec_speaker_body">Sem fone o microfone pega a banda também e a gravação sai com eco. Dá pra gravar assim mesmo.</string>

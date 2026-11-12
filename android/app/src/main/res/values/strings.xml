@@ -1709,7 +1709,7 @@
     <string name="jam_rec_route_bluetooth">Bluetooth headphones</string>
     <string name="jam_rec_route_speaker">No headphones</string>
     <string name="jam_rec_route_other">Audio output</string>
-    <string name="jam_rec_measured">Headphones set · %d ms</string>
+    <string name="jam_rec_measured">Delay set · %d ms</string>
     <string name="jam_rec_not_measured">Not measured yet</string>
     <string name="jam_rec_speaker_title">Put your headphones on</string>
     <string name="jam_rec_speaker_body">Without them the microphone hears the band too and the recording comes out with an echo. You can record anyway.</string>

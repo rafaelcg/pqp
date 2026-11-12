@@ -129,6 +129,8 @@ data class JamStudioUi(
     val calibration: LatencyResult? = null,
     val measuring: MeasureMethod? = null,
     val measureFailed: Boolean = false,
+    /** Which way the failed measurement was tried, so the sentence says what to do differently. */
+    val measureFailedMethod: MeasureMethod? = null,
     val countInBars: Int = 1,
     val bpm: Int = DEFAULT_BPM,
     val beat: Int = 0,
@@ -310,7 +312,7 @@ class JamStudioViewModel(
         val u = _ui.value
         if (u.phase != StudioPhase.Setup || u.block != null || !u.micGranted || measureJob?.isActive == true) return
         measureJob = viewModelScope.launch {
-            _ui.update { it.copy(phase = StudioPhase.Measuring, measuring = method, measureFailed = false, notice = null) }
+            _ui.update { it.copy(phase = StudioPhase.Measuring, measuring = method, measureFailed = false, measureFailedMethod = null, notice = null) }
             val result = try {
                 runMeasurement(method)
             } catch (e: CancellationException) {
@@ -325,6 +327,7 @@ class JamStudioViewModel(
                     phase = StudioPhase.Setup,
                     measuring = null,
                     measureFailed = saved == null && !closed,
+                    measureFailedMethod = if (saved == null && !closed) method else null,
                     notice = if (saved != null) StudioNotice.MeasureSaved else null,
                 )
             }

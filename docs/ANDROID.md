@@ -4038,7 +4038,7 @@ emulator (Pixel 10 Pro profile, Android 17, local API, MinIO, FLAC, Opus, AAC,
 MP3 and a broken stem, an MP4 video): the row, the wall (hero, wide,
 small, poster, waveform tiles), filters, a song opening, play with the playhead
 and the video counter moving together, scrub, mute, solo, volume, a vote
-(confirmed on the server), auditioning a take, the record sheet, a song
+(confirmed on the server), auditioning a take, the studio end to end (a typed delay, count-in, recording, review, nudge, send, the take on the server as FLAC, a restored unsent take, mic denied, app left mid-take, covers, a 1.6 font scale, dark), a song
 arriving live, a broken stem, pt-BR, dark, a 2.0 font scale, the song link,
 pause on leaving the app, and the flag off. **Not verified, needs a real phone**:
 

@@ -662,7 +662,7 @@ private fun MeasureCard(model: JamStudioViewModel, ui: JamStudioUi, onDismiss: (
         Text(stringResource(R.string.jam_rec_measure_body), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
         if (ui.measureFailed) {
             Text(
-                stringResource(R.string.jam_rec_measure_failed),
+                stringResource(if (ui.measureFailedMethod == MeasureMethod.TapAlong) R.string.jam_rec_measure_failed_tap else R.string.jam_rec_measure_failed),
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.error,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
@@ -1245,10 +1245,9 @@ private fun NudgeCard(model: JamStudioViewModel, ui: JamStudioUi) {
             Text(
                 value,
                 style = MaterialTheme.typography.titleSmall,
-                fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.width(112.dp).testTag("jam.studio.nudgeValue").semantics { liveRegion = LiveRegionMode.Polite },
+                modifier = Modifier.weight(1.1f).testTag("jam.studio.nudgeValue").semantics { liveRegion = LiveRegionMode.Polite },
             )
             NudgeButton(stringResource(R.string.jam_rec_later), PqpIcons.Forward, 1, model, Modifier.weight(1f).testTag("jam.studio.later"))
         }
