@@ -7,9 +7,9 @@ import { asInstrument, INSTRUMENT_LOOK, type Instrument } from "./instruments";
 import { levelScale, windowBars } from "./levels";
 import { mosaicLayout, spotlightLayout } from "./mosaic";
 import type { PublicPlayer } from "./player";
-import { Badge, Glyph, LiveBars, MosaicGrid, tileGround } from "./tiles";
-import { useMedia, usePlayerState } from "./use-player";
-import { cn, instrumentName, personLabel } from "./util";
+import { Badge, LiveBars, MosaicGrid, tileGround } from "./tiles";
+import { useMedia, usePlayerState, useStageAspect } from "./use-player";
+import { cn, partLabel, personLabel } from "./util";
 
 /**
  * THE MOSAIC of a song: every public part is a tile. A part with a video is
@@ -28,6 +28,40 @@ const LEVEL_BARS = 15;
 type Item =
   | { kind: "part"; track: PublicJamTrack }
   | { kind: "need"; instrument: Instrument };
+
+/**
+ * Who it is: the person's picture, or their initial on the instrument's colour,
+ * with the instrument's glyph as a badge on it. A part with no video is a
+ * person, not an icon.
+ */
+function PersonMark({ track }: { track: PublicJamTrack }) {
+  const instrument = asInstrument(track.instrument);
+  const look = INSTRUMENT_LOOK[instrument];
+  const name = personLabel(track.person);
+  const [broken, setBroken] = useState(false);
+  const Icon = look.icon;
+  return (
+    <span className="relative grid aspect-square h-12 place-items-center @min-[8rem]/face:h-16 @min-[13rem]/face:h-20 @min-[18rem]/face:h-24">
+      {track.person.avatarUrl && !broken ? (
+        <img
+          src={track.person.avatarUrl}
+          alt=""
+          loading="lazy"
+          draggable={false}
+          onError={() => setBroken(true)}
+          className="h-full w-full rounded-full object-cover"
+        />
+      ) : (
+        <span aria-hidden="true" className={cn("grid h-full w-full place-items-center rounded-full font-display text-xl font-extrabold @min-[13rem]/face:text-3xl", look.fill)}>
+          {Array.from(name)[0]?.toUpperCase() ?? "?"}
+        </span>
+      )}
+      <span aria-hidden="true" className={cn("absolute -bottom-1 -right-1 grid h-7 w-7 place-items-center rounded-full ring-2 ring-media-scrim", look.fill)}>
+        <Icon className="h-4 w-4" strokeWidth={2} />
+      </span>
+    </span>
+  );
+}
 
 function PartFace({ track, player, playing }: { track: PublicJamTrack; player: PublicPlayer; playing: boolean }) {
   const instrument = asInstrument(track.instrument);
@@ -67,7 +101,7 @@ function PartFace({ track, player, playing }: { track: PublicJamTrack; player: P
   );
   return (
     <div className={cn("@container/face absolute inset-0 flex flex-col items-center justify-center gap-3", tileGround(instrument))}>
-      <Glyph instrument={instrument} className="h-[22%] w-[22%] min-h-8 min-w-8 max-h-20 max-w-20" />
+      <PersonMark track={track} />
       <LiveBars instrument={instrument} count={LEVEL_BARS} paint={paint} className="hidden h-[14%] min-h-6 max-h-10 @min-[7rem]/face:flex" />
     </div>
   );
@@ -110,14 +144,14 @@ function PartTile({
       type="button"
       onClick={onSelect}
       aria-pressed={spotlit}
-      aria-label={jt("tile.listen", { name, instrument: instrumentName(instrument) })}
+      aria-label={jt("tile.listen", { name, instrument: partLabel(track).toLowerCase() })}
       data-jam-tile={track.id}
       data-jam-tile-kind={videoUrl ? "video" : "audio"}
       data-spotlit={spotlit ? "true" : undefined}
       className={cn(
         "@container/tile group/tile absolute inset-0 block h-full w-full cursor-pointer overflow-hidden bg-media-scrim text-left outline-none",
         "focus-visible:z-10 focus-visible:shadow-[inset_0_0_0_3px_var(--color-accent)]",
-        dimmed && "saturate-[0.45] brightness-[0.82]",
+        dimmed && "grayscale brightness-[0.5]",
       )}
       style={spotlit ? { boxShadow: `inset 0 0 0 3px var(${look.token})` } : undefined}
     >
@@ -144,7 +178,7 @@ function PartTile({
         <Badge instrument={instrument} className="h-5 w-5" />
         <span className="truncate @max-[7rem]/tile:hidden">
           {name}
-          <span className="hidden font-semibold text-on-media-muted @min-[11rem]/tile:inline"> · {instrumentName(instrument)}</span>
+          <span className="hidden font-semibold text-on-media-muted @min-[11rem]/tile:inline"> · {partLabel(track).toLowerCase()}</span>
         </span>
       </span>
     </button>
@@ -204,7 +238,8 @@ export function SongStage({
     ],
     [tracks, need],
   );
-  const aspect = wide ? 16 / 9 : 0.8;
+  const stage = useStageAspect();
+  const aspect = wide ? stage : 0.8;
   const spotIndex = spot !== null && spot < tracks.length ? spot : null;
   const layout = useMemo(
     () => (spotIndex === null ? mosaicLayout(items.length, aspect) : spotlightLayout(items.length, spotIndex, aspect)),
@@ -214,7 +249,7 @@ export function SongStage({
   const soloed = spotIndex !== null ? tracks[spotIndex] : null;
 
   return (
-    <div className="relative mx-auto w-full" style={{ maxWidth: wide ? `calc((100dvh - 12rem) * ${layout.aspect})` : undefined, minWidth: wide ? "min(100%, 36rem)" : undefined }}>
+    <div className="relative w-full">
       <MosaicGrid layout={layout} label={label} className="rounded-[var(--radius-panel)]">
         {items.map((item, index) =>
           item.kind === "need" ? (
@@ -237,10 +272,10 @@ export function SongStage({
       {soloed && (
         <div
           data-jam-solo=""
-          className="absolute left-3 top-3 z-20 inline-flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full bg-on-media py-1 pl-4 pr-1 text-[13px] font-bold text-media-scrim shadow-[var(--shadow-2)]"
+          className="absolute left-3 top-3 z-20 inline-flex max-w-[calc(100%-1.5rem)] items-center gap-2 rounded-full bg-on-media py-1 pl-4 pr-1 text-[13px] font-bold text-media-scrim"
         >
           <span className="truncate">
-            {jt("spot.only", { name: personLabel(soloed.person), instrument: instrumentName(soloed.instrument) })}
+            {jt("spot.only", { name: personLabel(soloed.person), instrument: partLabel(soloed).toLowerCase() })}
           </span>
           <button
             type="button"

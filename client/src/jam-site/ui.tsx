@@ -78,7 +78,7 @@ export function Sheet({
             type="button"
             onClick={onClose}
             aria-label={jt("sheet.close")}
-            className={cn(buttonClass.base, buttonClass.icon, "absolute right-3 top-3 h-9 w-9")}
+            className={cn(buttonClass.base, buttonClass.icon, "absolute right-3 top-3 h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11")}
           >
             <X className="h-4 w-4" aria-hidden />
           </button>

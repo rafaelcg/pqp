@@ -57,6 +57,11 @@ export function ago(iso: string, locale: Locale, now: number = Date.now()): stri
   }
 }
 
+/** What a part is called: the person's own word for it ("cavaquinho") or the instrument's name. */
+export function partLabel(track: { label: string | null; instrument: string }): string {
+  return track.label?.trim() || instrumentName(track.instrument);
+}
+
 /** The instrument's name, lower case: "baixo". */
 export function instrumentName(instrument: Instrument | string): string {
   return jt(`instrument.${asInstrument(instrument)}` as Parameters<typeof jt>[0]);

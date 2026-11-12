@@ -607,6 +607,13 @@ export default defineConfig(({ command }) => ({
           if (id.includes("/node_modules/lucide-react/")) {
             return "icons";
           }
+          // React's own runtime, apart from the icons. Rollup had hoisted it
+          // INTO the icons chunk (lucide imports it first), so the public jam
+          // site, which needs React and none of the app's icons, downloaded
+          // every icon the app uses (about 29 kB gzipped) to get 7 kB of React.
+          if (/\/node_modules\/(?:\.pnpm\/[^/]+\/node_modules\/)?(?:react|scheduler)\//.test(id)) {
+            return "react-core";
+          }
           return undefined;
         },
       },

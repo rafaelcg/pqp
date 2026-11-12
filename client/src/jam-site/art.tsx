@@ -51,11 +51,11 @@ export function SongArt({
     [cells.length, variant],
   );
   if (cells.length === 0) {
-    return <div className={cn("aspect-[4/5] w-full bg-media-scrim", className)} />;
+    return <div className={cn("aspect-square w-full bg-media-scrim", className)} />;
   }
   return (
     <div className={cn("relative", className)}>
-      <MosaicGrid layout={layout}>
+      <MosaicGrid layout={layout} aspect={variant === "card" ? 1 : undefined}>
         {cells.map((cell, slot) => {
           if (cell.kind === "cover") {
             return (
@@ -72,7 +72,7 @@ export function SongArt({
           }
           if (cell.kind === "need") {
             return (
-              <div key={`need-${cell.instrument}`} className="absolute inset-0" role="img" aria-label={jt(`needs.${cell.instrument}` as Parameters<typeof jt>[0])}>
+              <div key={`need-${cell.instrument}`} className="absolute inset-0" role="img" title={jt(`needs.${cell.instrument}` as Parameters<typeof jt>[0])} aria-label={jt(`needs.${cell.instrument}` as Parameters<typeof jt>[0])}>
                 <NeedStill
                   instrument={cell.instrument}
                   label={variant === "hero" ? jt(`tile.yours.${cell.instrument}` as Parameters<typeof jt>[0]) : undefined}

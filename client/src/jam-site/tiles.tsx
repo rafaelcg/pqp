@@ -16,17 +16,20 @@ export function MosaicGrid({
   className,
   label,
   gap = 2,
+  aspect,
 }: {
   layout: MosaicLayout;
   children: ReactNode[];
   className?: string;
   label?: string;
   gap?: number;
+  /** A fixed width over height, for a row of pictures that must line up whatever their count. */
+  aspect?: number;
 }) {
   const style: CSSProperties = {
     gridTemplateColumns: layout.columns.map((w) => `${w}fr`).join(" "),
     gridTemplateRows: layout.rows.map((h) => `${h}fr`).join(" "),
-    aspectRatio: String(layout.aspect),
+    aspectRatio: String(aspect ?? layout.aspect),
     gap,
   };
   return (
@@ -110,7 +113,8 @@ export function LiveBars({
     return paint((values) => {
       for (let k = 0; k < bars.length; k++) {
         const v = Math.min(1, Math.max(0, values[k] ?? 0));
-        bars[k]!.style.height = `${Math.round(14 + v * 86)}%`;
+        bars[k]!.style.height = `${Math.round(10 + v * 90)}%`;
+        bars[k]!.style.opacity = v < 0.03 ? "0.35" : "1";
       }
     });
   }, [paint]);
@@ -122,7 +126,7 @@ export function LiveBars({
       className={cn("flex h-9 items-center justify-center gap-[3px]", className)}
     >
       {Array.from({ length: count }, (_, index) => (
-        <i key={index} className={cn("block w-[3px] rounded-full", look.bar)} style={{ height: "14%" }} />
+        <i key={index} className={cn("block w-[3px] rounded-full", look.bar)} style={{ height: "10%", opacity: 0.35 }} />
       ))}
     </span>
   );

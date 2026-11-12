@@ -1,5 +1,5 @@
 import type { PublicJamSongDetail } from "@pqp/shared";
-import { ArrowLeftIcon as ArrowLeft, FlagIcon as Flag, Link2Icon as Link2 } from "./icons";
+import { ArrowLeftIcon as ArrowLeft, FlagIcon as Flag } from "./icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { jt } from "@/lib/i18n/jam-site";
 import { detectLocale } from "@/lib/locale";
@@ -171,7 +171,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
     <div className={cn(CONTAINER, "pt-6 sm:pt-8")} data-jam-song={song.id}>
       <Link
         href={jamPath(mount, { kind: "home" })}
-        className="inline-flex h-10 items-center gap-2 rounded-full pr-3 text-[15px] font-bold text-text-secondary outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
+        className="inline-flex h-10 items-center gap-2 rounded-full pr-3 text-[15px] font-bold text-text-secondary outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring sm:hidden"
       >
         <ArrowLeft className="h-[18px] w-[18px]" aria-hidden />
         {jt("song.back")}
@@ -184,7 +184,8 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
         </div>
       )}
 
-      <div className="mt-4">
+      <div className="mt-4 flex items-end gap-4 sm:gap-6">
+        <div className="min-w-0 flex-1">
         {song.origin && (
           <p className="flex items-center gap-2 text-[15px] font-bold text-text-secondary" data-jam-origin-line="">
             {song.origin.iconUrl ? (
@@ -201,12 +202,21 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
           {song.title}
         </h1>
         <p className="mt-2 text-[15px] text-text-tertiary">
-          {song.artist ? `${song.artist} · ` : ""}
-          {jt("song.startedBy", { who })} · {ago(song.publishedAt, locale)} · {jt("card.plays", { count: song.plays, countLabel: compactCount(song.plays, locale) })}
+          {song.artist ? <><span className="whitespace-nowrap">{song.artist}</span> · </> : null}
+          <span className="whitespace-nowrap">{jt("song.startedBy", { who })}</span> · <span className="whitespace-nowrap">{ago(song.publishedAt, locale)}</span> · <span className="whitespace-nowrap">{jt("card.plays", { count: song.plays, countLabel: compactCount(song.plays, locale) })}</span>
         </p>
+        </div>
+        {song.coverUrl && (
+          <img
+            src={song.coverUrl}
+            alt={jt("art.cover", { title: song.title })}
+            data-jam-cover=""
+            className="h-16 w-16 shrink-0 rounded-[var(--radius-card)] object-cover sm:h-24 sm:w-24"
+          />
+        )}
       </div>
 
-      <div className="mt-6">
+      <div className="mt-6" data-jam-stagewrap="">
         <SongStage
           tracks={tracks}
           need={need}
@@ -239,26 +249,17 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
         <aside className="flex flex-col gap-6">
           {song.origin && (
             <section aria-labelledby="jam-origin-title">
-              <h2 id="jam-origin-title" className="text-xs font-extrabold uppercase tracking-[0.08em] text-text-tertiary">
+              <h2 id="jam-origin-title" className="text-sm font-bold text-text-secondary">
                 {jt("origin.title")}
               </h2>
               <OriginCard origin={song.origin} />
             </section>
           )}
           <section>
-            <h2 className="text-xs font-extrabold uppercase tracking-[0.08em] text-text-tertiary">{jt("how.title")}</h2>
+            <h2 className="text-sm font-bold text-text-secondary">{jt("how.title")}</h2>
             <p className="mt-2 text-[15px] leading-6 text-text-secondary">{jt("how.body", { who })}</p>
           </section>
-          <div className="flex flex-wrap gap-1 border-t border-border pt-4">
-            <button
-              type="button"
-              onClick={() => void share()}
-              data-jam-copy=""
-              className={button("ghost", "md", "gap-2 px-3")}
-            >
-              <Link2 className="h-4 w-4" aria-hidden />
-              {jt("share.copy")}
-            </button>
+          <div className="flex flex-wrap gap-1 border-t border-border pt-3">
             <button
               type="button"
               onClick={() => ask({ kind: "report", songId: song.id })}

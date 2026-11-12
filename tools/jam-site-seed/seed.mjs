@@ -155,13 +155,12 @@ function videoFor(instrument, variant) {
     const file = join(OUT, `v-${key}.webm`);
     if (!existsSync(file) || statSync(file).size === 0) {
       const hue = HUE[instrument] ?? HUE.other;
-      // A sweeping bar tied to the clock, so a viewer can SEE the picture is on the song's time.
+      // A thin progress line tied to the clock, so a viewer can SEE the picture is on the song's time.
       ffmpeg([
         "-f", "lavfi", "-i",
         `gradients=s=640x360:d=${SECONDS}:r=15:speed=${0.01 + variant * 0.006}:c0=${hue}:c1=0x10161c:c2=${hue}:nb_colors=3:type=${variant % 2 ? "radial" : "linear"}`,
-        "-f", "lavfi", "-i", `color=c=white@0.85:s=60x14:r=15:d=${SECONDS}`,
-        "-f", "lavfi", "-i", `color=c=white@0.6:s=640x4:r=15:d=${SECONDS}`,
-        "-filter_complex", `[0][1]overlay=x='mod(t*40,W)':y=H-14[a];[a][2]overlay=x='-w+t*w/${SECONDS}':y=0,format=yuv420p`,
+        "-f", "lavfi", "-i", `color=c=white@0.5:s=640x3:r=15:d=${SECONDS}`,
+        "-filter_complex", `[0][1]overlay=x='-w+t*w/${SECONDS}':y=0,format=yuv420p`,
         "-c:v", "libvpx", "-b:v", "600k", "-crf", "32", "-deadline", "realtime", "-cpu-used", "8", "-an", "-t", String(SECONDS), file,
       ]);
     }

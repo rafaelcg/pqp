@@ -31,8 +31,8 @@ html[data-jam-site] {
 }
 
 html[data-jam-site][data-theme="light"] {
-  --jam-ink-mix: 54%;
-  --jam-wave-dim: 0.34;
+  --jam-ink-mix: 62%;
+  --jam-wave-dim: 0.5;
 }
 
 /* The seek bar: a thin track that fills with the accent, a thumb that is there

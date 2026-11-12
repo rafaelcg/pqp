@@ -7,7 +7,7 @@ import { laneBars } from "./levels";
 import type { PublicPlayer } from "./player";
 import { Badge } from "./tiles";
 import { useClockDraw, usePlayerState } from "./use-player";
-import { cn, instrumentName, personLabel } from "./util";
+import { cn, instrumentName, partLabel, personLabel } from "./util";
 
 /**
  * "Quem tocou o quê": one lane per part, each a waveform laid on the song's
@@ -112,7 +112,7 @@ export function SongLanes({
                 <div className="min-w-0 leading-tight">
                   <p className="truncate font-bold">{who}</p>
                   <p className="truncate text-[13px] text-text-tertiary">
-                    {track.label?.trim() || instrumentName(instrument)}
+                    {partLabel(track)}
                     {track.person.handle ? ` · @${track.person.handle}` : ""}
                   </p>
                 </div>
@@ -125,7 +125,7 @@ export function SongLanes({
                 onClick={() => onReport(track.id)}
                 aria-label={jt("lanes.report", { name: who })}
                 data-jam-report-part={track.id}
-                className="grid h-9 w-9 place-items-center rounded-full text-text-tertiary outline-none hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
+                className="grid h-9 w-9 place-items-center rounded-full text-text-tertiary outline-none hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:h-11 pointer-coarse:w-11"
               >
                 <Flag className="h-4 w-4" aria-hidden />
               </button>

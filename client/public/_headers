@@ -65,6 +65,18 @@
   Cache-Control: no-cache
 /index.html
   Cache-Control: no-cache
+# The public jam site's page (`jam-site/index.html`, served by the middleware for
+# jam.pqp.gg and `/jam`): the same reason, it names the bundle. Pages answers it
+# at every spelling, and each needs its own rule for the same reason `/`
+# and `/index.html` do.
+/jam-site
+  Cache-Control: no-cache
+/jam-site/
+  Cache-Control: no-cache
+/jam-site/index.html
+  Cache-Control: no-cache
+/jam-site/index
+  Cache-Control: no-cache
 
 # Vite emits content-hashed filenames under /assets, so those are immutable by
 # construction and safe to cache hard.

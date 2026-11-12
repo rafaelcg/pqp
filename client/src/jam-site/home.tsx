@@ -6,7 +6,7 @@ import { detectLocale } from "@/lib/locale";
 import { SongArt } from "./art";
 import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
-import { INSTRUMENT_LOOK, INSTRUMENTS, asInstrument, type Instrument } from "./instruments";
+import { INSTRUMENT_LOOK, INSTRUMENTS, asInstrument, inkMix, type Instrument } from "./instruments";
 import { unlockAudioInGesture, warmJamEngine } from "./player";
 import { Link, useJamRoute } from "./router";
 import { jamPath } from "./route";
@@ -82,12 +82,14 @@ function PlayButton({ song, size, label }: { song: PublicJamSong; size: "card" |
       onFocus={() => void warmJamEngine()}
       onClick={() => unlockAudioInGesture()}
       className={cn(
-        "relative z-10 grid shrink-0 place-items-center rounded-full bg-accent text-on-accent transition-transform duration-[var(--duration-fast)] hover:scale-105 motion-reduce:transition-none motion-reduce:hover:scale-100",
+        "relative z-10 grid shrink-0 place-items-center rounded-full transition-[transform,background-color] duration-[var(--duration-fast)] motion-reduce:transition-none",
         focusRing,
-        size === "hero" ? "h-16 w-16" : "h-11 w-11",
+        size === "hero"
+          ? "h-16 w-16 bg-accent text-on-accent hover:scale-105 motion-reduce:hover:scale-100"
+          : "h-10 w-10 bg-surface-2 text-text ring-1 ring-inset ring-border hover:bg-accent hover:text-on-accent hover:ring-transparent pointer-coarse:h-11 pointer-coarse:w-11",
       )}
     >
-      <Play className={size === "hero" ? "h-7 w-7" : "h-5 w-5"} fill="currentColor" aria-hidden />
+      <Play className={size === "hero" ? "h-7 w-7" : "h-4 w-4"} fill="currentColor" aria-hidden />
     </Link>
   );
 }
@@ -101,7 +103,7 @@ function Card({ song }: { song: PublicJamSong }) {
       </div>
       <div className="mt-3 flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <h3 className="text-base font-bold leading-snug">
+          <h3 className="line-clamp-2 text-base font-bold leading-snug">
             <Link
               href={path}
               className="rounded-sm outline-none after:absolute after:inset-0 after:z-0 after:rounded-[var(--radius-panel)] focus-visible:after:ring-2 focus-visible:after:ring-focus-ring"
@@ -133,7 +135,7 @@ function Hero() {
   const locale = detectLocale();
   if (status === "loading") {
     return (
-      <div className="grid gap-6 pb-2 pt-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] lg:items-center lg:gap-12 lg:pt-10" aria-hidden="true">
+      <div className="grid gap-6 pb-2 pt-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:items-center lg:gap-12 lg:pt-10" aria-hidden="true">
         <Skeleton className="aspect-[16/10] w-full rounded-[var(--radius-panel)]" />
         <div>
           <Skeleton className="h-3 w-24" />
@@ -146,7 +148,7 @@ function Hero() {
   if (!song) return null;
   const people = song.parts.map((part) => part.person.name).filter(Boolean);
   return (
-    <section aria-label={jt("home.featured")} data-jam-hero={song.id} className="grid gap-6 pb-2 pt-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] lg:items-center lg:gap-12 lg:pt-10">
+    <section aria-label={jt("home.featured")} data-jam-hero={song.id} className="grid gap-6 pb-2 pt-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] lg:items-center lg:gap-12 lg:pt-10">
       <div className="overflow-hidden rounded-[var(--radius-panel)]">
         <SongArt song={song} variant="hero" />
       </div>
@@ -159,7 +161,7 @@ function Hero() {
           <p className="mt-4 text-[15px] text-text-secondary">{listOf(people, locale)}</p>
         )}
         {song.needs.length > 0 && (
-          <p className={cn("mt-3 text-xl font-extrabold", INSTRUMENT_LOOK[asInstrument(song.needs[0]!)].ink)}>
+          <p className="mt-3 text-xl font-extrabold" style={{ color: inkMix(asInstrument(song.needs[0]!)) }}>
             {needSentence(song.needs)}
           </p>
         )}
@@ -175,21 +177,22 @@ function Hero() {
   );
 }
 
-function StartStrip() {
+/** The first card of the grid: the one door to starting a jam, as tall as its neighbours. */
+function StartCard() {
   const ask = useAsk();
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-[var(--radius-panel)] border border-border bg-surface-1 p-4 sm:px-5">
-      <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-accent text-on-accent">
-        <Mic className="h-5 w-5" aria-hidden />
+    <article data-jam-start-card="" className="@container/start flex min-w-0 flex-col justify-between gap-4 rounded-[var(--radius-panel)] border border-border bg-surface-1 p-4 sm:p-5">
+      <span className="grid h-12 w-12 place-items-center rounded-full bg-accent text-on-accent">
+        <Mic className="h-6 w-6" aria-hidden />
       </span>
-      <div className="min-w-0 flex-1 basis-56">
-        <p className="text-base font-extrabold leading-tight">{jt("start.title")}</p>
-        <p className="mt-0.5 text-sm text-text-secondary">{jt("start.body")}</p>
+      <div>
+        <h3 className="text-lg font-extrabold leading-tight">{jt("start.title")}</h3>
+        <p className="mt-1 text-sm leading-5 text-text-secondary">{jt("start.body")}</p>
+        <button type="button" onClick={() => ask({ kind: "start" })} data-jam-start-strip="" className={button("secondary", "md", "mt-4 w-full")}>
+          {jt("start.cta")}
+        </button>
       </div>
-      <button type="button" onClick={() => ask({ kind: "start" })} data-jam-start-strip="" className={button("secondary")}>
-        {jt("start.cta")}
-      </button>
-    </div>
+    </article>
   );
 }
 
@@ -224,6 +227,7 @@ function Tabs({
             {jt(`tabs.${id}` as Parameters<typeof jt>[0])}
           </button>
         ))}
+        <span aria-hidden="true" className="w-4 shrink-0" />
       </div>
       {tab === "needs" && (
         <div role="group" aria-label={jt("filter.label")} className="mt-3 flex flex-wrap gap-2">
@@ -312,9 +316,6 @@ export function HomePage() {
       <div className="mt-10 sm:mt-14">
         <Tabs tab={tab} onTab={setTab} need={need} onNeed={setNeed} />
       </div>
-      <div className="mt-6">
-        <StartStrip />
-      </div>
       <div className="mt-8" aria-live="polite" aria-busy={status === "loading"}>
         {status === "error" ? (
           <div className="rounded-[var(--radius-panel)] border border-border bg-surface-1 px-6 py-10 text-center" role="alert" data-jam-error="">
@@ -334,6 +335,7 @@ export function HomePage() {
         ) : (
           <>
             <div className="grid grid-cols-2 gap-x-4 gap-y-8 md:grid-cols-3 lg:grid-cols-4 lg:gap-x-6" data-jam-grid="">
+              <StartCard />
               {cards}
             </div>
             {more && (

@@ -29,7 +29,7 @@ function ThemeToggle() {
       onClick={() => setBrightness(next)}
       aria-label={jt("theme.toggle")}
       data-jam-theme-toggle=""
-      className={cn(buttonClass.base, buttonClass.icon)}
+      className={cn(buttonClass.base, buttonClass.icon, "pointer-coarse:h-11 pointer-coarse:w-11")}
     >
       {brightness === "dark" ? <Sun className="h-[18px] w-[18px]" aria-hidden /> : <Moon className="h-[18px] w-[18px]" aria-hidden />}
     </button>
@@ -41,7 +41,7 @@ export function Header() {
   const ask = useAsk();
   const home = jamPath(mount, { kind: "home" });
   return (
-    <header className="sticky top-0 z-30 border-b border-border bg-surface-0/95 backdrop-blur-sm">
+    <header className="sticky top-0 z-30 border-b border-border bg-surface-0">
       <div className={cn(CONTAINER, "flex h-16 items-center gap-3")}>
         <Link
           href={home}
@@ -81,7 +81,7 @@ export function Footer() {
     <footer className="mt-20 border-t border-border">
       <div className={cn(CONTAINER, "flex flex-wrap items-center gap-x-6 gap-y-2 py-8 text-sm text-text-tertiary")}>
         <span>{jt("footer.line")}</span>
-        <span className="flex-1" />
+        <span className="flex-1 max-sm:hidden" />
         <a className="rounded-sm hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" href={`${origin}/`}>
           {jt("footer.pqp")}
         </a>

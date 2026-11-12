@@ -54,7 +54,7 @@ function Seek({ player }: { player: PublicPlayer }) {
         aria-label={jt("seek.label")}
         aria-valuetext={`${clock(drag ?? player.position())} / ${clock(state.durationMs)}`}
         data-jam-seek=""
-        className="jam-seek order-5 h-6 min-w-0 basis-full md:order-none md:basis-auto md:flex-1"
+        className="jam-seek order-5 h-11 min-w-0 basis-full md:order-none md:h-6 md:basis-auto md:flex-1"
         onPointerDown={() => {
           dragging.current = true;
         }}
@@ -144,7 +144,7 @@ export function SongTransport({
           onClick={onLike}
           aria-label={jt("like.label")}
           data-jam-like=""
-          className={cn(buttonClass.base, "h-10 gap-1.5 px-3 text-sm text-text-secondary hover:bg-surface-2 hover:text-text")}
+          className={cn(buttonClass.base, "h-10 gap-1.5 px-3 text-sm text-text-secondary hover:bg-surface-2 hover:text-text pointer-coarse:h-11 pointer-coarse:min-w-11")}
         >
           <Heart className="h-[18px] w-[18px]" aria-hidden />
           {likes > 1 && <span className="tabular-nums">{likes}</span>}
@@ -153,7 +153,7 @@ export function SongTransport({
           type="button"
           onClick={onShare}
           data-jam-share=""
-          className={cn(buttonClass.base, "h-10 gap-2 px-3 text-sm text-text-secondary hover:bg-surface-2 hover:text-text")}
+          className={cn(buttonClass.base, "h-10 gap-2 px-3 text-sm text-text-secondary hover:bg-surface-2 hover:text-text pointer-coarse:h-11 pointer-coarse:min-w-11")}
         >
           <Share2 className="h-[18px] w-[18px]" aria-hidden />
           <span className="max-sm:sr-only">{jt("share.label")}</span>
