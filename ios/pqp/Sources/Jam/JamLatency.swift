@@ -51,7 +51,7 @@ struct JamLatencyResult: Codable, Equatable, Sendable {
     /// stored value is stale.
     var reportedOutputMs: Double?
 
-    var isUsable: Bool { confidence != .failed && roundTripMs.isFinite }
+    var isUsable: Bool { confidence != .failed && roundTripMs.isFinite && roundTripMs >= 0 }
 }
 
 enum JamLatencyRules {
@@ -437,17 +437,26 @@ enum JamLatencyAnalysis {
             played: played, at: now, reportedOutputMs: reportedOutputMs
         )
         guard lags.count >= 3 else { return failed }
+        // A round trip is never negative. For a tap, a negative median means
+        // the player anticipates the beat (people do, by tens of ms), and the
+        // measurement says nothing about the route.
+        guard JamPulse.median(lags) >= 0 else { return failed }
         let m = JamPulse.median(lags)
         let inliers = lags.filter { abs($0 - m) <= t.outlierMs }
         guard !inliers.isEmpty else { return failed }
         let result = JamPulse.median(inliers)
         let spread = inliers.reduce(0.0) { max($0, abs($1 - result)) }
         let minAccepted = max(3, Int((Double(played) * 0.5).rounded(.up)))
-        let confidence: JamLatencyConfidence
+        var confidence: JamLatencyConfidence
         if inliers.count < minAccepted { confidence = .low }
         else if spread <= t.highSpread { confidence = .high }
         else if spread <= t.mediumSpread { confidence = .medium }
         else { confidence = .low }
+        // A tap is a person: it carries their own reaction time (or their
+        // anticipation) on top of the route's latency, so it is never better
+        // than a rough adjustment, however steady the taps. The loopback is the
+        // measurement; the nudge in review is where a human's feel goes.
+        if method == .tapAlong, confidence == .high { confidence = .medium }
         return JamLatencyResult(
             method: method, roundTripMs: (result * 1000).rounded() / 1000, confidence: confidence,
             spreadMs: (spread * 1000).rounded() / 1000, accepted: inliers.count, played: played, at: now,

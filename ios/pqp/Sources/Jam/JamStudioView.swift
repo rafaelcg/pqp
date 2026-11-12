@@ -18,6 +18,7 @@ struct JamStudioView: View {
     @State private var model: JamRecordModel
     @State private var confirmingLeave = false
     @State private var showingCalibration = false
+    @State private var finished = false
     /// Called once, when the studio closes: the song and track that were sent,
     /// or nil.
     let onClose: ((song: JamSongSummary, track: JamTrack)?) -> Void
@@ -69,6 +70,9 @@ struct JamStudioView: View {
         .task(id: model.phase) {
             guard model.phase == .done else { return }
             try? await Task.sleep(for: .seconds(1.3))
+            // Closed by hand during the wait: the view's task is cancelled and
+            // `finish` has already run.
+            guard !Task.isCancelled else { return }
             finish(model.posted)
         }
         .sensoryFeedback(.impact(weight: .heavy), trigger: model.phase == .recording)
@@ -77,6 +81,10 @@ struct JamStudioView: View {
     }
 
     private func finish(_ result: (song: JamSongSummary, track: JamTrack)?) {
+        // Once: a second close (the done screen's timer after a tap on X) would
+        // resume the song twice.
+        guard !finished else { return }
+        finished = true
         model.tearDown()
         onClose(result)
     }
@@ -297,6 +305,10 @@ struct JamStudioView: View {
                     }
                     .font(JamFont.text(13, .bold)).foregroundStyle(Palette.paper)
                     .frame(minHeight: 44)
+                } else if notice == .buildFailed {
+                    Button("Try again") { model.retryBuild() }
+                        .font(JamFont.text(13, .bold)).foregroundStyle(Palette.paper)
+                        .frame(minHeight: 44)
                 }
             }
         }
@@ -314,6 +326,7 @@ struct JamStudioView: View {
         case .noInput: "No microphone found."
         case .startFailed: "Could not start recording. Try again."
         case .diskFailed: "The phone ran out of space and the recording stopped."
+        case .buildFailed: "Could not get your recording ready. Free some space on the phone and try again."
         case .tooShort: "That was too short. Keep playing a little longer."
         case .unplayable: "Some tracks of the band do not play on iPhone yet, so you will not hear them while you record."
         case .stopped(let cause, let kept):

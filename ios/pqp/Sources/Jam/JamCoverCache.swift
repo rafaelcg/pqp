@@ -119,19 +119,13 @@ final class JamCoverStore {
 
         let file = directory.appendingPathComponent(JamCoverKey.fileName(for: key))
         let fetcher = self.fetcher
+        // The disk read, the decode, the write and the budget scan all run OFF
+        // the main actor (a nonisolated async function does not inherit it);
+        // only the finished bitmap comes back to be kept in memory.
         let task = Task<UIImage?, Never> { [weak self] in
-            if let bytes = try? Data(contentsOf: file), let image = Self.decode(bytes) {
-                self?.touch(file)
-                return image
-            }
-            guard let remote = JamMediaURL.allowed(url) else { return nil }
-            guard let bytes = try? await fetcher.data(from: remote), let image = Self.decode(bytes) else {
-                return nil
-            }
-            self?.noteFetch()
-            try? bytes.write(to: file, options: .atomic)
-            self?.trimToBudget(keeping: file)
-            return image
+            let loaded = await Self.load(file: file, address: url, fetcher: fetcher)
+            if loaded.fetched { self?.noteFetch() }
+            return loaded.image
         }
         inFlight[key] = task
         let image = await task.value
@@ -179,11 +173,23 @@ final class JamCoverStore {
         return UIImage(cgImage: image)
     }
 
-    private nonisolated func touch(_ file: URL) {
-        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
+    /// Disk first, then the network with the address as it is NOW.
+    private nonisolated static func load(
+        file: URL, address: String, fetcher: any JamCoverFetching
+    ) async -> (image: UIImage?, fetched: Bool) {
+        if let bytes = try? Data(contentsOf: file), let image = decode(bytes) {
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
+            return (image, false)
+        }
+        guard let remote = JamMediaURL.allowed(address),
+              let bytes = try? await fetcher.data(from: remote), let image = decode(bytes)
+        else { return (nil, false) }
+        try? bytes.write(to: file, options: .atomic)
+        trimToBudget(keeping: file)
+        return (image, true)
     }
 
-    private nonisolated func trimToBudget(keeping keep: URL) {
+    private nonisolated static func trimToBudget(keeping keep: URL) {
         let manager = FileManager.default
         let directory = keep.deletingLastPathComponent()
         guard let urls = try? manager.contentsOfDirectory(
@@ -194,9 +200,9 @@ final class JamCoverStore {
             return (url, values?.contentModificationDate ?? .distantPast, values?.fileSize ?? 0)
         }
         var total = entries.reduce(0) { $0 + $1.size }
-        guard total > Self.diskBudgetBytes else { return }
+        guard total > diskBudgetBytes else { return }
         entries.sort { $0.date < $1.date }
-        for entry in entries where total > Self.diskBudgetBytes && entry.url != keep {
+        for entry in entries where total > diskBudgetBytes && entry.url != keep {
             try? manager.removeItem(at: entry.url)
             total -= entry.size
         }

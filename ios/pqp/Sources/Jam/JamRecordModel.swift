@@ -37,6 +37,8 @@ final class JamRecordModel {
         case noInput
         case startFailed
         case diskFailed
+        /// The recording is safe on disk but could not be prepared.
+        case buildFailed
         /// The take was stopped from outside: what was captured is kept (a take
         /// to hear) or there was nothing worth keeping.
         case stopped(Cause, kept: Bool)
@@ -116,6 +118,11 @@ final class JamRecordModel {
     @ObservationIgnored private var bandFiles: [String: URL] = [:]
     @ObservationIgnored private var routeObserver: NSObjectProtocol?
     @ObservationIgnored private var started: JamRecorder.Started?
+    /// The capture file of the take in progress, so cancelling deletes it.
+    @ObservationIgnored private var rawURL: URL?
+    /// A capture whose FLAC could not be written (the disk was full): kept so a
+    /// retry can build it again instead of losing the take.
+    @ObservationIgnored private var failedBuild: (raw: JamRecorder.Raw, latency: JamLatencyResult)?
     @ObservationIgnored private var countIn: JamCountIn?
     @ObservationIgnored private var postState = JamPostState()
     @ObservationIgnored private var createdSongId: String?
@@ -230,6 +237,12 @@ final class JamRecordModel {
     /// The call started (or ended) while the studio was open.
     func callStateChanged(active: Bool) {
         callActive = active
+        // A call that starts in-app does not always post an audio interruption:
+        // stop the take here and keep what was captured.
+        if active, phase == .countIn || phase == .recording {
+            stopRecording(cause: .interruption)
+            return
+        }
         guard phase == .setup else { return }
         if active {
             refusal = .inCall
@@ -265,8 +278,13 @@ final class JamRecordModel {
         if !missing.isEmpty {
             loading = (0, missing.count)
             var done = 0
+            // At most four at a time: a song can hold 32 stems.
             await withTaskGroup(of: (String, URL?).self) { group in
-                for track in missing {
+                var next = 0
+                func startOne() {
+                    guard next < missing.count else { return }
+                    let track = missing[next]
+                    next += 1
                     group.addTask {
                         let url = try? await JamMediaCache.shared.localURL(
                             id: track.id, remote: track.audioUrl,
@@ -275,10 +293,12 @@ final class JamRecordModel {
                         return (track.id, url)
                     }
                 }
+                for _ in 0..<min(4, missing.count) { startOne() }
                 for await (id, url) in group {
                     done += 1
                     if let url { bandFiles[id] = url } else { downloadFailed = true }
                     loading = (done, missing.count)
+                    startOne()
                 }
             }
             loading = nil
@@ -421,12 +441,15 @@ final class JamRecordModel {
         do {
             started = try recorder.start(countIn: countIn, rawURL: raw)
         } catch JamRecorder.StartError.noInput {
+            try? FileManager.default.removeItem(at: raw)
             notice = .noInput
             return
         } catch {
+            try? FileManager.default.removeItem(at: raw)
             notice = .startFailed
             return
         }
+        rawURL = raw
         self.recorder = recorder
         self.countIn = countIn
         elapsedMs = -(countIn?.durationSeconds ?? 0) * 1000
@@ -496,6 +519,11 @@ final class JamRecordModel {
             return
         }
         phase = .building
+        rawURL = nil
+        build(raw: raw, latency: latency, cause: cause, failure: failure)
+    }
+
+    private func build(raw: JamRecorder.Raw, latency: JamLatencyResult, cause: Notice.Cause?, failure: Notice?) {
         let output = Self.takesDirectory().appendingPathComponent("\(UUID().uuidString).flac")
         let mine = lifecycle
         Task { [weak self] in
@@ -504,17 +532,35 @@ final class JamRecordModel {
             }.value
             guard let self, mine == self.lifecycle, !self.torn else {
                 if let built { try? FileManager.default.removeItem(at: built.fileURL) }
+                if let url = raw.capture.url { try? FileManager.default.removeItem(at: url) }
                 return
+            }
+            if built == nil, let url = raw.capture.url, FileManager.default.fileExists(atPath: url.path) {
+                // The take is on disk and could not be turned into a FLAC (the
+                // disk is full): kept, so freeing space and trying again works.
+                self.failedBuild = (raw, latency)
             }
             self.finishBuilding(built, cause: cause, failure: failure)
         }
     }
 
+    /// Whether a take is waiting to be built again.
+    var canRetryBuild: Bool { failedBuild != nil && phase == .setup }
+
+    func retryBuild() {
+        guard let pending = failedBuild, phase == .setup else { return }
+        failedBuild = nil
+        notice = nil
+        phase = .building
+        build(raw: pending.raw, latency: pending.latency, cause: nil, failure: nil)
+    }
+
     private func finishBuilding(_ built: JamTake?, cause: Notice.Cause?, failure: Notice?) {
         guard let built else {
-            backToSetup(notice: failure ?? (cause.map { .stopped($0, kept: false) } ?? .tooShort))
+            backToSetup(notice: failedBuild != nil ? .buildFailed : (failure ?? (cause.map { .stopped($0, kept: false) } ?? .tooShort)))
             return
         }
+        failedBuild = nil
         let played = built.playedMs
         // A tap on the button, or a take cut short with nothing in it: not worth
         // a review. A take cut short with something to hear is KEPT.
@@ -524,7 +570,7 @@ final class JamRecordModel {
                 backToSetup(notice: .tooShort)
                 return
             }
-        } else if played < 1000 || built.isSilent {
+        } else if played < Double(JamUploadPlan.minDurationMs) || built.isSilent {
             discardFile(built)
             backToSetup(notice: failure ?? .stopped(cause ?? .microphone, kept: false))
             return
@@ -542,7 +588,13 @@ final class JamRecordModel {
         ticker?.cancel()
         recorder?.cancel()
         recorder = nil
+        removeRaw()
         backToSetup(notice: nil)
+    }
+
+    private func removeRaw() {
+        if let rawURL { try? FileManager.default.removeItem(at: rawURL) }
+        rawURL = nil
     }
 
     private func backToSetup(notice: Notice?) {
@@ -680,9 +732,14 @@ final class JamRecordModel {
                     songId = created
                 } else {
                     let song = try await api.createJamSong(channelId: channel.id, body: draft.body)
-                    createdSongId = song.id
                     songId = song.id
-                    guard mine == lifecycle, !torn else { return }
+                    guard mine == lifecycle, !torn else {
+                        // The studio closed while the song was being made: nobody
+                        // is left to fill it, so it goes (only while still empty).
+                        Task { try? await api.deleteJamSongIfEmpty(id: song.id) }
+                        return
+                    }
+                    createdSongId = song.id
                 }
             }
             if postState.result == nil {
@@ -770,6 +827,9 @@ final class JamRecordModel {
         if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
         if let take { discardFile(take) }
         take = nil
+        removeRaw()
+        if let url = failedBuild?.raw.capture.url { try? FileManager.default.removeItem(at: url) }
+        failedBuild = nil
         if sessionHeld {
             audioSession.deactivate()
             sessionHeld = false

@@ -446,6 +446,20 @@ final class JamRecordingPlacementTests: XCTestCase {
         XCTAssertEqual(sink.takeMeterPeak(), 0, "reading the meter starts the next window")
     }
 
+    func testALateTapCallbackAfterFinishChangesNothing() throws {
+        let sink = JamCaptureSink(fileURL: nil, keepInMemory: true)
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+        let b = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 480)!
+        b.frameLength = 480
+        for i in 0..<480 { b.floatChannelData![0][i] = 0.3 }
+        sink.append(b, when: AVAudioTime(hostTime: JamHostClock.ticks(fromSeconds: 5), sampleTime: 0, atRate: 48_000))
+        let capture = try XCTUnwrap(sink.finish())
+        // The tap was removed while a callback was in flight: it arrives after the capture was handed over.
+        sink.append(b, when: AVAudioTime(hostTime: JamHostClock.ticks(fromSeconds: 5.01), sampleTime: 480, atRate: 48_000))
+        XCTAssertEqual(sink.capturedFrames, capture.frames, "the capture returned is the capture there is")
+        XCTAssertEqual(capture.frames, 480)
+    }
+
     func testTheSinkEstimatesTheStartWhenTheBufferHasNoHostTime() throws {
         let sink = JamCaptureSink(fileURL: nil, keepInMemory: true)
         let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
@@ -783,6 +797,16 @@ final class JamCalibrationMeasurementTests: XCTestCase {
         let t = taps(lagMs: 52, jitterMs: [0], missing: Set(0..<11))
         let result = JamLatencyAnalysis.tapAlong(captured: t.captured, clickFrames: t.clicks, sampleRate: rate)
         XCTAssertEqual(result.confidence, .failed)
+    }
+
+    func testAPlayerWhoAnticipatesTheBeatDoesNotSaveANegativeCalibration() {
+        let t = taps(lagMs: -40, jitterMs: [0, 1, -1])
+        let result = JamLatencyAnalysis.tapAlong(captured: t.captured, clickFrames: t.clicks, sampleRate: rate)
+        XCTAssertEqual(result.confidence, .failed, "a round trip is never negative")
+        XCTAssertFalse(result.isUsable)
+        let steady = taps(lagMs: 52, jitterMs: [0])
+        let ok = JamLatencyAnalysis.tapAlong(captured: steady.captured, clickFrames: steady.clicks, sampleRate: rate)
+        XCTAssertNotEqual(ok.confidence, .high, "a tap carries the person's own timing: never better than a rough adjustment")
     }
 
     func testTheSignalsAreWhatTheMeasurementExpects() {

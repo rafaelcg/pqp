@@ -53,6 +53,12 @@ final class JamCaptureSink: @unchecked Sendable {
     private var loudest: Float = 0
     private var meterPeak: Float = 0
     private var failed = false
+    private var closed = false
+    /// Buffers queued for the writer and not yet written. A writer that falls
+    /// behind (a stalled disk) must not let audio pile up without bound: past
+    /// this many (about 40 s of audio) the capture is declared failed.
+    private var pending = 0
+    private static let maxPending = 2000
 
     // Touched only on `queue`.
     private var file: AVAudioFile?
@@ -88,6 +94,12 @@ final class JamCaptureSink: @unchecked Sendable {
         }
 
         lock.lock()
+        // After `finish` nothing more is taken (a tap callback that was in
+        // flight when the tap was removed).
+        guard !closed else {
+            lock.unlock()
+            return
+        }
         let first = !started
         var gap = 0
         if first {
@@ -115,9 +127,16 @@ final class JamCaptureSink: @unchecked Sendable {
         frames += gap + frameLength
         loudest = max(loudest, peak)
         meterPeak = max(meterPeak, peak)
-        lock.unlock()
+        if pending >= Self.maxPending {
+            failed = true
+            lock.unlock()
+            return
+        }
+        pending += 1
 
         // Copied here (the tap's buffer is reused) and written on the queue.
+        // Queued INSIDE the lock, so `finish`, which takes the lock first, can
+        // never drain the queue between "counted" and "queued".
         var copy = [[Float]](repeating: [], count: channels)
         for c in 0..<channels {
             copy[c] = Array(UnsafeBufferPointer(start: data[c], count: frameLength))
@@ -126,7 +145,11 @@ final class JamCaptureSink: @unchecked Sendable {
         let chunk = copy, missing = gap
         queue.async { [self] in
             write(chunk, gap: missing, sampleRate: rate)
+            lock.lock()
+            pending -= 1
+            lock.unlock()
         }
+        lock.unlock()
     }
 
     private func write(_ channels: [[Float]], gap: Int, sampleRate: Double) {
@@ -205,6 +228,11 @@ final class JamCaptureSink: @unchecked Sendable {
     func finish() -> Capture? {
         // Everything queued is written, then the file is closed (released), so
         // it is a complete file when this returns.
+        // Close the door first: any append that already counted its buffer has
+        // queued it (it does both under the lock), and none can start after.
+        lock.lock()
+        closed = true
+        lock.unlock()
         let kept: [[Float]] = queue.sync {
             file = nil
             return memory

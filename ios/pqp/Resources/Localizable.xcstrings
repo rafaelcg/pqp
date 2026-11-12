@@ -301,6 +301,16 @@
         }
       }
     },
+    "Could not get your recording ready. Free some space on the phone and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra deixar a tua gravação pronta. Libera espaço no celular e tenta de novo."
+          }
+        }
+      }
+    },
     "Could not measure it properly. Try again closer to the speaker, or skip." : {
       "localizations" : {
         "pt-BR" : {
