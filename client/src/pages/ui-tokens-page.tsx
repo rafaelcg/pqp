@@ -1356,7 +1356,7 @@ function PrimitiveSheet() {
           not load (sad), a search that found nothing (curious, inline), and
           the same search in a narrow column with a long query, and with a
           query that has no spaces and a hint line. */}
-      <div data-testid="qa-primitive-empty-mascot" className="grid gap-4 sm:grid-cols-[1fr_1fr_1fr_12rem_12rem]">
+      <div data-testid="qa-primitive-empty-mascot" className="grid gap-4 sm:grid-cols-3">
         <div className="rounded-[var(--radius-pane)] bg-pane-main">
           <EmptyState
             mascot="hello"
@@ -1393,7 +1393,9 @@ function PrimitiveSheet() {
             bodyClassName="text-xs text-text-muted"
           />
         </div>
-        <div className="flex h-72 rounded-[var(--radius-pane)] bg-pane-main">
+        {/* The narrow column: a search pane squeezed to 12rem. */}
+        <div className="flex gap-4 sm:col-span-3">
+        <div className="flex h-72 w-48 rounded-[var(--radius-pane)] bg-pane-main">
           <EmptyState
             size="inline"
             mascot="curious"
@@ -1404,7 +1406,7 @@ function PrimitiveSheet() {
             bodyClassName="text-xs text-text-muted"
           />
         </div>
-        <div className="flex h-72 rounded-[var(--radius-pane)] bg-pane-main">
+        <div className="flex h-72 w-48 rounded-[var(--radius-pane)] bg-pane-main">
           <EmptyState
             size="inline"
             mascot="curious"
@@ -1415,6 +1417,7 @@ function PrimitiveSheet() {
             titleClassName="text-sm text-text"
             bodyClassName="text-xs text-text-muted"
           />
+        </div>
         </div>
       </div>
 
