@@ -656,10 +656,16 @@ test("captures the design council screens", async ({ browser }) => {
       } catch {
         console.log("communities shot skipped");
       }
-      // Novidades: a pane of its own beside the rail.
-      await page.getByRole("button", { name: /^Novidades/ }).first().click();
-      await page.waitForTimeout(1200);
-      await shoot(page, `18-whats-new-${theme}`);
+      // Novidades: a pane of its own beside the rail. Since 2026-11-01 the
+      // rail has no Novidades button; the notes open from the update popover,
+      // which only shows with an update waiting. Skipped when not on screen.
+      try {
+        await page.getByRole("button", { name: /^Novidades/ }).first().click({ timeout: 3_000 });
+        await page.waitForTimeout(1200);
+        await shoot(page, `18-whats-new-${theme}`);
+      } catch {
+        console.log("whats new shot skipped");
+      }
 
       // Friends: the add panel open, then Pendentes with a real request from
       // Duda, withdrawn again so the scenes after this one are unchanged.
