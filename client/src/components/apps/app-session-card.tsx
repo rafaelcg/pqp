@@ -93,7 +93,7 @@ export const AppSessionCard = memo(function AppSessionCard({
         "redesign:p-4",
         !ended && "redesign:[--app-face-cut:var(--card-bg-solid)]",
         ended
-          ? "redesign:border-[color:color-mix(in_oklab,var(--color-text)_18%,transparent)]"
+          ? "redesign:border-[color:var(--app-card-edge)]"
           : inside
             ? "redesign:bg-[color:var(--card-bg)]"
             : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",

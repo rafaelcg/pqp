@@ -899,6 +899,8 @@
      cut (stacked faces on a card in chat). */
   --card-bg-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-main));
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+  /* A choice card's edge firming under the pointer (bot and settings choices). */
+  --card-border-hover: color-mix(in oklab, var(--color-text) 18%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
   /* A whole card under the pointer: one step over the card's own fill. */
   --card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
@@ -922,6 +924,19 @@
      the conversation rather than a stripe across it. */
   --banner-radius: 0.75rem;
   --banner-edge: 28%;
+
+  /* Three small edges drawn as an alpha of the text, named so high contrast
+     can move them to the border pair: an app session card's outline, the
+     inset ring on a dark connection tile, and the ring around a role's
+     colour swatch. The rule between call control groups is a hairline. */
+  --app-card-edge: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --connection-tile-edge: color-mix(in oklab, var(--color-text) 14%, transparent);
+  --role-swatch-ring: color-mix(in oklab, var(--color-text) 24%, transparent);
+  /* A filled field (a textarea or a pasted line on a 5% text fill) draws
+     no edge; high contrast gives it one. */
+  --field-fill-edge: transparent;
+  /* The hairline between groups of call controls. */
+  --call-control-rule: color-mix(in oklab, var(--color-text) 14%, transparent);
 
   /* Badges (ui/badge.tsx): a small pill in sentence case; a tag beside a
      name is a step smaller. Counts are a touch larger in type than the old
@@ -2636,6 +2651,31 @@
   --sidebar-invite-border: var(--color-border-strong);
   --forum-card-hover-border: var(--color-border-strong);
   --forum-card-open-border: var(--color-text);
+  /* The emoji picker maps its own border to this one. */
+  --picker-border: var(--color-border-strong);
+  --slider-thumb-border: var(--color-border-strong);
+  --app-card-edge: var(--color-border-strong);
+  /* Inside a dark brand tile in both brightnesses, so a light edge. */
+  --connection-tile-edge: oklch(1 0 0 / 0.45);
+  --call-control-rule: var(--color-border);
+  --role-swatch-ring: var(--color-border-strong);
+  /* Firmer than the strong edge at rest, so hover still reads. */
+  --card-border-hover: var(--color-text);
+  /* A tooltip floats (strong edge); a search pill's edge is a hairline. */
+  --color-tooltip-border: var(--color-border-strong);
+  --sidebar-search-border: var(--color-border);
+  --field-fill-edge: var(--color-border-strong);
+  /* A banner's edge is a share of its own tone (28% dark, 22% light). */
+  --banner-edge: 60%;
+  /* The one fill this block moves: the empty part of a slider's track is
+     what shows where the range ends. */
+  --slider-track: var(--color-border);
+}
+
+/* The light tooltip is the inverted dark bubble and draws no edge; one more
+   attribute than the block above so it keeps that. */
+:root[data-redesign][data-theme="light"][data-contrast="more"] {
+  --color-tooltip-border: transparent;
 }
 
 /*

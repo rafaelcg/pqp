@@ -32,7 +32,7 @@ export function CallControlDivider({
     <span
       aria-hidden="true"
       className={cn(
-        "hidden w-px self-stretch bg-border redesign:bg-[color:color-mix(in_oklab,var(--color-text)_14%,transparent)]",
+        "hidden w-px self-stretch bg-border redesign:bg-[color:var(--call-control-rule)]",
         container ? "@min-[22rem]:block" : "@min-[40rem]:block",
         className,
       )}
