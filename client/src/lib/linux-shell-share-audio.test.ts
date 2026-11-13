@@ -4,6 +4,7 @@ import {
   armLinuxShellShareAudio,
   attachLinuxShellShareAudio,
   ensureLinuxShellShareAudio,
+  isLinuxShellShareAudioTrack,
   linuxShellShareAudioReady,
   pickShareAudioInput,
   resetLinuxShellShareAudioForTests,
@@ -19,6 +20,7 @@ import {
   offersShellSystemAudio,
   screenCaptureOptions,
   shellCarriesScreenAudio,
+  stripLeakedSystemAudioTracks,
 } from "./screen-capture-audio";
 
 /** What the new Linux shell publishes (electron/preload.js). */
@@ -313,5 +315,84 @@ describe("armLinuxShellShareAudio", () => {
         throw new Error("ipc closed");
       }),
     ).toBe(false);
+  });
+});
+
+/**
+ * The watch party setup preview is the only picker a watch party has: go-live
+ * publishes that stream as it is and never arms the shell. Until 2026-11 the
+ * preview asked the Linux shell for no sound at all, so a Linux desktop host
+ * always went live silent, flag on or not.
+ */
+describe("a watch party picked in the Linux shell", () => {
+  it("asks for the bus once the shell, the flag and a sound server said yes", async () => {
+    setShell(linuxShell());
+    expect(await ensureLinuxShellShareAudio(deps(true))).toBe(true);
+    const env = liveScreenCaptureEnvironment();
+    // The tab steer is a browser thing and must not silence the shell.
+    const options = screenCaptureOptions(env.shellLinuxShareAudio === true, env, {
+      preferBrowserTab: true,
+    });
+    expect(options.audio).not.toBe(false);
+    expect((options.video as { displaySurface?: string }).displaySurface).toBeUndefined();
+  });
+
+  it("stays video-only with the flag off, as every Linux desktop party did", async () => {
+    setShell(linuxShell());
+    expect(await ensureLinuxShellShareAudio(deps(false))).toBe(false);
+    const env = liveScreenCaptureEnvironment();
+    const options = screenCaptureOptions(env.shellLinuxShareAudio === true, env, {
+      preferBrowserTab: true,
+    });
+    expect(options.audio).toBe(false);
+  });
+});
+
+describe("the bus track and the mixer-leak strip", () => {
+  function captured(audio?: object) {
+    const tracks: object[] = audio ? [audio] : [];
+    const video = {
+      stop: () => {},
+      getSettings: () => ({ displaySurface: "monitor" }),
+      addEventListener: () => {},
+    };
+    return {
+      getAudioTracks: () => tracks,
+      getVideoTracks: () => [video],
+      addTrack: (t: object) => tracks.push(t),
+      removeTrack: (t: object) => tracks.splice(tracks.indexOf(t), 1),
+    };
+  }
+
+  function leakyTrack() {
+    // What a mixer tap that could not keep the call out reports.
+    return {
+      stop: vi.fn(),
+      getSettings: () => ({ restrictOwnAudio: false }),
+      getCapabilities: () => ({ restrictOwnAudio: [false] }),
+    };
+  }
+
+  it("is never stripped at go-live, whatever its settings say", async () => {
+    const track = leakyTrack();
+    const stream = captured();
+    const result = await attachLinuxShellShareAudio(stream as never, {
+      claim: async () => ({ active: true, label: "pqp-share-audio" }),
+      enumerate: async () => [{ kind: "audioinput", label: "pqp-share-audio", deviceId: "bus" }],
+      getUserMedia: async () => ({ getAudioTracks: () => [track] }),
+    });
+    expect(result).toBe("attached");
+    expect(isLinuxShellShareAudioTrack(track)).toBe(true);
+    expect(stripLeakedSystemAudioTracks(stream as unknown as MediaStream)).toBe(false);
+    expect(stream.getAudioTracks()).toEqual([track]);
+    expect(track.stop).not.toHaveBeenCalled();
+  });
+
+  it("still strips a real mixer tap that carries the call", () => {
+    const track = leakyTrack();
+    const stream = captured(track);
+    expect(isLinuxShellShareAudioTrack(track)).toBe(false);
+    expect(stripLeakedSystemAudioTracks(stream as unknown as MediaStream)).toBe(true);
+    expect(track.stop).toHaveBeenCalled();
   });
 });

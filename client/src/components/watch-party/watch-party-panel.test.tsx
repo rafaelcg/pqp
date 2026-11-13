@@ -816,6 +816,25 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     );
   });
 
+  it("arms and attaches the Linux desktop bus in the setup pick, since go-live never does", () => {
+    const source = readFileSync(
+      new URL("./watch-party-panel.tsx", import.meta.url),
+      "utf8",
+    );
+    const pick = source.slice(
+      source.indexOf("const pick = async () => {"),
+      source.indexOf("const goLive = async () => {"),
+    );
+    expect(pick).toContain("ensureLinuxShellShareAudio()");
+    expect(pick).toContain("screenCaptureOptions(linuxSound, pickEnv, intent)");
+    expect(pick.indexOf("armLinuxShellShareAudio()")).toBeLessThan(
+      pick.indexOf("getDisplayMedia(options)"),
+    );
+    expect(pick.indexOf("attachLinuxShellShareAudio(picked)")).toBeGreaterThan(
+      pick.indexOf("getDisplayMedia(options)"),
+    );
+  });
+
   it("hands go-live a stream without claiming system-audio opt-in", () => {
     const source = readFileSync(
       new URL("../../App.tsx", import.meta.url),
