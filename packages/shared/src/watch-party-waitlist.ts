@@ -91,7 +91,7 @@ export const joinWatchPartyWaitlistSchema = z.object({
    * The server this is about. Null is "I would watch, I have no server to
    * ask for": the marketing page's visitor who signed up with nothing yet.
    */
-  serverId: z.string().uuid().nullable(),
+  serverId: z.string().guid().nullable(),
   audienceBucket: z.enum(WATCH_PARTY_AUDIENCE_BUCKETS).nullable().optional(),
   note: optionalText(WATCH_PARTY_WAITLIST_NOTE_MAX),
   streamChannel: z
@@ -123,7 +123,7 @@ export type JoinWatchPartyWaitlistRequest = z.input<
 
 /** The caller's own row. Never anybody else's. */
 export const watchPartyWaitlistEntrySchema = z.object({
-  serverId: z.string().uuid().nullable(),
+  serverId: z.string().guid().nullable(),
   kind: z.enum(WATCH_PARTY_WAITLIST_KINDS),
   status: z.enum(WATCH_PARTY_WAITLIST_STATUSES),
   audienceBucket: z.enum(WATCH_PARTY_AUDIENCE_BUCKETS).nullable(),
@@ -156,7 +156,7 @@ export type WatchPartyWaitlistState = z.infer<
 
 /** A server the caller waited for that has since been switched on. */
 export const watchPartyWaitlistApprovalSchema = z.object({
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   serverName: z.string(),
   kind: z.enum(WATCH_PARTY_WAITLIST_KINDS),
   decidedAt: z.string(),
@@ -166,7 +166,7 @@ export type WatchPartyWaitlistApproval = z.infer<
 >;
 
 export const ackWatchPartyWaitlistApprovalSchema = z.object({
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
 });
 
 /**
@@ -178,7 +178,7 @@ export const ackWatchPartyWaitlistApprovalSchema = z.object({
  */
 export const watchPartyWaitlistApprovedSchema = z.object({
   type: z.literal("watch-party-waitlist-approved"),
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   serverName: z.string(),
 });
 export type WatchPartyWaitlistApprovedMessage = z.infer<

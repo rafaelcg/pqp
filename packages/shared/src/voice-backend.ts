@@ -312,8 +312,8 @@ export function getDefaultVoiceBackend(
  * roster, speaking rings, and occupancy keyed consistently across both paths.
  */
 export const voiceSessionRequestSchema = z.object({
-  voiceChannelId: z.string().uuid(),
-  peerId: z.string().uuid(),
+  voiceChannelId: z.string().guid(),
+  peerId: z.string().guid(),
   /**
    * The resume HMAC `welcome` handed out for this peer id. Optional, and
    * older clients never send it: without it the server proves ownership

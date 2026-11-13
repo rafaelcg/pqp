@@ -2662,7 +2662,7 @@ router.get(ADMIN_USER_ACTIVITY_PATH, async ({ url, user }) => {
  * a server's owner. See services/client-platforms.ts for what is and is not
  * recorded.
  */
-const userClientIdSchema = z.string().uuid();
+const userClientIdSchema = z.string().guid();
 
 async function operatorUserClient(target: UserClientTarget) {
   const userId = await resolveUserClientTarget(target);
@@ -3182,7 +3182,7 @@ async function operatorChannels(serverId: string | null) {
 }
 
 const adminChannelLayoutSchema = z.object({
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   action: z.enum(["migrate", "revert"]),
   dryRun: z.boolean().optional(),
 });
@@ -3953,7 +3953,7 @@ router.get(
  */
 router.get("/api/watch-party/waitlist", async ({ url, user }) => {
   const raw = url.searchParams.get("serverId");
-  const serverId = raw ? z.string().uuid().parse(raw) : null;
+  const serverId = raw ? z.string().guid().parse(raw) : null;
   return getWatchPartyWaitlistState(user.id, serverId);
 });
 
@@ -4917,7 +4917,7 @@ router.delete(
  * own server, so a client that asked with the wrong id is refused there.
  */
 router.get("/api/attachments/config", async ({ url }) => {
-  const serverId = z.string().uuid().safeParse(url.searchParams.get("serverId"));
+  const serverId = z.string().guid().safeParse(url.searchParams.get("serverId"));
   return {
     enabled: isAttachmentsConfigured(),
     maxBytes: maxAttachmentBytes(),
@@ -5130,7 +5130,7 @@ router.post(
 router.post(
   "/api/attachments/:attachmentId/transcript",
   async ({ user }, { attachmentId }) => {
-    if (!z.string().uuid().safeParse(attachmentId).success) {
+    if (!z.string().guid().safeParse(attachmentId).success) {
       throw new NotFound("Voice note not found");
     }
     if (!transcriptRequestLimiter.take(user.id)) {
@@ -6178,7 +6178,7 @@ router.get("/api/community-home/config", async ({ url }) => {
   // `?serverId=` is the server the client is looking at: VIP is a per-server
   // flag (`community_home_vip`). Absent or not a uuid, the answer is the
   // global one, which is what every client before this change received.
-  const parsed = z.string().uuid().safeParse(url.searchParams.get("serverId"));
+  const parsed = z.string().guid().safeParse(url.searchParams.get("serverId"));
   return {
     enabled: isCommunityHomeEnabled(),
     vipEnabled: isCommunityHomeVipEnabled(parsed.success ? parsed.data : null),
@@ -12406,7 +12406,7 @@ router.post(
   },
 );
 
-const voiceMoveSchema = z.object({ channelId: z.string().uuid() });
+const voiceMoveSchema = z.object({ channelId: z.string().guid() });
 
 /**
  * "Move to channel" is eject-and-invite, because a server cannot force-join a

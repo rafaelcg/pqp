@@ -119,7 +119,7 @@ export const createServerBotSchema = z.object({
   name: botName,
   persona: safeText(SERVER_BOT_PERSONA_MAX).default(""),
   knowledge: safeText(SERVER_BOT_KNOWLEDGE_MAX).default(""),
-  channelIds: z.array(z.string().uuid()).max(SERVER_BOT_CHANNELS_MAX).default([]),
+  channelIds: z.array(z.string().guid()).max(SERVER_BOT_CHANNELS_MAX).default([]),
   answerToName: z.boolean().default(false),
   model: botModel,
   tools: botToolsSchema.optional(),
@@ -134,7 +134,7 @@ export const updateServerBotSchema = z.object({
   name: botName.optional(),
   persona: safeText(SERVER_BOT_PERSONA_MAX).optional(),
   knowledge: safeText(SERVER_BOT_KNOWLEDGE_MAX).optional(),
-  channelIds: z.array(z.string().uuid()).max(SERVER_BOT_CHANNELS_MAX).optional(),
+  channelIds: z.array(z.string().guid()).max(SERVER_BOT_CHANNELS_MAX).optional(),
   enabled: z.boolean().optional(),
   answerToName: z.boolean().optional(),
   /** `null` goes back to the default model. */
@@ -146,7 +146,7 @@ export const updateServerBotSchema = z.object({
   tagline: botTagline,
   /** The fixed welcome for new members: on or off, where, and its text (`null` is the default text). */
   welcomeEnabled: z.boolean().optional(),
-  welcomeChannelId: z.string().uuid().nullable().optional(),
+  welcomeChannelId: z.string().guid().nullable().optional(),
   welcomeMessage: safeText(SERVER_BOT_WELCOME_MAX)
     .transform((value) => value.trim() || null)
     .nullable()
@@ -241,8 +241,8 @@ export const botActionCardSchema = z.object({
   confirmBy: z.string().max(64).nullable().default(null),
   expiresAt: z.string().nullable().default(null),
   /** A plan's: what its Confirm and Cancel buttons answer, and who may press them. */
-  planId: z.string().uuid().nullable().default(null),
-  confirmById: z.string().uuid().nullable().default(null),
+  planId: z.string().guid().nullable().default(null),
+  confirmById: z.string().guid().nullable().default(null),
   /** A plan's or a question's outcome once decided; null while it waits. */
   state: z.enum(["confirmed", "cancelled", "expired", "answered"]).nullable().default(null),
   /** A question's choices, and the index the member picked. */
@@ -253,10 +253,10 @@ export type BotActionCard = z.infer<typeof botActionCardSchema>;
 
 /** `POST /api/servers/:id/bots/:botId/intro`: staff post the bot's hello, as the bot. */
 export const botIntroSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   body: safeText(1900).refine((value) => value.trim().length > 0, "Empty"),
   /** The same value on a retry finds the first post instead of making another. */
-  nonce: z.string().uuid().optional(),
+  nonce: z.string().guid().optional(),
 });
 
 /** `POST /api/bots/plans/:planId/decision`: a plan card's buttons. */
@@ -285,8 +285,8 @@ export type BotNoticeReason = z.infer<typeof botNoticeReasonSchema>;
  */
 export const botNoticeSchema = z.object({
   type: z.literal("bot-notice"),
-  channelId: z.string().uuid(),
-  botUserId: z.string().uuid(),
+  channelId: z.string().guid(),
+  botUserId: z.string().guid(),
   botName: z.string().max(100),
   reason: botNoticeReasonSchema,
   /** The limit that was reached, for `member-hour` and `server-day`. */

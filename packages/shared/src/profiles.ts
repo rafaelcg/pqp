@@ -418,7 +418,7 @@ export function canRenameHandle(
  * `COMMUNITIES_ENABLED`.
  */
 export const profileBadgeSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string(),
   category: z.string(),
 });
@@ -448,7 +448,7 @@ export type ProfileBadge = z.infer<typeof profileBadgeSchema>;
  * story the ordering tells.
  */
 export const publicDepoimentoSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   body: z.string(),
   author: z.object({
     displayName: z.string(),

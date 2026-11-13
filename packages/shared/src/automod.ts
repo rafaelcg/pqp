@@ -75,8 +75,8 @@ export const automodKeywordSchema = z
   .refine((value) => !/[\r\n]/.test(value), "no line breaks");
 
 export const automodRuleSchema = z.object({
-  id: z.string().uuid(),
-  serverId: z.string().uuid(),
+  id: z.string().guid(),
+  serverId: z.string().guid(),
   kind: automodRuleKindSchema,
   enabled: z.boolean(),
   keywords: z.array(automodKeywordSchema).max(AUTOMOD_KEYWORDS_MAX),
@@ -86,14 +86,14 @@ export const automodRuleSchema = z.object({
     .int()
     .min(AUTOMOD_MENTION_LIMIT_MIN)
     .max(AUTOMOD_MENTION_LIMIT_MAX),
-  exemptRoleIds: z.array(z.string().uuid()).max(AUTOMOD_EXEMPT_ROLES_MAX),
+  exemptRoleIds: z.array(z.string().guid()).max(AUTOMOD_EXEMPT_ROLES_MAX),
   exemptChannelIds: z
-    .array(z.string().uuid())
+    .array(z.string().guid())
     .max(AUTOMOD_EXEMPT_CHANNELS_MAX),
   /** Shown to the author under the composer. Empty means the default copy. */
   customMessage: z.string().trim().max(AUTOMOD_CUSTOM_MESSAGE_MAX),
   /** A text channel in the same server that gets a post per hit. Null: none. */
-  alertChannelId: z.string().uuid().nullable(),
+  alertChannelId: z.string().guid().nullable(),
   /** Time the author out for this long on a hit. 0: do not. */
   timeoutMinutes: z.number().int().min(0).max(AUTOMOD_TIMEOUT_MAX_MINUTES),
   /**

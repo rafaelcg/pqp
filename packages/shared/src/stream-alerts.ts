@@ -66,8 +66,8 @@ export function streamAlertEnabled(
  */
 export const streamStartedSchema = z.object({
   type: z.literal("stream-started"),
-  serverId: z.string().uuid(),
-  channelId: z.string().uuid(),
+  serverId: z.string().guid(),
+  channelId: z.string().guid(),
   /** The voice channel's name, or the party's own name when `kind` is `party`. */
   channelName: z.string(),
   serverName: z.string(),

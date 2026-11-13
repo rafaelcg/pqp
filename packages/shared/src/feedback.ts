@@ -133,7 +133,7 @@ export type ResolveFeedbackRequest = z.infer<typeof resolveFeedbackSchema>;
  */
 export const feedbackItemSchema = z.object({
   id: z.string(),
-  userId: z.string().uuid().nullable(),
+  userId: z.string().guid().nullable(),
   username: z.string().nullable(),
   kind: z.enum(FEEDBACK_KINDS),
   body: z.string(),

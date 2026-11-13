@@ -80,7 +80,7 @@ export const OPERATOR_CHANNEL_SFU_REGION_PATH = "/api/admin/channel-sfu-region";
 
 export const setServerLiveHlsSchema = z
   .object({
-    serverId: z.string().uuid(),
+    serverId: z.string().guid(),
     /**
      * `true` on, `false` off, `null` back to "nobody has decided", which hands
      * the answer back to `LIVE_HLS_SERVER_ALLOWLIST`. Three states because two
@@ -106,13 +106,13 @@ export const setServerLiveHlsSchema = z
   );
 
 export const setChannelVoiceTransportSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /** `null` is automatic: size, community and HLS decide, as they always did. */
   transport: z.enum(["mesh", "livekit"]).nullable(),
 });
 
 export const setChannelSfuRegionSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /**
    * A configured region id (`LIVEKIT_REGIONS`, or the home id), or `null`
    * for automatic: the first joiner's country decides.
