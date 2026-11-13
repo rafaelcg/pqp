@@ -1991,6 +1991,18 @@ test("captures the phone shell", async ({ browser }) => {
       await page.waitForTimeout(300);
       await shoot(page, `m-shell-focus-${theme}`);
       await context.close();
+      // Gui has servers and no conversation yet: the empty Conversas tab.
+      const empty = await browser.newContext({ viewport: PHONE, colorScheme: theme, hasTouch: true });
+      const emptyPage = await empty.newPage();
+      await as(emptyPage, theme);
+      await emptyPage.addInitScript(() => localStorage.setItem("pqp:dev-user-suffix", "gui"));
+      await emptyPage.goto(`/app/dm?lang=pt-BR`);
+      await expect(emptyPage.locator("[data-phone-tab-bar]")).toBeVisible({ timeout: 30_000 });
+      await hideDevBanner(emptyPage);
+      await emptyPage.locator(`[data-phone-tab="conversas"]`).click();
+      await emptyPage.waitForTimeout(800);
+      await shoot(emptyPage, `m-shell-conversas-empty-${theme}`);
+      await empty.close();
     }
   } finally {
     await flags(null);
