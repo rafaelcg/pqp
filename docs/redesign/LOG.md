@@ -200,9 +200,25 @@ Items 5 to 8 were made in the new look by the commits that introduced them.
 Items 1 to 4 left gaps, listed per element in
 [`INVENTORY.md`](./INVENTORY.md) under "Brand pass (v2)".
 
+### t-color (v2)
+
+High contrast did not reach every redesign edge. Fixed: the emoji picker's
+border, the slider thumb and its empty track, a choice card's hover edge, an
+app session card, a dark connection tile (a light edge in both brightnesses),
+a role swatch, the call control rule, the tooltip (strong in dark, none in
+light), the search pills, filled fields and banners. Every component edge now
+reads a named token, and `docs/DESIGN.md` states the rule.
+
+Rounds: r1 Codex 8.3, r2 Codex 8.8, r3 Opus 8.9, r4 Codex 9.0, r5 Opus 9.1.
+No MUST in any round. After r5: filled fields (`--field-fill-edge`) and
+banners (`--banner-edge: 60%`) under high contrast, the doc rewrapped. The
+council shots skip Novidades when the rail has no button for it, and gained
+a choice card hover shot. Toggle off: the primitives and the full screens
+set compared pixel by pixel; only animation, camera and random-code noise.
+
 | Element | Brand pass status |
 |---|---|
-| `t-color` | Re-check |
+| `t-color` | Merged (Opus 9.1 r5, no MUST) |
 | `p-empty` | Re-check |
 | `f-states` | Re-check |
 | `f-dm-home` | Re-check |
