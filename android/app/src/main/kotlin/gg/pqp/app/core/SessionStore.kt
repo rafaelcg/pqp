@@ -328,6 +328,14 @@ class SessionStore(
         private set
 
     /**
+     * Whether the age gate reads the date back before sending it, from the
+     * same `/api/me` that sent the phase there (`age_gate_readback`).
+     */
+    @Volatile
+    var ageGateReadback: Boolean = true
+        private set
+
+    /**
      * Where the app should open the moment first run hands over: the room an
      * invite joined, or the one the organizer just made. Consumed once by the
      * signed-in navigation, which also draws the arrival banner from it.
@@ -395,17 +403,29 @@ class SessionStore(
                 "blocked" -> _phase.value = SessionPhase.Blocked(me.ageGate)
                 else -> {
                     gateLeadsToOnboarding = gg.pqp.app.onboarding.shouldRunOnboarding(me)
+                    ageGateReadback = gg.pqp.app.onboarding.ageGateReadbackEnabled(me.ageGateReadback)
                     _phase.value = SessionPhase.AgeGate
                 }
             }
         }
     }
 
-    fun submitAgeCheck(dateOfBirth: String, onError: (String) -> Unit) {
+    /**
+     * Send the declaration. A success re-reads `/api/me`, which moves to the
+     * app or to the blocked screen. A refusal is handed to [onFailure] as what
+     * it means for the gate (see `ageCheckFailureOf`): a 400 never blocks, it
+     * is the person's input to fix. A 409 means another device already
+     * answered, so the gate lets go of its fields and re-reads `/api/me` too.
+     */
+    fun submitAgeCheck(dateOfBirth: String, onFailure: (gg.pqp.app.onboarding.AgeCheckFailure) -> Unit) {
         scope.launch {
             runCatching { api.submitAgeCheck(dateOfBirth) }
                 .onSuccess { restore() }
-                .onFailure { onError(it.message.orEmpty()) }
+                .onFailure {
+                    val failure = gg.pqp.app.onboarding.ageCheckFailureOf(it)
+                    onFailure(failure)
+                    if (failure == gg.pqp.app.onboarding.AgeCheckFailure.Stale) restore()
+                }
         }
     }
 
