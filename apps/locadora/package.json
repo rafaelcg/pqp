@@ -19,7 +19,7 @@
     "fflate": "0.8.3"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "^1.64.1",
     "@pqp/shared": "workspace:*",
     "@types/node": "^22.10.5",
     "typescript": "^5.7.3",
