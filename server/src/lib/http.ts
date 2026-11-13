@@ -33,7 +33,19 @@ function allowedOrigins(): string[] | null {
     .split(",")
     .map((value) => value.trim().replace(/\/$/, ""))
     .filter(Boolean);
-  return origins.length > 0 ? origins : null;
+  if (origins.length === 0) {
+    return null;
+  }
+  // The public Jam site is its own origin and calls this API from the browser.
+  // Hosted default, overridable (a self-host sets JAM_SITE_ORIGIN to its own
+  // host, or to a single space to add nothing).
+  const jam = (process.env.JAM_SITE_ORIGIN ?? "https://jam.pqp.gg")
+    .trim()
+    .replace(/\/$/, "");
+  if (jam && !origins.includes(jam)) {
+    origins.push(jam);
+  }
+  return origins;
 }
 
 /**

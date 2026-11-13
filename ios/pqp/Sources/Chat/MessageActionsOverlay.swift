@@ -36,6 +36,10 @@ struct MessageActionsOverlay: View {
     /// source. Defaulted off so every other caller keeps its menu.
     var canForward: Bool = false
     var onForward: () -> Void = {}
+    /// Block the author. Offered on anybody's message but your own and a
+    /// webhook's: there is no account behind a webhook to block.
+    var canBlock: Bool = false
+    var onBlock: () -> Void = {}
 
     var onReact: (String) -> Void
     var onMoreReactions: () -> Void
@@ -228,6 +232,18 @@ struct MessageActionsOverlay: View {
                 divider
                 row("Report", icon: "flag", tint: Palette.danger) {
                     onReport()
+                    onDismiss()
+                }
+            }
+
+            // Next to Report, on the message itself: App Store guideline 1.2
+            // wants blocking where the offending content is, not three taps
+            // away behind a profile. The caller confirms, then every list drops
+            // the person at once (`BlockedUsers`).
+            if canBlock {
+                divider
+                row("Block", icon: "hand.raised", tint: Palette.danger) {
+                    onBlock()
                     onDismiss()
                 }
             }

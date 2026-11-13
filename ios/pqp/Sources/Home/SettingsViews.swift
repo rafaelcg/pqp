@@ -148,8 +148,11 @@ struct AccountSettingsView: View {
                             Spacer()
                             Button("Unblock") {
                                 Task {
-                                    try? await session.api.setBlocked(userId: user.id, blocked: false)
-                                    blocked.removeAll { $0.id == user.id }
+                                    // Through the shared store, so the person
+                                    // is back in every list at once.
+                                    if (try? await session.blocked.unblock(user.id, using: session.api)) != nil {
+                                        blocked.removeAll { $0.id == user.id }
+                                    }
                                 }
                             }
                             .foregroundStyle(Palette.signal)
@@ -169,6 +172,8 @@ struct AccountSettingsView: View {
                 }
 
                 YourDataSection(exportFile: $exportFile) { confirmingDeletion = true }
+
+                AboutSection()
             }
             .scrollContentBackground(.hidden)
             .background(Palette.ink)
@@ -212,7 +217,10 @@ struct AccountSettingsView: View {
         }
         // ON THE STACK, not on the `Form` alongside the confirmation above.
         // Two `.sheet` modifiers at the same level is a coin flip over which
-        // one is honoured; at different levels both are unambiguous.
+        // one is honoured; at different levels both are unambiguous. The
+        // in-app browser for the About links hangs here too, for the same
+        // reason (and so it outlives the About section scrolling away).
+        .inAppLegalLinks()
         .sheet(item: Binding(
             get: { exportFile.map { ShareItem(url: $0) } },
             set: { if $0 == nil { exportFile = nil } }

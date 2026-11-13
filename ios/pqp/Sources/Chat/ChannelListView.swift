@@ -53,6 +53,9 @@ struct ChannelListView: View {
     /// This server's stories: the strip at the top of the list, and the
     /// composer the menu opens. Draws nothing with the flag off.
     @State private var stories: StoryStripModel
+    /// Jam: whether it is on for this server, and each jam row's song count
+    /// and news. With the flag off no jam row is drawn at all.
+    @State private var jam = JamListModel()
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Sections folded on this device: `text`, `voice` or a category id.
@@ -230,19 +233,28 @@ struct ChannelListView: View {
     /// ones, matching the web client's layout. A forum sits with the text
     /// channels, as on the web.
     private var looseText: [Channel] {
-        listed.filter { ($0.isText || $0.isForum) && $0.parentId == nil }
+        listed.filter { ($0.isText || $0.isForum || ($0.isJam && jam.isEnabled)) && $0.parentId == nil }
     }
     private var looseVoice: [Channel] { listed.filter { $0.isVoice && $0.parentId == nil } }
 
     private func children(of category: Channel) -> [Channel] {
-        Self.children(of: category, in: listed)
+        Self.children(of: category, in: listed, jamEnabled: jam.isEnabled)
+    }
+
+    private var jamChannelIds: [String] { channels.filter(\.isJam).map(\.id) }
+
+    private func refreshJam() async {
+        // Nothing is asked of a server that has no jam channel: its list must
+        // behave exactly as it did before the feature existed.
+        guard !jamChannelIds.isEmpty else { return }
+        await jam.refresh(session: session, serverId: server.id, jamChannelIds: jamChannelIds)
     }
 
     /// Only types this build can open (a chat or a forum): a type it does not
     /// know is hidden, not drawn as a row that goes nowhere.
-    static func children(of category: Channel, in listed: [Channel]) -> [Channel] {
+    static func children(of category: Channel, in listed: [Channel], jamEnabled: Bool = false) -> [Channel] {
         listed
-            .filter { $0.parentId == category.id && $0.isListed }
+            .filter { $0.parentId == category.id && ($0.isListed || (jamEnabled && $0.isJam)) }
             .sorted { $0.position < $1.position }
     }
 
@@ -256,7 +268,14 @@ struct ChannelListView: View {
     }
 
     private func mark(for channel: Channel) -> ChannelUnreadMark {
-        ChannelUnreadMark.resolve(unread: unread[channel.id], isMuted: isMuted(channel))
+        // A jam carries no messages, so its news is the device-local
+        // "somebody else made something since you looked" (`JamUnread`), kept
+        // out of `unread` so it never reaches the server tile's badge.
+        if channel.isJam {
+            guard !isMuted(channel), jam.row(for: channel.id)?.isUnread == true else { return .none }
+            return ChannelUnreadMark(isUnread: true, mentions: 0)
+        }
+        return ChannelUnreadMark.resolve(unread: unread[channel.id], isMuted: isMuted(channel))
     }
 
     private func summary(of members: [Channel]) -> ChannelSectionSummary {
@@ -432,7 +451,7 @@ struct ChannelListView: View {
     /// keeps whatever a client did not send exactly where it was.
     private func mixedLayout(of channels: [Channel]) -> SidebarLayout<Channel> {
         ChannelLayoutRules.build(
-            channels.filter { !$0.isWatchParty && ($0.isCategory || $0.isListed) },
+            channels.filter { !$0.isWatchParty && ($0.isCategory || $0.isListed || ($0.isJam && jam.isEnabled)) },
             mixed: true
         )
     }
@@ -601,7 +620,8 @@ struct ChannelListView: View {
                     isMuted: isMuted(channel),
                     isLive: liveChannels.contains(channel.id),
                     isCurrentCall: inCall,
-                    occupantCount: people.count
+                    occupantCount: people.count,
+                    jam: channel.isJam ? jam.row(for: channel.id) : nil
                 )
             }
             .buttonStyle(ChannelRowButtonStyle())
@@ -981,6 +1001,9 @@ struct ChannelListView: View {
         // the badge the hub hydrated), and a mute changes the total with no
         // unread change at all.
         .onChange(of: unread, initial: true) { _, _ in publishServerUnread() }
+        // A jam channel arriving (the list loaded, or somebody created one):
+        // ask whether jam is on here and what is in it.
+        .onChange(of: jamChannelIds) { _, _ in Task { await refreshJam() } }
         .onChange(of: unreadFetched) { _, _ in publishServerUnread() }
         .onChange(of: session.preferences) { _, _ in publishServerUnread() }
         // Removed from this server, or it was deleted: nothing here is real any
@@ -1003,6 +1026,8 @@ struct ChannelListView: View {
     private func destination(for channel: Channel) -> some View {
         if channel.isForum {
             ForumHomeView(forum: channel, server: current)
+        } else if channel.isJam {
+            JamWallView(channel: channel, server: current)
         } else {
             chat(for: channel)
         }
@@ -1059,6 +1084,7 @@ struct ChannelListView: View {
             unreadFetched = true
         }
         await refreshBau()
+        await refreshJam()
     }
 
     /// The push for a new post lands here with `opensBau`. Once, and only if

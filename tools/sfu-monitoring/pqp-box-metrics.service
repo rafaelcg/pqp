@@ -4,5 +4,9 @@ After=docker.service vnstat.service
 
 [Service]
 Type=oneshot
+# Optional per-box overrides (allowance, interface, containers), written by
+# install-regional.sh. The leading `-` makes a missing file fine, which is the
+# case on sfu-pqp: its defaults are the file's defaults.
+EnvironmentFile=-/etc/pqp-box-metrics.env
 ExecStart=/usr/local/bin/pqp-box-metrics
 Nice=10

@@ -1,5 +1,17 @@
 # Fly.io deployment (API + WebSocket)
 
+> **Historical: production left Fly on 2026-09-17; the Fly apps were destroyed
+> 2026-10-22; kept for self-hosters on Fly.** Production runs on a Vultr box
+> ([`deploy-vultr.md`](./deploy-vultr.md), which also holds the rollback
+> plan). The repo no longer carries a production `fly.toml`, `fly.worker.toml`
+> or `deploy-api-fly.yml`: this guide still refers to them, so for a Fly
+> self-host start from [`fly.staging.toml`](../fly.staging.toml) (the one Fly
+> config left, a complete single-machine API) and read the old production file
+> with `git show 94cfe2475:fly.toml` (the worker's is `fly.worker.toml` at the
+> same commit). Commands, line numbers and the "rollback to Railway" framing
+> below are as they were written in 2026-08 and 2026-09.
+
+
 Runbook for moving the pqp API and WebSocket server from Railway to **Fly.io, region `gru` (São Paulo)**.
 
 Only the API moves. The SPA stays on Cloudflare Pages; Fly serves `/api/*`, `/health`, `/status.json` and the `/ws` upgrade. Config lives in [`fly.toml`](../fly.toml) — read the header comment there before changing anything, because it explains the one constraint that governs this whole document:

@@ -257,6 +257,63 @@
    */
   --color-on-media: oklch(0.97 0.005 95);
   --color-on-media-muted: oklch(0.8 0.008 95);
+  /* The dark a caption sits on when it is drawn OVER a picture (a Jam tile's
+     video, a label on a camera): dark in every theme, like the film itself. */
+  --color-media-scrim: oklch(0.14 0.012 250);
+
+  /*
+   * JAM INSTRUMENTS. One fill per instrument, for a song tile, a track's
+   * waveform lane and its avatar chip. They are identities, not chrome, so
+   * like the connection marks they do not retint with the theme: the same six
+   * fills in light and dark, each carrying the dark `--color-on-inst`.
+   *
+   * Told apart by LIGHTNESS as well as hue (steps of 0.05 or more, from the
+   * darkest blue to the lightest yellow), because hue alone fails for a person
+   * who cannot tell the hues apart, and every one also carries its own icon.
+   * The bench measures `on-inst` on each fill at 4.5.
+   *
+   * The guitar is a warm yellow, not the lime it started as: lime is the
+   * accent, the colour of every "do this" button, and a lime guitar lane next
+   * to a lime "Gravar" read as one more button.
+   *
+   * `other` is a violet, not the grey it started as: a grey chip beside five
+   * hues read as DISABLED ("this part does not count"), when it is simply a
+   * part that is none of the five. Violet is the one open stretch of the hue
+   * wheel (green is the accent's), 14 or more apart in OKLab from every other
+   * fill (the five were 16 or more among themselves), and it keeps the 0.05
+   * lightness step above the blue.
+   */
+  --color-inst-bass: oklch(0.64 0.15 255);
+  --color-inst-other: oklch(0.71 0.16 310);
+  --color-inst-drums: oklch(0.77 0.15 55);
+  --color-inst-vocals: oklch(0.82 0.12 345);
+  --color-inst-keys: oklch(0.87 0.11 195);
+  --color-inst-guitar: oklch(0.92 0.15 90);
+  --color-on-inst: oklch(0.16 0.012 250);
+
+  /*
+   * JAM TILES. One neutral ground for every part of a song's mosaic that has no
+   * video, the same in the public site and the app's song view
+   * (`lib/jam-tile-look.ts`), and one ink per instrument for the glyph, the
+   * level strip, the initial and a dashed outline.
+   *
+   * The ground is NEUTRAL on purpose, an alias of the raised surface so every
+   * look (harmony, hearth, night) carries it: a tinted ground per instrument,
+   * however opaque, put six muddy hues side by side on one dark page (the
+   * reviewers scored the colour 5.5 to 6 three rounds running). The hue now
+   * lives only where it identifies: the chip, the glyph, the strip. The ink is
+   * the deep end on the light theme and the pale end on the dark one, so it
+   * clears 3:1 on the ground and the page's text colour clears 4.5:1 on it (the
+   * bench measures both for every instrument in every look).
+   */
+  --color-tile: var(--color-surface-2);
+  --color-tile-disc: var(--color-surface-3);
+  --color-tile-guitar-ink: oklch(0.88 0.14 92);
+  --color-tile-bass-ink: oklch(0.8 0.11 255);
+  --color-tile-drums-ink: oklch(0.82 0.13 55);
+  --color-tile-vocals-ink: oklch(0.84 0.11 350);
+  --color-tile-keys-ink: oklch(0.85 0.1 195);
+  --color-tile-other-ink: oklch(0.82 0.12 310);
 
   /* The `* Fallback` names are metric-adjusted local fonts declared in
      fonts.css, so the swap to the real face barely moves the text. */
@@ -1291,6 +1348,14 @@
   --color-text: oklch(0.25 0.015 250);
   --color-text-secondary: oklch(0.38 0.018 250);
   --color-text-tertiary: oklch(0.45 0.02 250);
+
+  /* Jam tiles on the light page: the neutral ground follows the surfaces; the ink is the deep end (see the dark block). */
+  --color-tile-guitar-ink: oklch(0.42 0.09 80);
+  --color-tile-bass-ink: oklch(0.42 0.14 258);
+  --color-tile-drums-ink: oklch(0.46 0.12 45);
+  --color-tile-vocals-ink: oklch(0.45 0.14 352);
+  --color-tile-keys-ink: oklch(0.42 0.08 200);
+  --color-tile-other-ink: oklch(0.45 0.15 310);
 
   /* The dark chartreuse is near-white in luminance and fails on a white page. */
   --color-accent: oklch(0.52 0.16 135);
@@ -6294,5 +6359,175 @@ html[data-immersive-stage] [data-immersive-hide] {
   .loc-door-cart,
   .loc-door-led {
     transition: none;
+  }
+}
+
+/*
+ * Baú+ (the fan paying for VIP, components/bau-plus/). A few quiet moments
+ * of motion and nothing else: the step of the pay sheet settling in, a
+ * breathing dot while the bank has not answered, and the confirmation (one
+ * halo that opens and fades behind the VIP seal). All off under reduced
+ * motion, where each state is simply there.
+ */
+@keyframes bau-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bau-step-in {
+  animation: bau-step-in var(--duration-slow) var(--ease-emphasized) backwards;
+  animation-delay: calc(var(--stagger, 0) * 60ms);
+}
+
+@keyframes bau-wait {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.bau-wait-dot {
+  animation: bau-wait 1.6s var(--ease-standard) infinite;
+}
+
+@keyframes bau-ring {
+  from {
+    opacity: 0.55;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+
+.bau-paid-ring {
+  animation: bau-ring 900ms var(--ease-emphasized) 120ms both;
+}
+
+
+/*
+ * The locked post's placeholder: bars shaped like the hidden paragraph (as
+ * many as the text is long), fading into the card under them. Plainly not
+ * words; the real body never reaches the client.
+ */
+.bau-lock-lines {
+  user-select: none;
+  -webkit-mask-image: linear-gradient(to bottom, black 15%, transparent 92%);
+  mask-image: linear-gradient(to bottom, black 15%, transparent 92%);
+}
+
+/*
+ * The VIP seal arriving (`vip-seal.tsx`, the confirmation and the welcome
+ * strip): the tile settles, one band of light crosses it once, the gem
+ * medallion lands a beat later. Once, never looping.
+ */
+@keyframes bau-seal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes bau-sheen {
+  from {
+    transform: translateX(-120%) skewX(-18deg);
+  }
+  to {
+    transform: translateX(220%) skewX(-18deg);
+  }
+}
+
+@keyframes bau-medal-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-25deg);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.08) rotate(4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+.bau-seal-in {
+  animation: bau-seal-in 480ms var(--ease-emphasized) both;
+}
+
+.bau-seal-sheen {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 45%;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-surface-0) 50%,
+    transparent
+  );
+  opacity: 0.55;
+  transform: translateX(-120%) skewX(-18deg);
+  animation: bau-sheen 900ms var(--ease-standard) 380ms both;
+}
+
+.bau-medal-in {
+  animation: bau-medal-in 520ms var(--ease-emphasized) 260ms both;
+}
+
+/* How much of the month is left: eases to its width when it first draws. */
+@keyframes bau-meter-in {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.bau-meter-fill {
+  transform-origin: left center;
+  animation: bau-meter-in 700ms var(--ease-emphasized) 120ms backwards;
+}
+
+/* The Pix code's time left, draining once a second. */
+.bau-drain {
+  transition: width 1s linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bau-step-in,
+  .bau-wait-dot,
+  .bau-paid-ring,
+  .bau-seal-in,
+  .bau-medal-in,
+  .bau-meter-fill {
+    animation: none;
+  }
+  .bau-seal-sheen {
+    display: none;
+  }
+  .bau-drain {
+    transition: none;
+  }
+  .bau-paid-ring {
+    opacity: 0;
   }
 }

@@ -2,7 +2,7 @@
 
 This repo deploys the **marketing site + static SPA shell** to **Cloudflare Pages**. The WebSocket/API server and Postgres are **not** on Pages — host them separately (e.g. [Railway](./deploy-railway.md)).
 
-**Production API + WS today:** Fly.io, [`deploy-fly.md`](./deploy-fly.md). **Moving to a Vultr box** (decision 2026-09-13, cost/capacity numbers in the watch-party postmortem): see [`deploy-vultr.md`](./deploy-vultr.md), gated on `vars.DEPLOY_TARGET` so it changes nothing until flipped.
+**Production API + WS today:** a Vultr box in São Paulo (two API containers and a worker behind Caddy), see [`deploy-vultr.md`](./deploy-vultr.md), which also holds the rollback plan. Production left Fly on 2026-09-17 and the Fly apps were destroyed on 2026-10-22; [`deploy-fly.md`](./deploy-fly.md) is kept for self-hosters who want to run the API on Fly.
 
 ## Architecture (hosted)
 
@@ -22,14 +22,21 @@ First deploy priority: **dev / marketing website** on Pages. Point `VITE_API_URL
 
 ### Which changes restart the API
 
-`deploy-api-fly.yml` only deploys when the commit touches something the server
-actually runs. The gate is an **allowlist**, so anything not on it is left
-alone and a new top-level directory defaults to *not* restarting production:
+`deploy-api-vultr.yml` only deploys when the commit touches something the server
+actually runs (`scripts/deploy/api-deploy-needed.mjs`, which also ignores the
+test files the build excludes). The gate is an **allowlist**, so anything not
+on it is left alone and a new top-level directory defaults to *not* restarting
+production:
 
 ```
-server/  packages/  Dockerfile  fly.toml  pnpm-lock.yaml
-pnpm-workspace.yaml  package.json  .github/workflows/deploy-api-fly.yml
+server/  packages/  Dockerfile  pnpm-lock.yaml
+pnpm-workspace.yaml  package.json
 ```
+
+The workflow adds the box's own files to that list: a change to
+`.github/workflows/deploy-api-vultr.yml` or anything under `tools/api-host/`
+(compose, Caddyfile, the deploy script) also redeploys, because those change
+what runs on the box.
 
 **`packages/` is on that list in full, and this is the one that surprises
 people.** The server compiles `@pqp/shared` into itself, so a change there is a
@@ -47,12 +54,13 @@ recreates `api-a`, waits for it to report healthy on the new commit, and only
 then touches `api-b`, so one container is always serving and a redeploy no
 longer takes every WebSocket down at once. Sockets on the container being
 recycled drop and reconnect onto its sibling; losing the whole box is still
-full downtime. The Fly path (`deploy-api-fly.yml`, one machine) is dormant, its
-apps kept at zero machines as the rollback target rather than the live deploy;
-see `docs/deploy-vultr.md` and `tools/api-host/compose.yaml`. When the container a socket is on is the one recycled, that socket still goes
+full downtime. There is no Fly fallback any more (its workflow, config and apps
+were removed on 2026-10-22); the rollback plan is the box itself, in
+`docs/deploy-vultr.md` §7 (`pqp-deploy <older sha>` by hand, and the nightly R2
+dump from `docs/DB_RUNBOOK.md`). See also `tools/api-host/compose.yaml`. When the container a socket is on is the one recycled, that socket still goes
 with it. Open chats reconnect on their own. **Web and Electron** keep the media
 session and reattach the same peer id. In the same process that is a 90-second
-orphan window. After a Fly restart the map is empty, so reconstruct uses the
+orphan window. After an API restart the map is empty, so reconstruct uses the
 HMAC token (valid for hours, so a long call still resumes). A deploy that
 stays down longer than 90 seconds drops the held mesh and cold-rejoins when
 the socket is back. Reconnect still needs a Clerk token that can be fetched

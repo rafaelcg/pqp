@@ -116,6 +116,16 @@ const SHARE_CAPABILITIES = Object.freeze({
    */
   linuxShareAudio: process.platform === "linux" && !runningInFlatpak,
   /**
+   * This binary can carry the computer's sound on a macOS share through
+   * Chromium's CoreAudio Tap with its own audio excluded
+   * (`lib/mac-share-audio.js`). A SEPARATE field, never `systemAudio:
+   * "loopback"`: every client already deployed reads that one as "ask for
+   * audio and it arrives", and on a Mac before 14.2 asking fails the whole
+   * capture. Whether it is ON is the runtime flag's business, and whether
+   * this Mac is new enough is `macShareAudioStatus()`'s.
+   */
+  macShareAudio: process.platform === "darwin",
+  /**
    * This shell is the Flatpak build. The page uses it for copy only: why a
    * Linux share carries no sound here, and where to get the build that can.
    */
@@ -350,6 +360,28 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     return () => {
       ipcRenderer.removeListener("pqp:native-share-audio-ended", handler);
     };
+  },
+
+  /**
+   * macOS share audio: is this Mac new enough for the CoreAudio Tap (14.2+)?
+   * Resolves `{ supported, version }`, and `supported: false` off macOS.
+   */
+  macShareAudioStatus() {
+    return ipcRenderer.invoke("pqp:mac-share-audio-status");
+  },
+
+  /**
+   * Right before `getDisplayMedia`, for a share the person said yes to sound
+   * for with the runtime flag on. The shell answers loopback only to a request
+   * that follows a fresh arm.
+   */
+  macShareAudioArm() {
+    return ipcRenderer.invoke("pqp:mac-share-audio-arm");
+  },
+
+  /** Opens System Settings at Privacy & Security > System Audio Recording. */
+  macShareAudioOpenSettings() {
+    return ipcRenderer.invoke("pqp:mac-share-audio-open-settings");
   },
 
   /**

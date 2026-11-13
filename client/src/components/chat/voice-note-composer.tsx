@@ -18,7 +18,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { loadLocalSettings } from "@/components/layout/settings-modal";
+import { loadLocalSettings } from "@/components/settings/local-settings";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/api";

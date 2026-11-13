@@ -19,6 +19,8 @@
     "e2e:locadora-share-sound": "playwright test -c playwright.locadora-share-sound.config.ts",
     "e2e:camera-sync": "playwright test -c playwright.camera-sync.config.ts",
     "e2e:share-fast-start": "playwright test -c playwright.share-fast-start.config.ts",
+    "e2e:jam": "playwright test -c playwright.jam.config.ts",
+    "e2e:jam-site": "playwright test -c playwright.jam-site.config.ts",
     "bench:tokens": "node bench/theme-tokens.mjs",
     "bench": "node bench/theme-tokens.mjs && node bench/theme-runtime.mjs",
     "bench:runtime": "node bench/theme-runtime.mjs",
@@ -47,15 +49,16 @@
     "hls.js": "1.7.3",
     "i18next": "^26.4.0",
     "livekit-client": "^2.21.0",
-    "lucide-react": "^0.469.0",
+    "lucide-react": "^1.65.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-markdown": "^9.0.3",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.1",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.0",
     "tailwind-merge": "^2.6.0",
-    "three": "^0.185.1"
+    "three": "^0.185.1",
+    "uqr": "0.1.2"
   },
   "devDependencies": {
     "@emulatorjs/core-fceumm": "4.2.3",

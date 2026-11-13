@@ -2,8 +2,8 @@ name: Android
 
 # Its own workflow file, deliberately, and not a job bolted onto `ci.yml`.
 #
-# `ci.yml` guards the API and the web client, and `deploy-api-fly.yml` ships the
-# API from `main` minutes after a merge. An Android build that cannot find an
+# `ci.yml` guards the API and the web client, and `deploy-api-vultr.yml` ships
+# the API from `main` minutes after a merge. An Android build that cannot find an
 # SDK platform must never be the reason an API fix does not deploy, so the two
 # pipelines share nothing: no runner, no toolchain, no required check.
 #
@@ -77,7 +77,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         # The whole repo, not a sparse android/ checkout: the protocol tests
         # read packages/shared, server/src/ws and client/src/lib off disk.
 
@@ -117,7 +117,7 @@ jobs:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           # Installs cmdline-tools and accepts the licences. The platform is
           # installed in the next step, where a miss can be reported clearly.
@@ -304,7 +304,7 @@ jobs:
 
       - name: Upload reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-reports
           path: |
@@ -323,7 +323,7 @@ jobs:
       # with the dev bypass token, which the hosted API refuses.
       - name: Upload debug APK
         if: success()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pqp-android-debug
           path: android/app/build/outputs/apk/debug/*.apk
@@ -332,7 +332,7 @@ jobs:
 
       - name: Upload sideload APK
         if: success()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pqp-android-sideload
           path: android/app/build/outputs/apk/sideload/pqp.apk
@@ -364,7 +364,7 @@ jobs:
           path: dist
 
       - name: Publish to android-beta
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: android-beta
           name: Android beta

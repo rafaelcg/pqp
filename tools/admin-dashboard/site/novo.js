@@ -1389,6 +1389,24 @@
     return h("div", { class: "sw-cell" }, [btn, msg ? h("p", { class: "sw-reason" + (sw.reason ? " blocked" : ""), id: reasonId, text: msg }) : null]);
   }
 
+  /**
+   * "Padrão em todos": the app released on every server that has not decided,
+   * new ones included. Turning it ON asks first (it reaches every server);
+   * turning it off does not (it is the safe direction, and the per server
+   * decisions stay).
+   */
+  function defaultControl(app) {
+    var on = !!app.defaultOperatorEnabled;
+    var noteId = "dr-" + app.id;
+    var btn = h("button", {
+      type: "button", class: "switch", role: "switch", "aria-checked": on ? "true" : "false",
+      "aria-label": app.name + ", padrão em todos os servidores", "aria-describedby": noteId,
+      "data-id": "dsw:" + app.id,
+      onclick: function () { if (on) setDefault(app.id, false); else askDefault(app); }
+    });
+    return h("div", { class: "sw-cell" }, [btn, h("p", { class: "sw-reason", id: noteId, text: M.defaultNote(app) })]);
+  }
+
   function renderAppList(body) {
     var apps = A.list.apps;
     if (!apps.length) {
@@ -1451,7 +1469,7 @@
         var opt = h("option", { value: value, text: M.appStatus(value).label, selected: value === app.status ? true : null, disabled: value === "live" && app.goLiveBlocker && app.status !== "live" ? true : null });
         return opt;
       }));
-    var canDisable = on || app.serversOn > 0 || app.liveSessions > 0;
+    var canDisable = on || app.defaultOperatorEnabled || app.serversOn > 0 || app.liveSessions > 0;
     body.appendChild(h("section", { class: "card", "aria-label": app.name }, [
       h("div", { class: "app-head" }, [
         h("div", { class: "app-id" }, [appTile(app, "lg"), h("div", { class: "app-name" }, [h("b", { text: app.name }), h("span", { text: M.appSubtitle(app) })])]),
@@ -1459,10 +1477,12 @@
         h("div", { class: "grow-space" }),
         h("label", { class: "field" }, [h("span", { text: "Estado" }), statusSelect]),
         h("div", { class: "field" }, [h("span", { text: "Global" }), globalControl(app)]),
+        h("div", { class: "field" }, [h("span", { text: "Padrão em todos" }), defaultControl(app)]),
         h("button", { type: "button", class: "btn warn", "data-id": "disable:" + app.id, "aria-disabled": canDisable ? null : "true",
           onclick: function () { if (canDisable) askDisableEverywhere(app); }, text: "Desligar em todos" })
       ]),
-      h("p", { class: "foot", style: "font-size:13px", text: M.appSummary(app, serverCount()) })
+      h("p", { class: "foot", style: "font-size:13px", text: M.appSummary(app, serverCount()) }),
+      strandedNote(app)
     ]));
 
     // Servers.
@@ -1485,6 +1505,17 @@
     body.appendChild(historyCard(app));
   }
 
+  // A live app pinned to a version the apps site no longer serves opens a white page for everybody:
+  // say it on the app itself, with the fix one click away.
+  function strandedNote(app) {
+    var note = M.strandedVersion(app);
+    if (!note) return null;
+    return h("div", { class: "row-between", role: "alert", "data-id": "stranded:" + app.id }, [
+      h("p", { class: "sw-reason blocked", style: "font-size:13px;max-width:640px", text: note.text }),
+      note.offer ? h("button", { type: "button", class: "btn primary", text: "Tornar atual a v" + note.offer, onclick: function () { setCurrentVersion(app.id, note.offer); } }) : null
+    ]);
+  }
+
   function renderServerRows() {
     var host = $("aSrvRows"); if (!host) return;
     var app = appById(A.open); if (!app) return;
@@ -1498,7 +1529,7 @@
     var list = h("ul", { class: "srv-list" });
     st.rows.forEach(function (row) {
       var m = M.serverRow(row);
-      var on = row.operatorEnabled === true;
+      var on = M.serverReleased(row);
       var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": on ? "true" : "false", "aria-label": row.name + ", " + app.name,
         "aria-disabled": m.locked ? "true" : null, "aria-describedby": m.locked ? "aLockNote" : null, "data-id": "srvsw:" + row.id,
         onclick: function () { if (m.locked) return; setServerSwitch(app.id, row.id, !on); } });
@@ -1555,6 +1586,7 @@
         h("div", { class: "version-head" }, [
           h("b", { text: "v" + v.version }),
           v.isCurrent ? h("span", { class: "badge accent", text: "atual" }) : h("button", { type: "button", class: "ghost small", text: "Tornar atual", onclick: function () { setCurrentVersion(app.id, v.version); } }),
+          v.served === "not-served" ? h("span", { class: "badge bad", title: "O site dos apps deste deploy não serve essa versão: um app nela abre uma tela branca.", text: "fora do site" }) : null,
           h("span", { class: "foot", text: v.reviewedAt ? "revisada " + ago(v.reviewedAt) + (v.reviewedBy ? " por " + v.reviewedBy.replace(/^moderator:.*/, "moderador") : "") : "ainda sem revisão" })
         ]),
         h("div", { class: "checks" }, items),
@@ -1700,6 +1732,23 @@
       }
     });
   }
+  function setDefault(appId, on) {
+    appWrite({
+      method: "PUT", path: "/operator/apps", body: { appId: appId, defaultOperatorEnabled: on },
+      reloadServers: true,
+      apply: function () {
+        var app = appById(appId); if (!app) return null;
+        var before = app.defaultOperatorEnabled;
+        app.defaultOperatorEnabled = on;
+        return function () { var a = appById(appId); if (a) a.defaultOperatorEnabled = before; };
+      }
+    });
+  }
+  function askDefault(app) {
+    var spec = M.defaultConfirm(app, serverCount());
+    spec.onConfirm = function () { setDefault(app.id, true); };
+    openDialog(spec, "dsw:" + app.id);
+  }
   function setStatus(appId, status) {
     appWrite({
       method: "PUT", path: "/operator/apps", body: { appId: appId, status: status },
@@ -1715,7 +1764,6 @@
     appWrite({ method: "PUT", path: "/operator/apps", body: { appId: appId, currentVersion: version } });
   }
   function setServerSwitch(appId, serverId, value) {
-    var step = value ? 1 : -1;
     appWrite({
       method: "PUT", path: "/operator/server-apps", body: { serverId: serverId, appId: appId, operatorEnabled: value },
       reloadServers: A.srv.on,
@@ -1723,13 +1771,17 @@
         var app = appById(appId);
         var row = A.srv.rows.filter(function (r) { return r.id === serverId; })[0];
         if (!app || !row) return null;
-        var before = row.operatorEnabled;
+        var before = row.operatorEnabled, wasReleased = M.serverReleased(row);
+        // What the answer will say: an explicit ON releases it, an explicit OFF does not.
+        var step = value === wasReleased ? 0 : (value ? 1 : -1);
         row.operatorEnabled = value;
+        row.released = value;
         app.serversOn = Math.max(0, app.serversOn + step);
         A.srv.enabledCount = Math.max(0, A.srv.enabledCount + step);
         return function () {
           var a = appById(appId);
           row.operatorEnabled = before;
+          row.released = wasReleased;
           if (a) a.serversOn = Math.max(0, a.serversOn - step);
           A.srv.enabledCount = Math.max(0, A.srv.enabledCount - step);
         };
@@ -1915,18 +1967,22 @@
     share_fast_start_quality: "Desligado por padrão. Ligue primeiro num servidor de teste (o override do servidor). Ligado, quem entra numa call com tela compartilhada já recebe a camada do palco (sem os primeiros segundos borrados em 360p) e o compartilhamento não é republicado quando a sala passa de 20 pessoas: a imagem não some pra todo mundo e só o teto da camada de cima muda. Não aumenta o consumo de banda por pessoa. Vale na próxima entrada na call e no próximo compartilhamento; abas abertas mudam no próximo refresh da config.",
     share_game_capture_hint: "Vale no próximo compartilhamento, só no app desktop do Windows que já pergunta ao Windows se um jogo está em tela cheia exclusiva: quem compartilha vê um aviso com o conserto quando a imagem chega preta, trava ou cai sozinha. Não muda a captura.",
     audience_mode: "Desligado por padrão. Ligado num servidor, quem modera ganha o botão Modo plateia na call: silencia todo mundo menos a staff e quem for liberado (no servidor de voz, não só no app). Risco: alguém que devia falar pode ficar mudo; o modo some sozinho quando a call esvazia ou a staff sai. Ligue primeiro num servidor de teste. Desligar aqui também desliga as plateias que estão rodando, em até 15 s.",
+    mac_desktop_system_audio: "Vale no próximo compartilhamento, só no app desktop do Mac (macOS 14.2 ou mais novo): quem compartilha é perguntado se quer o som do computador, sem a chamada, e o macOS pede a permissão Gravação de Áudio do Sistema na primeira vez. Vale pra todos os servidores de uma vez. Ligado por padrão; desligar é o interruptor de emergência: o compartilhamento no Mac volta a ficar sem som.",
     linux_desktop_system_audio: "Vale no próximo compartilhamento, só no app desktop do Linux (PulseAudio ou PipeWire): quem compartilha é perguntado se quer o som do computador, sem a chamada. Vale pra todos os servidores de uma vez; desligado, o compartilhamento no Linux fica sem som, como antes.",
+    share_sound_promotion: "Ligado por padrão. Quando alguém no iPhone começa a compartilhar a tela numa chamada ponto a ponto (DM, grupo ou servidor pequeno), a chamada passa pro servidor de voz e a tela vai com som; ali o servidor de mídia paga a banda dessa chamada. Desligado, o iPhone apresenta só a imagem, como antes. Vale no próximo compartilhamento.",
     watch_camera_sync: "Desligado por padrão. Ligado, a câmera de quem apresenta acompanha o filme no player de quem assiste; desligado, ela toca solta como antes (numa watch party de baixa latência, uns 13 s atrás do filme). Ligue primeiro num servidor de teste. Abas abertas mudam no próximo refresh da config.",
     watch_now_banner: "Desligado por padrão. Ligado, quem está num canal de texto vê uma faixa \"Assistir\" quando alguém do servidor compartilha a tela ou uma watch party está no ar, e entra com um toque, sem microfone. É só tela: não manda nada novo pela rede, e desligar some a faixa na hora (abas abertas no próximo refresh da config). Ligue primeiro num servidor só.",
     desktop_notify_default_on: "Desligado por padrão. Ligado, o app desktop já começa com os banners do sistema ligados (quem desligou na mão continua desligado), DMs e servidores têm nível padrão separado (servidor começa em só menções, então mensagem comum de servidor não vira banner) e, no navegador, depois da primeira DM ou menção com a aba escondida, aparece um cartão único pra ativar as notificações. Global; abas abertas pegam no próximo refresh da config.",
     soundboard: "Desligado por padrão. Ligado num servidor, quem pode falar na call ganha o soundboard (clipes de até 5,2 s que a sala inteira ouve) e a staff ganha a aba de sons nas configurações. Quem está com o microfone travado (plateia, watch party fechada) não toca. Desligar aqui corta na hora os cliques numa call que já está rolando; o botão some no próximo refresh da config. Ligue primeiro num servidor de teste.",
     raised_hand_sticky: "Ligado por padrão. A mão levantada fica até a pessoa abaixar, quem modera abaixar (a mão ou \"Baixar todas\") ou a pessoa sair da call; liberar o microfone na plateia não abaixa mais, e clicar no número da própria mão abaixa. Desligado volta ao de antes: liberar o microfone na plateia abaixa a mão, a mão é só um desenho e \"Baixar todas\" some e a rota recusa. Vale em segundos, sem reentrar na call; abas abertas mudam no próximo refresh da config.",
     clean_voice_default: "Ligado por padrão (desde 2026-10-20). Quem nunca escolheu a redução de ruído naquele aparelho começa na Voz limpa, se o navegador aguenta e o aparelho tem 4 núcleos ou mais; quem já escolheu um modo não muda. Desligar aqui volta todo mundo que não escolheu pro filtro do navegador no próximo refresh da config, até no meio da call (o microfone troca sem cair). Use se aparecer reclamação de áudio picotado ou celular esquentando.",
+    voice_gate: "Ligado por padrão. Na Voz limpa, depois do RNNoise, um expansor adaptativo abaixa uns 20 dB o que sobra entre as falas (teclado que passou, respiração, ventilador), com antecipação de 8 ms de áudio que não soma atraso, então o começo das palavras não é comido. Não corta seco: o fundo só fica mais baixo. Desligar aqui faz toda Voz limpa voltar a ser só RNNoise no próximo refresh da config, até no meio da call (sem reentrar, sem trocar o microfone). Use se alguém reclamar que a voz some no meio da frase ou que o início das palavras sai picotado.",
     voice_notes: "Desligado por padrão. Ligado num servidor, quem está no chat pode mandar mensagem de voz (até 5 min). Desligar aqui impede mensagens de voz novas na hora; as que já foram mandadas continuam tocando. Ligue primeiro num servidor de teste. Abas abertas mostram o microfone no próximo refresh da config.",
     voice_note_transcription: "Desligado por padrão, e manda áudio pra fora (Cloudflare Workers AI, fora do Brasil). Ligado num servidor, quem pede vê o texto embaixo da mensagem de voz; em conversa a transcrição sai na hora, se quem mandou e quem recebe não desligaram. Desligar aqui para os trabalhos na fila sem chamar o provedor e esconde na hora as transcrições já feitas. Precisa de VOICE_STT_PROVIDER no worker; sem ele, o texto fica \"indisponível\".",
     notify_open_channel: "Desligado por padrão. Ligado, com a janela minimizada, escondida ou sem foco, uma mensagem no canal ou na conversa que está aberta vira banner do sistema (antes era o único lugar que nunca avisava). Respeita nível, mudo e não perturbe, e só vale pra quem já ligou os banners. Global; abas abertas pegam no próximo refresh da config.",
     conversations_home: "Desligado por padrão. Ligado, a porta das DMs na barra ganha o nome Conversas e mostra embaixo quem te escreveu, a lista fica estilo WhatsApp (presença dos amigos, prévia, digitando, fixadas, filtros), Nova conversa já lista os amigos e Ctrl/Cmd+K vira \"ir pra\" (a busca de mensagens passa pro Ctrl/Cmd+F). Global; abas abertas pegam no próximo refresh da config. A seção Conversas em produto mostra quem manda DM.",
     conversations_home_phone_tabs: "Desligado por padrão, e só vale com Conversas ligado. Ligado, no navegador do celular a barra de servidores sai e entra uma barra embaixo: Conversas, Servidores e Tu. Abre na última aba usada; quem nunca escolheu começa em Servidores. Se as mensagens em servidor ou as entradas em call caírem depois de ligar, desliga este primeiro.",
+    age_gate_readback: "Ligado por padrão (kill switch). Antes de enviar a data de nascimento, o portão de idade mostra a data escrita por extenso (\"Tu nasceu em 3 de dezembro de 2008\") com Está certo e Corrigir, igual pra todo mundo. Desligado, volta o envio direto de antes. Não mexe no piso do servidor (data de menos de 10 anos atrás é recusada sem gastar a tentativa). Vale no próximo carregamento do app; uma tela já aberta mantém o modo com que abriu.",
     stories: "Desligado por padrão. Ligado num servidor, quem é membro vê o anel de stories no topo da lista de canais e pode postar foto, vídeo de até 30 s ou texto que some em 24 h (precisa da permissão Postar stories, que vem ligada pra @everyone). Desligar esconde a faixa e recusa os posts na hora; nada é apagado antes da hora, e a limpeza dos arquivos continua rodando. Ligue primeiro no QG.",
     stories_friends: "Desligado por padrão. Ligado, o story também pode ir pros amigos, com a faixa no topo das Conversas. Vale pra todo mundo de uma vez. Espere o redesenho das Conversas e o teste no QG antes de ligar.",
     mixed_channel_list: "Desligado por padrão, e mexe nos dados: ligado num servidor, em até 1 min os canais soltos (texto, depois voz) vão pra uma categoria nova Canais no topo, na mesma ordem, e a lista passa a ter só categorias, com tipos misturados. Antes fica guardada uma foto da ordem antiga. Desligar aqui volta o desenho antigo na hora, sem mexer nos dados; pra desfazer os dados, POST /api/admin/channel-layout com action revert. Ligado no global, servidor novo já nasce com a categoria Canais. Ligue primeiro no QG.",
@@ -1935,6 +1991,8 @@
     hint_budget: "Desligado por padrão, e é o que pode mexer no funil de quem chega: ligado, nenhuma dica não pedida aparece enquanto a pessoa está numa call, num app ou jogo, compartilhando ou assistindo uma tela ou watch party, com o campo de mensagem em foco ou com rascunho, ou com uma janela aberta. A dica espera e volta quando o momento acaba; nada é gravado. Falha de microfone ou áudio, atualização, notificações, o banner de chegada e o aviso de transcrição de voz nunca esperam. Ligue e compare as impressões do QG (arrival_*) e as entradas no QG com o período anterior; desligar volta tudo na hora. Global; abas abertas pegam no próximo refresh da config.",
     forum_channels: "Desligado por padrão. Ligado num servidor, a staff pode criar canal fórum (posts com título, tags e respostas) e a galera pode postar. Desligado aqui, ninguém cria fórum nem post novo, mas os que já existem continuam abertos pra ler e responder; nada é apagado. Ligue primeiro num servidor só (o override do servidor).",
     forum_announcement: "Desligado por padrão. Ligue só num servidor (o override do servidor), e só onde o forum_channels também está ligado; sem ele não aparece nada. Ligado, quem é membro e enxerga o canal fórum vê UMA vez um cartão no canto: \"O fórum abriu\", com Abrir o fórum e Agora não. Nunca bloqueia nada, não aparece numa call, compartilhando, numa watch party, digitando, nem pra quem já está no fórum. A lembrança é por aparelho. Desligar some o cartão no próximo refresh da config; dá pra desligar quando o aviso já fez o serviço.",
+    jam_public: "Desligado por padrão. Global, e muda a categoria jurídica (conteúdo público, igual ao COMMUNITIES_ENABLED): só liga com o ok do Rafael, depois de ler docs/JAM_PUBLIC.md. Ligado, jam.pqp.gg passa a listar jams públicas que qualquer pessoa ouve sem conta; qualquer conta começa uma, e quem começou uma música de canal pode deixar ela pública (cada pessoa com parte gravada responde se a parte dela vai, só o áudio, ou não vai). Capa e vídeo passam pelo scanner antes de aparecer; áudio não é escaneado. Conta nova (menos de 72 h) cai na fila de revisão. Desligado, as rotas públicas nem existem, ninguém publica e nada aparece; os canais jam não mudam. A fila e o despublicar ficam em /api/admin/jam-public/*.",
+    jam_channels: "Desligado por padrão. Ligado num servidor, a staff pode criar canal jam (cada música é um monte de faixas gravadas, violão, baixo, voz, que tocam juntas) e a galera pode criar música e gravar faixa. Desligado aqui, ninguém cria canal, música nem faixa nova, mas o que já existe continua aberto pra ouvir, e dá pra apagar música e faixa; nada é apagado por desligar. Ligue primeiro num servidor só (o override do servidor). Antes de ligar, confira que o CORS do bucket deixa GET e PUT vir da origem do app (docs/ATTACHMENTS.md, seção 4).",
     report_attachment_preview: "Desligado por padrão. Global. Ligado, no cartão de uma denúncia de mensagem aparece o botão Mostrar: um clique abre, borrado, a imagem ou o gif da mensagem denunciada (link que vale 60 s, cada abertura fica no log de auditoria). Nunca abre o que o scanner marcou (flagged, rejected, erro), o que tem rótulo illegal ou csam_suspected, o que está em quarentena, nem denúncia de menor em conteúdo sexual; vídeo e arquivo nunca abrem. Desligado, a rota responde 404 e o botão some, mas a lista de anexos (tipo e veredito do scanner) continua no cartão. Leia a seção do runbook em docs/CONTENT_SAFETY.md antes de ligar.",
     emulator_room: "Desligado por padrão, e NÃO ligue antes da revisão do advogado (docs/EMULATOR_ROOM.md). Ligado num servidor, o menu do servidor ganha \"Sala de emulador\": cada pessoa abre, do próprio computador, um jogo que ela tem, num emulador que roda no navegador dela. O pqp não fornece jogo, o arquivo nunca sai do navegador e não existe sala compartilhada. Ligue primeiro num servidor só (o override do servidor).",
     retro_look: "Ligado por padrão: é o interruptor de emergência do Modo 2005 (o visual escondido que a pessoa acha com /2005). Desligado, quem estava nele volta pro visual padrão no próximo refresh da config e o /2005 some. Só desligue se o visual quebrar.",

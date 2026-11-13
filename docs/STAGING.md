@@ -126,7 +126,8 @@ Size it like production, give it an SFU so one room can hold more than `MESH_VOI
 #    machine to the size in fly.staging.toml, so scaling before deploying is undone.
 gh workflow run deploy-staging.yml --ref my-branch
 
-# 2. Size to match production (fly.toml: performance-2x / 4 GB).
+# 2. Size to match production (a 4 vCPU / 8 GB Vultr box; performance-2x / 4 GB
+#    is the closest Fly size).
 fly scale vm performance-2x --vm-memory 4096 -a pqp-api-staging
 
 # 3. Production's pool ceiling, plus the limiter headroom, as secrets. A secret

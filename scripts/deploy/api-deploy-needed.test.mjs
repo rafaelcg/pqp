@@ -91,6 +91,17 @@ test("shared package tests and fixtures do not deploy", () => {
   );
 });
 
+test("deleting the retired Fly files does not restart the API", () => {
+  for (const file of [
+    "fly.toml",
+    "fly.worker.toml",
+    ".github/workflows/deploy-api-fly.yml",
+    "scripts/monitor/errors.mjs",
+  ]) {
+    assert.equal(decide([file], matchers()).needed, false, file);
+  }
+});
+
 test("client-only changes do not deploy, which is the behaviour that already worked", () => {
   assert.equal(
     decide(["client/src/App.tsx", "docs/MONITORING.md"], matchers()).needed,
@@ -101,10 +112,8 @@ test("client-only changes do not deploy, which is the behaviour that already wor
 test("infrastructure files deploy", () => {
   for (const file of [
     "Dockerfile",
-    "fly.toml",
     "pnpm-lock.yaml",
     "packages/shared/src/signaling.ts",
-    ".github/workflows/deploy-api-fly.yml",
   ]) {
     assert.equal(decide([file], matchers()).needed, true, file);
   }

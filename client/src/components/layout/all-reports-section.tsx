@@ -16,6 +16,7 @@ import {
   resolveReport,
 } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { reportSubjectKey } from "@/lib/report-subject";
 import { formatFullTimestamp } from "@/lib/utils";
 
 /**
@@ -234,11 +235,7 @@ export function AllReportsSection() {
                       {REPORT_REASON_LABELS[report.reason]}
                     </span>
                     {" · "}
-                    {t(
-                      report.subjectType === "message"
-                        ? "reports.subjectMessage"
-                        : "reports.subjectAccount",
-                    )}{" "}
+                    {t(reportSubjectKey(report.subjectType))}{" "}
                     <span className="font-semibold">
                       {report.reportedUserName ?? t("reports.departed")}
                     </span>

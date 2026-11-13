@@ -83,7 +83,15 @@ describe("the googleAds plugin", () => {
     expect(plugin.apply).toBe("build");
     const hook = plugin.transformIndexHtml;
     expect(typeof hook).toBe("function");
-    expect((hook as () => unknown)()).toEqual([]);
+    const run = hook as (html: string, ctx: { path: string }) => unknown;
+    expect(run("", { path: "/index.html" })).toEqual([]);
+  });
+
+  it("puts the tag on the main page only, never on the public jam site's page", () => {
+    const plugin = googleAds({ VITE_GOOGLE_ADS_ID: "AW-123" });
+    const run = plugin.transformIndexHtml as unknown as (html: string, ctx: { path: string }) => unknown[];
+    expect(run("", { path: "/index.html" }).length).toBeGreaterThan(0);
+    expect(run("", { path: "/jam-site/index.html" })).toEqual([]);
   });
 });
 

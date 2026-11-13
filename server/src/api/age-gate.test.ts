@@ -10,7 +10,11 @@ import {
   vi,
 } from "vitest";
 import type { WebSocket } from "ws";
-import type { AgeGateStatus } from "@pqp/shared";
+import {
+  ageCheckToday,
+  formatCalendarDate,
+  type AgeGateStatus,
+} from "@pqp/shared";
 
 /**
  * The 18+ gate, end to end, with NOTHING about authentication stubbed.
@@ -43,6 +47,9 @@ const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { clearAuthCaches, DEV_AUTH_TOKEN } = await import("../auth/clerk.js");
 const { handleWsConnection } = await import("../ws/index.js");
+const { ageGateMetrics, resetAgeGateMetricsForTests } = await import(
+  "../services/age-gate.js"
+);
 
 let server: Server;
 let baseUrl: string;
@@ -194,6 +201,7 @@ describeDb("18+ age gate", () => {
 
   beforeEach(async () => {
     resetApiRateLimits();
+    resetAgeGateMetricsForTests();
     // The DB row for an identity is cached for 30s; a truncate without this
     // leaves the next test authenticating as a user id that no longer exists.
     clearAuthCaches();
@@ -410,6 +418,164 @@ describeDb("18+ age gate", () => {
       { dateOfBirth: ADULT_DOB },
     );
     expect(declared.body.ageGate).toBe("passed");
+  });
+
+  // ------------------------------------------------------- plausibility floor
+
+  /** The gate's own "today", shifted back whole years: a calendar fact. */
+  function yearsBack(years: number, extraDays = 0): string {
+    const today = ageCheckToday();
+    const shifted = new Date(
+      Date.UTC(today.year - years, today.month - 1, today.day + extraDays),
+    );
+    return formatCalendarDate({
+      year: shifted.getUTCFullYear(),
+      month: shifted.getUTCMonth() + 1,
+      day: shifted.getUTCDate(),
+    });
+  }
+
+  it("answers a date under ten years back with a stable code and keeps the attempt", async () => {
+    const token = tokenFor("slip");
+    const thisYear = ageCheckToday().year;
+    for (const dateOfBirth of [
+      `${thisYear}-01-01`,
+      yearsBack(0),
+      yearsBack(9),
+      // One day short of exactly ten years.
+      yearsBack(10, 1),
+    ]) {
+      const res = await call<{ error: string; code: string }>(
+        token,
+        "POST",
+        "/api/me/age-check",
+        { dateOfBirth },
+      );
+      expect(`${dateOfBirth} -> ${res.status}`).toBe(`${dateOfBirth} -> 400`);
+      expect(res.body.code).toBe("birth_date_implausible");
+      expect(res.body.error).toMatch(/check the year/i);
+    }
+    // A date that does not exist has its own stable code.
+    const impossible = await call<{ code: string }>(
+      token,
+      "POST",
+      "/api/me/age-check",
+      { dateOfBirth: "2007-02-30" },
+    );
+    expect(impossible.status).toBe(400);
+    expect(impossible.body.code).toBe("birth_date_invalid");
+
+    // Nothing was recorded: the account is still pending and still has its one go.
+    const me = await call<{ ageGate: AgeGateStatus }>(token, "GET", "/api/me");
+    expect(me.body.ageGate).toBe("pending");
+    const stored = await getPool().query<{ age_checked_at: Date | null }>(
+      `SELECT age_checked_at FROM users WHERE clerk_id = 'dev_local_user_slip'`,
+    );
+    expect(stored.rows[0]?.age_checked_at).toBeNull();
+
+    const declared = await call<{ ageGate: AgeGateStatus }>(
+      token,
+      "POST",
+      "/api/me/age-check",
+      { dateOfBirth: ADULT_DOB },
+    );
+    expect(declared.body.ageGate).toBe("passed");
+  });
+
+  it("takes exactly ten years back as a declaration, and it is final and blocked", async () => {
+    const token = tokenFor("tenyears");
+    const declared = await call<{ ageGate: AgeGateStatus }>(
+      token,
+      "POST",
+      "/api/me/age-check",
+      { dateOfBirth: yearsBack(10) },
+    );
+    // Plausible, so it is recorded; ten is under eighteen, so it blocks.
+    expect(declared.status).toBe(200);
+    expect(declared.body.ageGate).toBe("blocked");
+    const again = await call(token, "POST", "/api/me/age-check", {
+      dateOfBirth: ADULT_DOB,
+    });
+    expect(again.status).toBe(409);
+  });
+
+  it("leaves a seventeen-year-old date a plain block, never a pass", async () => {
+    const token = tokenFor("minor17");
+    const seventeen = await call<{ ageGate: AgeGateStatus }>(
+      token,
+      "POST",
+      "/api/me/age-check",
+      { dateOfBirth: yearsBack(17) },
+    );
+    expect(seventeen.body.ageGate).toBe("blocked");
+  });
+
+  // -------------------------------------------------- observability + flag
+
+  it("logs one line per answer with no date and no id, and counts it", async () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...args) => {
+      lines.push(args.join(" "));
+    });
+    try {
+      await call(tokenFor("obs-pass"), "POST", "/api/me/age-check", {
+        dateOfBirth: ADULT_DOB,
+      });
+      await call(tokenFor("obs-block"), "POST", "/api/me/age-check", {
+        dateOfBirth: CHILD_DOB,
+      });
+      await call(tokenFor("obs-slip"), "POST", "/api/me/age-check", {
+        dateOfBirth: yearsBack(0),
+      });
+      // A second answer is refused (409) and is not another declaration.
+      await call(tokenFor("obs-pass"), "POST", "/api/me/age-check", {
+        dateOfBirth: CHILD_DOB,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    const declared = lines.filter((line) => line.includes("age.declared"));
+    expect(declared).toEqual([
+      "[pqp] age.declared passed=true implausible=false",
+      "[pqp] age.declared passed=false implausible=false",
+      "[pqp] age.declared passed=false implausible=true",
+    ]);
+    for (const line of declared) {
+      expect(line).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+      expect(line).not.toMatch(/userId|obs-|dev_local/);
+    }
+    expect(ageGateMetrics()).toEqual({ passed: 1, blocked: 1, implausible: 1 });
+  });
+
+  it("serves the read-back switch on /api/me while pending, and only then", async () => {
+    const token = tokenFor("readback");
+    const pending = await call<{ ageGateReadback?: boolean }>(
+      token,
+      "GET",
+      "/api/me",
+    );
+    expect(pending.body.ageGateReadback).toBe(true);
+
+    process.env.AGE_GATE_READBACK = "off";
+    try {
+      const off = await call<{ ageGateReadback?: boolean }>(
+        token,
+        "GET",
+        "/api/me",
+      );
+      expect(off.body.ageGateReadback).toBe(false);
+    } finally {
+      delete process.env.AGE_GATE_READBACK;
+    }
+
+    await call(token, "POST", "/api/me/age-check", { dateOfBirth: ADULT_DOB });
+    const passed = await call<{ ageGate: string; ageGateReadback?: boolean }>(
+      token,
+      "GET",
+      "/api/me",
+    );
+    expect(passed.body.ageGate).toBe("passed");
+    expect(passed.body).not.toHaveProperty("ageGateReadback");
   });
 
   it("refuses a body that is not a declaration at all", async () => {

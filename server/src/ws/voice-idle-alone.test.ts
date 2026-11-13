@@ -627,8 +627,9 @@ describe("idle hangup", () => {
  * that have always worked the same way (`rateLimitSweep`,
  * `communityHomeSweep`) — so what actually keeps a worker from running it is
  * not an `if (role !== "worker")` guard inside that file, it is that
- * `fly.worker.toml` runs `node server/dist/worker.js` as the worker's own
- * entry point (see its `worker =` line), a file that never imports
+ * the `worker` service in `tools/api-host/compose.yaml` runs
+ * `node server/dist/worker.js` as the worker's own entry point (see its
+ * `command:` line), a file that never imports
  * `index.js` or `ws/voice.js` at all (only `jobs.ts` and
  * `worker-health.ts` — see the banner comment at the top of
  * `server/src/worker.ts`). `WORKER_MODE=worker node dist/index.js` is a
@@ -637,15 +638,15 @@ describe("idle hangup", () => {
  * in-process once `main()` runs, which is enough to skip `/ws` and the
  * database-backed batch jobs gated by `runsColdJobs`, but does not un-create
  * a `setInterval` a module-level statement already fired before `main` was
- * ever called — that path is not what production deploys (`docs/deploy-fly.md`
- * §7f, `fly.worker.toml`), so it is out of scope for this fix.
+ * ever called — that path is not what production deploys (the compose
+ * `worker` service above), so it is out of scope for this fix.
  *
  * So the test that actually proves requirement (c), read against how the
  * worker really starts: `worker.ts`'s import list never reaches
  * `ws/voice.js`.
  */
 describe("the idle sweep's reach", () => {
-  it("worker.ts, the process fly.worker.toml actually runs, never imports the sweep", () => {
+  it("worker.ts, the process the compose worker service actually runs, never imports the sweep", () => {
     const worker = readFileSync(
       fileURLToPath(new URL("../worker.ts", import.meta.url)),
       "utf8",
@@ -654,11 +655,11 @@ describe("the idle sweep's reach", () => {
     expect(worker).not.toMatch(/from ["']\.\/index\.js["']/);
   });
 
-  it("fly.worker.toml starts the worker via worker.js, not index.js", () => {
-    const flyWorkerToml = readFileSync(
-      fileURLToPath(new URL("../../../fly.worker.toml", import.meta.url)),
+  it("the compose worker service starts the worker via worker.js, not index.js", () => {
+    const compose = readFileSync(
+      fileURLToPath(new URL("../../../tools/api-host/compose.yaml", import.meta.url)),
       "utf8",
     );
-    expect(flyWorkerToml).toMatch(/worker\s*=\s*"node server\/dist\/worker\.js"/);
+    expect(compose).toMatch(/command:\s*\["node",\s*"server\/dist\/worker\.js"\]/);
   });
 });

@@ -53,6 +53,7 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { handleApi, resetApiRateLimits } = await import("../api/index.js");
 const { upsertUser } = await import("./users.js");
 const { createServer: createChatServer } = await import("./servers.js");
+const flags = await import("../lib/flags.js");
 
 let httpServer: Server;
 let baseUrl: string;
@@ -92,6 +93,7 @@ interface PostBody {
   hasMedia: boolean;
   posterUrl: string | null;
   locked: boolean;
+  lockedHint?: { mediaKind: string | null; readMinutes: number } | null;
   commentCount: number;
   commentTeaser: { body: string }[];
   likeCount: number;
@@ -387,6 +389,9 @@ describeDb("community home (Baú)", () => {
     );
     expect(locked.commentCount).toBe(1);
     expect(locked.commentTeaser).toEqual([]);
+    // The lock may say what it hides (a video, a one-minute read), never
+    // a word of it.
+    expect(locked.lockedHint).toEqual({ mediaKind: "youtube", readMinutes: 1 });
     expect(JSON.stringify(asMember.body)).not.toContain("sessao-11");
     expect(JSON.stringify(asMember.body)).not.toContain("youtu.be");
 
@@ -417,6 +422,7 @@ describeDb("community home (Baú)", () => {
       const res = await call<{ posts: PostBody[] }>(viewer, "GET", `${base()}/posts`);
       const open = res.body.posts[0]!;
       expect(open.locked).toBe(false);
+      expect(open.lockedHint).toBeNull();
       expect(open.body).toContain("sessao-11-clip.webm");
       expect(open.hasMedia).toBe(true);
       expect(open.media?.kind).toBe("youtube");
@@ -431,6 +437,21 @@ describeDb("community home (Baú)", () => {
     expect(res.body.posts[0]!.body).toBe("mapa-porao.png");
     expect(res.body.posts[0]!.hasMedia).toBe(false);
     expect(res.body.posts[0]!.posterUrl).toBeNull();
+    expect(res.body.posts[0]!.lockedHint).toBeNull();
+  });
+
+  it("a locked text post's hint is its length in minutes and no media", async () => {
+    const words = Array.from({ length: 450 }, () => "segredo").join(" ");
+    await publish({
+      title: "Roteiro",
+      body: words,
+      visibility: "members",
+    });
+    const res = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    const locked = res.body.posts[0]!;
+    expect(locked.locked).toBe(true);
+    expect(locked.lockedHint).toEqual({ mediaKind: null, readMinutes: 3 });
+    expect(JSON.stringify(res.body)).not.toContain("segredo");
   });
 
   describe("with COMMUNITY_HOME_VIP_ENABLED unset", () => {
@@ -460,6 +481,133 @@ describeDb("community home (Baú)", () => {
 
       const feed = await call<{ posts: PostBody[] }>(owner, "GET", `${base()}/posts`);
       expect(feed.body.posts.map((p) => p.title)).toEqual(["Livre"]);
+    });
+  });
+
+  // ------------------------------------------- VIP is per server (the pilot)
+
+  describe("community_home_vip set for ONE server", () => {
+    let pilotId: string;
+    let otherId: string;
+
+    beforeEach(async () => {
+      // The configuration production uses: Baú on, the VIP variable unset and
+      // the flag machinery started, so a per-server row is what turns VIP on.
+      delete process.env.COMMUNITY_HOME_VIP_ENABLED;
+      flags.resetFeatureFlagsForTests();
+      await getPool().query(
+        `TRUNCATE feature_flags, feature_flag_overrides, feature_flag_audit`,
+      );
+      await flags.startFeatureFlags();
+      pilotId = serverId;
+      otherId = (await createChatServer("Outra mesa", owner.id)).server.id;
+      await flags.setServerFlagOverride("community_home_vip", pilotId, true, {
+        kind: "dashboard",
+      });
+    });
+
+    afterEach(async () => {
+      await getPool().query(
+        `TRUNCATE feature_flags, feature_flag_overrides, feature_flag_audit`,
+      );
+      flags.resetFeatureFlagsForTests();
+    });
+
+    const vipConfig = async (query: string) =>
+      (
+        await call<{ enabled: boolean; vipEnabled: boolean }>(
+          member,
+          "GET",
+          `/api/community-home/config${query}`,
+        )
+      ).body.vipEnabled;
+
+    it("the config answers per server, and the global answer with no server", async () => {
+      expect(await vipConfig(`?serverId=${pilotId}`)).toBe(true);
+      expect(await vipConfig(`?serverId=${otherId}`)).toBe(false);
+      expect(await vipConfig("")).toBe(false);
+      // Not a uuid is read as absent, never an error.
+      expect(await vipConfig("?serverId=nope")).toBe(false);
+    });
+
+    it("members-only posts work on the pilot server and are refused on the other", async () => {
+      const pilotPost = await call<{ post: PostBody }>(
+        owner,
+        "POST",
+        `/api/servers/${pilotId}/home/posts`,
+        { title: "VIP", body: "x", visibility: "members", status: "published" },
+      );
+      expect(pilotPost.status).toBe(201);
+
+      const otherPost = await call(
+        owner,
+        "POST",
+        `/api/servers/${otherId}/home/posts`,
+        { title: "VIP", body: "x", visibility: "members", status: "published" },
+      );
+      expect(otherPost.status).toBe(400);
+    });
+
+    it("the feed and the unread count keep members-only posts only where VIP is on", async () => {
+      await getPool().query(
+        `UPDATE servers SET community_home_enabled = TRUE WHERE id = ANY($1)`,
+        [[pilotId, otherId]],
+      );
+      for (const person of [member]) {
+        await getPool().query(
+          `INSERT INTO server_members (server_id, user_id, role)
+           VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING`,
+          [otherId, person.id],
+        );
+      }
+      // Seed the rows directly: the other server cannot create one through the API.
+      for (const id of [pilotId, otherId]) {
+        await getPool().query(
+          `INSERT INTO community_home_posts
+             (server_id, author_id, title, body, visibility, status, published_at)
+           VALUES ($1, $2, 'Livre', 'a', 'free', 'published', NOW()),
+                  ($1, $2, 'So VIP', 'b', 'members', 'published', NOW())`,
+          [id, owner.id],
+        );
+      }
+      const titles = async (id: string) =>
+        (
+          await call<{ posts: PostBody[] }>(
+            member,
+            "GET",
+            `/api/servers/${id}/home/posts`,
+          )
+        ).body.posts
+          .map((p) => p.title)
+          .sort();
+      expect(await titles(pilotId)).toEqual(["Livre", "So VIP"]);
+      expect(await titles(otherId)).toEqual(["Livre"]);
+
+      const all = await call<{ servers: Record<string, number> }>(
+        member,
+        "GET",
+        "/api/community-home/unread",
+      );
+      expect(all.body.servers[pilotId]).toBe(2);
+      expect(all.body.servers[otherId]).toBe(1);
+      const single = await call<{ count: number }>(
+        member,
+        "GET",
+        `/api/servers/${otherId}/home/unread`,
+      );
+      expect(single.body.count).toBe(1);
+    });
+
+    it("an override OFF beats the variable ON, and with no row the variable alone answers", async () => {
+      process.env.COMMUNITY_HOME_VIP_ENABLED = "true";
+      // No row for the other server: the variable is the whole answer.
+      expect(await vipConfig(`?serverId=${otherId}`)).toBe(true);
+      expect(await vipConfig("")).toBe(true);
+      await flags.setServerFlagOverride("community_home_vip", otherId, false, {
+        kind: "dashboard",
+      });
+      expect(await vipConfig(`?serverId=${otherId}`)).toBe(false);
+      expect(await vipConfig(`?serverId=${pilotId}`)).toBe(true);
     });
   });
 

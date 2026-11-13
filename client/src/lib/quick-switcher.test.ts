@@ -83,4 +83,27 @@ describe("quickSwitcherItems", () => {
   it("finds a channel with or without the #", () => {
     expect(quickSwitcherItems("#gen", sources).map((item) => item.id)).toContain("channel:ch2");
   });
+
+  it("lists the Jam's songs the server matched, last, by title and artist, accent-blind", () => {
+    const songs = [
+      { id: "s-b", title: "Bloom do Caio", artist: null, channelId: "ch-jam", serverId: "s2", coverUrl: null },
+      { id: "s-a", title: "In Bloom", artist: "Nirvana", channelId: "ch-jam", serverId: "s2", coverUrl: null },
+      { id: "s-c", title: "Cazuza", artist: "Bloomberg", channelId: "ch-jam", serverId: "s2", coverUrl: null },
+      { id: "s-x", title: "Outra", artist: null, channelId: "ch-jam", serverId: "s2", coverUrl: null },
+    ];
+    const items = quickSwitcherItems("blóom", { ...sources, songs });
+    expect(items.filter((item) => item.kind === "song").map((item) => item.id)).toEqual([
+      "song:s-b",
+      "song:s-c",
+      "song:s-a",
+    ]);
+    // after every other kind of row
+    expect(items.at(-1)?.kind).toBe("song");
+  });
+
+  it("offers no song with nothing typed, and none the viewer was not handed", () => {
+    const songs = [{ id: "s-a", title: "In Bloom", artist: null, channelId: "ch-jam", serverId: "s2", coverUrl: null }];
+    expect(quickSwitcherItems("", { ...sources, songs }).some((item) => item.kind === "song")).toBe(false);
+    expect(quickSwitcherItems("bloom", sources).some((item) => item.kind === "song")).toBe(false);
+  });
 });

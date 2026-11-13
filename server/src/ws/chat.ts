@@ -23,6 +23,7 @@ import {
   type ForumSettings,
   type ForumTag,
   type FriendActivity,
+  type JamFrame,
   type MessagePreview,
   type MessageRejectReason,
   type MessageForward,
@@ -2081,6 +2082,18 @@ export function announceForumPostRemoved(forumId: string, postId: string): void 
   broadcastToChannel(postId, frame);
 }
 
+// --- jam ---
+//
+// A jam channel's live songs and tracks. One function for all seven frames
+// (`jam.ts`): every one goes to the CHANNEL through `broadcastToChannel`, so it
+// reaches viewers on the sibling instance on the channel relay like any
+// channel frame (the seven types are in `CHAT_SERVER_MESSAGE_TYPES`, which is
+// what lets the receiving side accept them). The audience is whoever joined the
+// channel, and `join-channel` checks they may see it.
+export function announceJam(frame: JamFrame): void {
+  broadcastToChannel(frame.channelId, frame);
+}
+
 /**
  * Posts with a bump in flight on this process, and the newest message time
  * that arrived while it ran. A burst of replies to one post costs one refresh
@@ -2499,6 +2512,11 @@ async function postChannelMessageAttempt(
   if (channel?.kind === "server" && channel.type === "forum") {
     return { ok: false, reason: "no-access" };
   }
+  // --- jam --- same for a jam channel: it holds songs, and a message stored
+  // on the row is one no surface ever shows.
+  if (channel?.kind === "server" && channel.type === "jam") {
+    return { ok: false, reason: "no-access" };
+  }
   let canMentionEveryone = false;
   let memberPerms = 0n;
   if (channel?.kind === "server" && channel.server_id) {
@@ -2611,6 +2629,10 @@ async function postChannelMessageAttempt(
       };
     }
   }
+  // A direct or group message is not read by pqp's default text filter: a
+  // private conversation between people who chose each other is not ours to
+  // filter, and there is no server owner to write a rule. Reports, blocking
+  // and image scanning are what exist there.
 
   await input.beforeCreate?.();
 

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { useTranslation } from "@/lib/i18n";
 import { ApiError, createReport } from "@/lib/api";
+import { reportPublicJam } from "@/lib/jam-public-api";
 
 /**
  * What is being reported, in the two shapes the API accepts.
@@ -36,7 +37,20 @@ export type ReportTarget =
    * to convey: somebody reporting a community is usually reporting the person
    * who would otherwise be reading the report.
    */
-  | { kind: "community"; serverId: string; subjectName: string | null };
+  | { kind: "community"; serverId: string; subjectName: string | null }
+  /**
+   * One Baú post or comment (docs/COMMUNITY_HOME.md). Only the id travels; the
+   * server reads the author, the server and the destination from the thing
+   * itself, and refuses a post this person cannot read (a members-only post
+   * is reportable only by those it is open to).
+   */
+  | { kind: "bau_post"; postId: string; subjectName: string | null }
+  | { kind: "bau_comment"; commentId: string; subjectName: string | null }
+  /**
+   * A public jam, or one part of it (`trackId`). Goes to the instance queue,
+   * never to a server owner (`docs/JAM_PUBLIC.md`, "Reports").
+   */
+  | { kind: "jam_public"; songId: string; trackId: string | null; subjectName: string | null };
 
 interface ReportDialogProps {
   target: ReportTarget | null;
@@ -60,7 +74,13 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
         ? `message:${target.messageId}`
         : target.kind === "community"
           ? `community:${target.serverId}`
-          : `user:${target.userId}`;
+          : target.kind === "bau_post"
+            ? `bau_post:${target.postId}`
+            : target.kind === "bau_comment"
+              ? `bau_comment:${target.commentId}`
+              : target.kind === "jam_public"
+                ? `jam_public:${target.songId}:${target.trackId ?? ""}`
+                : `user:${target.userId}`;
 
   useEffect(() => {
     setReason(null);
@@ -81,6 +101,16 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
     setSubmitting(true);
     setError(null);
     try {
+      if (target.kind === "jam_public") {
+        await reportPublicJam({
+          songId: target.songId,
+          ...(target.trackId ? { trackId: target.trackId } : {}),
+          reason,
+          ...(details.trim() ? { details: details.trim() } : {}),
+        });
+        setDone(true);
+        return;
+      }
       const body: CreateReportRequest =
         target.kind === "message"
           ? {
@@ -96,13 +126,27 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
                 reason,
                 details: details.trim() || null,
               }
-            : {
-                subjectType: "user",
-                userId: target.userId,
-                serverId: target.serverId ?? null,
-                reason,
-                details: details.trim() || null,
-              };
+            : target.kind === "bau_post"
+              ? {
+                  subjectType: "bau_post",
+                  postId: target.postId,
+                  reason,
+                  details: details.trim() || null,
+                }
+              : target.kind === "bau_comment"
+                ? {
+                    subjectType: "bau_comment",
+                    commentId: target.commentId,
+                    reason,
+                    details: details.trim() || null,
+                  }
+                : {
+                    subjectType: "user",
+                    userId: target.userId,
+                    serverId: target.serverId ?? null,
+                    reason,
+                    details: details.trim() || null,
+                  };
       await createReport(body);
       // A duplicate answers 200 rather than an error, so re-reporting the same
       // thing lands here too and is told the same thing. That is deliberate:
@@ -137,9 +181,11 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
           <p>
             {t("report.thanks")}
           </p>
-          <p>
-            {t("report.blockHint")}
-          </p>
+          {target.kind !== "jam_public" && (
+            <p>
+              {t("report.blockHint")}
+            </p>
+          )}
         </div>
       </Dialog>
     );
@@ -149,7 +195,13 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
     target.subjectName ??
     (target.kind === "community"
       ? t("report.thisCommunity")
-      : t("report.thisAccount"));
+      : target.kind === "bau_post"
+        ? t("report.thisPost")
+        : target.kind === "bau_comment"
+          ? t("report.thisComment")
+          : target.kind === "jam_public"
+            ? t(target.trackId ? "report.thisJamPart" : "report.thisJam")
+            : t("report.thisAccount"));
 
   return (
     <Dialog
@@ -160,7 +212,15 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
           : t(
               target.kind === "message"
                 ? "report.title.message"
-                : "report.title.user",
+                : target.kind === "bau_post"
+                  ? "report.title.bauPost"
+                  : target.kind === "bau_comment"
+                    ? "report.title.bauComment"
+                    : target.kind === "jam_public"
+                      ? target.trackId
+                        ? "report.title.jamPart"
+                        : "report.title.jam"
+                      : "report.title.user",
             )
       }
       eyebrow={t("report.eyebrow")}
@@ -170,7 +230,13 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
           : t(
               target.kind === "message"
                 ? "report.body.message"
-                : "report.body.user",
+                : target.kind === "bau_post"
+                  ? "report.body.bauPost"
+                  : target.kind === "bau_comment"
+                    ? "report.body.bauComment"
+                    : target.kind === "jam_public"
+                      ? "report.body.jam"
+                      : "report.body.user",
             )
       }
       onClose={onClose}

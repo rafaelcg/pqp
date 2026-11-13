@@ -136,6 +136,8 @@ export function MenuItemRows({
             data-menu-item={item.id}
             className={cn(
               MENU_ROW,
+              "text-left",
+              item.detail && "items-start",
               item.danger
                 ? "text-danger [--menu-icon:currentColor] data-[highlighted]:bg-[color:var(--menu-danger-hover,color-mix(in_oklab,var(--color-danger)_15%,transparent))]"
                 : "text-text",
@@ -144,7 +146,7 @@ export function MenuItemRows({
             {reserveIcon && (
               <span
                 aria-hidden="true"
-                className={cn(MENU_ICON_BOX, DISABLED_PART)}
+                className={cn(item.detail ? "flex h-5 w-4 shrink-0 items-center justify-center" : MENU_ICON_BOX, DISABLED_PART)}
               >
                 {item.icon ? <item.icon className={MENU_ICON} /> : null}
               </span>
@@ -170,7 +172,7 @@ export function MenuItemRows({
               <span className={cn("min-w-0 flex-1 whitespace-normal", DISABLED_PART)}>{item.label}</span>
             )}
             {item.trailing ? (
-              <span className="ml-3 flex shrink-0 items-center">
+              <span className={cn("ml-3 flex shrink-0 items-center", item.detail && "h-5")}>
                 {item.trailing}
               </span>
             ) : null}

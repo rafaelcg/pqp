@@ -12,8 +12,13 @@ import {
   type StreamAlertMetrics,
 } from "./stream-alerts.js";
 import { livePreviewMetrics } from "./live-preview.js";
+import { jamPublicCounters, jamPublicTableMetrics } from "./jam-public.js";
+import { jamPlays } from "./jam-public-plays.js";
+import { jamPublicScanCounters } from "./jam-public-scan.js";
 import { appsMetrics, type AppsMetrics } from "../apps/metrics.js";
+import { ageGateMetrics, type AgeGateMetrics } from "./age-gate.js";
 import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
+import { blockMetrics, type BlockMetrics } from "./block-notice.js";
 import { channelLayoutReport, type ChannelLayoutReport } from "./channel-layout.js";
 import {
   communityHomeTranslationMetrics,
@@ -25,6 +30,10 @@ import {
 } from "./community-home-captions.js";
 import { storiesMetrics, type StoriesMetrics } from "./story-metrics.js";
 import {
+  creatorHubMetrics,
+  type CreatorHubMetrics,
+} from "./creator-hub-metrics.js";
+import {
   communityColumns,
   communityTag,
   type CommunityColumns,
@@ -34,6 +43,7 @@ import {
 type RoomNameRow = CommunityColumns & { id: string; channel: string; server: string | null };
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
+import { reportQueueStats, type ReportQueueStats } from "./report-queue.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import {
   clusterTopologyTracked,
@@ -65,9 +75,11 @@ import {
   type AudienceModeMetrics,
 } from "../voice/audience.js";
 import {
+  getSfuAdmissionSnapshot,
   getVoiceActivitySnapshot,
   localVoicePeerCount,
 } from "../ws/voice.js";
+import type { SfuAdmissionSnapshot } from "../voice/sfu-admission-metrics.js";
 import { watchPartyStateFrameCounters } from "../ws/watch-party-events.js";
 import {
   watchPartyWaitlistMetrics,
@@ -131,6 +143,7 @@ import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
 import { connectionFailureCounts } from "./connections-failures.js";
 import { voiceNoteMetrics, type VoiceNoteMetrics } from "./voice-note-metrics.js";
+import { jamVideoMetrics, type JamVideoMetrics } from "./jam-video-metrics.js";
 import {
   conversationMetrics,
   type ConversationMetrics,
@@ -323,6 +336,19 @@ export interface AdminMetrics {
    */
   sfuRegions: SfuRegionsReport;
   /**
+   * What the video admission estimator believes, per SFU box
+   * (`voice/sfu-admission-metrics.ts`): the Mbit/s it prices for the rooms on
+   * the box (`loadMbps`), the budget it holds them to, and how many camera,
+   * share and promotion checks it answered and refused in the last five
+   * minutes. Divide `loadMbps` by the box's MEASURED transmit rate to see how
+   * far the estimate has drifted from the hardware (the 2026-10-20 refusals
+   * were an estimate at 524 to 605 of 600 on a box at 32 percent CPU).
+   * `loads` are cluster-wide (registry rooms, cached 10 s); the counts are
+   * this process's own, so the exporter sums them across replicas. Null when
+   * the room read failed. Additive: nothing here is read by an admission.
+   */
+  sfuAdmission: SfuAdmissionSnapshot | null;
+  /**
    * Runtime feature flags (`lib/flags.ts`): every flag's answer on the
    * process that served this request and where it came from (a row, the
    * environment, the code default), how many per-server overrides it has,
@@ -358,6 +384,15 @@ export interface AdminMetrics {
    */
   stories: StoriesMetrics;
   /**
+   * The Baú creator hub (`services/creator-hub-metrics.ts`): servers with Baú
+   * on, posts and their members-only share, VIP holders (total and the top
+   * servers), Seguir follows and their deliveries, and joins in the last 7
+   * days into Baú servers by door and by tagged link, deployment wide and
+   * cached 30 s; plus this process's `ctaViews` / `supportClicks` counters.
+   * Counts only. Live like `stories`.
+   */
+  creatorHub: CreatorHubMetrics;
+  /**
    * The start-of-stream notice (`services/stream-alerts.ts`), since this
    * process started: shares that armed a timer, those dropped for the flag, the
    * 20 s debounce or the cooldown, notices claimed, people told, why people
@@ -374,6 +409,17 @@ export interface AdminMetrics {
    */
   livePreview: ReturnType<typeof livePreviewMetrics>;
   /**
+   * Public jams (`services/jam-public*.ts`, docs/JAM_PUBLIC.md). From the
+   * tables (live): whether the flag is on, songs published, waiting for review
+   * (songs and takes), hidden by reports, removed by an operator, total plays
+   * and likes, cover and video verdicts by status, and objects in quarantine.
+   * Since this process started: publishes, auto-hides, reports filed, plays it
+   * counted (rows inserted) and deduped in memory, scan outcomes, and refusals
+   * by limit (`rateLimited`: songs, takes, likes, reports; `addressRefused`:
+   * the public routes' address buckets). Per process like the push counters.
+   */
+  jamPublic: JamPublicMetrics;
+  /**
    * Chamar a atenção (`services/nudge.ts`), since this process started:
    * whether the `nudge` flag is on here, nudges sent, and refusals by reason
    * (`cooldown`, `unanswered`, `busy`, `self-off`, `unavailable`). Per process
@@ -381,6 +427,21 @@ export interface AdminMetrics {
    * the 30 s cache.
    */
   nudge: NudgeMetrics;
+  /**
+   * The 18+ gate's answers (`services/age-gate.ts`), since this process started:
+   * `passed`, `blocked`, and `implausible` (a date refused without spending the
+   * attempt). Counts only, never a date or an account. Per process: with two
+   * instances read each. Live, never from the 30 s cache.
+   */
+  age: AgeGateMetrics;
+  /**
+   * User blocks (`services/block-notice.ts`), since this process started: new
+   * blocks, the instance-queue tickets they opened (`reportsFiled`), those held
+   * back by the per-account daily cap, and notifications that threw. Counts
+   * only, never an account. Per process: with two instances read each. Live,
+   * never from the 30 s cache.
+   */
+  blocks: BlockMetrics;
   /**
    * Apps in channels (`apps/metrics.ts`): live sessions and seats from the
    * table, and since this process started the starts, ends by reason, handoffs,
@@ -1022,6 +1083,14 @@ export interface AdminMetrics {
    * rather than as zero.
    */
   conversations: ConversationMetrics | null;
+  /**
+   * Jam camera videos on iOS and Safari: how many have the MP4 copy they
+   * play, how many are waiting for the worker, and how many gave up (`failed`,
+   * which belongs at zero). Read from the database, so it is the same on every
+   * replica. Null when its read failed. Field by field in
+   * `services/jam-video-metrics.ts`.
+   */
+  jamVideo: JamVideoMetrics | null;
 
   // ------------------------------------------------------------ tab detail
   // Everything below backs one tab each on the operator dashboard. It is
@@ -1177,7 +1246,11 @@ export interface AdminMetrics {
 
   /** Backs the "moderação" tab. */
   moderation: {
-    reports: { open: number; actioned: number; dismissed: number; last24h: number };
+    /**
+     * `oldestOpenAgeSeconds` is the 24 hour promise as a number (0 when
+     * nothing is open); see `services/report-queue.ts`.
+     */
+    reports: ReportQueueStats;
     feedback: { open: number; confirmed: number; closed: number; last24h: number };
     bans: number;
     /** Timeouts that have not expired yet. */
@@ -1266,6 +1339,7 @@ type CachedMetrics = Omit<
   | "ready"
   | "sfu"
   | "sfuRegions"
+  | "sfuAdmission"
   | "instanceId"
   | "instanceCount"
   | "cluster"
@@ -1273,9 +1347,13 @@ type CachedMetrics = Omit<
   | "communityHomeTranslation"
   | "communityHomeCaptions"
   | "stories"
+  | "creatorHub"
   | "streamAlerts"
   | "livePreview"
+  | "jamPublic"
   | "nudge"
+  | "age"
+  | "blocks"
   | "channelLayout"
   | "apps"
 >;
@@ -1297,6 +1375,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     connections,
     voiceNotes,
     conversations,
+    jamVideo,
   ] = await runWithConcurrencyLimit(
     [
     () => pool.query<{ total: string; last24h: string }>(
@@ -1401,6 +1480,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     () => voiceNoteMetrics(),
     () => conversationMetrics().catch((error: unknown) => {
       console.error("[metrics] conversation metrics failed:", error);
+      return null;
+    }),
+    () => jamVideoMetrics().catch((error: unknown) => {
+      console.error("[metrics] jam video metrics failed:", error);
       return null;
     }),
     ],
@@ -1596,15 +1679,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         ORDER BY s.member_count DESC, s.name
         LIMIT 20`,
     ),
-    () => pool.query<{ open: string; actioned: string; dismissed: string; last24h: string }>(
-      `SELECT COUNT(*) FILTER (WHERE status = 'open')::text AS open,
-              COUNT(*) FILTER (WHERE status = 'actioned')::text AS actioned,
-              COUNT(*) FILTER (WHERE status = 'dismissed')::text AS dismissed,
-              COUNT(*) FILTER (
-                WHERE created_at >= now() - interval '24 hours'
-              )::text AS last24h
-         FROM reports`,
-    ),
+    () => reportQueueStats(),
     () => pool.query<{ open: string; confirmed: string; closed: string; last24h: string }>(
       `SELECT COUNT(*) FILTER (WHERE status = 'open')::text AS open,
               COUNT(*) FILTER (WHERE status = 'confirmed')::text AS confirmed,
@@ -1878,6 +1953,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     },
     voiceNotes,
     conversations,
+    jamVideo,
 
     channelDetail: {
       privateText: Number(channelShape.rows[0]?.private_text ?? 0),
@@ -1971,12 +2047,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     },
 
     moderation: {
-      reports: {
-        open: Number(reportCounts.rows[0]?.open ?? 0),
-        actioned: Number(reportCounts.rows[0]?.actioned ?? 0),
-        dismissed: Number(reportCounts.rows[0]?.dismissed ?? 0),
-        last24h: Number(reportCounts.rows[0]?.last24h ?? 0),
-      },
+      reports: reportCounts,
       feedback: {
         open: Number(feedbackCounts.rows[0]?.open ?? 0),
         confirmed: Number(feedbackCounts.rows[0]?.confirmed ?? 0),
@@ -2065,10 +2136,12 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     ready,
     sfu,
     sfuRegions,
+    sfuAdmission,
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
     stories,
+    creatorHub,
     channelLayout,
     apps,
   ] = await Promise.all([
@@ -2076,10 +2149,12 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     checkReady(),
     readSfuStats(),
     sfuRegionsReport(),
+    getSfuAdmissionSnapshot(),
     featureFlagMetrics(),
     communityHomeTranslationMetrics(),
     communityHomeCaptionsMetrics(),
     storiesMetrics(),
+    creatorHubMetrics(),
     channelLayoutReport(),
     appsMetrics(),
   ]);
@@ -2094,16 +2169,61 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     ready,
     sfu,
     sfuRegions,
+    sfuAdmission,
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
     stories,
+    creatorHub,
     streamAlerts: streamAlertMetrics(),
     livePreview: livePreviewMetrics(),
+    jamPublic: await jamPublicMetrics(),
     nudge: nudgeMetrics(),
+    age: ageGateMetrics(),
+    blocks: blockMetrics(),
     channelLayout,
     apps,
   };
+}
+
+export type JamPublicMetrics = Awaited<ReturnType<typeof jamPublicTableMetrics>> & {
+  process: ReturnType<typeof jamPublicCounters> & {
+    plays: { counted: number; deduped: number; flushFailures: number; dropped: number };
+    scans: ReturnType<typeof jamPublicScanCounters>;
+  };
+};
+
+/**
+ * The `jamPublic` block. Never throws: a failed table read reports the process
+ * counters with zeroed tables rather than failing the dashboard.
+ */
+async function jamPublicMetrics(): Promise<JamPublicMetrics> {
+  const perProcess = {
+    ...jamPublicCounters(),
+    plays: {
+      counted: jamPlays.counted,
+      deduped: jamPlays.deduped,
+      flushFailures: jamPlays.flushFailures,
+      dropped: jamPlays.dropped,
+    },
+    scans: jamPublicScanCounters(),
+  };
+  try {
+    return { ...(await jamPublicTableMetrics()), process: perProcess };
+  } catch (error) {
+    console.error("[metrics] jamPublic failed:", error instanceof Error ? error.message : error);
+    return {
+      enabled: false,
+      published: 0,
+      pendingReview: { songs: 0, tracks: 0 },
+      hiddenByReports: 0,
+      removed: 0,
+      plays: 0,
+      likes: 0,
+      scans: { covers: {}, videos: {}, quarantined: 0 },
+      process: perProcess,
+    };
+  }
 }
 
 export interface SfuRegionsReport {

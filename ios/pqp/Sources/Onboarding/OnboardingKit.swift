@@ -286,7 +286,7 @@ extension FeatureMoment {
             id: "voice",
             symbol: "waveform",
             title: "Voice that holds the whole room.",
-            detail: "Push-to-talk or voice activation, volume per person."
+            detail: "Mute, deafen and volume per person."
         ),
         FeatureMoment(
             id: "screen",
@@ -297,7 +297,7 @@ extension FeatureMoment {
         FeatureMoment(
             id: "watch",
             symbol: "play.tv",
-            title: "Watch parties of 100+ people",
+            title: "Watch parties with your crew",
             detail: "Same film, same second, one room."
         ),
     ]

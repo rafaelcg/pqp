@@ -16,7 +16,10 @@ open pqp.xcodeproj
 
 Debug builds point at `http://localhost:3001` and authenticate with the
 dev-bypass token, **so the server has to be running** — without it the app lands
-on onboarding with "Could not connect to the server." rather than signing in:
+on onboarding with "Could not connect to the server." rather than signing in.
+(Plain HTTP to localhost is allowed in Debug only: a build phase adds the App
+Transport Security exception to the built Info.plist, `the "Allow local HTTP (Debug only)" phase in `ios/project.yml``,
+so the Release plist, the one App Review reads, has none.)
 
 ```bash
 # root .env
@@ -118,6 +121,35 @@ it would fail on literally every message. `Coding.decoder` tries both formats.
 **`Message.blocked` is on the wire but not in the zod schema**, and
 `Server.role` is genuinely absent (not null) outside `/api/servers`. Both are
 decoded defensively; see the comments in `Models.swift`.
+
+**A block hides the person everywhere, at once, from `session.blocked`.** The
+server enforces what it can (no new DMs, badges, pushes, mentions or stories)
+but keeps a blocked author's rows in a shared channel so paging stays honest, and
+a socket frame is never stamped per reader. So hiding is the client's job, and
+`BlockedUsers` (an observable set on `SessionStore`, loaded at `.ready`, added to
+optimistically on the tap) is what every list reads: the transcript
+(`ChatModel.visibleMessages`, which also covers threads, group DMs and forum
+posts, live frames included), the Conversas list and hub (`BlockRules.visible`),
+story rings and the open viewer, forum lists, thread lists, Baú comments and
+reply quotes. Blocking is offered on a message's long-press menu, on a profile,
+in Friends and on a Baú post's or comment's menu; each sends a `surface` token
+(`message`, `profile`, `friends`, `bau`) so the operators' log line says which.
+Guideline 1.2; see `docs/CONTENT_SAFETY.md` §"Blocking a person tells the
+operators". Not hidden on purpose: the member list and the voice roster (a
+roster is who is in a place, not a feed).
+
+**What a reader can report from the phone** (guideline 1.2: every kind of user
+content, two taps). One sheet, `ReportSheet`, one set of reasons and one
+"Report sent" confirmation, keyed on `ReportTarget`: a message (long-press
+menu), a person (profile, members), a community (directory card), a story (the
+viewer), a Baú post and a Baú comment. The Baú ones (`bau_post` / `bau_comment`,
+id only) are the post card's ellipsis and the ellipsis on each comment, both
+beside Block, hidden on your own words, and a locked (VIP) post offers Block
+only because the server refuses to report words the reader cannot see. A Baú in
+a community is filed to the instance queue (`docs/COMMUNITY_HOME.md` §"Reporting
+a post or a comment"). Forum posts are chat messages in a thread, so they take
+the message path. Pinned by `BauReportTests` (request shape) and
+`BauReportUITests` (the flow, seeds its own server).
 
 **`presence-update` uses `name`, every other payload uses `displayName`.** One
 struct cannot serve both, hence `PresenceUser`.
@@ -256,6 +288,22 @@ around. The Android app does the same, through its audio device's buffer
 callback. A mesh room stays picture only: Google's WebRTC build has no capture
 hook short of replacing the whole audio device, and the presenter banner says
 "Apresentando só a imagem, sem o som". **Unverified on hardware.**
+
+**So a share on mesh asks for the voice server (2026-11-05).** A DM call and a
+small server are mesh by policy, which made them the one place a phone's share
+went out silent. A new share in a mesh room now sends `audioNeedsSfu: true` on
+`set-sharing-screen` (`shareAudioNeedsSfu`, `RealtimeClient.sharingScreenFrame`),
+and with the runtime flag `share_sound_promotion` on (default) the server moves
+the room to LiveKit through its ordinary promotion. The `voice-transport-changed`
+that follows is the one `followPromotion` already handles: the share is
+republished on the SFU, which opens the sound gate. Refused (an operator's mesh
+pin, a seat that could not follow, somebody else already sharing, the box's
+budget), nothing changes and the banner keeps saying picture only. Builds up to
+1.0.39 never send the field, so they behave exactly as before. Device QA owed:
+the far end hears the game; the call does not drop during the move; and **the
+far end does not hear its own voice echoed back**: ReplayKit's `.audioApp` may
+include this app's own playback of the call, which is PR 1030's open item 5 and
+is unverified.
 
 **The share control follows SPEAK.** `welcome.self.canSpeak` (and the same
 field on every roster entry) is the channel's SPEAK permission, which is the
@@ -1136,6 +1184,39 @@ identity; without that, running the suite would destroy the servers,
 conversations and handle every other test reads. Debug-only, like
 `PQP_API_OVERRIDE`.
 
+## What App Review reads inside the bundle
+
+Settings ends in an **About** section (`Sources/Home/AboutSection.swift`):
+Terms of Service and Privacy Policy (the web's own pages, in the same in-app
+Safari sheet as the sign-in line), "Contact us or report abuse"
+(`mailto:contato@pqp.gg`, the one address the Terms name; there is no contact
+page on the web, so the address is also printed in the row), and the version and
+build. Guidelines 5.1.1(i) and 1.2. The sheet hangs on the screen's
+`NavigationStack`, never on the section (see `YourDataSection`).
+
+- **Privacy manifest.** `pqp/PrivacyInfo.xcprivacy` (app) and
+  `pqp/Broadcast/PrivacyInfo.xcprivacy` (extension, declares nothing), wired in
+  `project.yml`. No tracking, no tracking domains. The one required-reason API
+  the code calls is `UserDefaults.standard` (`CA92.1`, our own defaults only);
+  there is no file-timestamp, boot-time or disk-space call in `Sources/`,
+  `Broadcast/` or `ScreenShare/` (`attributesOfItem` is read for `.size` only).
+  The bundled SDKs (WebRTC, LiveKit, the Rust FFI) ship their own manifests.
+  Collected data types follow the Privacy Policy's "What we collect": email
+  (Clerk), name, user id, device id (push token), photos or videos, audio (voice
+  notes), other user content (messages), feedback, coarse location (the
+  country code, never an IP) and product interaction (the active-days record).
+  All linked to the account, none used for tracking. Change it when the app
+  starts calling a new required-reason API or collecting a new kind of data, and
+  keep the App Store Connect nutrition label in step.
+- **Local network.** `NSLocalNetworkUsageDescription` is set because WebRTC (the
+  mesh and LiveKit alike) gathers host candidates and resolves mDNS ones, which
+  is what makes iOS ask. `NSBonjourServices` is not needed: nothing browses or
+  advertises a Bonjour service.
+- **Background modes.** `audio` only. `voip` was removed in November 2026: it is
+  for PushKit, `PKPushRegistry` is not wired (`docs/IOS_CALLKIT.md`), and the
+  CallKit incoming call needs no background mode when it is reported from the
+  live socket. Put it back in the same change that registers for VoIP pushes.
+
 ## The server list: unread, order, "Mandar um oi"
 
 Four things the hub shares with the web rail (`ServerUnread.swift`, `HomeView.swift`):
@@ -1166,6 +1247,200 @@ Four things the hub shares with the web rail (`ServerUnread.swift`, `HomeView.sw
 
 Tests: `PhoneGapsTests`; UI journeys in `ServerUnreadUITests` and
 `PhoneGapsUITests` (a local API and a second dev account, not run in CI).
+
+## Jam: the wall and the song
+
+A `jam` channel holds songs, each a stack of recorded stems (`docs/JAM.md`, the
+wire contract in `packages/shared/src/jam.ts`). This build SEES, HEARS, REACTS
+and RECORDS (audio only; "Gravar minha parte", see "Recording a part" below).
+Code is in `Sources/Jam/`, tests in `JamContractTests`, `JamRulesTests`,
+`JamEngineTests` and `JamRecordingTests`.
+
+**Invisible without the flag.** `Channel.isJam` is deliberately not part of
+`isListed`. The channel list draws a jam row only when
+`GET /api/jam/config?serverId=` says `enabled` (`JamListModel`), and asks
+nothing at all on a server that has no jam channel. Flag off, the list is
+exactly what it was.
+
+**The row** has the `music.note.list` glyph, the song count (first page, so a
+full page reads `50+`) and an unread mark. A jam carries no messages and the
+server has no per-person cursor for it, so "unread" is device-local: somebody
+else's bump newer than the newest one this device saw when it last opened the
+wall (`JamUnread`, `JamSeenStore`). It is kept out of `unread`, so it never
+reaches the server tile's badge.
+
+**The wall** is a mosaic (`JamMosaic`: dense first-fit on a 2 column grid, 4 on
+a regular width, the newest or most active song is the only hero). The list
+carries no media, no peaks and no names, so each tile reads its song's detail
+once, lazily, three at a time (`JamPreview`): the mix's loudness for a coloured
+tile's waveform, the people on it, and a poster frame from the first in-mix MP4
+video. Filters are Tudo / Falta alguem (songs that want somebody, open ones
+included) / Prontas.
+
+**The engine** is one `AVAudioEngine` with one `AVAudioPlayerNode` per stem
+(`JamEngine`). Stems are scheduled as file segments (streamed from disk, never
+decoded whole) at a sample time relative to one host start, with the frames
+computed in `JamAlignment`, the only place a track's numbers are arithmetic:
+the stored file's FIRST sample sits at `offsetMs` and only
+`audio[trimStart, length - trimEnd]` is heard, so a trim hides audio and never
+moves it. That is how the web recorder writes a take (a count-in stays in the
+file, hidden by `trimStartMs`) and how the web player plays it
+(`planSegment`); the header of `jam.ts` words `offsetMs` as "the first PLAYED
+sample", and following that wording put every web take `trimStartMs` early
+(fixed 2026-11-10: two takes a count-in apart sounded seconds apart). The
+transport's zero is the earliest heard sample, and a negative offset is not
+special. `renderOffline` runs the same graph with no hardware, which is how
+`JamEngineTests` proves, frame by frame, where each stem's first sample lands
+(a negative offset and both trims, FLAC and WAV, 44.1 kHz against 48), and how
+`JamWebTakeAlignmentTests` plays three takes made by the web's own FLAC encoder
+with the recorder's numbers (count-in, head and tail trims, one at 44.1 kHz)
+from the top, after a seek and for four minutes, and then live through the
+hardware with a pause and a resume, tapping the mixer: every click within one
+frame (48 kHz stems) or half a millisecond (the 44.1 kHz one).
+Gain (0 to 2) times the person's slider goes through a one-band EQ's
+`globalGain`, because a player node's volume stops at 1.
+
+**Formats.** What AVFoundation opens, measured with an impulse at frame 24000
+through `AVAudioFile` (iOS 27 simulator and macOS 27 agree): WAV, FLAC, AAC in
+M4A/MP4 and Opus in Ogg land on frame 24000 exactly; MP3 lands 576 frames (12
+ms) late, the same number the web engine measured in WebKit; **WebM does not
+open at all**. The contract accepts `audio/webm`, so a stem recorded by a
+Chromium `MediaRecorder` is silent on a phone: its row says "Ainda nao toca no
+iPhone" and the others keep playing. Ogg Opus was only verified on iOS 27;
+the deployment target is 17.
+
+**Audio session.** `.playback` with the default mode, taken only when nothing
+else owns the session, by the same rule the watch party, the Bau's video and
+voice notes use (`BauPlaybackPolicy.audioPlan`): a call, or a recording
+category, is left alone and the song plays through the call's session; the lock
+screen is then left to the call. Leaving the song stops it. A route change
+(headphones out) and an interruption pause it and keep the place.
+
+**Video** stems are muted `AVPlayer`s started at the engine's host time plus
+the output latency, and put back with a seek when they drift past 90 ms
+(`JamVideoSync`). MP4 only.
+
+### Covers and colours
+
+`JamSongSummary.coverUrl` (a presigned GET, new on every read) is drawn on the
+wall tile (picture under a shade, the old coloured tile until it lands or when
+it never does) and as the song header. The identity of a picture is the SONG
+plus the PATH of the address (`JamCoverKey`): the key inside it never changes
+for one picture, a replaced cover is a new path, and the payload has no other
+version. `JamCoverRef` compares by path, so a song frame that carries a fresh
+signature changes nothing and redraws nothing. `JamCoverStore` keeps the
+bytes on disk (48 MB) and a down-sampled bitmap in memory (32 MB), fetches once,
+and leaves a failed key alone for a minute. The instrument colours are the
+web's `--color-inst-*` tokens converted to sRGB (guitar yellow, bass blue,
+drums orange, vocals pink, keys cyan, other lilac); `JamInstrumentColorTests`
+reads `client/src/index.css` and fails when they drift.
+
+### Recording a part
+
+From a song, "Gravar minha parte"; from the wall, "Gravar uma música" (a name
+and who may join, then the same studio; the song is made when the first take is
+SENT, and deleted again with `?ifEmpty=true` if the studio made it and left).
+Setup (what you play, the band's lanes and "Ouvir a banda", the headphones
+card, count-in), count-in, recording over the band's lanes with a large clock,
+review (the take plays with the band; nudge it earlier or later in 5 ms steps,
+held buttons repeat faster; record again) and send. Flow and wording follow the
+web studio. Files: `JamRecordModel` (the order of things), `JamRecorder` (the
+audio), `JamRecordingRules` and `JamLatency` (the arithmetic, pure),
+`JamStudioView` / `JamStudioParts` (screens).
+
+**One engine, one clock.** The band (`JamEngine`), the count-in (one buffer,
+a click per beat) and the microphone's tap live on ONE `AVAudioEngine`, and
+every start is a host time: the count-in at T0, the band at H0 = T0 + count-in,
+the first captured sample stamped Hc by the tap. The take is placed at
+`from + (Hc - H0) - L` where `from` is the song time the band started from (its
+earliest heard sample) and `L` the round trip; the file's first sample is
+`offsetMs` (a whole millisecond, reached by dropping fewer than one ms of
+leading samples), the count-in stays in the file and `trimStartMs = from -
+offsetMs` hides it, exactly what the web writes. A recorder lives for one take:
+the engine that recorded has its input node in the graph, so review and the
+band preview use a fresh one that never opens the microphone. The tap is
+installed from a NONISOLATED function (`JamCaptureSink.install`): a closure
+written in a main-actor method is main-actor isolated and AVAudioEngine runs it
+on its own queue, where Swift traps (the first build crashed on the first
+buffer).
+
+**Latency.** `L` is, best first: a calibration for this audio ROUTE (input and
+output UIDs and the sample rate, stored in `UserDefaults`), by loopback (sweeps
+found in the capture by cross-correlation, to a fraction of a millisecond) or by
+tapping along (wired headphones, where the microphone cannot hear the output);
+otherwise `AVAudioSession.outputLatency + inputLatency` (10 ms input assumed
+when the session reports under a millisecond), labelled low confidence. A
+stored calibration goes stale when the reported output latency moves more than
+8 ms under the same route. The sheet is "Fone ajustado · 33 ms" when measured.
+
+**Upload.** FLAC, 16-bit mono at the capture rate (`audio/flac`, in the
+contract's allowed list; lossless, so the server moves nothing), the same file
+that is heard in review. `POST uploads` (kind `audio`), `PUT` to the bucket with
+the exact `Content-Type` and the file's length, `POST tracks` (idempotent on
+`audioUploadId`; a retry reuses the ticket and the stored file). Fields:
+`offsetMs` (with the nudge), whole-ms `trimStartMs`, `trimEndMs 0`, `durationMs`,
+`gain 1`, 400 peaks, `videoUploadId null`. Not here: the camera, replacing the
+viewer's old take in the mix, trimming and volume in review.
+
+**Audio session.** `.playAndRecord`, mode `.default` (never voice chat: voice
+processing would thin an instrument and duck the band), `.defaultToSpeaker`,
+`.allowBluetoothA2DP` (not the hands-free profile), 48 kHz and a 5 ms buffer
+asked for, the previous category put back on close. While a call holds the
+session the studio does not record: "Sai da call pra gravar" (`JamRecordingGate`,
+the voice notes' rule). The route card warns about the speaker (the band leaks
+into the microphone) and about Bluetooth (100 to 300 ms that move), and allows
+recording anyway. A call, a route change (headphones out, a device joined), a
+lost microphone or a full disk stops the take and KEEPS what was captured when
+there is something to hear (a second and not silence); closing asks first while
+a take exists; a song deleted while a take waits offers "send as a new song".
+Microphone permission denied says so and opens Settings.
+
+**What only a device can say.** The simulator has no real latency (it reports
+none, and its microphone is the Mac's), so what is proved is everything above
+the hardware: `JamRecordingPlacementTests` builds takes from synthetic captures
+(a perfect player, N ms into the song, L ms of round trip, 44.1 and 48 kHz, with
+and without a count-in, a band that starts at 500 ms) with the real builder and
+checks them by the web's own formula and through this engine rendered offline,
+to one frame. Not provable without a phone: what stamp the hardware gives the
+tap's first buffer, whether `outputLatency + inputLatency` is the round trip on
+a given route (the calibration exists because it often is not), Bluetooth,
+the speaker's acoustics. Checklist for a device: record over a click track with
+wired headphones before and after "Calibrar" and check the take against the
+band on the web; repeat with the speaker and with AirPods (expect the warning
+and a take that needs a nudge); take a call mid-take; pull the headphones mid-take.
+
+**Not here.** Recording a camera, replacing the viewer's old take in the mix,
+trimming, comments, a song deep link (`JamLinks.song` is shaped like the forum's `/post/` link and is only as
+the web's own route, `/app/server/<server>/channel/<jam channel>/song/<song>`), Spanish (the app ships en and pt-BR
+only).
+
+## Activities (apps in a channel)
+
+The web's apps platform (`docs/APPS.md`: a sandboxed bundle somebody starts in a
+text or voice channel and others join) on the phone. **Invisible unless the
+server says so:** nothing is drawn or asked until `GET /api/apps/config?serverId=`
+answers `enabled` with an apps origin and at least one app this build can show or
+run (`LauncherRules.offersEntry`). Code: `ios/pqp/Sources/Apps/`.
+
+| File | Role |
+|---|---|
+| `AppsModels.swift` | the config, the session summary and the six frames (`channel-app`, `app-session`, `app-state`, `app-event`, `app-ended`, `app-error`), decoded leniently |
+| `AppsStore.swift` | the one source of truth for "an activity runs in this channel": fed by `GET /api/servers/:id/app-sessions` on open and on every reconnect, and by the frames; a frame that lands during a read wins over the read |
+| `AppsRules.swift` | pure rules: what a phone may do with an app, the launcher's reasons, the strip's states |
+| `AppBridge.swift` | the phone's half of the sandbox message API v1, ported from `bridge-host.ts` (strict parsing, manifest caps on the MERGED state, token buckets, participants built from scratch) |
+| `AppFrameController.swift` | the `WKWebView` and its isolation |
+| `ActivityRunner.swift` | one seat: join, resume on a new socket, state patches answered by the next `app-state`, leave |
+| `ActivitiesChannelModel.swift`, `ActivitiesHost.swift` | per channel: strip, toolbar entry, launcher, consent sheet, pane |
+
+**The isolation, which is the point.** The bundle runs as `<iframe sandbox="allow-scripts" allow="" referrerpolicy="no-referrer">` inside a wrapper document loaded with the pqp web origin as its base URL (what the bundle's `frame-ancestors` names) and a NON-persistent data store. The wrapper has no script of the page's world: the only code is a relay injected into an ISOLATED `WKContentWorld`, where the native message handler is registered, so the app's own scripts cannot see the handler, the port or the wrapper (`ActivitiesFrameIsolationTests` serves a hostile page and fails if the handler is registered in the page world instead, which was checked). The relay answers `app-hello` only from the frame's own window, hands over one `MessageChannel` port, and carries its messages to Swift as JSON text. Swift is the host. Navigation is decided natively: the wrapper loads once, the frame loads its entry once, a second load of the frame is cancelled and the frame removed (`frame-navigated`), popups are refused, no `hello` in 20 s removes it (`timeout`). The apps origin's own `Content-Security-Policy` header applies as on the web because the bundle is fetched from there with its headers. The auth token, user ids, channel and server ids and the socket never exist in the webview.
+
+**What a phone does today (phase A).** `AppPhoneSupport` is a short list in code, because the config does not carry the manifest's `platforms`: `pqp-eco` is playable (join, shared state, events, theme, roster with avatars as data URLs); `pqp-locadora` is watch-only (the strip says it is running and, in a voice channel, "Ver na call" joins the call where the host's share is drawn, with no seat in the app); everything else is dimmed in the launcher as "Só no computador por enquanto". The bridge answers `not-allowed` to `assets`, `files`, `store`, `sync` and `share`, the answer an app already reads as "this host has no such grant". Enquete no longer exists (removed from `apps/` in #1426); Eco is the platform's test app and is not released anywhere in production, so until a phone-first app ships there is no live participation on a phone outside a dev box.
+
+**Consent.** The join sheet shows the first time per app (`GET /api/me/app-consents`, `POST /api/apps/:app/consent`); a consent on file that is not stale goes straight in.
+
+**Copy** is the web's own (`apps.*` keys in `client/src/locales`), so both clients say the same thing; en and pt-BR in `Localizable.xcstrings`.
+
+**Verified** against a local server with `APPS=true` and the apps bundles served by `pnpm apps:dev`, with the web client and a scripted second user as the other participants: start on either side and join on the other, shared counter and events both ways, an end by the host, by somebody else and by the operator switching the app off, a socket drop and resume of the same seat. **Not verified:** a real device, a real Clerk account, any app other than Eco playing on a phone, Locadora's share on a phone (`locadora_share` is off until the legal answer).
 
 ## Parity with the web client
 

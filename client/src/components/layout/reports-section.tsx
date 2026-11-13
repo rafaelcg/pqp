@@ -10,6 +10,7 @@ import { ReportAttachments } from "@/components/layout/report-attachments";
 import { ReportContextPanel } from "@/components/layout/report-context-panel";
 import { ApiError, fetchServerReports, resolveReport } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { reportSubjectKey } from "@/lib/report-subject";
 import { formatFullTimestamp } from "@/lib/utils";
 
 /**
@@ -184,11 +185,7 @@ export function ReportsSection({ serverId }: { serverId: string }) {
                     {REPORT_REASON_LABELS[report.reason]}
                   </span>
                   {" · "}
-                  {t(
-                    report.subjectType === "message"
-                      ? "reports.subjectMessage"
-                      : "reports.subjectAccount",
-                  )}{" "}
+                  {t(reportSubjectKey(report.subjectType))}{" "}
                   <span className="font-semibold">
                     {report.reportedUserName ?? t("reports.departed")}
                   </span>

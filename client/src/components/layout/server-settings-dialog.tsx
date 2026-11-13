@@ -134,6 +134,7 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "report.resolve": "serverSettings.audit.action.report.resolve",
   "report.attachment_reveal":
     "serverSettings.audit.action.report.attachment_reveal",
+  "report.bau_view": "serverSettings.audit.action.report.bau_view",
   "role.create": "serverSettings.audit.action.role.create",
   "role.update": "serverSettings.audit.action.role.update",
   "role.delete": "serverSettings.audit.action.role.delete",
@@ -173,6 +174,14 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "bau_follow.unblock": "serverSettings.audit.action.bau_follow.unblock",
   "bau_follow.allow": "serverSettings.audit.action.bau_follow.allow",
   "bau_follow.disallow": "serverSettings.audit.action.bau_follow.disallow",
+  "bau_plus.plan_update": "serverSettings.audit.action.bau_plus.plan_update",
+  "bau_plus.activate": "serverSettings.audit.action.bau_plus.activate",
+  "bau_plus.cancel": "serverSettings.audit.action.bau_plus.cancel",
+  "bau_plus.resume": "serverSettings.audit.action.bau_plus.resume",
+  "bau_plus.refund": "serverSettings.audit.action.bau_plus.refund",
+  "bau_plus.grace": "serverSettings.audit.action.bau_plus.grace",
+  "bau_plus.expire": "serverSettings.audit.action.bau_plus.expire",
+  "bau_plus.vip_regrant": "serverSettings.audit.action.bau_plus.vip_regrant",
   "forum.post_pin": "serverSettings.audit.action.forum.post_pin",
   "forum.post_lock": "serverSettings.audit.action.forum.post_lock",
   "forum.post_delete": "serverSettings.audit.action.forum.post_delete",
@@ -198,7 +207,9 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
  * the raw kind (`keywords`), not copy, so the name comes from the same strings
  * the AutoMod pane uses for that rule.
  */
-const AUDIT_AUTOMOD_KIND_KEYS: Record<AutomodRuleKind, MessageKey> = {
+const AUDIT_AUTOMOD_KIND_KEYS: Record<AutomodRuleKind | "baseline", MessageKey> = {
+  // The built-in filter's hits are stored with the reason `baseline`.
+  baseline: "automod.baseline.title",
   keywords: "automod.keywords.title",
   invite_links: "automod.inviteLinks.title",
   mention_spam: "automod.mentionSpam.title",

@@ -629,3 +629,26 @@ func voicePromotionNotice(reason: String?) -> String {
         String(localized: "This call became a large room so more people fit")
     }
 }
+
+// MARK: - A share's sound, which only the voice server carries
+
+/**
+ Whether a new share should tell the server its sound needs the voice server
+ (`audioNeedsSfu` on `set-sharing-screen`).
+
+ The broadcast's sound is mixed into the microphone track by LiveKit's audio
+ engine (`ScreenShareAppAudio`); the mesh path's WebRTC build has no such door.
+ So on mesh this phone presents the picture only, and a DM call or a small
+ server is mesh by policy. Asking on mesh lets the server move the room to the
+ SFU through its ordinary promotion (runtime flag `share_sound_promotion`): the
+ `voice-transport-changed` that follows is handled by `followPromotion`, which
+ already restarts a running share on the new transport and opens the sound gate
+ there. Refused, nothing changes and the share stays picture only.
+
+ Never on the SFU, where the sound already goes out, so a re-declare after the
+ move does not ask again, and never before `welcome` has said which transport
+ the room is on (nil).
+ */
+func shareAudioNeedsSfu(transport: VoiceRoomTransport?) -> Bool {
+    transport == .mesh
+}

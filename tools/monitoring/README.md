@@ -26,12 +26,15 @@ actually running on a box with a Prometheus textfile collector -- see
 | File | Role |
 |---|---|
 | `pqp-api-metrics-exporter.py` | Reads `GET /api/admin/metrics` (the `ready`, `runtime`, `voice`, `liveHls`, `cluster`, `users`, `servers`, `messages`, `activation`, `calls`, `streamQuality` and `product` blocks) every 20s and writes a node_exporter textfile, so readiness, Postgres latency, pool queue depth, seated count, sockets, voice-by-backend, HLS rung/session counts, the DB breaker state, the **activation funnel** (per-step cohort counts and step-to-step conversion), **the growth counters** (signups, messages by scope, call attempts/connects/refusals-by-reason and ring outcomes, watch-party starts/restarts and playlist rejections, and push delivery by platform/outcome) **and screen-share/watch-party video quality** (fps/bitrate/resolution buckets by role and transport, and WebRTC's own `qualityLimitationReason` for the presenter) become Prometheus series Grafana can alert and graph on over time, not just read as an instantaneous pull. Scrapes the endpoint repeatedly and dedups by the payload's own `instanceId` (`collect_admin_metrics_snapshots()`), merging the distinct per-replica snapshots (`merge_admin_metrics()`) into one correct, monotonic payload before `render()` runs -- no Caddy route or per-replica URL required; see "Replica-split metrics" below. Adding a field to `/api/admin/metrics` does not surface it here on its own -- `render()` hand-picks fields, so a new metric needs a line here too, and if the field is process-local it needs a merge rule too. |
+| `grafana-dashboard-capacity.json` | Standing "pqp Capacity" dashboard (uid `pqp-capacity`): estimated vs measured SFU load and their ratio, admission refusals, CPU and memory per container and Caddy request rate and 5xx on the API box, and the API event-loop lag. Import and leave up. Built on `pqp_api_sfu_admission_*`, `pqp_api_event_loop_*`, Alloy's cAdvisor and Caddy scrapes (`tools/api-host/config.alloy`); see docs/MONITORING.md "Capacity gauges". |
+| `grafana-alert-rules-capacity-gauges.json` | Always-on group `pqp-capacity`: "SFU admission estimate far above what the box carries" (estimated/measured above 2.5 for 15m while CPU is under 40%) and "API event loop stalled" (p99 above 200 ms for 5m). Windows are 3 minutes or more on purpose (the series land once a minute). |
 | `grafana-dashboard-growth.json` | Standing "pqp Growth" dashboard: signups, messages by scope, call attempts/connect/failure-rate/refusals, ring outcomes, watch-party reliability, playlist rejections, push delivery. Import and leave up. |
 | `grafana-dashboard-activation.json` | Standing "pqp Activation" dashboard: the new-user funnel (signup -> age gate -> handle -> first join -> first message -> first voice -> first watch party) as a bar-funnel for the 7- and 30-day signup cohorts, the headline signup -> first-message activation rate, step-to-step conversion, and conversion over time. Import and leave up. Built on `payload.activation`; see docs/MONITORING.md and `server/src/services/activation.ts`. |
 | `grafana-alert-rules-growth.json` | Always-on alert rules: "call failure rate high" and "push failure rate high", each with a volume floor in the query so low traffic never pages. Unlike the event rules, meant to stay imported. |
 | `grafana-alert-rules-activation.json` | One always-on rule: "activation funnel stalled at the age gate" -- fires only when signups keep arriving (> 20 in 7 days) while the first gated step after signup is near zero for an hour, i.e. a broken step rather than a slow week. Deliberately the only funnel alert: a conversion floor is a threshold guess with no day-0 baseline and would cry wolf. |
 | `grafana-dashboard-voice-notes.json` | Standing "pqp Mensagens de voz" dashboard (uid `pqp-voice-notes`): a usage row (sent by scope and recorder, senders, length, first plays, listened share, refused requests) and a health row (oldest due job, queue depth, jobs settled and success rate, time to done, transcript status, speech budget). Built on `payload.voiceNotes`. Import and leave up. |
 | `grafana-alert-rules-voice-notes.json` | Always-on group `pqp-voice-notes`: queue stuck, job failure rate high, speech budget exhausted, speech budget at 80%. |
+| `grafana-alert-rules-moderation.json` | Always-on group `pqp-moderation`: a report open more than 12 hours (warning) and more than 20 hours (critical), on `pqp_api_reports_oldest_open_age_seconds`. The 24 hour rule; see "Report queue age" below. |
 | `grafana-alert-rules-capacity.json` | Always-on group `pqp-capacity` (eight rules, thresholds are fractions of the core count where they can be): SFU CPU busy above 45% for 15m (warn) and 60% for 10m (critical), LiveKit participants above 240 for 5m, outgoing packet loss p95 above 0.5% for 1h, SFU transmit above 600 Mbit/s for 10m, API box root disk above 75% and memory above 75%, and a presence rule for the SFU trigger series. They read node exporter and LiveKit series, not the API exporter above. They hand over to `docs/SFU_RESIZE_RUNBOOK.md`. See "Capacity alerts" below. |
 | `pqp-api-metrics.service` / `.timer` | The systemd timer that runs it. |
 | `install.sh` | Idempotent installer for the box above. |
@@ -361,6 +364,46 @@ every panel reads "No data", which is harmless).
    The dashboard lands at `$GRAFANA_URL/d/pqp-voice-notes`. The series arrive
    about a minute after step 1 (the timer ticks every 20 s, Alloy scrapes the
    textfile, remote-write adds a little).
+
+## Report queue age (the 24 hour rule)
+
+`payload.moderation.reports` carries `oldestOpenAgeSeconds` (0 when nothing is
+open), `openOver12h` and `openOver24h` next to the old counts
+(`server/src/services/report-queue.ts`). It is read from Postgres, so both
+replicas agree and `moderation` stays a take-first block. An API older than the
+field emits no series at all, and the rules treat no data as silence.
+
+| Series | Reads |
+|---|---|
+| `pqp_api_reports_oldest_open_age_seconds` | `moderation.reports.oldestOpenAgeSeconds`, every queue |
+| `pqp_api_reports_open{age}` | `open` (`age="all"`), `openOver12h`, `openOver24h` |
+
+`grafana-alert-rules-moderation.json` is NOT imported anywhere yet. To import
+it, after the API carrying this field is live and the exporter on the SFU box is
+redeployed (same two steps as "Voice notes", "Deploying it": `scp` the exporter,
+`systemctl start pqp-api-metrics.service`, then check
+`grep -c "^pqp_api_reports" /var/lib/node_exporter/textfile_collector/pqp_api.prom`
+is above 0):
+
+```bash
+source ~/.config/pqp/grafana.env
+cd tools/monitoring
+jq -c '.groups[] | .name as $g | .rules[] | . + {folderUID: "ffxfigbmjr2f4e", ruleGroup: $g}' \
+    grafana-alert-rules-moderation.json \
+  | while read -r rule; do
+      printf '%s' "$rule" | curl -sS -X POST "$GRAFANA_URL/api/v1/provisioning/alert-rules" \
+        -H "Authorization: Bearer $GRAFANA_SA_TOKEN" -H 'Content-Type: application/json' \
+        -H 'X-Disable-Provenance: true' -d @-
+      echo
+    done
+```
+
+Verify through the datasource:
+`query=pqp_api_reports_oldest_open_age_seconds` on
+`$GRAFANA_URL/api/datasources/proxy/uid/grafanacloud-prom/api/v1/query`. To
+prove a rule fires without waiting 12 hours, backdate a report on a staging
+database, never production. The contact point is `rafael-email`; for the 24 hour
+promise to hold overnight, point it at something that rings.
 
 ## Capacity alerts (added 2026-10-25)
 

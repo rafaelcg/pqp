@@ -236,6 +236,37 @@ class VoiceController(
      */
     val speakingPeers: StateFlow<Set<String>> = _speakingPeers.asStateFlow()
 
+    private val peerVolumes = PeerVolumes()
+    private val _peerVolumeLevels = MutableStateFlow<Map<String, Double>>(emptyMap())
+
+    /**
+     * userId to the level this listener chose for that person, 1 being what
+     * they send. Only people who were moved are present; absent is 1. Kept by
+     * user for the life of the app and not cleared by a call ending, as on the
+     * web. See [PeerVolumes].
+     */
+    val peerVolumeLevels: StateFlow<Map<String, Double>> = _peerVolumeLevels.asStateFlow()
+
+    /** The per-person slider. [volume] is clamped to 0 through [PEER_VOLUME_MAX]. */
+    fun setPeerVolume(userId: String, volume: Double) {
+        peerVolumes.set(userId, volume)
+        publishPeerVolume(userId)
+    }
+
+    /** The mute button beside the slider: zero, or back to the last level above it. */
+    fun togglePeerMute(userId: String) {
+        peerVolumes.toggleMute(userId)
+        publishPeerVolume(userId)
+    }
+
+    private fun publishPeerVolume(userId: String) {
+        val level = peerVolumes.volumeFor(userId)
+        _peerVolumeLevels.value = _peerVolumeLevels.value + (userId to level)
+        _state.value.participants
+            .filter { it.userId == userId && it.peerId != _state.value.localPeerId }
+            .forEach { engine.setPeerVolume(it.peerId, level) }
+    }
+
     private val _remoteScreens = MutableStateFlow<Map<String, RemoteVideoFeed>>(emptyMap())
 
     /**
@@ -1407,6 +1438,9 @@ class VoiceController(
                 // frame as a new share already knows which track to spare.
                 engine.setPeerScreenAudioStreamId(participant.peerId, participant.screenAudioStreamId)
                 engine.setPeerServerMuted(participant.peerId, participant.serverMuted)
+                // The listener's own level, by user: the peer id is new every
+                // join, so this is what carries it across a reconnect.
+                engine.setPeerVolume(participant.peerId, peerVolumes.volumeFor(participant.userId))
             }
         }
     }

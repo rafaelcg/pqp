@@ -79,6 +79,18 @@ export interface PqpDesktop {
    */
   fullscreenAppState?(): Promise<DesktopFullscreenAppState>;
   /**
+   * macOS share audio: is this Mac new enough (14.2+) for Chromium's CoreAudio
+   * Tap? `supported: false` off macOS. Absent in shells before it.
+   */
+  macShareAudioStatus?(): Promise<{ supported: boolean; version: string | null }>;
+  /**
+   * Right before the `getDisplayMedia` of a share that asks for sound with the
+   * runtime flag on: the shell answers loopback to the next request only.
+   */
+  macShareAudioArm?(): Promise<boolean>;
+  /** Opens System Settings at Privacy & Security > System Audio Recording. */
+  macShareAudioOpenSettings?(): Promise<boolean>;
+  /**
    * Linux share audio: can this machine build the "everything but pqp" bus?
    * `available: false` off Linux and where `pactl` is missing.
    */
@@ -296,6 +308,15 @@ export interface DesktopShareCapabilities {
    * in every shell before it, and off unless the runtime flag says so.
    */
   linuxShareAudio?: boolean;
+  /**
+   * macOS: this shell can carry the computer's sound on the display stream
+   * through Chromium's CoreAudio Tap with its own audio excluded
+   * (`electron/lib/mac-share-audio.js`), on macOS 14.2+. A SEPARATE field from
+   * `systemAudio`, which stays `"none"` on a Mac so an older page never asks
+   * for audio the shell would reject. Absent in every shell before it. Used
+   * unless the runtime flag (default on) is switched off.
+   */
+  macShareAudio?: boolean;
   /**
    * The shell is the Flatpak build (`flatpak/gg.pqp.pqp.yml`). It never
    * offers `linuxShareAudio`; the page uses this for copy only. Absent before.
@@ -531,6 +552,25 @@ export function desktopPredatesScreenShare(): boolean {
  */
 export function desktopShareCapabilities(): DesktopShareCapabilities | null {
   return getDesktop()?.capabilities ?? null;
+}
+
+const SHELL_VERSION_PATTERN = /^\d+\.\d+\.\d+([-+][\w.]+)?$/;
+
+/**
+ * The Electron shell's own version (`0.2.9`), which is not the web bundle's
+ * build id. Null in a browser, in a shell that predates
+ * `capabilities.version`, and for anything not shaped like a semver: the value
+ * comes from a launch argument and ends up in a line people paste to support.
+ */
+export function desktopShellVersion(): string | null {
+  return sanitizeShellVersion(getDesktop()?.capabilities?.version);
+}
+
+/** The version if it is shaped like a semver, otherwise null. */
+export function sanitizeShellVersion(version: unknown): string | null {
+  return typeof version === "string" && SHELL_VERSION_PATTERN.test(version)
+    ? version
+    : null;
 }
 
 /**

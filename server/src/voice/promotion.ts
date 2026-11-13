@@ -352,8 +352,72 @@ export type PromotionRefusal =
    * `"dm"` reason — and none of the five promotion triggers may second-guess
    * it. Checked ahead of the budget so a conversation is never priced or
    * pinned to the SFU at all.
+   *
+   * The one exception is `blockShareSoundPromotion` below: a phone that can
+   * only send its share's sound on the SFU asks for the move itself.
    */
-  | "conversation";
+  | "conversation"
+  /**
+   * A share's sound asked for the move, and a seat in the room did not
+   * declare `voice-transport-changed`, so the move would hang it up. A sound
+   * is not worth a person: the share stays picture only.
+   */
+  | "seat-cannot-follow"
+  /**
+   * A share's sound asked for the move while somebody else in the room is
+   * already sharing. The Android app stops its own share when its room moves,
+   * so the move would trade one person's picture for another person's sound.
+   */
+  | "other-share-live";
+
+export interface ShareSoundPromotionGate {
+  /** `channels.voice_transport`, as the sharer's seat read it at join. */
+  channelOverride: VoiceRoomTransport | null;
+  /** The sharer's own socket declared `voice-transport-changed`. */
+  sharerFollows: boolean;
+  /**
+   * Live seats in the room, other than the sharer, whose socket did NOT
+   * declare `voice-transport-changed`. Orphans are not counted: a refresh in
+   * flight rejoins onto whatever the room is pinned to.
+   */
+  seatsThatCannotFollow: number;
+  /** Other people sharing a screen in the room right now. */
+  othersSharing: number;
+}
+
+/**
+ * Whether a phone's share may move its mesh room to the SFU so the share goes
+ * out with its sound (`share_sound_promotion`, the `audioNeedsSfu` field on
+ * `set-sharing-screen`).
+ *
+ * Every other trigger moves a room because the mesh ran out of something. This
+ * one moves it for a feature, so it yields to anybody it would cost: a seat
+ * that would be hung up, a share that would be stopped, an operator's explicit
+ * "Small, peer-to-peer". A refusal leaves the share exactly where it was
+ * before this existed, on mesh, picture only. The box's budget is the
+ * ordinary guard after this and is not repeated here.
+ *
+ * Unlike the size and cap triggers it IS allowed in a DM or group call. The
+ * `"dm"` pin is a guess about cost (a call between friends gains nothing from
+ * an SFU), and the person sharing has just told the server the guess is wrong
+ * for this call.
+ *
+ * Returns null when none applies.
+ */
+export function blockShareSoundPromotion(
+  gate: ShareSoundPromotionGate,
+): PromotionRefusal | null {
+  if (gate.channelOverride === "mesh") {
+    return "mesh-override";
+  }
+  if (!gate.sharerFollows || gate.seatsThatCannotFollow > 0) {
+    return "seat-cannot-follow";
+  }
+  if (gate.othersSharing > 0) {
+    return "other-share-live";
+  }
+  return null;
+}
 
 export interface JoinPromotionGate {
   /** `channels.voice_transport`: the operator's explicit choice, or null. */

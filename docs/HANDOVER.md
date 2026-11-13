@@ -4,6 +4,7 @@ This top section is the current state. The section after it (2026-10-12) and eve
 
 ## Where production is
 
+- **No Fly rollback any more (2026-10-22).** The Fly apps `pqp-api`, `pqp-worker` and `pqp-log-shipper` were destroyed, and `deploy-api-fly.yml`, `fly.toml`, `fly.worker.toml` and the rollback-only monitor checks were removed from the repo. The rollback plan is the box: `pqp-deploy <older sha>` by hand, the nightly R2 dump, `docs/deploy-vultr.md` section 7. Staging, `pqp-support` and `pqp-ambient` stay on Fly. Repo variable `DEPLOY_TARGET` must stay `vultr` (it gates the Vultr deploy).
 - **API:** Vultr box `216.238.126.103` behind Cloudflare, `/opt/pqp`, compose services `api-a`, `api-b`, `worker`, `caddy`. `ssh root@216.238.126.103` works from Rafael's Mac. Deploys: `deploy-api-vultr.yml` and `deploy-web.yml` after CI is green on `main`. `https://api.pqp.gg/ready` prints the deployed commit (`version`).
 - **Database:** Vultr managed Postgres. Agents read only (`~/.config/pqp/prod-db-readonly.env`, `PQP_DB_RO_URL`). The operator does writes and flag flips.
 - **Caddy was running a four week old config until today.** See "Caddy" below before touching `tools/api-host/Caddyfile`.

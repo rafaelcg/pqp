@@ -7,6 +7,7 @@ import { logEvent } from "../lib/log.js";
 import { parseCalendarDate, recordAgeDeclaration } from "./age-gate.js";
 import { updateCommunitySettings } from "./communities.js";
 import { createMessage } from "./messages.js";
+import { connectSandboxPayout } from "./bau-payments/service.js";
 import { mergePreferences } from "./preferences.js";
 import { assignRole, listRoles } from "./roles.js";
 import { createChannel, createServer } from "./servers.js";
@@ -129,6 +130,9 @@ export async function seedDevHall(options: { port: number }): Promise<void> {
   }
 
   await listAsCommunity(serverId);
+  await ensureBauPlusSandbox(serverId).catch((error: unknown) => {
+    console.error("[dev-seed] could not seed the Baú+ sandbox plan:", error);
+  });
 
   if (general) {
     await ensureSampleMessages(general, people);
@@ -220,6 +224,33 @@ async function listAsCommunity(serverId: string): Promise<void> {
     logEvent("dev-seed.community-skipped", {
       reason: error instanceof Error ? error.message : String(error),
     });
+  }
+}
+
+/**
+ * A Baú+ plan and a sandbox payout account, so the fan's pay flow can be
+ * walked locally. Inert until `bau_payments` (and the Baú and VIP flags) are
+ * on; written once, so a plan edited by hand survives the next boot.
+ */
+async function ensureBauPlusSandbox(serverId: string): Promise<void> {
+  const plan = await getPool().query(`SELECT 1 FROM bau_plans WHERE server_id = $1`, [serverId]);
+  if (!plan.rowCount) {
+    await getPool().query(
+      `INSERT INTO bau_plans (server_id, name, price_cents, perks)
+       VALUES ($1, 'VIP', 990, $2::jsonb)`,
+      [
+        serverId,
+        JSON.stringify([
+          "Todos os posts VIP do Baú, inteiros",
+          "A sala de voz só de VIP",
+          "Selo VIP do lado do teu nome",
+        ]),
+      ],
+    );
+  }
+  const payout = await getPool().query(`SELECT 1 FROM bau_payout_accounts WHERE server_id = $1`, [serverId]);
+  if (!payout.rowCount) {
+    await connectSandboxPayout(serverId, null, "Dev User");
   }
 }
 

@@ -1,8 +1,13 @@
 import { PANE_HEADER_REDESIGN, PANE_HEADER_TITLE_REDESIGN } from "@/components/ui/pane-header";
 import {
   bauPostPath,
+  communityLinksWithoutSupport,
+  communitySupportOf,
   parseCommunityLink,
+  parseCommunitySupport,
   type Channel,
+  type CommunityHomeMediaKind,
+  type CommunityLink,
   type Gif,
   type PublicUser,
   type Server,
@@ -10,16 +15,20 @@ import {
 import {
   CalendarClock,
   Eye,
+  Flag,
   Heart,
+  Image as ImageIcon,
   Link2,
   Lock,
   LockOpen,
   Menu as MenuIcon,
   MessageCircle,
   MoreHorizontal,
+  Paperclip,
   Pencil,
   Pin,
   PinOff,
+  Play,
   Plus,
   RotateCcw,
   Send,
@@ -45,9 +54,11 @@ import {
   CommunityIdentityRail,
   type CommunityIdentityDraft,
 } from "@/components/communities/community-identity-header";
+import { supportDraftOf } from "@/components/communities/community-support-field";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { GifPickerPanel } from "@/components/chat/gif-picker";
 import { GifAttachment } from "@/components/chat/message-list";
+import { ReportDialog, type ReportTarget } from "@/components/chat/report-dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -130,6 +141,14 @@ import {
 import { ComposeCover } from "./community-home-compose-cover";
 import { ComposeMobileRendition } from "./community-home-compose-mobile";
 import { UnlockedMedia } from "./community-home-media";
+import { VipUnlockCard } from "./community-home-vip-unlock";
+import { Badge } from "@/components/ui/badge";
+import { BauPlusMembershipStrip } from "@/components/bau-plus/bau-plus-membership-strip";
+import { BauPlusPayDialog } from "@/components/bau-plus/bau-plus-pay-dialog";
+import { BauPlusPaywall } from "@/components/bau-plus/bau-plus-paywall";
+import { onBauPayRequest, onBauPlusUpdate, takeBauPayRequest } from "@/lib/bau-plus/updates";
+import { useBauOffer } from "@/lib/bau-plus/use-bau-offer";
+import { requestSettingsSection } from "@/lib/settings-request";
 import { BauShareButton } from "./community-home-share-public";
 import {
   ComposeTranslationNote,
@@ -321,7 +340,10 @@ function identityDraftFrom(server: Server): CommunityIdentityDraft {
   return {
     tagline: server.communityTagline ?? "",
     about: server.communityAbout ?? "",
-    linkUrls: communityLinksOf(server).map((link) => link.url),
+    linkUrls: communityLinksWithoutSupport(communityLinksOf(server)).map(
+      (link) => link.url ?? "",
+    ),
+    supportText: supportDraftOf(communitySupportOf(communityLinksOf(server))),
   };
 }
 
@@ -334,7 +356,13 @@ function identityDraftDirty(
     (draft.tagline.trim() || null) !== (server.communityTagline ?? null) ||
     (draft.about.trim() || null) !== (server.communityAbout ?? null) ||
     JSON.stringify(links) !==
-      JSON.stringify(communityLinksOf(server).map((link) => link.url))
+      JSON.stringify(
+        communityLinksWithoutSupport(communityLinksOf(server)).map(
+          (link) => link.url,
+        ),
+      ) ||
+    draft.supportText.trim() !==
+      supportDraftOf(communitySupportOf(communityLinksOf(server)))
   );
 }
 
@@ -360,12 +388,28 @@ function defaultScheduleValue(): string {
 
 // -------------------------------------------------------------------- media
 
-function LockedMedia({ posterUrl }: { posterUrl: string | null }) {
+function LockedMedia({
+  posterUrl,
+  mediaKind,
+}: {
+  posterUrl: string | null;
+  /** From `post.lockedHint`: the plate takes the shape of the hidden media. */
+  mediaKind: CommunityHomeMediaKind | null;
+}) {
   const { t } = useTranslation();
+  const KindIcon =
+    mediaKind === "image" || mediaKind === "instagram"
+      ? ImageIcon
+      : mediaKind === "file"
+        ? Paperclip
+        : mediaKind
+          ? Play
+          : null;
   return (
     <div
       className="relative aspect-video overflow-hidden bg-surface-0"
       data-home-locked-media
+      data-home-locked-kind={mediaKind ?? undefined}
     >
       <div
         className="absolute inset-0 bg-[repeating-linear-gradient(135deg,var(--color-surface-3)_0_10px,transparent_10px_20px)] opacity-80"
@@ -380,6 +424,14 @@ function LockedMedia({ posterUrl }: { posterUrl: string | null }) {
         />
       ) : null}
       <div className="absolute inset-0 bg-ink/45" aria-hidden />
+      {KindIcon && (
+        <span
+          aria-hidden
+          className="absolute left-1/2 top-1/2 grid h-14 w-14 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-ink/70 text-paper backdrop-blur-sm"
+        >
+          <KindIcon className="h-6 w-6" />
+        </span>
+      )}
       <span
         className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-ink/85 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-paper redesign:normal-case redesign:tracking-normal redesign:text-[length:var(--badge-text)]"
         data-home-locked-badge
@@ -403,14 +455,49 @@ function LockedBodyBlur() {
 
 // ----------------------------------------------------------------- comments
 
+/**
+ * The comment's overflow menu. Today its only row is "Denunciar", offered to
+ * everybody but the author (the server refuses your own words anyway). The
+ * trigger is a quiet icon in the comment's header, the same weight as delete.
+ */
+function CommentMenu({ onReport }: { onReport: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <Menu
+      align="end"
+      items={[
+        {
+          id: "report",
+          label: t("communityHome.report.comment"),
+          icon: Flag,
+          onSelect: onReport,
+        },
+      ]}
+    >
+      <button
+        type="button"
+        className="shrink-0 rounded p-0.5 text-paper-muted hover:text-paper"
+        aria-label={t("communityHome.report.commentMenu")}
+        title={t("communityHome.report.commentMenu")}
+        data-home-comment-menu
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </Menu>
+  );
+}
+
 function CommentRow({
   comment,
   canDelete,
   onDelete,
+  onReport,
 }: {
   comment: CommunityHomeComment;
   canDelete: boolean;
   onDelete: () => void;
+  /** Absent for your own comment. */
+  onReport?: () => void;
 }) {
   const { t, locale } = useTranslation();
   return (
@@ -430,17 +517,20 @@ function CommentRow({
           <span className="shrink-0 text-[11px] text-paper-muted">
             {relativeDayLabel(comment.createdAt, t, locale)}
           </span>
-          {canDelete && (
-            <button
-              type="button"
-              className="ml-auto shrink-0 rounded p-0.5 text-paper-muted hover:text-danger redesign:rounded-full redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
-              aria-label={t("communityHome.comments.delete")}
-              title={t("communityHome.comments.delete")}
-              onClick={onDelete}
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden />
-            </button>
-          )}
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {onReport && <CommentMenu onReport={onReport} />}
+            {canDelete && (
+              <button
+                type="button"
+                className="shrink-0 rounded p-0.5 text-paper-muted hover:text-danger redesign:rounded-full redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
+                aria-label={t("communityHome.comments.delete")}
+                title={t("communityHome.comments.delete")}
+                onClick={onDelete}
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            )}
+          </span>
         </div>
         {/* A comment that is nothing but a GIF link is media, not prose —
             the same rule chat uses, and the same renderer. */}
@@ -482,6 +572,7 @@ function CommentsBlock({
   const [error, setError] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   /**
    * Which way the GIF panel opens. A comment box can sit anywhere in a
    * scrolling feed, unlike the chat composer which is always at the bottom,
@@ -583,8 +674,17 @@ function CommentsBlock({
     }
   }
 
+  function reportComment(comment: CommunityHomeComment) {
+    setReportTarget({
+      kind: "bau_comment",
+      commentId: comment.id,
+      subjectName: comment.author.displayName,
+    });
+  }
+
   return (
     <div className="mt-3 border-t border-ink-4/60 pt-3 redesign:border-[color:var(--card-border)] redesign:pt-4" data-home-comments>
+      <ReportDialog target={reportTarget} onClose={() => setReportTarget(null)} />
       {!expanded && teasers.length > 0 && (
         <ul className="space-y-1.5" data-home-comment-teaser>
           {teasers.map((comment) => (
@@ -592,9 +692,14 @@ function CommentsBlock({
               key={comment.id}
               className="rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--card-row-hover)] redesign:text-[0.8125rem]"
             >
-              <p className="font-semibold text-paper redesign:text-text">
-                {comment.author.displayName}
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="min-w-0 flex-1 truncate font-semibold text-paper redesign:text-text">
+                  {comment.author.displayName}
+                </p>
+                {comment.author.id !== me.id && (
+                  <CommentMenu onReport={() => reportComment(comment)} />
+                )}
+              </div>
               {gifMessageMedia(comment.body) ? (
                 <GifAttachment media={gifMessageMedia(comment.body)!} />
               ) : (
@@ -613,6 +718,11 @@ function CommentsBlock({
               comment={comment}
               canDelete={canManageServer || comment.author.id === me.id}
               onDelete={() => void remove(comment)}
+              onReport={
+                comment.author.id === me.id
+                  ? undefined
+                  : () => reportComment(comment)
+              }
             />
           ))}
         </ul>
@@ -752,6 +862,19 @@ type PostCardProps = {
   onForward?: (post: CommunityHomePost) => void;
   /** Followed from a permalink or a chat card: ring it for a moment. */
   highlighted?: boolean;
+  /**
+   * The server's support link (`communitySupportOf`): what the locked card's
+   * "Apoiar" opens. Absent or null and the card has no button.
+   */
+  support?: CommunityLink | null;
+  /** Funnel events for the locked card; see `VipUnlockCard`. */
+  onSupportView?: () => void;
+  onSupportClick?: () => void;
+  /**
+   * Baú+: what a locked card shows instead of the support-link card when the
+   * server sells VIP in pqp (`BauPlusPaywall`). Absent, the card is as before.
+   */
+  unlock?: ReactNode;
 };
 
 /**
@@ -783,10 +906,15 @@ export function PostCard({
   onCopyLink,
   onForward,
   highlighted = false,
+  support = null,
+  onSupportView,
+  onSupportClick,
+  unlock,
 }: PostCardProps) {
   const { t, locale } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const [liking, setLiking] = useState(false);
   // An automatic translation can be flipped back to the author's words, per
   // post, and the choice lasts the session. The lock is not involved: the API
@@ -822,6 +950,18 @@ export function PostCard({
         onCopyLink ||
         onForward,
     );
+  // Denunciar, for anybody who READS the post and did not write it. The server
+  // enforces the same rules (a locked post, a draft and your own post are all
+  // a 404), so this only keeps the button from offering what would fail.
+  const canReport =
+    mode === "feed" &&
+    post.status === "published" &&
+    !locked &&
+    post.author.id !== me.id;
+  const showCardMenu = showStaffMenu || canReport;
+  // A member's menu is one row, so it only nudges the first line clear of the
+  // corner button instead of narrowing the whole card the way staff's does.
+  const memberMenuOnly = canReport && !showStaffMenu;
 
   useEffect(() => {
     if (!confirmDelete) {
@@ -867,12 +1007,17 @@ export function PostCard({
       data-home-post-status={post.status}
       data-home-post-locked={locked ? "1" : "0"}
     >
-      {showLockPlate && <LockedMedia posterUrl={posterUrl} />}
+      {showLockPlate && (
+        <LockedMedia
+          posterUrl={posterUrl}
+          mediaKind={post.lockedHint?.mediaKind ?? null}
+        />
+      )}
       {showMedia && post.media ? (
         <UnlockedMedia
           media={post.media}
           flush
-          reserveCorner={showStaffMenu}
+          reserveCorner={showCardMenu}
           captions={
             post.captions && !isPreview
               ? {
@@ -885,7 +1030,7 @@ export function PostCard({
           }
         />
       ) : null}
-      {showStaffMenu && (
+      {showCardMenu && (
         <div
           className={cn(
             "absolute z-10",
@@ -941,7 +1086,7 @@ export function PostCard({
                 {t("communityHome.drafts.unschedule")}
               </button>
             )}
-            {onForward && post.status === "published" && (
+            {showStaffMenu && onForward && post.status === "published" && (
               <button
                 type="button"
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text text-paper-muted hover:bg-ink-3 hover:text-paper"
@@ -1045,6 +1190,20 @@ export function PostCard({
                 {t("communityHome.compose.edit")}
               </button>
             )}
+            {canReport && (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setReportOpen(true);
+                }}
+                data-home-report
+              >
+                <Flag className="h-3.5 w-3.5" aria-hidden />
+                {t("communityHome.report.post")}
+              </button>
+            )}
             {onDelete &&
               (confirmDelete ? (
                 <button
@@ -1071,15 +1230,33 @@ export function PostCard({
         </div>
       )}
 
+      {reportOpen && (
+        <ReportDialog
+          target={{ kind: "bau_post", postId: post.id, subjectName: null }}
+          onClose={() => setReportOpen(false)}
+        />
+      )}
+
       {/* Under the redesign only the title makes room for the menu, so the
           footer and the comment row run to the card's own edge. */}
       <div className={cn("p-5", showStaffMenu && "pr-12 redesign:pr-5")}>
         {view.title && (
-          <h2 className={cn("break-words font-display text-2xl font-bold leading-snug tracking-tight text-text", showStaffMenu && "redesign:pr-8")}>
+          <h2
+            className={cn(
+              "break-words font-display text-2xl font-bold leading-snug tracking-tight text-text",
+              memberMenuOnly && "pr-6",
+              showStaffMenu && "redesign:pr-8",
+            )}
+          >
             {view.title}
           </h2>
         )}
-        <p className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-text-tertiary">
+        <p
+          className={cn(
+            "mt-1.5 flex flex-wrap items-center gap-2 text-sm text-text-tertiary",
+            memberMenuOnly && !view.title && "pr-6",
+          )}
+        >
           <span>
             {isPreview
               ? t("communityHome.compose.previewNow")
@@ -1095,8 +1272,8 @@ export function PostCard({
             </span>
           )}
           {/* The owner's sign that a post is members-only; the old look
-              shows it only in the menu. */}
-          {post.visibility === "members" && !locked && (
+              shows it only in the menu. With VIP on, the VIP chip below says it. */}
+          {post.visibility === "members" && !locked && !vipEnabled && (
             <span
               className={cn("hidden", badgeRedesignClasses("neutral", "tag"), "redesign:gap-1")}
               data-home-members-chip
@@ -1104,6 +1281,13 @@ export function PostCard({
               <Lock className="h-3 w-3" aria-hidden />
               {t("communityHome.visibility.members")}
             </span>
+          )}
+          {!locked && post.visibility === "members" && vipEnabled && (
+            // The reader holds VIP (or staff): say so, so a paid post never
+            // looks like any other.
+            <Badge variant="accent" data-home-vip-chip>
+              {t("communityHome.vipChip")}
+            </Badge>
           )}
           {post.pinned && (
             <span
@@ -1136,19 +1320,16 @@ export function PostCard({
                 <ChannelText text={summary} />
               </p>
             )}
-            <LockedBodyBlur />
-            <div className="mt-4">
-              <Button
-                type="button"
-                variant="secondary"
-                className="gap-1.5"
-                disabled
-                data-home-unlock-cta
-              >
-                <Lock className="h-3.5 w-3.5" aria-hidden />
-                {t("communityHome.unlockCta")}
-              </Button>
-            </div>
+            {unlock ?? (
+              <>
+                <LockedBodyBlur />
+                <VipUnlockCard
+                  support={support}
+                  onView={onSupportView}
+                  onSupportClick={onSupportClick}
+                />
+              </>
+            )}
           </>
         ) : (
           <>
@@ -1309,7 +1490,7 @@ const NO_COVER = {
   clearCover: false,
 } as const;
 
-const emptyCompose = (): ComposeState => ({
+export const emptyCompose = (): ComposeState => ({
   editingId: null,
   editingStatus: null,
   title: "",
@@ -1362,6 +1543,17 @@ function composeMainIsVideo(state: ComposeState): boolean {
 /** Which main video the composer holds: the session upload, else the post's own. */
 function composeMainKey(state: ComposeState): string {
   return state.upload?.uploadId ?? `existing:${state.editingId ?? ""}`;
+}
+
+/**
+ * The React key of a picker that hangs off the main video: the main video's
+ * key under the picker's own name. The phone cut and the cover are siblings in
+ * the form, so keying both by the bare main key gave two children the same key
+ * and React duplicated or dropped one of them on every update (the phone
+ * button repeated down the card).
+ */
+function composeSlotKey(slot: "mobile" | "cover", state: ComposeState): string {
+  return `${slot}:${composeMainKey(state)}`;
 }
 
 /** The cut as the composer shows it: picked now, else the one on the post. */
@@ -1480,7 +1672,7 @@ function previewPost(
 
 type ComposeAction = "publish" | "draft" | "schedule" | "save";
 
-function ComposeCard({
+export function ComposeCard({
   state,
   setState,
   serverId,
@@ -1493,6 +1685,7 @@ function ComposeCard({
   customCoverEnabled,
   channels,
   announceChannel,
+  support = null,
   onDone,
   onCancelEdit,
 }: {
@@ -1509,6 +1702,8 @@ function ComposeCard({
   mobileRenditionEnabled: boolean;
   /** `bau_custom_cover` is on here: offer a cover (a frame or an image) for a video. */
   customCoverEnabled: boolean;
+  /** The server's support link, so the locked preview draws the real card. */
+  support?: CommunityLink | null;
   /** Channels the author can see: the `#` picker lists these. */
   channels: readonly Channel[];
   /**
@@ -2029,7 +2224,7 @@ function ComposeCard({
             // Keyed by the main video: a new main file remounts the picker,
             // which aborts a cut still uploading for the old one, so it can
             // never land beside a video it was not cut from.
-            key={composeMainKey(state)}
+            key={composeSlotKey("mobile", state)}
             serverId={serverId}
             current={composeMobile(state)}
             onUploaded={(uploaded, previewUrl) => {
@@ -2065,7 +2260,7 @@ function ComposeCard({
             // Keyed by the main video, like the phone cut: a new main file
             // remounts the picker, which aborts a cover still uploading for
             // the old one.
-            key={composeMainKey(state)}
+            key={composeSlotKey("cover", state)}
             serverId={serverId}
             videoUrl={
               state.upload ? state.uploadPreviewUrl : (state.existingMedia?.url ?? null)
@@ -2312,6 +2507,7 @@ function ComposeCard({
                 locked
                 canManageServer={false}
                 vipEnabled={vipEnabled}
+                support={support}
                 mode="preview"
               />
             </div>
@@ -2508,6 +2704,26 @@ export function CommunityHomeFeed({
   /** A permalink to a post older than the page the feed loads. */
   const [focusedExtra, setFocusedExtra] = useState<CommunityHomePost | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  // What the locked VIP card's "Apoiar" opens: the creator's own link, held on
+  // the server row (`communityLinks`, kind `support`). Null and the card has no
+  // button, only the line that says who to ask.
+  const supportLink = communitySupportOf(communityLinksOf(server));
+  // TODO(creator-hub): report these through `recordCreatorHubEvent` (the
+  // first-party funnel counters, another PR) once it is on main: a `view` when a
+  // locked card with a support link is drawn, a `click` when "Apoiar" is
+  // pressed. That helper did not exist when this was written and a second one
+  // here would collide with it, so the card exposes the two callbacks and
+  // nothing is recorded yet.
+  const onSupportView = undefined;
+  const onSupportClick = undefined;
+  // Baú+: the server sells VIP inside pqp. Web and desktop only (this is the
+  // web client; the phone apps have their own Baú with no price on it).
+  const bau = useBauOffer(serverId, vipEnabled && feedAvailable);
+  const bauOffer = bau.offer;
+  const [payOpen, setPayOpen] = useState(false);
+  const [payPostId, setPayPostId] = useState<string | null>(null);
+  const [bauWelcome, setBauWelcome] = useState(false);
+  const bauSelling = Boolean(bauOffer?.enabled && bauOffer.plan);
   const [identityEditing, setIdentityEditing] = useState(false);
   const [identityDraft, setIdentityDraft] = useState<CommunityIdentityDraft>(
     () => identityDraftFrom(server),
@@ -2571,6 +2787,74 @@ export function CommunityHomeFeed({
       void load(true);
     }
   }, [refreshSignal, load]);
+
+  // A change to the fan's own membership on this server (paid elsewhere,
+  // expired, refunded) can unlock or lock posts: read the feed again.
+  useEffect(
+    () =>
+      onBauPlusUpdate((message) => {
+        if (message.serverId === serverId) {
+          void load(true);
+        }
+      }),
+    [serverId, load],
+  );
+
+  const openBauPay = useCallback((postId: string | null) => {
+    setPayPostId(postId);
+    setPayOpen(true);
+  }, []);
+
+  // "Renovar" from Configurações, Assinaturas lands here with a request.
+  useEffect(() => {
+    if (bauSelling && takeBauPayRequest(serverId)) {
+      openBauPay(null);
+    }
+    return onBauPayRequest((requested) => {
+      if (requested === serverId && bauSelling && takeBauPayRequest(serverId)) {
+        openBauPay(null);
+      }
+    });
+  }, [serverId, bauSelling, openBauPay]);
+
+  const reloadBau = bau.reload;
+  const onBauPaid = useCallback(() => {
+    setBauWelcome(true);
+    void load(true);
+    void reloadBau();
+  }, [load, reloadBau]);
+
+  const closeBauPay = useCallback(() => {
+    setPayOpen(false);
+    const postId = payPostId;
+    if (postId && bauWelcome) {
+      // Back to the post they wanted, now open.
+      window.setTimeout(() => {
+        document
+          .querySelector(`[data-home-post-id="${CSS.escape(postId)}"]`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setHighlightId(postId);
+        window.setTimeout(
+          () => setHighlightId((current) => (current === postId ? null : current)),
+          2400,
+        );
+      }, 60);
+    }
+  }, [payPostId, bauWelcome]);
+
+  function renderUnlock(post: CommunityHomePost): ReactNode {
+    if (!bauSelling || !bauOffer) {
+      return undefined;
+    }
+    return (
+      <BauPlusPaywall
+        offer={bauOffer}
+        serverName={serverName}
+        hint={post.lockedHint}
+        onStart={() => openBauPay(post.id)}
+      />
+    );
+  }
 
   useEffect(() => {
     if (!notice) {
@@ -2658,6 +2942,11 @@ export function CommunityHomeFeed({
         return;
       }
     }
+    const supportText = identityDraft.supportText.trim();
+    if (supportText && !parseCommunitySupport(supportText)) {
+      setIdentityError(t("communities.support.invalid"));
+      return;
+    }
     setIdentitySaving(true);
     setIdentityError(null);
     try {
@@ -2669,6 +2958,7 @@ export function CommunityHomeFeed({
         about:
           identityDraft.about.trim() === "" ? null : identityDraft.about.trim(),
         links: preparedLinks.map((url) => ({ url })),
+        support: supportText === "" ? null : supportText,
       });
       onServerUpdated?.({
         ...server,
@@ -3221,6 +3511,7 @@ export function CommunityHomeFeed({
                 customCoverEnabled={customCoverEnabled}
                 channels={channels}
                 announceChannel={announceChannel}
+                support={supportLink}
                 onDone={onComposed}
                 onCancelEdit={() => {
                   setCompose(emptyCompose());
@@ -3275,6 +3566,35 @@ export function CommunityHomeFeed({
                   serverName={serverName}
                   vipEnabled={vipEnabled}
                   onDismiss={onDismissIntro}
+                />
+              )}
+
+              {bauOffer?.membership && (
+                <BauPlusMembershipStrip
+                  offer={bauOffer}
+                  serverName={serverName}
+                  serverIconUrl={server.iconUrl ?? null}
+                  welcome={bauWelcome && !payOpen}
+                  onDismissWelcome={() => setBauWelcome(false)}
+                  onPay={() => openBauPay(null)}
+                  onManage={() => requestSettingsSection("subscriptions")}
+                  onChanged={() => void bau.reload()}
+                />
+              )}
+              {bauOffer && bauSelling && (
+                <BauPlusPayDialog
+                  open={payOpen}
+                  offer={bauOffer}
+                  serverName={serverName}
+                  serverIconUrl={server.iconUrl ?? null}
+                  onClose={closeBauPay}
+                  onPaid={onBauPaid}
+                  onOfferStale={() => void bau.reload()}
+                  primaryAfterPaid={payPostId ? "post" : "feed"}
+                  onOpenMembership={() => {
+                    setPayOpen(false);
+                    requestSettingsSection("subscriptions");
+                  }}
                 />
               )}
 
@@ -3394,6 +3714,10 @@ export function CommunityHomeFeed({
                   )}
                   canManageServer={canManageServer}
                   vipEnabled={vipEnabled}
+                  support={supportLink}
+                  onSupportView={onSupportView}
+                  onSupportClick={onSupportClick}
+                  unlock={renderUnlock(post)}
                   onPatch={(patch) => patchPost(post.id, patch)}
                   onEdit={canManageServer ? beginEdit : undefined}
                   onDelete={

@@ -41,6 +41,12 @@
 		# at error level on every request now that this file is the one
 		# actually running (2026-10-15). Nothing is lost by turning it off.
 		protocols h1 h2
+		# Per-handler request counters and latency, served by the `:2020`
+		# site at the bottom of this file and scraped by Alloy
+		# (tools/api-host/config.alloy). Off by default in Caddy; this is the
+		# whole switch. It adds a few hundred counters in memory and nothing
+		# on the request path worth measuring.
+		metrics
 	}
 }
 
@@ -184,3 +190,26 @@ api.pqp.gg {
 #
 # 	encode gzip zstd
 # }
+
+# --- Caddy's own metrics, for Alloy -----------------------------------------
+# Request rate, status codes and latency of everything this box serves
+# (capacity review 2026-10-22, section G, item 3). A SEPARATE listener on 2020
+# rather than the admin API on 2019: the admin API can rewrite this config and
+# stays on the container's loopback; this site can only be read.
+#
+# NOT PUBLIC, three independent reasons, each enough alone:
+#   1. compose.yaml publishes only 80 and 443 for caddy, so 2020 has no host
+#      or internet mapping at all. Alloy runs on the host and reaches it at
+#      the container's address on the Docker bridge (config.alloy,
+#      discovery.relabel "caddy"), which the internet cannot route to.
+#   2. ufw on this box allows 80 and 443 from Cloudflare's ranges, and SSH
+#      (provision.sh), nothing else.
+#   3. The public site above is `api.pqp.gg`, a named host on 443; a request
+#      for any host on 80 or 443 never reaches a listener on 2020.
+# It is reachable from the other containers on the compose network, which can
+# read counters and nothing else. `http://` keeps Caddy's automatic HTTPS off
+# for it. Do not add a `ports:` line for 2020 to compose.yaml, and do not
+# proxy `/metrics` from the public site.
+http://:2020 {
+	metrics
+}

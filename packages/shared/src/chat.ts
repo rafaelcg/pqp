@@ -37,6 +37,7 @@ import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
 import { storiesUpdateFrameSchema } from "./stories.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
+import { bauPlusUpdateSchema } from "./bau-payments.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { serverRemovedSchema } from "./moderation.js";
 import { serverOrderUpdateSchema } from "./server-order.js";
@@ -60,6 +61,18 @@ import {
   forumPostRemovedSchema,
   forumPostUpsertSchema,
 } from "./forums.js";
+// --- jam ---
+import {
+  JAM_FRAME_TYPES,
+  jamSongCreatedSchema,
+  jamSongDeletedSchema,
+  jamSongUpdatedSchema,
+  jamTrackAddedSchema,
+  jamTrackDeletedSchema,
+  jamTrackUpdatedSchema,
+  jamTrackVotesSchema,
+  type JamFrame,
+} from "./jam.js";
 import { chanceRequestSchema, chanceResultSchema } from "./chance.js";
 import { pollRequestSchema, pollSchema } from "./polls.js";
 import { AUTOMOD_CUSTOM_MESSAGE_MAX } from "./automod.js";
@@ -712,6 +725,15 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   forumPostUpsertSchema,
   forumPostRemovedSchema,
   forumConfigUpdateSchema,
+  // --- jam --- songs and tracks of a jam channel (`jam.ts`), fanned out to
+  // everybody viewing it. Nothing about the person is on any of them.
+  jamSongCreatedSchema,
+  jamSongUpdatedSchema,
+  jamSongDeletedSchema,
+  jamTrackAddedSchema,
+  jamTrackUpdatedSchema,
+  jamTrackDeletedSchema,
+  jamTrackVotesSchema,
   // A refusal is a chat outcome: it is sent over the chat socket, in response
   // to a chat action, and it describes what happened to a message somebody
   // tried to send. It belongs in the type the chat socket is declared to carry,
@@ -746,6 +768,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   watchPartyUpdateSchema,
   // Per person, like `friend-activity`: see `watch-party-waitlist.ts`.
   watchPartyWaitlistApprovedSchema,
+  // Per person: one of the account's own Baú+ memberships moved (paid,
+  // expired, refunded...). See `bau-payments.ts`.
+  bauPlusUpdateSchema,
   // Per person too: see `moderation.ts`, and its absence from the list below.
   serverRemovedSchema,
   // Per person too: the account's own sockets, see `server-order.ts`.
@@ -938,6 +963,11 @@ export const CHAT_SERVER_MESSAGE_TYPES = [
   // they reach anybody.
   "voice-note-transcript",
   "voice-note-updated",
+  // --- jam --- songs and tracks of a jam channel (`jam.ts`), for everybody
+  // viewing the channel. Shared by every viewer (nothing about the person), so
+  // the channel relay is the right audience; without these lines a song added
+  // on the sibling instance never reaches the viewers here.
+  ...JAM_FRAME_TYPES,
 ] as const;
 
 export function isChatServerMessage(message: {
@@ -999,4 +1029,4 @@ export const voiceNoteFrameSchema = z.discriminatedUnion("type", [
 export type VoiceNoteFrame = z.infer<typeof voiceNoteFrameSchema>;
 
 /** Everything the channel relay may fan out: `CHAT_SERVER_MESSAGE_TYPES`. */
-export type ChannelFanoutFrame = ChatServerMessage | VoiceNoteFrame;
+export type ChannelFanoutFrame = ChatServerMessage | VoiceNoteFrame | JamFrame;

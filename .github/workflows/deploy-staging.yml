@@ -1,6 +1,6 @@
 name: Deploy Staging
 
-# Staging twin of deploy-web.yml + deploy-api-fly.yml, deliberately simpler.
+# Staging twin of deploy-web.yml + deploy-api-vultr.yml, deliberately simpler.
 # See docs/STAGING.md for what staging is and how to use it.
 #
 # Two triggers:
@@ -37,17 +37,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history for the sitemap's lastmod; see deploy-web.yml.
           fetch-depth: 0
 
       - name: Setup pnpm
         # Version comes from the root package.json "packageManager" field.
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: pnpm
@@ -147,7 +147,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Resolve commit
         id: commit
@@ -166,7 +166,7 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master 2026-04-08
 
       # --ha=false and rolling for the same reason as prod: the server is
-      # single-process by design (see fly.staging.toml / fly.toml headers), and
+      # single-process by design (see the fly.staging.toml header), and
       # even on staging two machines would be two disjoint chat servers.
       # -e APP_VERSION stamps the commit so /health can report it and the verify
       # step below can read it back.

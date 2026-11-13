@@ -44,7 +44,7 @@ the six separate contact addresses (one person cannot staff six inboxes);
 personally); `{{MARCO_CIVIL_NOTICE_PROCEDURE}}` (it assumed a Brazilian entity);
 `{{TRANSFER_SAFEGUARD}}` (there are no negotiated DPAs — the pages now say so);
 `{{BR_MIGRATION_TARGET}}` (no committed date exists); and the four SLA numbers
-(§2).
+(§2; only the 24 hour report review is published now).
 
 ### Identity — **founder decides, one edit**
 
@@ -91,8 +91,8 @@ live. **Check the actual production environment, not the repo.**
 
 | Token | What it is | How to confirm | Pages |
 |---|---|---|---|
-| `{{HOSTING_PROVIDER}}` | Who runs the API and Postgres | `docs/DEPLOY.md` says Railway; `fly.toml` targets Fly.io. Confirm which is serving `api` today | privacy |
-| `{{HOSTING_REGION}}` | The region it runs in | Railway US East (Virginia) vs Fly `gru` (São Paulo). `fly.toml:36` sets `primary_region = "gru"` | privacy |
+| `{{HOSTING_PROVIDER}}` | Who runs the API and Postgres | Production API and worker run on a Vultr box (`docs/deploy-vultr.md`); Fly was retired 2026-10-22 and Railway long before. Confirm before filling this in | privacy |
+| `{{HOSTING_REGION}}` | The region it runs in | Vultr `gru` (São Paulo) for the API box; the database and the media boxes are Vultr too (`docs/deploy-vultr.md`, `docs/DB_RUNBOOK.md`) | privacy |
 | `{{OBJECT_STORAGE_PROVIDER}}` | Attachment storage vendor and region | Whatever `S3_ENDPOINT` points at (Cloudflare R2 in the hosted plan) | privacy |
 | `{{ATTACHMENTS_STATUS}}` | Literally "enabled" or "disabled" | Attachments are off entirely unless `S3_*` is set — `docs/ATTACHMENTS.md`. Per `MEMORY`, they were merged but not switched on in production | privacy |
 | `{{TURN_PROVIDER}}` | The STUN/TURN vendor(s) actually configured | `server/src/services/ice.ts` resolves in order: static `TURN_*` → Cloudflare Realtime → Metered/Open Relay. Name the one in use | privacy, cookies |
@@ -105,25 +105,37 @@ ever exists, revisit — see §7.
 
 ---
 
-## 2. Response times — **no SLA is published, deliberately**
+## 2. Response times: one published number, 24 hours for reports
 
-There are no SLA tokens any more, and the Terms page no longer contains a
-number. A published SLA is a public promise; one person with a day job cannot
-keep a 4-hour urgent target at 3am on a Sunday, and a missed promise is worse
-than an honest absence of one.
+The Terms publish exactly one response time, and it is the one App Review's
+Guideline 1.2 asks for: **we review every report within 24 hours.** The other
+SLA numbers (urgent targets, appeal turnaround) stay unpublished, because a
+missed promise is worse than an honest absence of one. The 24 hour rule is a
+commitment now, so it has to be kept, including weekends: see
+[`CONTENT_SAFETY.md`](./CONTENT_SAFETY.md) "Reports: the 24 hour rule" (added by
+the report-age alert PR) for how the queue is watched.
 
-**What the Terms now say** — keep this wording and this operating posture in
-sync:
+**What the Terms now say** (acceptable use, "Reporting abuse" and
+"Moderation and enforcement"; keep this wording and this operating posture in
+sync):
 
 | Area | Published position |
 |---|---|
-| Reports generally | One person reads them; acted on as fast as one person reasonably can, *usually within a few days*; no guarantee, and longer when the operator is away |
+| Zero tolerance | pqp has zero tolerance for objectionable content and abusive users. Anyone can report content or a person from inside the app and can block a person |
+| Reports generally | We review every report within 24 hours |
+| Confirmed violation | The content is removed and so is the account that posted it |
 | Priority | Reports involving minors, imminent physical danger, or non-consensual intimate images go to the front of the queue |
 | **CSAM / sexualisation of a minor** | **Removed on sight, account terminated, reported to the competent authorities. No queue, no timeline caveat, no appeal.** This is the one commitment with no proportionality argument attached to it |
 | Appeals | Read and answered when possible; no promised turnaround; explicitly *not* reviewed by an independent person, because there is no second person |
 
-"Usually within a few days" is a description, not a target. If it stops being
-true, change the sentence rather than quietly missing it.
+Server-queue reports are covered too: one a server's owner closes leaves a copy
+in the instance queue with its original clock, and one the owner leaves open is
+in the same list and the same age alert (`CONTENT_SAFETY.md` "Where a report
+lands").
+
+If the 24 hours stops being true (the operator away, a backlog), fix the
+coverage, do not quietly miss it, and do not soften the sentence without
+changing the Terms and the store reply that cites it.
 
 Statutory timelines are **not chosen and not negotiable**:
 
@@ -662,7 +674,7 @@ claimant would plausibly bother. Until then, keep the list; do not act on it.
 9. **pt-BR versions** — still outstanding (§6), and when they exist, which
    language governs if the two ever diverge.
 
-**Not on this list, on purpose:** an SLA (§2), a DPO, a registered address, six
+**Not on this list, on purpose:** any SLA beyond the 24 hour report review (§2), a DPO, a registered address, six
 contact aliases, and a negotiated DPA. Those were removed rather than deferred,
 because a hobby project cosplaying as a company invites expectations it cannot
 meet, and every unmet promise is a liability the wording itself created.

@@ -23,18 +23,26 @@ struct ConversasView: View {
     /// Friends' stories, under the title and above search: Amigos only.
     @State private var friendStories = StoryStripModel(scope: .friends)
 
+    /// Every conversation except a 1:1 with somebody this account blocked, and
+    /// with a blocked person's newest line taken off a group's preview. Reads
+    /// `session.blocked`, so a block made over this screen empties the row at
+    /// once. See `BlockRules`.
+    private var allConversations: [DmSummary] {
+        BlockRules.visible(model.conversations, blocked: session.blocked.ids)
+    }
+
     private var visible: [DmSummary] {
-        ConversationList.filter(model.conversations, query: query, filter: filter)
+        ConversationList.filter(allConversations, query: query, filter: filter)
     }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             Palette.ink.ignoresSafeArea()
 
-            if model.isLoading && model.conversations.isEmpty && !model.hasLoadedOnce {
+            if model.isLoading && allConversations.isEmpty && !model.hasLoadedOnce {
                 ProgressView().tint(Palette.signal)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.conversations.isEmpty {
+            } else if allConversations.isEmpty {
                 ScrollView {
                     ConversationsEmptyHero(
                         friends: model.friends,
@@ -301,7 +309,7 @@ struct ConversasView: View {
         let friendIds = Set(model.friends.map(\.id))
         var seen = Set<String>()
         var people: [PublicUser] = []
-        for conversation in model.conversations where conversation.kind == "dm" {
+        for conversation in allConversations where conversation.kind == "dm" {
             guard let person = conversation.participants.first,
                   !friendIds.contains(person.id),
                   seen.insert(person.id).inserted

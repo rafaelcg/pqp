@@ -115,7 +115,36 @@ both in `docs/CAPACITY.md` §"The video budget is per box"),
 `USER_STATS` (`user_stats`, default **on**: the per-person counts the
 Retrospectiva is built from; off stops every new write, nothing is deleted;
 see `server/src/services/user-stats.ts`),
-`COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
+`DEFAULT_TEXT_FILTER` (`default_text_filter`, **per server**, default **off**,
+only `true` turns the variable on: the built-in text filter, a short list of
+slurs and threats (kill-yourself, rape threats, child sexual content) in
+English, Portuguese and Spanish, refused on server messages and edits, forum
+posts, stories, Baú comments and posts and profile names with no AutoMod rule
+written by anybody; insults and everyday swearing are not on it, and direct
+and group messages are never read by it. Off by default: nothing is filtered
+until the operator turns it on (globally or for one server, from the
+dashboard) or a server's owner turns it on for their own server in AutoMod
+settings (`server_text_filter_settings`, either direction, the owner's choice
+wins for that server). A profile name has no server and follows only the global
+answer. The App Review server has it on. Served as
+`GET /api/servers/:id/automod/baseline`.
+`docs/CONTENT_SAFETY.md` §"The built-in text filter"),
+`COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`
+(`community_home_vip`, **per server**: the creator-hub pilot turns VIP on for
+one server at a time with `PUT /api/admin/flag-overrides` or the dashboard's
+per-server switch; the variable stays the default and a global row still
+decides for every server without an override, so with no row nothing changes.
+Still needs the global `community_home`. Served as `vipEnabled` on
+`GET /api/community-home/config?serverId=`; without `serverId` the answer is the
+global one, which is what phones ask today, see `docs/COMMUNITY_HOME.md`),
+`BAU_PAYMENTS` (`bau_payments`, **per server**, default off: Baú+, a fan pays
+the creator for VIP inside pqp, Pix first; also needs `community_home`,
+`community_home_vip` for that server, an active plan, a connected payout
+account and a provider (`BAU_PAYMENTS_PROVIDER`, which is not a flag: unset is
+the sandbox under the dev bypass and off everywhere else). Off stops NEW
+checkouts only; months already paid keep running and still expire on their
+date. Served as `enabled` on `GET /api/servers/:id/bau-plus`; see
+`docs/BAU_PAYMENTS.md`),
 `PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below),
 `COMMUNITY_HOME_TRANSLATION` (`community_home_translation`, **per server**,
 default off; automatic translation of Baú posts, which also needs
@@ -208,6 +237,43 @@ config refresh, mid-call, no reload. The same answer is the client's proof that
 the API takes `mediaQuality.audioHealth` on a call rating, which feeds
 `callRatings.audioHealthSinceBoot` on `GET /api/admin/metrics` and the Faro
 event `voice.audioHealth`.
+
+Born as a flag (no old reader): `VOICE_CALM_DETECTOR`
+(`voice_calm_detector`, default **on**, global, client-only, since 2026-11-05), the
+web call's speaking detector on a timer instead of every animation frame
+(`client/src/lib/speaking-clock.ts`, wired in `hooks/use-voice.ts`). The ring
+that lights a speaker, and the music ducking that follows it, were read inside a
+`requestAnimationFrame` callback: the display's refresh rate, 120 times a second
+on a ProMotion laptop, and the only thing waking an idle page in a quiet call.
+On: the same loop runs at 20 Hz (4 Hz while the window is hidden or minimized, so
+the ducking still follows speech), the analysers' smoothing is rescaled so a ring
+rises as fast as before (`analyserSmoothingFor`), and the voice-activity transmit
+gate keeps a 16 ms clock of its own while it has something to decide and the
+window is visible (50 ms interval as always when hidden). Nothing touches the
+audio, the mic, push-to-talk or what the server hears. Served as `calmDetector` on
+the global `GET /api/voice/config`; **unknown is off** (an API older than the flag
+sends no field, a failed ask keeps the last answer), and a flip reaches a call
+already running at the next config refresh, with no reload: the loop picks its
+clock again on every step. Off is the per-frame loop, byte for byte. Your own ring reads the
+local analyser at 20 Hz, which in voice-activity mode is already being read
+every 16 ms by the gate; in push-to-talk it can light a few tens of ms later than
+it used to. Measured in headless Chromium, alone in a silent mesh call
+(`client/bench/startup-and-call.mjs call 60`): 16.4 % of a core across the
+browser's processes with the frame loop, 11.5 % with the timer (GPU process 1.7 %
+to 0, the renderer's main thread 2.3 % to 0.8 %), 120 animation frames a second
+to none. What is left is the RNNoise worklet and the audio service. Only
+`false` / `0` / `off` turn the variable off.
+
+Born as a flag (no old reader): `VOICE_GATE` (`voice_gate`, default **on**,
+global, client-only), the adaptive gate after RNNoise in "Voz limpa"
+(`client/src/lib/voice-gate/`, `docs/NOISE_SUPPRESSION.md` §"The voice gate").
+Served as `voiceGate` on the global `GET /api/voice/config`; absent (an older
+API) is **on**, which is the code default, and only an explicit `false` is the
+kill switch. Off sends every running gate a bypass message (it stays in the
+chain as a wire and stops expanding), and no new one is built: Voz limpa is plain RNNoise again, mid-call, no rejoin, no
+microphone swap, on the next config refresh. Only `false` / `0` / `off` turn
+the variable off. Turn it off on reports of a voice that fades inside a
+sentence or a word that starts clipped.
 
 Born as a flag (no old reader): `CLEAN_VOICE_DEFAULT` (`clean_voice_default`,
 default **on**, global, client-only, since 2026-10-20), "Voz limpa" (RNNoise,
@@ -393,6 +459,31 @@ the merge that shipped the client (#866 into desktop 0.2.3);
 `server/src/lib/flag-client-contract.test.ts` now fails when a field the client
 reads from `/api/share/config`, or one a flag's `clientVia` names, is not on the
 server.
+
+Born as a flag (no old reader): `MAC_DESKTOP_SYSTEM_AUDIO`
+(`mac_desktop_system_audio`, default **on**, **global only**; `false` / `0` / `off` is the kill switch), the computer's sound
+on a screen share from the macOS desktop app (macOS 14.2+), served by
+`GET /api/share/config` as `macDesktopSystemAudio`. Only does anything in a
+desktop build whose preload publishes `capabilities.macShareAudio`; Chromium's
+CoreAudio Tap does the capture with its own audio process excluded, and the Mac
+asks the person for "System Audio Recording" the first time.
+`docs/DESKTOP.md` §"macOS share audio". Global for the same reason as the Linux
+flag: the client reads the config without a server. On by default (Rafael,
+2026-11-05) because a Mac share should carry sound like the other platforms
+(Windows 11, the phones); only Linux ships dark. Off, a Mac share is video only
+and the picker says sound is not available yet. Turn it off from controles →
+interruptores if the permission flow or the exclusion misbehaves; the page asks
+again before every share, so there is no reload and no desktop update.
+
+Born as a flag (no old reader): `SHARE_SOUND_PROMOTION`
+(`share_sound_promotion`, default **on**, **global only**, server only). A phone
+that can only send its share's sound on the voice server (the iOS app) says so
+on a new share in a mesh room (`audioNeedsSfu` on `set-sharing-screen`), and the
+server moves the room, a DM call included, through the ordinary promotion so the
+share goes out with its sound. Off returns before anything is read or logged:
+the share stays on mesh, picture only, exactly as before. Global because a DM
+call has no server to name. Read per share, so a flip takes effect on the next
+share. `docs/voice-backends.md` §"The share-sound trigger".
 
 Born as a flag (no old reader): `AUDIENCE_MODE` (`audience_mode`, default off,
 **per server**), "Modo plateia" in voice calls (`docs/plans/AUDIENCE_MODE.md`):
@@ -896,13 +987,71 @@ once it has done its job. Open tabs follow on the next config refresh (focus or
 10 min). `server/src/lib/flag-client-contract.test.ts` pins the field on both
 sides; `server/src/api/forum-flag.test.ts` pins the answer with rows.
 
+## `jam_channels` (per server)
+
+Jam channels: a channel type, `jam`, whose posts are songs made of recorded
+tracks that play together (`docs/JAM.md`, the wire contract in
+`packages/shared/src/jam.ts`). Behind `JAM_CHANNELS` (default off, **per
+server**, born as a flag). Served as `enabled` on
+`GET /api/jam/config?serverId=` (`server/src/lib/jam-config.ts`), beside
+`uploads` (object storage is configured here).
+
+Off gates **creating and changing**, never reading: `POST
+/api/servers/:id/channels` with `type: "jam"` answers 403 `jam_channels_off`,
+and so does creating or editing a song, asking for an upload, adding or editing
+a track, and voting. A jam and its songs stay readable and playable. The three
+removals (delete a song, delete a track, take a vote back) keep working, so
+turning it off freezes the feature without stranding a moderator or somebody's
+own recording. Nothing is hidden or deleted.
+
+Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "jam_channels", serverId, enabled: true }` or from controles →
+interruptores; `enabled: null` returns to the default. Open tabs follow on the
+next config refresh (focus or 10 min). Both phones leave a channel type they do
+not know out of the list (iOS `isListed`, Android `drawable`), so a jam channel
+is invisible there rather than a dead row. Before it goes on, the bucket's CORS
+policy has to allow GET and PUT from the app's origin (`docs/ATTACHMENTS.md`
+section 4), because the audio engine fetches the stems from the browser.
+`server/src/lib/flag-client-contract.test.ts` pins the route, the field and the
+create guard.
+
+## `jam_public` (global, default off)
+
+Public jams: songs anybody hears and watches at jam.pqp.gg without an account
+(`docs/JAM_PUBLIC.md`, the wire contract in `packages/shared/src/jam-public.ts`).
+Behind `JAM_PUBLIC` (only `true` turns it on), born as a flag. **Global**: a
+standalone public jam has no server and the website's visitor has none either.
+
+- **A legal category change.** Like `COMMUNITIES_ENABLED`, on is public content
+  to the open web. It goes on when Rafael says so, after
+  `docs/CONTENT_SAFETY.md` §"Public jams". One flag, no environment
+  acknowledgement on top: the dashboard flip is the decision.
+- **Served by** `GET /api/public/jams/config` -> `{ enabled }` and nothing else
+  (unauthenticated, never reads `Authorization`, its own address bucket,
+  `public, max-age=60`, 200 `{ enabled: false }` when off), and by
+  `GET /api/jam-public/config` (signed in: `enabled`, what this account may do,
+  whether storage is configured).
+- **Off is dark.** Every other `/api/public/jams*` route is not matched (the
+  401 an unknown path gets), every publishing write is 403 `jam_public_off`,
+  a non-member loses public access to a channel's song, and nothing about
+  `jam_channels` changes. The removals stay open (unpublish, a consent of
+  `no`, unlike, deleting a track), so off never strands somebody's own content.
+- **Read per request, nothing cached per process**, so a flip, an unpublish or
+  a takedown is in the next answer on both API containers; a shared cache in
+  front holds a list for at most 60 s and a song for 30 s.
+
+Turn it on from controles → interruptores, or `PUT /api/admin/flags
+{ key: "jam_public", enabled: true }`. Rollback is the same with `false`.
+Pinned by `server/src/api/jam-public.test.ts` (with the flag as a row, the way
+production sets it) and `server/src/lib/flag-client-contract.test.ts`.
+
 ## `apps` (per server)
 
 The apps platform: small interactive things (Locadora, a game room) that a person
 starts in a text or voice channel and others join from a live card in the
 timeline. Behind `APPS` (default off, **per server**, born as a flag). It is the
 first of the platform's gates: an app is also released by the operator per server
-(`server_apps.operator_enabled`), and Locadora needs `emulator_room` on top.
+(`server_apps.operator_enabled`, or for every server at once with the app's `default_operator_enabled`, see `docs/APPS.md` §"The operator's release"), and Locadora needs `emulator_room` on top.
 
 Off means nothing renders and every apps route answers 404, except
 `GET /api/apps/config?serverId=` (`enabled`), which answers `{ enabled: false }`
@@ -1131,3 +1280,34 @@ Turn it on from controles → interruptores, or `PUT /api/admin/flags
 next load of the queue. Pinned by `server/src/api/report-attachments.test.ts`
 (the route and the list) and `client/src/components/layout/report-attachments.test.tsx`
 (the card).
+
+## `age_gate_readback` (global, default ON, a kill switch)
+
+The age gate's read-back step: before the date of birth is sent, the dialog says
+it back in words in the person's language ("Tu nasceu em 3 de dezembro de 2008.
+Confere o dia, o mês e o ano.") with "Está certo" (sends) and "Corrigir" (back to
+the fields, values kept). Everybody gets the same screen, pass or block, so it
+reveals nothing the gate's own warning does not already say. Behind
+`AGE_GATE_READBACK` (default **on**, `false` / `0` / `off` is the rollback,
+global: the person is a sign-up with no server).
+
+Off is exactly the direct submit the dialog always had. It is not a rollout
+flag: on is the shipped behaviour, and the switch exists so a bad build of the
+step can be turned off live. It does not touch the server's plausibility floor
+(a date under 10 years back answers 400 `birth_date_implausible` and does not
+spend the attempt), which is not a flag: it only ever refuses dates that were
+never an answer, and it gives a minor no way to pass.
+
+Served as `ageGateReadback` on `GET /api/me`, and **only while `ageGate` is
+`pending`**: a pending account can reach nothing but `/api/me` and the
+declaration, so there is no config route it could ask. A client that gets no
+field (an API that predates it) takes that as off and submits directly. Web:
+`client/src/components/user/age-gate-dialog.tsx` (`readback` prop, wired from
+`/api/me` in `App.tsx`). The phones read the same field and the same copy keys
+(`ageGate.readback.*`, `ageGate.error.checkYear`, `ageGate.blocked.contact.*`).
+
+Turn it off from controles → interruptores, or `PUT /api/admin/flags
+{ key: "age_gate_readback", enabled: false }`. A gate already on screen keeps
+the mode it loaded with; the next `/api/me` (a reload) picks the change up.
+Pinned by `server/src/api/age-gate.test.ts` (the field, pending only, and the
+switch) and `client/src/components/user/age-gate-dialog.test.tsx`.

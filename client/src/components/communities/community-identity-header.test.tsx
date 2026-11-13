@@ -32,7 +32,7 @@ const server: Pick<
 };
 
 const idleEdit: CommunityIdentityEdit = {
-  draft: { tagline: "", about: "", linkUrls: [] },
+  draft: { tagline: "", about: "", linkUrls: [], supportText: "" },
   saving: false,
   uploadsEnabled: true,
   imageBusy: null,

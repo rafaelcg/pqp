@@ -106,6 +106,89 @@ describe("audio playback health", () => {
     expect(takeOutputMissingEvents()).toBe(1);
   });
 
+  it("points every element back at the chosen output when it comes back", async () => {
+    // A USB or wireless headset re-enumerating mid-call: gone, then listed
+    // again. The elements were moved to the default output when it went;
+    // nothing else moves them back (their own effect only runs when the
+    // choice or the stream changes), so without this the call played on the
+    // monitor until a leave and rejoin.
+    setAudioSelfHealForTests(true);
+    const { el } = element(() => false);
+    const setSinkId = vi.fn(async (_id: string) => {});
+    Object.assign(el, { setSinkId });
+    trackPlaybackElement(el, "bob");
+    const speakers = [
+      { kind: "audiooutput", deviceId: "default" },
+      { kind: "audiooutput", deviceId: "speakers-1" },
+    ];
+    let outputs = speakers;
+    vi.stubGlobal("navigator", {
+      mediaDevices: { enumerateDevices: async () => outputs },
+    });
+    await checkOutputDevice("headset-1");
+    expect(setSinkId).toHaveBeenLastCalledWith("");
+
+    outputs = [...speakers, { kind: "audiooutput", deviceId: "headset-1" }];
+    await checkOutputDevice("headset-1");
+    expect(setSinkId).toHaveBeenLastCalledWith("headset-1");
+    expect(setSinkId).toHaveBeenCalledTimes(2);
+
+    // Already back on it: another devicechange does nothing.
+    await checkOutputDevice("headset-1");
+    expect(setSinkId).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries the way back on the next check when the returning device is not ready yet", async () => {
+    setAudioSelfHealForTests(true);
+    const { el } = element(() => false);
+    let ready = false;
+    const setSinkId = vi.fn(async (id: string) => {
+      if (id === "headset-1" && !ready) {
+        throw new Error("NotFoundError");
+      }
+    });
+    Object.assign(el, { setSinkId });
+    trackPlaybackElement(el, "bob");
+    const speakers = [
+      { kind: "audiooutput", deviceId: "default" },
+      { kind: "audiooutput", deviceId: "speakers-1" },
+    ];
+    let outputs = speakers;
+    vi.stubGlobal("navigator", {
+      mediaDevices: { enumerateDevices: async () => outputs },
+    });
+    await checkOutputDevice("headset-1");
+    outputs = [...speakers, { kind: "audiooutput", deviceId: "headset-1" }];
+    await checkOutputDevice("headset-1");
+    expect(setSinkId).toHaveBeenLastCalledWith("headset-1");
+    ready = true;
+    await checkOutputDevice("headset-1");
+    expect(setSinkId).toHaveBeenCalledTimes(3);
+    expect(setSinkId).toHaveBeenLastCalledWith("headset-1");
+    // Now settled: no further calls, and the earlier loss is not re-counted.
+    await checkOutputDevice("headset-1");
+    expect(setSinkId).toHaveBeenCalledTimes(3);
+    expect(takeOutputMissingEvents()).toBe(1);
+  });
+
+  it("does not move elements onto a device nobody chose", async () => {
+    setAudioSelfHealForTests(true);
+    const { el } = element(() => false);
+    const setSinkId = vi.fn(async (_id: string) => {});
+    Object.assign(el, { setSinkId });
+    trackPlaybackElement(el, "bob");
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        enumerateDevices: async () => [
+          { kind: "audiooutput", deviceId: "default" },
+          { kind: "audiooutput", deviceId: "headset-1" },
+        ],
+      },
+    });
+    await checkOutputDevice("headset-1");
+    expect(setSinkId).not.toHaveBeenCalled();
+  });
+
   it("says nothing when outputs carry no ids, or only the default (no permission yet)", async () => {
     setAudioSelfHealForTests(true);
     for (const listed of [

@@ -17,6 +17,27 @@ import gg.pqp.app.PqpApplication
 import gg.pqp.app.R
 
 /**
+ * The one line the call notification shows, which on Android 12+ is also the
+ * `Person` name of the `CallStyle`.
+ *
+ * Never blank. `Person.Builder().setName("")` is accepted, but
+ * `CallStyle.forOngoingCall` then throws `IllegalArgumentException: person must
+ * have a non-empty a name` from inside `startForeground`, which crashed the app
+ * the moment a call started in a channel whose name arrived empty. A blank name
+ * falls back to the generic title, exactly like a missing one always did.
+ */
+internal fun callNotificationLine(
+    projecting: Boolean,
+    channelName: String?,
+    sharing: String,
+    title: String,
+): String = when {
+    projecting -> sharing
+    !channelName.isNullOrBlank() -> channelName
+    else -> title
+}
+
+/**
  * The notification that keeps a call alive.
  *
  * This is not decoration. Android stops an app's threads shortly after it is
@@ -155,11 +176,12 @@ class VoiceService : Service() {
         // system's own cast indicator. One of them is the platform telling
         // people what is happening to their device; the other is us admitting
         // it, which is the one that names the app doing it.
-        val text = if (projecting) {
-            getString(R.string.voice_notification_sharing)
-        } else {
-            channelName ?: getString(R.string.voice_notification_title)
-        }
+        val text = callNotificationLine(
+            projecting = projecting,
+            channelName = channelName,
+            sharing = getString(R.string.voice_notification_sharing),
+            title = getString(R.string.voice_notification_title),
+        )
 
         val muteAction = NotificationCompat.Action(
             0,

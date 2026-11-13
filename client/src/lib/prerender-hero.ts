@@ -207,14 +207,15 @@ const FLAG_SVG: Record<PrerenderLocale, string> = {
   es: '<svg viewBox="0 0 20 14" class="h-full w-full" role="presentation"><rect width="20" height="14" class="fill-flag-es-red"></rect><rect y="3.5" width="20" height="7" class="fill-flag-es-yellow"></rect></svg>',
 };
 
-/* Lucide icons, as `lucide-react` renders them. */
+/* Lucide icons, as `lucide-react` renders them (v1 marks an icon with no
+   label as `aria-hidden`, which is why every one carries it). */
 const SVG_OPEN =
   'xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
 const ICON_CHEVRON = `<svg ${SVG_OPEN} class="lucide lucide-chevron-down h-3 w-3 opacity-70" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>`;
 const ICON_ARROW = `<svg ${SVG_OPEN} class="lucide lucide-arrow-right h-4 w-4" aria-hidden="true"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg>`;
-const ICON_LOCK = `<svg ${SVG_OPEN} class="lucide lucide-lock h-2.5 w-2.5 shrink-0 opacity-70 sm:h-3 sm:w-3"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>`;
-const ICON_RELOAD = `<svg ${SVG_OPEN} class="lucide lucide-rotate-cw ml-auto hidden h-3.5 w-3.5 text-paper-muted/50 sm:block"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>`;
-const ICON_PLAY = `<svg ${SVG_OPEN} class="lucide lucide-play h-4 w-4" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>`;
+const ICON_LOCK = `<svg ${SVG_OPEN} class="lucide lucide-lock h-2.5 w-2.5 shrink-0 opacity-70 sm:h-3 sm:w-3" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>`;
+const ICON_RELOAD = `<svg ${SVG_OPEN} class="lucide lucide-rotate-cw ml-auto hidden h-3.5 w-3.5 text-paper-muted/50 sm:block" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>`;
+const ICON_PLAY = `<svg ${SVG_OPEN} class="lucide lucide-play h-4 w-4" aria-hidden="true"><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"></path></svg>`;
 
 /* Class strings, as the live page renders them (after `cn()`). */
 const ROOT = "min-h-screen overflow-x-clip bg-ink text-paper [&_section]:scroll-mt-0";

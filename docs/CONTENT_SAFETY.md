@@ -8,11 +8,105 @@ It is deliberately blunt about the residual risk. A safety document that reads
 like a feature announcement is worse than none, because it makes the untouched
 parts invisible.
 
-> **Status as shipped: `CONTENT_SCAN_PROVIDER` is empty, so nothing is scanned.**
-> Every attachment row, and every Baú upload row, records
-> `scan_status = 'unscanned'`. That is the honest state, not a pass. Turning
-> it on is a Railway variable and a restart —
-> [Turning it on](#turning-it-on).
+> **Status:** `CONTENT_SCAN_PROVIDER` is **set on the production API** (since
+> 24 August 2026, see `docs/HANDOVER.md`), so image scanning is live and
+> fail-closed there. A deployment without it records `scan_status =
+> 'unscanned'` on every attachment and Baú upload row, which is the honest state
+> and not a pass. Turning it on is a variable and a restart —
+> [Turning it on](#turning-it-on). **Text** has its own, separate check that
+> needs no configuration: [The built-in text filter](#the-built-in-text-filter).
+
+---
+
+## The built-in text filter
+
+Image scanning does nothing for words, and AutoMod (below) is an empty list an
+owner has to fill in. App Store Guideline 1.2 asks for "a method for filtering
+objectionable content", so pqp has a **built-in baseline**: a short list of
+slurs and threats that needs no rule written by anybody. **It is OFF by
+default.** Nothing is filtered on any surface until somebody turns it on
+(Rafael's decision, 2026-11-05: friendly text is not ours to filter). It is
+turned on by the operator, globally or for one server, from the dashboard, or by
+a server's owner for their own server in AutoMod settings. The App Review
+demo server ("pqp review", seeded by `review-seed.ts`) has it on.
+
+Code: the list and the matcher are `packages/shared/src/automod-baseline.ts`
+(pure, shared with the web settings page's test box); the enforcement is
+`checkBaselineText` / `checkAutomod` in `server/src/services/automod.ts`.
+
+**Where it runs, once it is on.** Public surfaces only: every surface that already ran AutoMod
+(a server message and its edit, a forum post title and body, a story), plus the
+ones that never did: Baú comments and Baú posts (title, body, teaser), and the
+names a person picks for themselves (display name, tag name, handle, the
+recado). It does **not** read: **direct messages and group messages, nor their
+edits** (a private conversation between people who chose each other is not read
+by the built-in filter; the owner's own AutoMod rules never applied there
+either, there being no server, and the image scanning, reports and blocking are
+unchanged), a name that comes from the sign-in provider at first registration
+(refusing it would refuse the account), voice, file names, link previews, or a
+server's own name and channel names.
+
+**What is on the list.** Two classes, English, Portuguese and a short Spanish
+list, whole words and phrases only:
+
+| Class | What it holds | Examples (the full list is `BASELINE_TEXT_LISTS`) |
+|---|---|---|
+| `slur` | racist, homophobic, transphobic and ableist slurs; hate slogans | `nigger`, `faggot`, `retard`, `viado`, `crioulo`, `maricón`, `white power` |
+| `threat` | telling somebody to kill themselves, rape threats, calls to kill a group, sexual content about children | `kill yourself`, `kys`, `vou te estuprar`, `te voy a violar`, `vai se matar` |
+
+**What is deliberately not on it.** Insults: `fuck you`, `fuck off`, `cunt`,
+`slut`, `vai tomar no cu`, `arrombado`, `chinga tu madre` and their kind were on
+the first version of the list as an `abuse` class and were taken out, because
+banter between friends is not ours to filter. Ordinary swearing (shit, damn,
+merda, porra, caralho, mierda, joder, "puta que pariu", "filho da puta"), a
+plain "I'll kill you" or "vou te matar" (it is how people trash-talk in a
+game), and every word that is also an ordinary word (veado, macaco, mongol,
+retrasado, Niger, snigger, fagot) are not on it either. A filter that fires on
+how friends talk gets turned off or left; the point is the worst of it. Widening the list is an edit to
+`BASELINE_TEXT_LISTS` and a case in `automod-baseline.test.ts`.
+
+**How it matches.** The text is folded by `normalizeForAutomod` (lowercase,
+accents stripped so `você`/`voce` and `maricón`/`maricon` are one word,
+fullwidth, Cyrillic and Greek look-alikes mapped to Latin, zero-width characters
+dropped) and matched as whole words, never substrings (so "Scunthorpe",
+"assassin" and "viaduto" pass). Then it is read four more ways, and a hit in any
+counts: leetspeak (`n1gg3r`, `f@ggot`, `sh!t`), stretching (`niiiigger`,
+`kiiiill yourself`), spelled-out letters (`k i l l  y o u r s e l f`,
+`n.i.g.g.e.r`) and phrases typed solid (`killyourself`). It does not catch sarcasm, a quoted slur, a
+new coinage, another language, or a word censored with `*`. It is a first line.
+
+**What the author sees.** The message is not sent and the sender gets
+`message-rejected` with `reason: "automod"` and a fixed sentence,
+`BASELINE_REJECTION_MESSAGE`: "This message was not sent: it breaks pqp's rules
+on abusive language." The web client draws that in the reader's language
+(`chat.reject.baseline`); the native clients show the sentence as it comes. A
+Baú comment or post and a profile name answer 400 or 422 with the same sentence.
+
+**What is kept.** Never the text. A hit in a server writes the usual
+`automod.block` audit row (visible to the server's admins) with `reason:
+"baseline"` and `matched` set to the **class** (`slur`, `threat`), not
+the word, plus a `[pqp] automod.baseline surface=... class=...` log line. A hit
+in a profile name writes the log line only (surface, class, user id).
+
+**Who can switch it on or off, and who is exempt.**
+
+- The **operator**, live, with the runtime flag `default_text_filter` (**default
+  off**, global or per server; dashboard, controles, interruptores; env
+  `DEFAULT_TEXT_FILTER=true`, only the word `true` turns it on). Precedence is
+  the usual one: the server's override, the global row, the variable, off.
+- A server's **owner** (Manage Server), for their own server, in AutoMod
+  settings (the row at the top, "pqp's built-in filter"): `PUT
+  /api/servers/:id/automod/baseline {enabled}`. Either direction writes one row
+  in `server_text_filter_settings` (`disabled = FALSE` is on, `TRUE` is off;
+  no row follows the operator's flag), and the owner's row wins for that server,
+  so a later change of the flag never flips a server whose owner chose. A Manage
+  Messages cargo can read the state but not change it. A change is audited as
+  an `automod.rule_update`.
+- **Nobody is exempt** once it is on, owners and admins included: AutoMod's
+  staff bypass exists so an owner is never locked out by their own list, and the
+  baseline is not their list. Profile names have no server, so they follow only
+  the operator's global answer (an owner's opt-in does not reach them). Direct
+  and group messages are not read at all.
 
 ---
 
@@ -31,8 +125,14 @@ the row and is not a pass.
 | Baú video (main file and phone cut) / PDF | skipped | same claim | same |
 | Server icon imported from Discord | **yes** | During the import, before it is set | not recorded; refused icons are discarded |
 | Custom server emoji | **yes** | On `POST /api/servers/:id/emoji`, before the emoji exists | `server_emoji.scan_*`; refused ones in `server_emoji_quarantine` |
+| Chat text in server channels, forum posts, stories, Baú comments and posts, profile names | **only where it is switched on**, the [built-in text filter](#the-built-in-text-filter) (off by default) | Before the text is stored | `automod.block` audit row (servers) or a log line |
+| Direct and group messages (text) | **no**, by decision: the built-in text filter does not read private conversations | | |
 | Avatars and profile banners (`avatars.ts`) | **no** | | |
 | Server icon / banner / community featured image uploaded in the app (`server-images.ts`) | **no** | | |
+| Jam song cover (`PUT /api/jam-songs/:songId/cover`) | **no** in a channel | | The claim checks the bytes are a real JPEG, PNG or WebP, not that they are acceptable. The author or a moderator can remove one at any time, even with the flag off. |
+| Public jam cover (`jam_public`, [Public jams](#public-jams)) | **yes** | On the worker, once per picture, at least 16 minutes after its upload; not public until it passed | `jam_public_cover_scans`; refused ones in `jam_public_quarantine` |
+| Public jam camera video | **yes**, sampled frames (the first, then one every 5 s, at most 24) | Same, only on a process with ffmpeg; the part is audio only publicly until it passed | `jam_public_tracks.video_scan_*`; refused ones in `jam_public_quarantine` |
+| Public jam audio | **no** | | Nothing here listens to audio. Stated in docs/JAM_PUBLIC.md too. |
 
 The last two rows are open gaps, not decisions. The community featured image
 in particular is shown on the public `pqp.gg/c/<slug>` page.
@@ -336,6 +436,53 @@ Nothing here changes where a report is *filed* — that routing is still
 decided once, by `createReport`/`createAutomatedReport`, from the reported
 thing, never by the client. This only widens who may *read and close* what
 was already filed.
+
+### Blocking a person tells the operators
+
+App Store guideline 1.2 asks that blocking "also notify the developer". A block
+is the one moderation act a user performs for themselves, so it is not a
+report, and it is not filed as an accusation by the blocker. Every NEW block
+(`POST /api/blocks`, not a repeat) does three things in
+`services/block-notice.ts`, none of which can fail the block:
+
+- logs `social.block blocker=<id> blocked=<id> surface=<message|profile|friends>
+  queued=<bool> capped=<bool>`: two account ids and where it was made, never a
+  message or a name;
+- counts it under `blocks` on `GET /api/admin/metrics` (`blocks`,
+  `reportsFiled`, `reportsCapped`, `failures`; per process);
+- opens one ticket in the INSTANCE report queue, through the same machinery as
+  the image scanner (`createAutomatedInstanceReport`): no reporter, reason
+  `other`, place label "Bloqueio", one open ticket per blocked person. The
+  context card on that ticket already says how many people blocked the account
+  and shows its recent messages, so a second blocker moves a number, not the
+  queue. Closing the ticket re-arms it.
+
+One account can file at most `BLOCK_REPORTS_PER_DAY` (20) tickets a day this
+way, counted in a durable per-account daily counter (`user_block_days`) so a
+block/unblock cycle cannot reset it; past that the block is still logged and
+counted. A flood of blocks is therefore a counter, not a denial of moderation.
+
+These tickets are informational, not reports of objectionable content, so they
+are left out of the report-age figures that drive the 12 h and 20 h alerts
+(`oldestOpenAgeSeconds`, `openOver12h`, `openOver24h` in
+`services/report-queue.ts`). They still count in `open`.
+
+### Reporting a Baú post or comment
+
+`createReportSchema` also takes `bau_post` and `bau_comment` (id only), filed
+from the web and from iOS (App Store guideline 1.2, two taps on either). The
+reporter must be able to READ the post (the feed's own VIP lock decides, so a
+members-only post is reportable by staff and VIPs only), and the words are
+copied into `reports.bau_snapshot` so the report outlives the post. **A Baú in
+a community is routed to the instance queue**, like a community report, because
+the posts are written by the staff who would otherwise read the report; another
+server's Baú goes to its own queue, and `minor_sexual` always goes to the
+instance. The card's "Contexto" panel opens the post past the VIP lock:
+`GET /api/reports/:id/context` carries `bau`, the one read that skips the lock,
+behind the same gate as the rest of the card, text and media metadata only,
+audited as `report.bau_view` (server-scoped reports) plus a `[moderation]` log
+line (all), never in a community's own audit log. See
+[`COMMUNITY_HOME.md`](./COMMUNITY_HOME.md) §"Reporting a post or a comment".
 
 ### What a moderator sees of a reported attachment
 
@@ -942,6 +1089,180 @@ add no new regime.
 **Screenshots** are not blocked and not detected. The help text says so.
 
 ---
+
+## Reports: the 24 hour rule
+
+Apple Guideline 1.2 asks that a developer "act on objectionable content reports
+within 24 hours by removing the content and ejecting the user who provided the
+offending content", and our Terms say the same. This section is how that is
+kept, and what tells us when it is not. Nothing here is a new moderation system;
+it is the existing report queue plus a clock on it.
+
+### Where a report lands
+
+A report is one row in `reports` (`createReport`, `server/src/services/reports.ts`),
+filed from `POST /api/reports` by any client, the iOS `ReportSheet` included
+(messages, people, stories, whole communities, and a Baú post or comment; forum
+posts are messages in a thread and take the message path). The client never names the destination; it is decided once, from
+the reported thing:
+
+| What was reported | Queue it lands in | Who can read and close it |
+|---|---|---|
+| A message or a person, in a server | That server's own queue | The server's owner and staff with KICK, BAN or MODERATE, **and** an instance moderator |
+| A message or a person in a DM or group | The instance queue | Instance moderators only |
+| A story seen through a server | That server's queue | Same as the first row |
+| A friends (Amigos) story | The instance queue | Instance moderators only |
+| A whole community, or a Baú in a community | The instance queue, never the owner's | Instance moderators only |
+| Anything under the reason `minor_sexual` | The instance queue, always | Instance moderators only |
+| An automated scanner hit (`reporter_id` NULL) | The server's queue if it fired in a server, else the instance's | As above |
+
+**An instance moderator** is an account whose Clerk id is in
+`INSTANCE_MODERATOR_CLERK_IDS` (operator configuration, not an in-app role).
+They see every report in one list, `GET /api/reports/all`, which the app shows
+as **Settings > Moderation** (only for them). That list is what closes the gap a
+server queue has: a report sitting in a server owner's queue that the owner
+never reads is still readable, and closable, by the instance moderator.
+
+**A server's own staff closing a report does not remove pqp's review.** An
+owner or admin who closes a user-filed report from their server's queue
+(`PATCH /api/reports/:id`, not an instance moderator) leaves **one copy** in the
+instance queue, written in the same statement as the close (`resolveReport`,
+`secondLook`): `server_id` NULL, `context_kind` `none`, still `open`, the
+original's `created_at` (the 24 hour clock does not restart), `escalated_from`
+naming the original, and a line in `details` saying what the staff decided. The
+copy is an ordinary instance report: it shows in `GET /api/reports/instance` and
+`/all`, **Contexto** and **Remove message** work on it, and it is counted by the
+age figures below. The server's own queue is unchanged (the owner still sees
+their one report, closed), the reporter still has one report in `/mine`, and the
+flood cap, a moderator's "other reports" list and the data export all skip
+copies (`escalated_from IS NULL`). Closing the copy never copies again. Not
+copied: a report an instance moderator closed, and a scanner's own report
+(`reporter_id` NULL). A report the owner leaves **open** needs no copy: it is
+already in `/all` and the clock.
+
+**Nobody is paged when a report is filed.** The row is written and that is all.
+The dashboard's moderation card shows the open count, and the in-app list is
+where a moderator looks. Closing that gap, per report, is not built; the clock
+below is what covers it.
+
+### The clock
+
+`GET /api/admin/metrics` carries, under `moderation.reports`:
+
+| Field | Meaning |
+|---|---|
+| `open` | Reports still open, in every queue |
+| `oldestOpenAgeSeconds` | Age of the oldest open one. **0 when none is open.** This is the 24 hour promise as a number |
+| `openOver12h`, `openOver24h` | How many open reports are past those lines |
+
+(`server/src/services/report-queue.ts`.) The exporter in `tools/monitoring/`
+turns them into `pqp_api_reports_oldest_open_age_seconds` and
+`pqp_api_reports_open{age}`, and `tools/monitoring/grafana-alert-rules-moderation.json`
+defines two rules on them, both to the `rafael-email` contact point:
+
+* **Warning at 12 hours** open: half the window is gone.
+* **Critical at 20 hours** open: four hours left.
+
+A rule fires after 5 minutes over its line, so a report is mentioned between
+12h and 12h06 and again between 20h and 20h06 after it was filed, give or take
+the exporter's minute of lag. The rules file is in the repo, not in Grafana,
+until somebody imports it (`tools/monitoring/README.md`,
+"Report queue age"). No data (an API or exporter older than the field) is
+treated as silence, not as an incident; the readiness rule watches the exporter
+itself.
+
+Two honest limits. The alert is **email only**, so it reaches a person only as
+fast as that person reads email; if the 24 hour promise is to hold on a night or
+a weekend, route this contact point to something that rings. And the figure is
+the age of the oldest report, so one stale report keeps it high however many
+newer ones were answered; that is the intent.
+
+### The steps, for the person holding the clock
+
+1. Sign in to the app as an instance moderator. **Settings > Moderation** opens
+   the list of every report. (The operator dashboard's "abrir fila completa"
+   link opens the same list at `pqp.gg/app?modAllReports=1`.) Oldest first is
+   the order the alert is about; the list is newest first, so scroll or filter
+   by status `open`.
+2. Open the card's **Contexto** panel to see the account's age, history,
+   sanctions and the messages around the reported one.
+3. **A minor in sexual content, or anything that looks like it:** stop and
+   follow the illegal-content runbook above first. That takes precedence over
+   everything here.
+4. **Remove the content.** On a message report, **Remove message**
+   (`POST /api/reports/:id/remove-message`); on a story report, **Remove story**
+   (`POST /api/reports/:id/remove-story`). Both work for an instance moderator
+   whatever server it is in, and both log `[moderation]` lines. A community's
+   listing is pulled with `is_community_suspended` (see "Runbook: a reported
+   community"). There is no one-click remove for a Baú post or comment: its own
+   staff remove it, or the community is suspended.
+5. **Eject the person.** In the Contexto panel, as far as the case warrants:
+   **Timeout** (a server-rank sanction, needs a real role in that server),
+   **Ban** from that server, or **Terminate account**
+   (`DELETE /api/admin/users/:userId`). Termination deletes the account and
+   everything it wrote and closes its live sockets, and it **refuses with a 409
+   when the account owns a server other people are in**: transfer or delete the
+   server first. Termination is deliberately not on `ADMIN_METRICS_TOKEN`; it
+   needs a signed-in human.
+6. **Resolve the report** with a note saying what was done (`actioned`) or why
+   nothing was (`dismissed`). The oldest-open figure drops the moment the last
+   old report is closed, and the alert resolves on its own.
+
+### What this does not cover
+
+* A report about something no client has a Report button for. Profile
+  bios and usernames are reported through the person (a user report), not the
+  text; there is no text filter on them either, see below.
+* The reporter is not told the outcome today beyond the status shown in their
+  own list (`GET /api/reports/mine`).
+* "Within 24 hours" is kept by a person reading an alert. There is one
+  operator contact point and no second reader.
+
+---
+
+## Public jams
+
+`jam_public` (global, default off) publishes songs to people with no account
+at jam.pqp.gg. Like [Communities](#communities-the-public-directory), turning it
+on changes the instance's category: it is public content, not private
+messaging. The whole model, the limits and the operator runbook are
+`docs/JAM_PUBLIC.md`; this section is what it adds to the scanning story.
+
+- **What is scanned before it is public.** The cover (the image scanner) and
+  each part's camera video (frames sampled by ffmpeg, each through the same
+  scanner). Audio is not scanned at all. Titles, artists and labels do not go
+  through the built-in text filter.
+- **Fail closed, and stricter than a channel.** Only `pass` is public. A
+  `flagged` cover or video stays private (and files a report); a scan error is
+  retried three times, then recorded `unscanned` and stays private; with no
+  provider configured nothing is ever judged and the cover and video are simply
+  never public (`unscanned`), which is the honest state.
+- **No bytes judged that can still be swapped.** A cover or video is not claimed
+  for scanning until its presigned PUT has expired (16 minutes), so the bytes
+  judged are the bytes shown. Residual risk 9 below does not apply here.
+- **On a rejection** the cover is taken off the song, or the video (and the
+  worker's MP4 copy of it) off the track, in its channel as well; the objects go
+  to `jam_public_quarantine` (no foreign key, skipped by every sweep and every
+  cascade key read); a report is filed to the **instance** queue
+  (`createAutomatedInstanceReport`, "Jam pública · <title>"). `illegal` or
+  `csam_suspected` logs `ILLEGAL-CONTENT MATCH` and is never auto-deleted;
+  anything else expires after `CONTENT_SCAN_QUARANTINE_DAYS`
+  (`sweepJamPublicQuarantine`).
+- **Reports** from people (signed in only) go to the instance queue, never to a
+  server owner, and enough distinct reporters hide the song until an operator
+  looks (`JAM_PUBLIC_REPORTS_TO_HIDE`).
+- **The edge seam.** `JAM_PUBLIC_MEDIA_BASE_URL` routes public media through a
+  pqp.gg hostname so Cloudflare's zone-level CSAM scanning sees those bytes
+  ([Enable Cloudflare's CSAM Scanning Tool](#3-enable-cloudflares-csam-scanning-tool--free-zero-approval-do-it-today)).
+  The Worker is not built yet; until it is, public media is served from the
+  bucket's own endpoint, which that tool does not see.
+
+```sql
+SELECT storage_key, kind, song_id, track_id, uploader_id, scan_provider,
+       scan_score, scan_labels, quarantined_at
+FROM jam_public_quarantine
+ORDER BY quarantined_at DESC;
+```
 
 ## Residual risk, stated plainly
 

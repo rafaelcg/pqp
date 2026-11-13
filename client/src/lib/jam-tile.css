@@ -1,0 +1,52 @@
+/*
+ * The level strip of a part with no video, shared by the public site and the
+ * app's song view (`lib/jam-tile-parts.tsx`). It is only drawn WHILE THE SONG
+ * PLAYS: a tile at rest is the person alone, because a strip with nothing
+ * moving in it read as a broken waveform.
+ *
+ * A strip that is silent is a DELIBERATE baseline: one continuous hairline in
+ * the instrument's ink, under bars that rise out of it where the take is
+ * loud. It used to be a row of equal dots, which read as a broken waveform at
+ * rest (a take that enters later, or ends early, is mostly "silent").
+ *
+ * Each bar's `transform: scaleY()` is written by script; a bar nobody has
+ * written is flat, so it is no bar at all.
+ */
+/* `display` is the caller's (`flex`, or `hidden` below a width): a rule here would
+    beat Tailwind's layered utilities, because unlayered CSS always wins. */
+.jam-level {
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  gap: var(--jam-level-gap, 3px);
+  color: inherit;
+}
+
+.jam-level::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.4;
+}
+
+.jam-level > span {
+  display: block;
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--jam-level-w, 3px);
+  height: 100%;
+  border-radius: 999px;
+  background: currentColor;
+  transform: scaleY(0);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .jam-level > span {
+    transition: transform 100ms linear;
+  }
+}

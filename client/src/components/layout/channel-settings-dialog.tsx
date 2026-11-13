@@ -639,7 +639,9 @@ export function ChannelSettingsDialog({
       ? "channelMeta.kind.voice"
       : current.type === "forum"
         ? "channel.type.forum"
-        : "channelMeta.kind.text";
+        : current.type === "jam"
+          ? "jam.channelKind"
+          : "channelMeta.kind.text";
 
   // The Tags section saves on its own footer; so does the overview. Whichever
   // is on screen and has changes owns the bar, and the other one's changes

@@ -130,10 +130,37 @@ final class ChatModel {
         botWork.values.sorted { ($0.name, $0.userId) < ($1.name, $1.userId) }
     }
 
-    func isGrouped(at index: Int) -> Bool {
-        guard index > 0, index < messages.count else { return false }
-        let current = messages[index]
-        let previous = messages[index - 1]
+    /// What the transcript draws: every message except those by somebody this
+    /// account has blocked. The blocked person's rows stay in `messages` (paging,
+    /// pending echoes and the cache all index it) and are dropped only here, so
+    /// a block hides what is already loaded AND what arrives a second later, and
+    /// an unblock brings it back with no refetch. Reads `session.blocked`, so a
+    /// view that calls this redraws when the set changes.
+    var visibleMessages: [Message] {
+        let blocked = session?.blocked.ids ?? []
+        let viewerId = session?.currentUser?.id
+        let loaded = session?.blocked.hasLoaded ?? true
+        let released = session?.blocked.released ?? []
+        return messages.compactMap { message in
+            guard !BlockRules.hides(
+                message, viewerId: viewerId, blocked: blocked, listLoaded: loaded, released: released
+            ) else { return nil }
+            var shown = message
+            // The blocked person's reactions on everybody else's messages go
+            // with them, and the chip's count drops by theirs.
+            shown.reactions = BlockRules.reactions(message.reactions, blocked: blocked)
+            // Fetched while the person was blocked, so it carries the server's
+            // stamp; they were unblocked since, and the row must draw in full
+            // rather than as the "hidden" placeholder.
+            if message.blocked, released.contains(message.authorId) { shown.blocked = false }
+            return shown
+        }
+    }
+
+    func isGrouped(at index: Int, in rows: [Message]) -> Bool {
+        guard index > 0, index < rows.count else { return false }
+        let current = rows[index]
+        let previous = rows[index - 1]
         guard current.authorId == previous.authorId, !current.isWebhook, !previous.isWebhook else {
             return false
         }
@@ -145,10 +172,10 @@ final class ChatModel {
     /// Whether the message at `index` is the first of its calendar day in the
     /// loaded transcript. The first loaded message always is: the day has to
     /// be named somewhere above it, and the row moves up as history loads.
-    func startsDay(at index: Int) -> Bool {
-        guard index >= 0, index < messages.count else { return false }
+    func startsDay(at index: Int, in rows: [Message]) -> Bool {
+        guard index >= 0, index < rows.count else { return false }
         guard index > 0 else { return true }
-        return !DayLabels.isSameDay(messages[index - 1].createdAt, messages[index].createdAt)
+        return !DayLabels.isSameDay(rows[index - 1].createdAt, rows[index].createdAt)
     }
 
     /// Cache first, then network.
@@ -797,7 +824,48 @@ final class ChatModel {
         }
     }
 
+    // MARK: - Refusal banner
+
+    /// How long a refusal stays above the composer when nothing else clears it.
+    var refusalBannerSeconds: Double = 10
+
+    /// The refusal currently on screen, with the draft it handed back. A
+    /// refusal is about one message; once the person moves on (types something
+    /// new, or a later send lands) it is stale and reads as if it were about
+    /// the next one. Only this banner is cleared here: an upload failure or a
+    /// history error set elsewhere is not a refusal and keeps its own life.
+    private var refusalBanner: (text: String, draft: String)?
+    private var refusalBannerTimer: Task<Void, Never>?
+
+    private func armRefusalBanner(_ text: String) {
+        refusalBanner = (text, draft)
+        refusalBannerTimer?.cancel()
+        let seconds = refusalBannerSeconds
+        refusalBannerTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            self?.clearRefusalBanner()
+        }
+    }
+
+    /// Drops the refusal banner if it is still the one showing.
+    func clearRefusalBanner() {
+        refusalBannerTimer?.cancel()
+        refusalBannerTimer = nil
+        if let banner = refusalBanner, error == banner.text { error = nil }
+        refusalBanner = nil
+    }
+
+    /// The composer's text changed. The refusal restores the refused text into
+    /// the composer, which also reports as a change, so the restored text
+    /// itself does not count: only a draft that differs from it does.
+    func noteDraftEdited() {
+        guard let banner = refusalBanner, draft != banner.draft else { return }
+        clearRefusalBanner()
+    }
+
     func noteTyping() {
+        noteDraftEdited()
         guard let session, let channelId, !draft.isEmpty else { return }
         // The server rate-limits typing to ~1/s and silently drops the rest, so
         // there is no point sending one per keystroke.
@@ -814,8 +882,10 @@ final class ChatModel {
     /// tested by feeding the event straight in.
     func apply(_ event: RealtimeEvent) {
         switch event {
-        case .messageCreated(let message, let nonce):
-            guard message.channelId == channelId else { return }
+        case .messageCreated(let received, let nonce):
+            guard received.channelId == channelId else { return }
+            var message = received
+            message.arrivedLive = true
             // A bot's "working" row ends with its message, not with a timer,
             // and so does a notice about that bot.
             if !botWork.isEmpty { botWork[message.authorId] = nil }
@@ -826,6 +896,9 @@ final class ChatModel {
             // dropped instead of overwritten — otherwise the swap would put two
             // rows with the same id in the list.
             if let nonce, let index = messages.firstIndex(where: { $0.pendingNonce == nonce }) {
+                // Our own message went through: the refusal above the composer
+                // was about an earlier one.
+                clearRefusalBanner()
                 settleVoiceRow(messages[index].id, delivered: true)
                 if messages.contains(where: { $0.id == message.id }) {
                     messages.remove(at: index)
@@ -888,8 +961,11 @@ final class ChatModel {
             }
             messages[index].reactions = reactions
 
-        case .typing(let typingChannelId, _, let displayName):
+        case .typing(let typingChannelId, let typingUserId, let displayName):
             guard typingChannelId == channelId else { return }
+            // The server drops a blocked person's "typing" in a conversation;
+            // in a server channel it is the reader's job, like their messages.
+            guard session?.blocked.contains(typingUserId) != true else { return }
             typingNames[displayName] = Date()
 
         case .botActivity(let activityChannelId, let userId, let displayName, let tool):
@@ -928,7 +1004,9 @@ final class ChatModel {
                 draft = draft.isEmpty ? body : body + "\n" + draft
             }
             // An AutoMod refusal may carry the owner's own words; they win.
-            error = rejection.automodMessage ?? ChatModel.rejectionCopy(for: rejection.reason)
+            let refusal = rejection.automodMessage ?? ChatModel.rejectionCopy(for: rejection.reason)
+            error = refusal
+            armRefusalBanner(refusal)
             // A temporary refusal names its wait; the composer counts it
             // down. A `slow-mode` without one falls back to the channel's
             // interval, which is the most the server would charge.
@@ -1006,7 +1084,11 @@ final class ChatModel {
              .callIncoming, .callRingCancelled, .callDeclined,
              // A forum's list frames are the forum screen's. An open post
              // reads its own state from them in `ForumPostModel`.
-             .forumPostUpsert, .forumPostRemoved, .forumConfigUpdate:
+             .forumPostUpsert, .forumPostRemoved, .forumConfigUpdate,
+             // A jam's frames belong to the jam wall and the open song.
+             .jam,
+             // An activity's frames belong to the activity store and the open pane.
+             .apps:
             break
         }
     }

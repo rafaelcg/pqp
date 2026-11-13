@@ -12,7 +12,7 @@
  * rename there cannot leave these judges matching a field nobody emits, which
  * would present as a permanent green.
  */
-import { test, describe, afterEach } from "node:test";
+import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -135,32 +135,13 @@ describe("judgeRegions", () => {
   });
 });
 
-describe("the Fly checks are rollback-only", () => {
-  const saved = process.env.MONITOR_FLY_ROLLBACK;
-  afterEach(() => {
-    if (saved === undefined) delete process.env.MONITOR_FLY_ROLLBACK;
-    else process.env.MONITOR_FLY_ROLLBACK = saved;
-  });
-
-  test("by default they are retired, so their open issues get closed", () => {
-    delete process.env.MONITOR_FLY_ROLLBACK;
+describe("the Fly rollback checks are gone for good", () => {
+  test("they are retired, so a still-open issue of theirs gets closed", () => {
     assert.deepEqual(retiredAvailabilityKeys(), ["fly-machines", "worker-image-drift"]);
     assert.deepEqual(retiredErrorKeys(), ["api-error-rate"]);
   });
 
-  test("a declared rollback un-retires them, so they are judged again", () => {
-    process.env.MONITOR_FLY_ROLLBACK = "true";
-    assert.deepEqual(retiredAvailabilityKeys(), []);
-    assert.deepEqual(retiredErrorKeys(), []);
-  });
-
-  test("anything but the exact string true is off (a typo must not revive them)", () => {
-    process.env.MONITOR_FLY_ROLLBACK = "1";
-    assert.deepEqual(retiredErrorKeys(), ["api-error-rate"]);
-  });
-
-  test("the errors group runs only the support-bot check by default", async () => {
-    delete process.env.MONITOR_FLY_ROLLBACK;
+  test("the errors group runs only the support-bot check", async () => {
     delete process.env.FLY_API_TOKEN;
     delete process.env.FLY_ORG_TOKEN;
     delete process.env.MONITOR_FLY_LOCAL;
@@ -192,7 +173,7 @@ describe("retiredIssues", () => {
     ]);
   });
 
-  test("a key that this run still reports is never retired (a rollback revived it)", () => {
+  test("a key that this run still reports is never retired", () => {
     const found = retiredIssues(existing, [{ key: "fly-machines", status: "fail" }], ["fly-machines"]);
     assert.deepEqual(found, []);
   });

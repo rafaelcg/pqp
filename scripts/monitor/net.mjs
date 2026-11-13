@@ -14,7 +14,7 @@ import { createConnection } from "node:net";
 import { createHash, randomBytes } from "node:crypto";
 
 /**
- * `MONITOR_RESOLVE="api.pqp.gg=66.241.125.111,pqp.gg=104.21.6.136"`.
+ * `MONITOR_RESOLVE="api.pqp.gg=104.21.6.136,pqp.gg=104.21.6.136"`.
  *
  * Pins a hostname to an address for every probe below. Two uses:
  *   * running these checks from a machine whose resolver lies about the
@@ -210,19 +210,6 @@ export function tlsCertificate(servername, { port = 443, timeoutMs = 10_000 } = 
     socket.on("error", reject);
     return () => socket.destroy();
   });
-}
-
-/**
- * `MONITOR_FLY_ROLLBACK=true` brings back the three checks that only mean
- * something while the API runs on Fly: `fly-machines`, `worker-image-drift`
- * and `api-error-rate` (the `fly logs` reader). Production moved to the Vultr
- * box on 2026-09-17 and the Fly apps sit at zero machines as a rollback, so
- * the default is off: those checks read dead apps and reported green. Set it
- * as a repository variable only for the duration of a rollback to Fly
- * (docs/MONITORING.md, "Rolling back to Fly").
- */
-export function flyRollback() {
-  return process.env.MONITOR_FLY_ROLLBACK === "true";
 }
 
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

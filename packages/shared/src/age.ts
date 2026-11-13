@@ -141,17 +141,39 @@ export function isAtLeastYearsOld(
 }
 
 /**
- * Is this a date a living person could have been born on?
+ * The youngest a person can be and still be asked this question.
  *
- * A date in the future or before 1900 is a slip of the keyboard, not a
- * declaration, and must therefore NOT consume the account's single attempt:
- * see `recordAgeDeclaration`. Rejecting it as malformed input and letting the
- * user type again is safe precisely because neither answer helps somebody
- * probing for a passing value: any *plausible* date they enter is final.
+ * Somebody who types a birth date less than this many years before today did
+ * not make a declaration, they slipped: the year of the day they are typing it,
+ * a year field left on a default, a two-digit year. pqp has no use for the
+ * answer and the account has a single attempt, so treating it as final turned a
+ * keyboard slip into a permanent block (a 19-year-old typed the current year and
+ * was refused for good, 2026-10-23). Ten is far below any age the gate cares
+ * about, so the floor changes nothing for a minor: a child who wants a passing
+ * date can already type an adult one on the first try.
+ */
+export const MIN_PLAUSIBLE_AGE_YEARS = 10;
+
+/**
+ * Is this a date a person who can answer this question could have been born on?
+ *
+ * A date in the future, before 1900, or less than `MIN_PLAUSIBLE_AGE_YEARS`
+ * before today is a slip of the keyboard, not a declaration, and must therefore
+ * NOT consume the account's single attempt: see `recordAgeDeclaration`.
+ * Rejecting it as malformed input and letting the user type again is safe
+ * precisely because neither answer helps somebody probing for a passing value:
+ * any *plausible* date they enter is final.
+ *
+ * `today` is the gate's own `ageCheckToday` (UTC+14), so the floor leans the
+ * same generous way the 18 boundary does: a date exactly ten years back is
+ * plausible, the day after is not.
  */
 export function isPlausibleBirthDate(
   dob: CalendarDate,
   today: CalendarDate = ageCheckToday(),
 ): boolean {
-  return dob.year >= EARLIEST_PLAUSIBLE_YEAR && compareDates(dob, today) <= 0;
+  return (
+    dob.year >= EARLIEST_PLAUSIBLE_YEAR &&
+    isAtLeastYearsOld(dob, today, MIN_PLAUSIBLE_AGE_YEARS)
+  );
 }

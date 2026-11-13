@@ -1,6 +1,7 @@
 import type { VoiceSignalingMessage } from "@pqp/shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTransport } from "@/lib/realtime";
+import { setCalmDetectorForTests } from "@/lib/calm-detector-flag";
 import { SPEAKING_HANGOVER_MS, SPEAKING_THRESHOLD } from "@/lib/voice-audio";
 
 /**
@@ -391,5 +392,76 @@ describe("voice-activity gate", () => {
     flushVoiceActivityPoll();
     expect(voice.getState().isTransmitting).toBe(false);
     expect(outgoingOpen()).toBe(false);
+  });
+});
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * `voice_calm_detector` on: the ring and the gate run on timers, and nothing
+ * asks for an animation frame. Real timers, a few tens of milliseconds each:
+ * the clocks are 16 ms (gate) and 50 ms (ring).
+ */
+describe("voice-activity gate with the calm detector on", () => {
+  beforeEach(() => {
+    setCalmDetectorForTests(true);
+  });
+  afterEach(() => {
+    setCalmDetectorForTests(false);
+  });
+
+  it("requests no animation frame at all", async () => {
+    const { voice } = await connected();
+    await wait(120);
+    expect(rafQueue).toHaveLength(0);
+    await voice.leave();
+  });
+
+  it("opens and closes the transmit gate on its own 16 ms clock, with no frame", async () => {
+    const { voice } = await connected();
+
+    analyserLevel = SPEAKING_THRESHOLD + 0.05;
+    await wait(250);
+    expect(voice.getState().isTransmitting).toBe(true);
+    expect(outgoingOpen()).toBe(true);
+
+    analyserLevel = 0;
+    nowMs += SPEAKING_HANGOVER_MS + 20;
+    await wait(250);
+    expect(voice.getState().isTransmitting).toBe(false);
+    expect(outgoingOpen()).toBe(false);
+    await voice.leave();
+  });
+
+  it("lights the speaker's own ring from the timer and drops it after the hangover", async () => {
+    const { voice } = await connected();
+    analyserLevel = 0.3;
+    await wait(250);
+    expect(voice.getState().speakingPeerIds).toEqual([PEER]);
+
+    analyserLevel = 0;
+    nowMs += SPEAKING_HANGOVER_MS + 20;
+    await wait(250);
+    expect(voice.getState().speakingPeerIds).toEqual([]);
+    await voice.leave();
+  });
+
+  it("never opens the mic while muted, same as the frame loop", async () => {
+    const { voice } = await connected();
+    analyserLevel = 0.4;
+    voice.toggleMute();
+    await wait(250);
+    expect(voice.getState().isTransmitting).toBe(false);
+    expect(outgoingOpen()).toBe(false);
+    await voice.leave();
+  });
+
+  it("stops every timer when the call ends", async () => {
+    const { voice } = await connected();
+    await voice.leave();
+    analyserLevel = 0.5;
+    await wait(150);
+    expect(voice.getState().isTransmitting).toBe(false);
+    expect(rafQueue).toHaveLength(0);
   });
 });

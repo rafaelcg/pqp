@@ -1012,6 +1012,24 @@ class NudgeTests(unittest.TestCase):
         self.assertEqual(merged["nudge"], {"enabled": True, "sent": 5, "refused": {"cooldown": 7}})
 
 
+class AgeGateTests(unittest.TestCase):
+    def test_render(self):
+        body = exporter.render(_base_payload(age={"passed": 7, "blocked": 2, "implausible": 3}))
+        self.assertIn("pqp_api_age_passed_total 7", body)
+        self.assertIn("pqp_api_age_blocked_total 2", body)
+        self.assertIn("pqp_api_age_implausible_total 3", body)
+        self.assertIn("# TYPE pqp_api_age_implausible_total counter", body)
+
+    def test_absent_block_renders_nothing(self):
+        self.assertNotIn("pqp_api_age", exporter.render(_base_payload()))
+
+    def test_counters_sum_across_replicas(self):
+        a = _base_payload(age={"passed": 7, "blocked": 2, "implausible": 3})
+        b = _base_payload(age={"passed": 1, "blocked": 0, "implausible": 4})
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["age"], {"passed": 8, "blocked": 2, "implausible": 7})
+
+
 class RenderVoiceNotesTests(unittest.TestCase):
     def test_usage_series(self):
         body = exporter.render(_base_payload(voiceNotes=_voice_notes()))
@@ -1119,6 +1137,182 @@ class MergeVoiceNotesTests(unittest.TestCase):
         merged = exporter.merge_admin_metrics([_base_payload(), _base_payload()])
         self.assertNotIn("voiceNotes", merged)
         self.assertNotIn("pqp_api_voice_notes", exporter.render(merged))
+
+
+def _with_event_loop(lag: dict | None) -> dict:
+    payload = _base_payload()
+    payload["runtime"] = {**payload["runtime"], "eventLoop": lag}
+    return payload
+
+
+class EventLoopTests(unittest.TestCase):
+    def test_omitted_for_an_api_without_the_field(self):
+        self.assertNotIn("pqp_api_event_loop", exporter.render(_base_payload()))
+
+    def test_omitted_while_the_monitor_has_no_sample_yet(self):
+        # The API sends `eventLoop: null` for the first seconds after boot.
+        body = exporter.render(_with_event_loop(None))
+        self.assertNotIn("pqp_api_event_loop", body)
+
+    def test_single_payload_renders_its_own_window(self):
+        body = exporter.render(
+            _with_event_loop({"windowSeconds": 60, "samples": 3000, "p50Ms": 0.4, "p99Ms": 12.5, "maxMs": 230})
+        )
+        self.assertIn("pqp_api_event_loop_lag_p50_ms 0.4", body)
+        self.assertIn("pqp_api_event_loop_lag_p99_ms 12.5", body)
+        self.assertIn("pqp_api_event_loop_lag_max_ms 230", body)
+        self.assertIn("pqp_api_event_loop_replicas_reporting 1", body)
+
+    def test_across_replicas_takes_the_worst(self):
+        calm = _with_event_loop({"p50Ms": 0.3, "p99Ms": 2, "maxMs": 9})
+        stalled = _with_event_loop({"p50Ms": 1.1, "p99Ms": 340, "maxMs": 900})
+        across = exporter.event_loop_across([calm, stalled])
+        self.assertEqual(across, {"p50Ms": 1.1, "p99Ms": 340, "maxMs": 900, "replicas": 2})
+        # `runtime` merges take-first (the calm replica); the worst still wins.
+        merged = exporter.merge_admin_metrics([calm, stalled])
+        body = exporter.render(merged, event_loop=across)
+        self.assertIn("pqp_api_event_loop_lag_p99_ms 340", body)
+        self.assertIn("pqp_api_event_loop_replicas_reporting 2", body)
+
+    def test_one_replica_reporting_still_counts(self):
+        old = _base_payload()
+        new = _with_event_loop({"p50Ms": 0.5, "p99Ms": 4, "maxMs": 20})
+        across = exporter.event_loop_across([old, new])
+        self.assertEqual(across["replicas"], 1)
+        self.assertEqual(across["p99Ms"], 4)
+
+
+def _admission(source: str = "cluster", **sao) -> dict:
+    """A `sfuAdmission` block shaped like SfuAdmissionSnapshot
+    (server/src/voice/sfu-admission-metrics.ts)."""
+    box_sao = {
+        "box": "sao", "loadMbps": 524.5, "budgetMbps": 600, "utilisation": 0.874,
+        "rooms": 31, "participants": 98, "cameraPublishers": 40, "screenPublishers": 3,
+        "checks5m": 12, "refusals5m": 2, "checksTotal": 300, "refusalsTotal": 9,
+    }
+    box_sao.update(sao)
+    box_mia = {
+        "box": "mia", "loadMbps": 0, "budgetMbps": 600, "utilisation": 0,
+        "rooms": 0, "participants": 0, "cameraPublishers": 0, "screenPublishers": 0,
+        "checks5m": 0, "refusals5m": 0, "checksTotal": 0, "refusalsTotal": 0,
+    }
+    return {"source": source, "perBox": True, "calibrated": True, "boxes": [box_sao, box_mia]}
+
+
+class SfuAdmissionTests(unittest.TestCase):
+    def test_omitted_for_an_api_without_the_block(self):
+        self.assertNotIn("pqp_api_sfu_admission", exporter.render(_base_payload()))
+
+    def test_omitted_when_the_room_read_failed(self):
+        self.assertNotIn("pqp_api_sfu_admission", exporter.render(_base_payload(sfuAdmission=None)))
+
+    def test_renders_one_series_per_box(self):
+        body = exporter.render(_base_payload(sfuAdmission=_admission()))
+        self.assertIn('pqp_api_sfu_admission_estimated_mbps{region="sao"} 524.5', body)
+        self.assertIn('pqp_api_sfu_admission_estimated_mbps{region="mia"} 0', body)
+        self.assertIn('pqp_api_sfu_admission_budget_mbps{region="sao"} 600', body)
+        self.assertIn('pqp_api_sfu_admission_rooms{region="sao"} 31', body)
+        self.assertIn('pqp_api_sfu_admission_participants{region="sao"} 98', body)
+        self.assertIn('pqp_api_sfu_admission_camera_publishers{region="sao"} 40', body)
+        self.assertIn('pqp_api_sfu_admission_screen_publishers{region="sao"} 3', body)
+        self.assertIn('pqp_api_sfu_admission_checks_5m{region="sao"} 12', body)
+        self.assertIn('pqp_api_sfu_admission_refusals_5m{region="sao"} 2', body)
+        self.assertIn("pqp_api_sfu_admission_cluster_view 1", body)
+        self.assertIn("# TYPE pqp_api_sfu_admission_refusals_total counter", body)
+        self.assertIn('pqp_api_sfu_admission_refusals_total{region="sao"} 9', body)
+        self.assertIn('pqp_api_sfu_admission_checks_total{region="sao"} 300', body)
+
+    def test_a_local_view_says_so(self):
+        body = exporter.render(_base_payload(sfuAdmission=_admission(source="local")))
+        self.assertIn("pqp_api_sfu_admission_cluster_view 0", body)
+
+    def test_loads_are_taken_once_and_counts_are_summed_across_replicas(self):
+        a = _base_payload(sfuAdmission=_admission())
+        b = _base_payload(sfuAdmission=_admission(checks5m=5, refusals5m=1, checksTotal=40, refusalsTotal=2))
+        merged = exporter.merge_admin_metrics([a, b])
+        sao = merged["sfuAdmission"]["boxes"][0]
+        # Cluster-wide estimate, identical on both replicas: never doubled.
+        self.assertEqual(sao["loadMbps"], 524.5)
+        self.assertEqual(sao["rooms"], 31)
+        # Process-local decisions: summed.
+        self.assertEqual(sao["checks5m"], 17)
+        self.assertEqual(sao["refusals5m"], 3)
+        self.assertEqual(sao["checksTotal"], 340)
+        self.assertEqual(sao["refusalsTotal"], 11)
+        body = exporter.render(merged)
+        self.assertIn('pqp_api_sfu_admission_refusals_5m{region="sao"} 3', body)
+
+    def test_a_replicas_own_room_floor_never_hides_the_cluster_view(self):
+        floor = _base_payload(sfuAdmission=_admission(source="local", loadMbps=40.0, rooms=2))
+        full = _base_payload(sfuAdmission=_admission())
+        for pair in ([floor, full], [full, floor]):
+            merged = exporter.merge_admin_metrics(pair)
+            self.assertEqual(merged["sfuAdmission"]["source"], "cluster")
+            self.assertEqual(merged["sfuAdmission"]["boxes"][0]["loadMbps"], 524.5)
+
+    def test_one_replica_without_the_block_leaves_the_other(self):
+        old = _base_payload()
+        new = _base_payload(sfuAdmission=_admission())
+        for pair in ([old, new], [new, old]):
+            merged = exporter.merge_admin_metrics(pair)
+            self.assertEqual(merged["sfuAdmission"]["boxes"][0]["loadMbps"], 524.5)
+
+    def test_a_box_only_one_replica_reports_is_kept(self):
+        a = _base_payload(sfuAdmission=_admission())
+        b = _base_payload(sfuAdmission=_admission())
+        b["sfuAdmission"]["boxes"].append({"box": "lhr", "loadMbps": 3, "budgetMbps": 600, "checks5m": 1})
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual([box["box"] for box in merged["sfuAdmission"]["boxes"]], ["sao", "mia", "lhr"])
+
+
+class RenderReportQueueTests(unittest.TestCase):
+    """The 24 hour rule's series (moderation.reports, services/report-queue.ts)."""
+
+    def _reports(self, **overrides) -> dict:
+        reports = {
+            "open": 3,
+            "actioned": 10,
+            "dismissed": 4,
+            "last24h": 5,
+            "oldestOpenAgeSeconds": 43200,
+            "openOver12h": 1,
+            "openOver24h": 0,
+        }
+        reports.update(overrides)
+        return {"reports": reports, "feedback": {}, "bans": 0, "activeTimeouts": 0}
+
+    def test_age_and_open_series(self):
+        body = exporter.render(_base_payload(moderation=self._reports()))
+        self.assertIn("pqp_api_reports_oldest_open_age_seconds 43200", body)
+        self.assertIn('pqp_api_reports_open{age="all"} 3', body)
+        self.assertIn('pqp_api_reports_open{age="over_12h"} 1', body)
+        self.assertIn('pqp_api_reports_open{age="over_24h"} 0', body)
+
+    def test_an_empty_queue_is_a_zero_not_an_absence(self):
+        body = exporter.render(
+            _base_payload(
+                moderation=self._reports(open=0, oldestOpenAgeSeconds=0, openOver12h=0, openOver24h=0)
+            )
+        )
+        self.assertIn("pqp_api_reports_oldest_open_age_seconds 0", body)
+
+    def test_an_api_older_than_the_field_emits_nothing(self):
+        # Silence, not "nothing is waiting": the alert rule's noDataState is OK.
+        old = {"reports": {"open": 2, "actioned": 0, "dismissed": 0, "last24h": 2}}
+        body = exporter.render(_base_payload(moderation=old))
+        self.assertNotIn("pqp_api_reports_oldest_open_age_seconds", body)
+        self.assertNotIn("pqp_api_reports_open", body)
+
+    def test_no_moderation_block_emits_nothing(self):
+        body = exporter.render(_base_payload())
+        self.assertNotIn("pqp_api_reports_oldest_open_age_seconds", body)
+
+    def test_replicas_share_it_and_it_is_not_doubled(self):
+        a = _base_payload(moderation=self._reports())
+        b = _base_payload(moderation=self._reports())
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["moderation"]["reports"]["oldestOpenAgeSeconds"], 43200)
+        self.assertEqual(merged["moderation"]["reports"]["open"], 3)
 
 
 if __name__ == "__main__":

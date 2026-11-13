@@ -225,6 +225,9 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
     // the room (`roomListOnScreen`), so fold the list to its icons first.
     await page.addInitScript(() => {
       localStorage.setItem("pqp:channel-sidebar", "icons");
+      // window.screen is larger than the viewport in this config
+      // (`DESKTOP_SCREEN`), so the whole-screen self-preview guard stays off
+      // until the stage goes fullscreen.
     });
     await openApp(page);
     await page.getByRole("button", { name: /lobby/i }).first().dblclick();

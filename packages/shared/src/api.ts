@@ -28,6 +28,12 @@ import { messageForwardFieldSchema } from "./forward.js";
  * `forum_channels_off` unless the runtime flag `forum_channels` is on for the
  * server. A forum never carries a message of its own; its topic is the
  * forum's guidelines.
+ *
+ * `jam` holds songs instead of messages: each song is a pile of recorded
+ * stems that play together (see `jam.ts`). Creating one is refused 403
+ * `jam_channels_off` unless the runtime flag `jam_channels` is on for the
+ * server. Like a forum it never carries a message. A client that does not know
+ * the type should leave the row out of its channel list; both phones do.
  */
 export const channelTypeSchema = z.enum([
   "text",
@@ -35,6 +41,7 @@ export const channelTypeSchema = z.enum([
   "category",
   "watch_party",
   "forum",
+  "jam",
 ]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 
@@ -609,6 +616,16 @@ export const userSchema = z.object({
    */
   ageGate: ageGateStatusSchema.optional(),
   /**
+   * Whether the age gate asks the person to confirm their date back in words
+   * before it is sent (`age_gate_readback`, a runtime kill switch, default on).
+   * Sent only while `ageGate` is `pending`, because that is the one moment a
+   * client can use it: a pending account may reach nothing but `/api/me` and the
+   * declaration, so there is no config route it could ask instead. Absent reads
+   * as "off", which is today's direct submit, so an API that predates it and a
+   * client that predates it both keep working.
+   */
+  ageGateReadback: z.boolean().optional(),
+  /**
    * The account's public handle — `pqp.gg/@rafa` — or null when it has never
    * claimed one, which is most accounts.
    *
@@ -774,8 +791,19 @@ export const serverSchema = z.object({
   communityLinks: z
     .array(
       z.object({
-        kind: z.enum(["youtube", "twitch", "instagram", "tiktok", "x", "site"]),
-        url: z.string(),
+        kind: z.enum([
+          "youtube",
+          "twitch",
+          "instagram",
+          "tiktok",
+          "x",
+          "site",
+          // The creator's own "pay me here" link: a page in `url`, or a Pix
+          // key or copia e cola as text in `pix`, never an href.
+          "support",
+        ]),
+        url: z.string().optional(),
+        pix: z.string().optional(),
       }),
     )
     .default([]),

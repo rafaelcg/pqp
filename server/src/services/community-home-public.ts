@@ -16,7 +16,12 @@ import {
   type PostRow,
 } from "./community-home.js";
 import { peekCoverInfo } from "./community-home-cover-info.js";
-import { teaserFromBody } from "./community-home-share.js";
+import {
+  markChannelRefs as markMentions,
+  mentionedChannelIds,
+  resolveChannelMarks as resolveMarks,
+  teaserFromBody,
+} from "./community-home-share.js";
 
 /**
  * A Baú post, read by somebody with no account: `pqp.gg/c/<slug>/p/<postId>`.
@@ -128,17 +133,6 @@ export function redactChannelRefs(
   });
 }
 
-/** Every channel id a set of texts mentions. */
-function mentionedChannelIds(texts: ReadonlyArray<string | null>): string[] {
-  const ids = new Set<string>();
-  for (const text of texts) {
-    for (const match of (text ?? "").matchAll(refPattern())) {
-      ids.add(match[1]!.toLowerCase());
-    }
-  }
-  return [...ids];
-}
-
 /**
  * Of the channels a post mentions, the ones EVERYBODY in the community can see
  * (id to name). The question a stranger's page has to ask is not "may this
@@ -178,40 +172,6 @@ async function everyoneVisibleChannels(
     visible.set(row.id.toLowerCase(), row.name);
   }
   return visible;
-}
-
-/**
- * Text for a card (teaser, Open Graph): `#name` where the channel is visible to
- * everybody, "um canal" where it is not, so the sentence still reads. A
- * private-use marker carries the mention through `teaserFromBody`, whose
- * markdown stripping would otherwise eat the `#` (and the brackets of the
- * reference, leaving the id behind as `<id`).
- */
-const MARK_OPEN = "\uE000";
-const MARK_CLOSE = "\uE001";
-
-function markMentions(text: string, ids: string[]): string {
-  return text.replace(
-    refPattern(),
-    (_all, id: string) => `${MARK_OPEN}${ids.indexOf(id.toLowerCase())}${MARK_CLOSE}`,
-  );
-}
-
-function resolveMarks(
-  text: string,
-  ids: string[],
-  visible: ReadonlyMap<string, string>,
-): string {
-  return text
-    .replace(
-      new RegExp(`${MARK_OPEN}(\\d+)${MARK_CLOSE}`, "g"),
-      (_all, index: string) => {
-        const name = visible.get(ids[Number(index)] ?? "");
-        return name ? `#${name}` : "um canal";
-      },
-    )
-    // A cut that landed inside a marker leaves half of one.
-    .replace(new RegExp(`${MARK_OPEN}\\d*(?:${MARK_CLOSE})?`, "g"), "");
 }
 
 /** This API's own stable address for a post's picture. Relative, like an icon's. */

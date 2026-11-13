@@ -24,16 +24,20 @@ function memory(seed: Record<string, string> = {}) {
 }
 
 describe("the coach marks that are left", () => {
-  it("are the two watch party hints and the voice note notice", () => {
+  it("are the two watch party hints, the two Jam tips and the voice note notice", () => {
     expect([...FEATURE_HINT_IDS]).toEqual([
       "watchPartyHost",
       "watchPartyViewer",
+      "jamWall",
+      "jamStudio",
       "voiceNoteTranscription",
     ]);
-    // The notice is drawn by the composer, so it is not in the queue.
+    // The notice is drawn by the composer and the studio tip by the studio,
+    // so neither is in the queue.
     expect([...ATTACHED_FEATURE_HINT_ORDER]).toEqual([
       "watchPartyHost",
       "watchPartyViewer",
+      "jamWall",
     ]);
   });
 });
@@ -146,5 +150,15 @@ describe("shouldOfferVoiceNoteTranscriptionNotice", () => {
     rememberFeatureHint("voiceNoteTranscription", storage, true);
     expect(isFeatureHintSeen("voiceNoteTranscription", storage, true)).toBe(true);
     expect(isFeatureHintSeen("watchPartyViewer", storage, true)).toBe(false);
+  });
+});
+
+describe("the Jam's first-run guidance", () => {
+  it("keeps the studio's tip out of the corner queue (it is drawn inside the studio)", () => {
+    expect(ATTACHED_FEATURE_HINT_ORDER as readonly string[]).not.toContain("jamStudio");
+  });
+
+  it("keeps the wall's tip in the attached queue", () => {
+    expect(ATTACHED_FEATURE_HINT_ORDER as readonly string[]).toContain("jamWall");
   });
 });

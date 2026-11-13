@@ -139,6 +139,15 @@
                 <data android:host="pqp.gg" />
                 <data android:pathPattern="/app/server/.*/channel/.*/post/.*" />
             </intent-filter>
+            <!-- A jam song's own link: /app/server/<sid>/channel/<jamId>/song/<songId>. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="pqp.gg" />
+                <data android:pathPattern="/app/server/.*/channel/.*/song/.*" />
+            </intent-filter>
         </activity>
 
         <!-- What keeps a call alive when the app is not on screen. Android

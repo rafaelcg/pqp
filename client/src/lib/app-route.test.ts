@@ -4,6 +4,7 @@ import {
   conversationRoutePath,
   forumPostRoutePath,
   homeRoutePath,
+  jamSongRoutePath,
   linkFollowedAt,
   messageLinkState,
   messageRoutePath,
@@ -20,6 +21,7 @@ describe("parseAppRoute", () => {
       channelId: null,
       messageId: null,
       postId: null,
+      songId: null,
     });
   });
 
@@ -30,6 +32,7 @@ describe("parseAppRoute", () => {
       channelId: "c1",
       messageId: null,
       postId: null,
+      songId: null,
     });
   });
 
@@ -40,6 +43,7 @@ describe("parseAppRoute", () => {
       channelId: "c1",
       messageId: "m1",
       postId: null,
+      songId: null,
     });
   });
 
@@ -50,6 +54,7 @@ describe("parseAppRoute", () => {
       channelId: null,
       messageId: null,
       postId: null,
+      songId: null,
     });
   });
 
@@ -84,6 +89,7 @@ describe("parseAppRoute", () => {
       channelId: "c1",
       messageId: "m1",
       postId: null,
+      songId: null,
     });
   });
 
@@ -96,6 +102,7 @@ describe("parseAppRoute", () => {
       channelId: "c d",
       messageId: null,
       postId: null,
+      songId: null,
     });
   });
 });
@@ -265,6 +272,7 @@ describe("parseAppRoute: Baú", () => {
       channelId: null,
       messageId: null,
       postId: null,
+      songId: null,
     });
     expect(parseAppRoute("/app/server/s1/channel/bau")?.kind).toBe("channel");
   });
@@ -335,6 +343,7 @@ describe("forum post links", () => {
       channelId: "f1",
       messageId: null,
       postId: "p1",
+      songId: null,
     });
   });
 
@@ -365,6 +374,39 @@ describe("forum post links", () => {
     // drop the one thing the link promised.
     expect(signedOutRedirectPath("/app/server/s1/channel/f1/post/p1")).toBe(
       "/app/server/s1/channel/f1/post/p1",
+    );
+  });
+});
+
+describe("jam song links", () => {
+  it("reads a song open on its Jam", () => {
+    expect(parseAppRoute("/app/server/s1/channel/j1/song/g1")).toEqual({
+      kind: "channel",
+      serverId: "s1",
+      channelId: "j1",
+      messageId: null,
+      postId: null,
+      songId: "g1",
+    });
+  });
+
+  it("round-trips through the builder, escaping included", () => {
+    const path = jamSongRoutePath("s 1", "j/1", "g 1");
+    expect(path).toBe("/app/server/s%201/channel/j%2F1/song/g%201");
+    expect(parseAppRoute(path)).toMatchObject({ serverId: "s 1", channelId: "j/1", songId: "g 1" });
+  });
+
+  it("does not read a song id without a Jam, and keeps a forum post a post", () => {
+    expect(parseAppRoute("/app/server/s1/song/g1")).toMatchObject({ channelId: null, songId: null });
+    expect(parseAppRoute("/app/server/s1/channel/f1/post/p1")).toMatchObject({
+      postId: "p1",
+      songId: null,
+    });
+  });
+
+  it("survives a sign-up redirect", () => {
+    expect(signedOutRedirectPath("/app/server/s1/channel/j1/song/g1")).toBe(
+      "/app/server/s1/channel/j1/song/g1",
     );
   });
 });

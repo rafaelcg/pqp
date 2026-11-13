@@ -13,6 +13,8 @@ import {
   storyViewsBatchSchema,
   type CommunityHomeContentType,
   AUTOMOD_MENTION_LIMIT_DEFAULT,
+  BASELINE_PROFILE_REJECTION_MESSAGE,
+  setBaselineSchema,
   createAutomodRuleSchema,
   updateAutomodRuleSchema,
   addChannelMemberSchema,
@@ -117,6 +119,8 @@ import {
   communityTaglineSchema,
   communityAboutSchema,
   normalizeCommunityLinks,
+  parseCommunitySupport,
+  type CommunityLink,
   parseCommunityFeaturedEmbed,
   updateCommunitySchema,
   reportStatusSchema,
@@ -346,6 +350,7 @@ import {
   AGE_GATE_PENDING_MESSAGE,
   isAgeGateExempt,
   isPlausibleBirthDate,
+  noteAgeDeclared,
   parseCalendarDate,
   recordAgeDeclaration,
 } from "../services/age-gate.js";
@@ -373,10 +378,34 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import { registerAppRoutes } from "./app-routes.js";
+import { registerJamRoutes } from "./jam-routes.js";
+import {
+  ADMIN_JAM_PUBLIC_BLOCK_PATH,
+  ADMIN_JAM_PUBLIC_QUEUE_PATH,
+  ADMIN_JAM_PUBLIC_REMOVE_PART_PATH,
+  ADMIN_JAM_PUBLIC_REVIEW_PATH,
+  ADMIN_JAM_PUBLIC_SONGS_PATH,
+  ADMIN_JAM_PUBLIC_UNPUBLISH_PATH,
+  adminJamPublicBlock,
+  adminJamPublicQueue,
+  adminJamPublicRemovePart,
+  adminJamPublicReview,
+  adminJamPublicSongs,
+  adminJamPublicUnpublish,
+  handleJamPublicPublicRoute,
+  registerJamPublicRoutes,
+  resetJamPublicRateLimits,
+} from "./jam-public-routes.js";
+import { JAM_CHANNELS_OFF, jamChannelsEnabled } from "../lib/jam-config.js";
+import {
+  handleBauPaymentsWebhook,
+  registerBauPaymentsRoutes,
+} from "./bau-payments-routes.js";
+import { noteStaffVipChange } from "../services/bau-payments/vip.js";
 import { endSessionsOfChannel } from "../apps/sweeps.js";
 import { publicAppsConfig } from "../apps/public-config.js";
 import { registerAppOwnerRoutes } from "./app-owner-routes.js";
-import { Created, HttpErrorWithDetail } from "../lib/route-results.js";
+import { Created, HttpErrorWithDetail, NoContent } from "../lib/route-results.js";
 import {
   ADMIN_APP_REVIEW_PATH,
   ADMIN_APP_SERVERS_PATH,
@@ -421,6 +450,10 @@ import {
 import { listAuditLog, logAudit } from "../services/audit.js";
 import {
   checkAutomod,
+  checkBaselineText,
+  getBaselineStatus,
+  recordBaselineHit,
+  setBaselineEnabled,
   createAutomodRule,
   deleteAutomodRule,
   getAutomodRule,
@@ -841,6 +874,8 @@ import {
 import { recordCallRating } from "../services/call-ratings.js";
 import { placeInDefaultCommunity } from "../services/default-community.js";
 import {
+  ADMIN_ACQUISITION_PATH,
+  acquisitionQuery,
   acquisitionReport,
   recordAcquisition,
 } from "../services/acquisition.js";
@@ -931,6 +966,7 @@ import {
   SelfBlockError,
   unblockUser,
 } from "../services/blocks.js";
+import { noteBlockForOperators } from "../services/block-notice.js";
 import {
   DmRefusedError,
   getConversation,
@@ -1462,6 +1498,7 @@ const listenLimiter = createRateLimiter({
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
+  resetJamPublicRateLimits();
   writeLimiter.reset();
   anonLimiter.reset();
   publicCommunitiesConfigLimiter.reset();
@@ -1525,9 +1562,7 @@ function created(body: unknown): Created {
   return new Created(body);
 }
 
-/** Wrap a handler result to answer 204 with no body. */
-class NoContent {}
-
+/** Wrap a handler result to answer 204 with no body (`NoContent`, in `lib/route-results.ts`). */
 function noContent(): NoContent {
   return new NoContent();
 }
@@ -1714,6 +1749,15 @@ const router = createRouter();
 
 // The apps platform's routes (`app-routes.ts`), behind the `apps` flag.
 registerAppRoutes(router);
+
+// Jam channels' routes (`jam-routes.ts`), behind the `jam_channels` flag for
+// writes only; every read answers whatever the flag says.
+registerJamRoutes(router);
+// Public jams' authenticated routes and the operator's session half
+// (`jam-public-routes.ts`), behind the global `jam_public` flag. The public
+// `/api/public/jams*` routes are answered in `handleApi`, before any of this.
+registerJamPublicRoutes(router);
+registerBauPaymentsRoutes(router);
 // The owner's switches for the apps the operator released (`app-owner-routes.ts`).
 registerAppOwnerRoutes(router);
 
@@ -1800,6 +1844,11 @@ router.get("/api/me", async ({ user, ageGate }) => ({
   // Reachable while the gate is still pending or blocked — it is how the client
   // finds out which of the two it is looking at.
   ageGate,
+  // Only while the gate is open, and only here: a pending account can reach
+  // nothing else, so this is the one place the client can learn the switch.
+  ...(ageGate === "pending"
+    ? { ageGateReadback: isEnabled("age_gate_readback") }
+    : {}),
 }));
 
 /**
@@ -1811,15 +1860,31 @@ router.get("/api/me", async ({ user, ageGate }) => ({
  * rather than an error. A second attempt is what gets refused, with 409 — and
  * refusing it here is the whole feature. See `recordAgeDeclaration`.
  *
- * A date that is not a real date, or is in the future, is a 400 and does NOT
- * consume the attempt. That is not a loophole: every *plausible* date is final,
- * so there is nothing to probe for.
+ * A date that is not a real date, is in the future, or is less than ten years
+ * back (`MIN_PLAUSIBLE_AGE_YEARS`: the year somebody is typing it, a default,
+ * a slip) is a 400 and does NOT consume the attempt. That is not a loophole:
+ * every *plausible* date is final, so there is nothing to probe for, and a minor
+ * gains nothing from the floor (they could always type an adult date first).
+ * The 400 carries a stable `code` beside `error` so a client can say "check the
+ * year" without parsing a sentence: `birth_date_invalid` (not a real date) or
+ * `birth_date_implausible` (a real date nobody answering this could have).
  */
 router.post("/api/me/age-check", async ({ req, user }) => {
   const body = ageDeclarationSchema.parse(await readJsonBody(req));
   const dob = parseCalendarDate(body.dateOfBirth);
-  if (!dob || !isPlausibleBirthDate(dob)) {
-    throw new HttpError(400, "Enter a valid date of birth.");
+  if (!dob) {
+    noteAgeDeclared({ passed: false, implausible: true });
+    throw new HttpErrorWithDetail(400, "Enter a valid date of birth.", {
+      code: "birth_date_invalid",
+    });
+  }
+  if (!isPlausibleBirthDate(dob)) {
+    noteAgeDeclared({ passed: false, implausible: true });
+    throw new HttpErrorWithDetail(
+      400,
+      "That date of birth does not look right. Check the year.",
+      { code: "birth_date_implausible" },
+    );
   }
 
   const result = await recordAgeDeclaration(user.id, dob);
@@ -1851,6 +1916,18 @@ const patchProfileSchema = updateProfileSchema.extend({
 
 router.patch("/api/me", async ({ req, user, ageGate }) => {
   const body = patchProfileSchema.parse(await readJsonBody(req));
+  // pqp's built-in text filter reads the names a person picks for themselves:
+  // display name, tag name, handle and the recado. Before any write, so a
+  // refusal leaves the profile exactly as it was. (A name that arrives from
+  // Clerk at sign-up is not read here: refusing it would refuse the account.)
+  for (const text of [body.displayName, body.username, body.handle, body.customStatus]) {
+    if (typeof text !== "string") continue;
+    const verdict = await checkBaselineText(null, text);
+    if (verdict) {
+      recordBaselineHit("profile", user.id, verdict);
+      throw new HttpError(422, BASELINE_PROFILE_REJECTION_MESSAGE);
+    }
+  }
   if (body.displayName !== undefined) {
     if (body.displayName === user.display_name.trim()) {
       // The stored name sent back unchanged is not an edit, whatever its length.
@@ -2509,11 +2586,12 @@ router.delete("/api/admin/users/:userId", async ({ user, res }, { userId }) => {
  * services/acquisition.ts. Deliberately NOT on the status page, which carries
  * no user counts of any kind.
  */
-router.get("/api/admin/acquisition", async ({ url, user }) => {
+router.get(ADMIN_ACQUISITION_PATH, async ({ url, user }) => {
   if (!isInstanceModerator(user)) {
     throw new NotFound("Not found");
   }
-  return acquisitionReport(clampLimit(url.searchParams.get("days"), 30, 90));
+  const { days, hours } = acquisitionQuery(url.searchParams);
+  return acquisitionReport(days, hours);
 });
 
 /**
@@ -2866,6 +2944,17 @@ const ADMIN_MACHINE_ROUTES: {
     path: ADMIN_USER_ACTIVITY_PATH,
     run: async (_req, query) => userActivityReport(userActivityQuery(query)),
   },
+  // Signups by source, medium, campaign, ref and landing path. Aggregate
+  // counts only, the same body the moderator's route answers: no row names a
+  // person. `?hours=` narrows the window for a surge.
+  {
+    method: "GET",
+    path: ADMIN_ACQUISITION_PATH,
+    run: async (_req, query) => {
+      const { days, hours } = acquisitionQuery(query);
+      return acquisitionReport(days, hours);
+    },
+  },
   // Which app one named person is on (platform, app version, OS and browser
   // family, last seen). Names a person, so it takes a target and is not on
   // /metrics. A read only; there is no write for it anywhere.
@@ -3015,6 +3104,42 @@ const ADMIN_MACHINE_ROUTES: {
     method: "POST",
     path: ADMIN_APP_SESSION_END_PATH,
     run: async (req) => adminEndSession(req, { kind: "dashboard" }),
+  },
+  // Public jams (`jam-public-routes.ts`, docs/JAM_PUBLIC.md): the list and
+  // the review queue (they name people, like the feedback queue), and four
+  // writes: take a song down, approve or reject a queued item, take one part
+  // out of the public version, block an account from publishing. Ids travel
+  // in the body or the query. Every write is audited in `jam_public_audit`
+  // with a NULL actor and `actor_kind` 'dashboard'.
+  {
+    method: "GET",
+    path: ADMIN_JAM_PUBLIC_SONGS_PATH,
+    run: async (_req, query) => adminJamPublicSongs(query),
+  },
+  {
+    method: "GET",
+    path: ADMIN_JAM_PUBLIC_QUEUE_PATH,
+    run: async () => adminJamPublicQueue(),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_JAM_PUBLIC_UNPUBLISH_PATH,
+    run: async (req) => adminJamPublicUnpublish(req, { kind: "dashboard" }),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_JAM_PUBLIC_REVIEW_PATH,
+    run: async (req) => adminJamPublicReview(req, { kind: "dashboard" }),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_JAM_PUBLIC_REMOVE_PART_PATH,
+    run: async (req) => adminJamPublicRemovePart(req, { kind: "dashboard" }),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_JAM_PUBLIC_BLOCK_PATH,
+    run: async (req) => adminJamPublicBlock(req, { kind: "dashboard" }),
   },
 ];
 
@@ -3250,6 +3375,16 @@ router.post("/api/blocks", async ({ req, user }) => {
   }
   try {
     const added = await blockUser(user.id, body.userId);
+    if (added) {
+      // The operators hear about every new block (a log line, a counter and an
+      // instance-queue ticket). Awaited so a test can read it, but it never
+      // throws: the block is already stored and must answer 201 regardless.
+      await noteBlockForOperators({
+        blockerId: user.id,
+        blockedUserId: body.userId,
+        surface: body.surface ?? null,
+      });
+    }
     // Blocking somebody you already blocked is not an error and not a new
     // block, so it answers 200 while the first one answers 201.
     return added ? created({ ok: true }) : { ok: true };
@@ -6039,11 +6174,17 @@ function translationActiveFor(serverId: string): boolean {
  * `mediaEnabled` is the storage probe, folded in so the client needs one
  * request rather than two before it can draw the composer.
  */
-router.get("/api/community-home/config", async () => ({
-  enabled: isCommunityHomeEnabled(),
-  vipEnabled: isCommunityHomeVipEnabled(),
-  mediaEnabled: isCommunityHomeEnabled() && isCommunityHomeMediaConfigured(),
-}));
+router.get("/api/community-home/config", async ({ url }) => {
+  // `?serverId=` is the server the client is looking at: VIP is a per-server
+  // flag (`community_home_vip`). Absent or not a uuid, the answer is the
+  // global one, which is what every client before this change received.
+  const parsed = z.string().uuid().safeParse(url.searchParams.get("serverId"));
+  return {
+    enabled: isCommunityHomeEnabled(),
+    vipEnabled: isCommunityHomeVipEnabled(parsed.success ? parsed.data : null),
+    mediaEnabled: isCommunityHomeEnabled() && isCommunityHomeMediaConfigured(),
+  };
+});
 
 /**
  * This server's own opt-in. The instance flag says Baú exists here; this
@@ -7779,6 +7920,25 @@ router.patch(
       links = parsed;
     }
 
+    // The support link, from its own box. Blank or null clears it. It never
+    // comes through `links`, whose kinds are derived from the host, so a
+    // payment page pasted there stays an ordinary "site" chip.
+    let support: CommunityLink | null | undefined;
+    if (body.support !== undefined) {
+      if (body.support === null || body.support.trim() === "") {
+        support = null;
+      } else {
+        const parsed = parseCommunitySupport(body.support);
+        if (!parsed) {
+          throw new HttpError(
+            400,
+            "That support link is not allowed. Use a Pix key, a Pix copia e cola, or an https link from LivePix, Apoia.se, Patreon, Ko-fi, Buy Me a Coffee, Cafecito, Catarse, Kick, Twitch, YouTube, PayPal.me or Mercado Pago.",
+          );
+        }
+        support = parsed;
+      }
+    }
+
     let featured: ReturnType<typeof parseCommunityFeaturedEmbed> | null | undefined;
     if (body.featured !== undefined) {
       if (body.featured === null) {
@@ -7807,6 +7967,7 @@ router.patch(
           ...(tagline !== undefined ? { tagline } : {}),
           ...(about !== undefined ? { about } : {}),
           ...(links !== undefined ? { links } : {}),
+          ...(support !== undefined ? { support } : {}),
           ...(featured !== undefined ? { featured } : {}),
           ...(body.category !== undefined ? { category: body.category } : {}),
           ...(slug !== undefined ? { slug } : {}),
@@ -7938,7 +8099,7 @@ router.patch(
             },
           ]
         : []),
-      ...(links !== undefined &&
+      ...((links !== undefined || support !== undefined) &&
       JSON.stringify(updated.previous.links) !==
         JSON.stringify(updated.settings.links)
         ? [
@@ -8113,6 +8274,10 @@ router.post(
     // is what keeps it inert until the runtime flag is on for this server.
     if (body.type === "forum" && !forumChannelsEnabled(serverId!)) {
       throw new Forbidden(FORUM_CHANNELS_OFF);
+    }
+    // Same for a jam channel (`jam_channels`).
+    if (body.type === "jam" && !jamChannelsEnabled(serverId!)) {
+      throw new Forbidden(JAM_CHANNELS_OFF);
     }
     // ABSENT `parentId` is an older client (the legacy-create rule): on a
     // server in the mixed layout its channel goes to the end of the first
@@ -10513,6 +10678,8 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
       );
     }
   }
+  // An edit in a direct or group conversation is not read by the default text
+  // filter either (see `postChannelMessage`): no server rules, no baseline.
 
   const updated = await updateMessageBody(messageId!, body.body);
   if (!updated) {
@@ -11678,6 +11845,12 @@ router.put(
     }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await assignRole(serverId!, userId!, roleId!);
+    if (role.system_key === "vip") {
+      // Best effort: the role change already committed and is what counts.
+      await noteStaffVipChange(serverId!, userId!).catch((error: unknown) => {
+        console.error("[bau-payments] staff VIP note failed:", error);
+      });
+    }
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -11704,6 +11877,11 @@ router.delete(
     }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await unassignRole(serverId!, userId!, roleId!);
+    if (role.system_key === "vip") {
+      await noteStaffVipChange(serverId!, userId!).catch((error: unknown) => {
+        console.error("[bau-payments] staff VIP note failed:", error);
+      });
+    }
     const revoked = new Set(
       await listRevokedPrivateChannelIds(serverId!, userId!),
     );
@@ -12682,6 +12860,32 @@ router.get(
   },
 );
 
+// The built-in text filter's switch (`@pqp/shared` `automod-baseline.ts`).
+// Same readers as the rules (a moderator may see what the filter does), and the
+// same writer: only MANAGE_SERVER turns it off for the server. The answer also
+// says whether the operator's flag has it off everywhere, so the page can say
+// so instead of showing a switch that does nothing.
+router.get(
+  "/api/servers/:serverId/automod/baseline",
+  async ({ user }, { serverId }) => {
+    await requireAnyPermission(serverId!, user.id, [
+      Permission.MANAGE_SERVER,
+      Permission.MANAGE_MESSAGES,
+    ]);
+    return getBaselineStatus(serverId!);
+  },
+);
+
+router.put(
+  "/api/servers/:serverId/automod/baseline",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = setBaselineSchema.parse(await readJsonBody(req));
+    // The audit line is written in the same transaction as the switch.
+    return setBaselineEnabled(serverId!, body.enabled, user.id);
+  },
+);
+
 router.post(
   "/api/servers/:serverId/automod/rules",
   async ({ req, user }, { serverId }) => {
@@ -13000,6 +13204,24 @@ router.post("/api/reports", async ({ req, res, user }) => {
                 reason: body.reason,
                 details: body.details,
               }
+            : body.subjectType === "bau_post"
+              ? {
+                  // The Baú flag, membership and the VIP lock are checked in
+                  // services/community-home.ts (`resolveBauReportTarget`).
+                  subjectType: "bau_post",
+                  reporterId: user.id,
+                  postId: body.postId,
+                  reason: body.reason,
+                  details: body.details,
+                }
+              : body.subjectType === "bau_comment"
+                ? {
+                    subjectType: "bau_comment",
+                    reporterId: user.id,
+                    commentId: body.commentId,
+                    reason: body.reason,
+                    details: body.details,
+                  }
             : {
               subjectType: "user",
               reporterId: user.id,
@@ -13104,6 +13326,27 @@ router.get("/api/reports/:report/context", async ({ user }, { report }) => {
   const context = await getReportContext(reportId, { id: user.id, instance });
   if (!context) {
     throw new NotFound("Report not found");
+  }
+  if (context.bau) {
+    // The one read that opens a Baú post past the VIP lock, so nobody reads
+    // it without a row saying so. Written BEFORE the words leave, and a failed
+    // write fails the request. A server-scoped report files it under that
+    // server; a community's Baú report lives in the instance queue and must
+    // not show in the community's own audit log, so it leaves the line alone.
+    if (scope.serverId) {
+      await logAudit({
+        serverId: scope.serverId,
+        actorId: user.id,
+        action: "report.bau_view",
+        targetType: "bau_post",
+        targetId: context.bau.post?.id ?? null,
+        changes: [{ key: "report", old: null, new: reportId }],
+      });
+    }
+    console.log(
+      `[moderation] report bau opened: report ${reportId}, ` +
+        `post ${context.bau.post?.id ?? "gone"}, moderator ${user.id}`,
+    );
   }
   return context;
 });
@@ -13367,6 +13610,9 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
     user.id,
     body.status,
     body.note,
+    // A server's own staff closing a user's report is not the pqp team
+    // reviewing it: leave a second look in the instance queue.
+    { secondLook: !isInstanceModerator(user) },
   );
   if (!resolved) {
     // Someone else closed it between the scope read and the update.
@@ -15236,9 +15482,22 @@ export async function handleApi(
     return;
   }
 
+  // Public jams (`jam-public-routes.ts`): `config` always answers; every
+  // other `/api/public/jams*` route is not matched at all while `jam_public`
+  // is off, so it falls through to the 401 an unknown path gets.
+  if (await handleJamPublicPublicRoute(req, res, pathname)) {
+    return;
+  }
+
   // The signed-out live preview's listing and start routes. Not matched at
   // all while `live_preview` is off everywhere (see `live-preview-routes.ts`).
   if (await handleLivePreviewRoute(req, res, pathname)) {
+    return;
+  }
+
+  // Baú+ payment provider notifications: no session, the adapter's
+  // signature check is the door (see `bau-payments-routes.ts`).
+  if (await handleBauPaymentsWebhook(req, res, pathname)) {
     return;
   }
 

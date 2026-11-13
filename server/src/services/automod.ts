@@ -1,7 +1,10 @@
 import {
   AUTOMOD_CLERK_ID,
   AUTOMOD_KIND_LABEL,
+  BASELINE_REJECTION_MESSAGE,
   evaluateAutomod,
+  findBaselineViolation,
+  type BaselineStatus,
   findPqpInviteLinks,
   type AutomodContext,
   Permission,
@@ -16,6 +19,8 @@ import {
   publishToCluster,
   subscribeToCluster,
 } from "../lib/bus.js";
+import { isEnabled } from "../lib/flags.js";
+import { logEvent } from "../lib/log.js";
 import { logAudit } from "./audit.js";
 import { getHydratedMessage, type HydratedMessage } from "./messages.js";
 import { issueTimeout, type IssuedTimeout } from "./sanctions.js";
@@ -323,6 +328,182 @@ function mapRule(row: RuleRow): AutomodRule {
 
 const cache = new Map<string, { rules: AutomodRule[]; expiresAt: number }>();
 
+// ---------------------------------------------------------------------------
+// The baseline text filter
+// ---------------------------------------------------------------------------
+
+/**
+ * pqp's built-in filter (`findBaselineViolation` in `@pqp/shared`): OFF by
+ * default, filtering nothing until somebody turns it on. Two levers, and the
+ * owner's wins for their own server:
+ *
+ * - the operator's `default_text_filter` flag, global or per server, from the
+ *   dashboard (env `DEFAULT_TEXT_FILTER`);
+ * - the server's owner, in AutoMod settings, either way: one row in
+ *   `server_text_filter_settings` (`disabled = FALSE` is "on for my server",
+ *   `TRUE` is "off for my server"; no row follows the flag).
+ *
+ * It is not an AutoMod rule: it has no row in `automod_rules`, no exemptions,
+ * no alert and no timeout, so nothing an existing server configured changes.
+ *
+ * NO STAFF BYPASS, unlike the rules above. A rule is the owner's list and the
+ * owner must never be locked out by their own list; the baseline is the
+ * instance's, and the owner's lever is the switch. It also means the account
+ * that owns a server and types a slur is refused like anybody, once it is on.
+ *
+ * The owner's choice is cached like the rules and dropped by the same
+ * invalidation, so it crosses the cluster the same way.
+ */
+const baselineCache = new Map<
+  string,
+  { choice: boolean | null; expiresAt: number }
+>();
+/** Bumped by every invalidation; a read that began under an older value must not cache. */
+let baselineEpoch = 0;
+
+/** This server's owner's choice: true on, false off, null no choice made. */
+async function ownerBaselineChoice(serverId: string): Promise<boolean | null> {
+  const now = Date.now();
+  const hit = baselineCache.get(serverId);
+  if (hit && hit.expiresAt > now) {
+    return hit.choice;
+  }
+  const epoch = baselineEpoch;
+  const result = await getPool().query<{ disabled: boolean }>(
+    `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1`,
+    [serverId],
+  );
+  const row = result.rows[0];
+  const choice = row ? !row.disabled : null;
+  if (epoch === baselineEpoch) {
+    baselineCache.set(serverId, { choice, expiresAt: now + CACHE_TTL_MS });
+  }
+  return choice;
+}
+
+/** What the settings page shows: the operator's answer, the owner's choice, and what applies. */
+export async function getBaselineStatus(serverId: string): Promise<BaselineStatus> {
+  const instanceEnabled = isEnabled("default_text_filter", { serverId });
+  const result = await getPool().query<{ disabled: boolean }>(
+    `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1`,
+    [serverId],
+  );
+  const row = result.rows[0];
+  const ownerChoice = row ? !row.disabled : null;
+  return { instanceEnabled, ownerChoice, enabled: ownerChoice ?? instanceEnabled };
+}
+
+/**
+ * The owner's switch, either direction: always writes the choice (on is
+ * `disabled = FALSE`, off is `TRUE`), so a later change of the operator's flag
+ * never silently flips a server whose owner chose. The write and its audit
+ * line are one transaction: a switch that took effect is never left
+ * unaudited, and an audit that failed leaves the switch where it was. Only a
+ * change of what applies is audited.
+ */
+export async function setBaselineEnabled(
+  serverId: string,
+  enabled: boolean,
+  actorId: string,
+): Promise<BaselineStatus> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const before = await client.query<{ disabled: boolean }>(
+      `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1 FOR UPDATE`,
+      [serverId],
+    );
+    const row = before.rows[0];
+    const wasEnabled = row
+      ? !row.disabled
+      : isEnabled("default_text_filter", { serverId });
+    await client.query(
+      `INSERT INTO server_text_filter_settings (server_id, disabled, updated_by)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (server_id) DO UPDATE
+         SET disabled = EXCLUDED.disabled, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+      [serverId, !enabled, actorId],
+    );
+    if (wasEnabled !== enabled) {
+      await logAudit(
+        {
+          serverId,
+          actorId,
+          action: "automod.rule_update",
+          targetType: "automod_rule",
+          changes: [
+            { key: "kind", old: null, new: "baseline" },
+            { key: "enabled", old: wasEnabled, new: enabled },
+          ],
+        },
+        client,
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  invalidateAutomodCache(serverId);
+  return getBaselineStatus(serverId);
+}
+
+function baselineVerdict(body: string): AutomodVerdict | null {
+  const hit = findBaselineViolation(body);
+  return hit
+    ? {
+        kind: "keywords",
+        matched: hit.class,
+        customMessage: BASELINE_REJECTION_MESSAGE,
+        baseline: true,
+      }
+    : null;
+}
+
+/**
+ * The baseline verdict for a text, or null when it may land. `serverId` is
+ * null for a surface with no server (a profile name), where only the global
+ * answer of the `default_text_filter` flag applies. With a server, the owner's
+ * choice wins and the flag (with the server's override) is the fallback.
+ * Direct and group messages never call this: the filter does not read
+ * private conversations.
+ */
+export async function checkBaselineText(
+  serverId: string | null,
+  body: string,
+): Promise<AutomodVerdict | null> {
+  const flagOn = isEnabled("default_text_filter", { serverId });
+  if (!serverId && !flagOn) {
+    return null;
+  }
+  // Only a text that hits the list costs the owner-choice lookup.
+  const verdict = baselineVerdict(body);
+  if (!verdict) {
+    return null;
+  }
+  if (serverId) {
+    const choice = await ownerBaselineChoice(serverId);
+    if (!(choice ?? flagOn)) {
+      return null;
+    }
+  }
+  return verdict;
+}
+
+/**
+ * A baseline hit on a surface with no server to audit it on. One log line
+ * with the class and the surface, never the text.
+ */
+export function recordBaselineHit(
+  surface: "profile",
+  userId: string,
+  verdict: AutomodVerdict,
+): void {
+  logEvent("automod.baseline", { surface, class: verdict.matched, userId });
+}
+
 /**
  * Drop this process's copy. The half that runs on EVERY instance: the write
  * path calls `invalidateAutomodCache` (below), which calls this and then says
@@ -334,10 +515,15 @@ const cache = new Map<string, { rules: AutomodRule[]; expiresAt: number }>();
  * members still trip and half no longer do.
  */
 export function invalidateAutomodCacheLocally(serverId?: string): void {
+  // A read already in flight started before this and may carry the old row:
+  // bumping the epoch tells it not to write what it found into the cache.
+  baselineEpoch += 1;
   if (serverId) {
     cache.delete(serverId);
+    baselineCache.delete(serverId);
   } else {
     cache.clear();
+    baselineCache.clear();
   }
 }
 
@@ -548,6 +734,11 @@ export interface AutomodCheckInput {
 export async function checkAutomod(
   input: AutomodCheckInput,
 ): Promise<AutomodVerdict | null> {
+  // The built-in filter first, and for everybody (see its comment above).
+  const baseline = await checkBaselineText(input.serverId, input.body);
+  if (baseline) {
+    return baseline;
+  }
   const rules = await cachedRules(input.serverId);
   if (rules.length === 0) {
     return null;
@@ -691,6 +882,13 @@ export async function recordAutomodHit(
   // null actor as "a departed account", which is the opposite of what
   // happened.
   const actorId = await ensureAutomodUser();
+  if (verdict.baseline) {
+    logEvent("automod.baseline", {
+      surface: "server",
+      serverId: input.serverId,
+      class: verdict.matched,
+    });
+  }
   try {
     await logAudit({
       serverId: input.serverId,
@@ -698,7 +896,9 @@ export async function recordAutomodHit(
       action: "automod.block",
       targetType: "user",
       targetId: input.authorId,
-      reason: verdict.kind,
+      // The rule kind for an owner's rule; `baseline` for the built-in filter,
+      // whose `matched` below is the class, never the word.
+      reason: verdict.baseline ? "baseline" : verdict.kind,
       changes: [
         { key: "channelId", old: null, new: input.channelId },
         { key: "matched", old: null, new: verdict.matched },

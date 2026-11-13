@@ -150,7 +150,11 @@ class VoiceEngine(
      * the peer's track does, so it has to be remembered per peer and consulted
      * when the track finally lands. See [RemoteAudioGate].
      */
-    private val remoteAudio = RemoteAudioGate<AudioTrack> { track, enabled ->
+    private val remoteAudio = RemoteAudioGate<AudioTrack>(
+        // `AudioTrack.setVolume` moves the track's source gain (0 to 10, 1 is
+        // untouched), which is how the per-person slider is heard on a mesh.
+        applyVolume = { track, volume -> runCatching { track.setVolume(volume) } },
+    ) { track, enabled ->
         runCatching { track.setEnabled(enabled) }
     }
     private val audioLock = Any()
@@ -434,6 +438,11 @@ class VoiceEngine(
      */
     override fun setPeerScreenAudioStreamId(remotePeerId: String, streamId: String?) {
         synchronized(audioLock) { remoteAudio.setScreenAudioStreamId(remotePeerId, streamId) }
+    }
+
+    /** The listener's level for one peer; see [RemoteAudioGate.setVolume]. */
+    override fun setPeerVolume(remotePeerId: String, volume: Double) {
+        synchronized(audioLock) { remoteAudio.setVolume(remotePeerId, volume) }
     }
 
     override fun addPeer(remotePeerId: String) {

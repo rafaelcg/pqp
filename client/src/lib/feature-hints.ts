@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { hintDietHides } from "./hint-diet";
 import {
+  isAutomatedBrowser,
   isHintSeen,
   rememberHint,
   shouldPersistHints,
@@ -19,6 +20,8 @@ import {
 export const FEATURE_HINT_IDS = [
   "watchPartyHost",
   "watchPartyViewer",
+  "jamWall",
+  "jamStudio",
   // Not in the attached queue: the notice is rendered by the composer itself,
   // at the moment somebody records (see `voice-note-transcription-notice.tsx`).
   "voiceNoteTranscription",
@@ -29,6 +32,8 @@ export type FeatureHintId = (typeof FEATURE_HINT_IDS)[number];
 export const FEATURE_HINT_STORAGE_KEYS = {
   watchPartyHost: "pqp:feature-hint-watch-party-host-2026-09",
   watchPartyViewer: "pqp:feature-hint-watch-party-viewer-2026-09",
+  jamWall: "pqp:feature-hint-jam-wall-2026-11",
+  jamStudio: "pqp:feature-hint-jam-studio-2026-11",
   voiceNoteTranscription: "pqp:feature-hint-voice-note-transcription-2026-10",
 } as const;
 
@@ -36,10 +41,15 @@ export const FEATURE_HINT_STORAGE_KEYS = {
 export const ATTACHED_FEATURE_HINT_ORDER = [
   // The two watch party hints: a person setting a show up, and a person who
   // has just landed in one. They say what the screen cannot (nothing goes out
-  // until Ir ao vivo; watching is not being in the call). Every other coach
-  // mark was removed on 2026-11-01: each pointed at a control the app shows.
+  // until Ir ao vivo; watching is not being in the call). The other coach
+  // marks were removed on 2026-11-01: each pointed at a control the app shows.
   "watchPartyHost",
   "watchPartyViewer",
+  // The Jam wall's tip, added on main after that removal (open question for
+  // André in docs/redesign/LOG.md). The studio's own tip is not in this queue:
+  // it is drawn inside the studio, `StudioTip`, through the same store, so a
+  // card in the corner can never cover the post button.
+  "jamWall",
 ] as const;
 
 export type AttachedFeatureHintId = (typeof ATTACHED_FEATURE_HINT_ORDER)[number];
@@ -185,6 +195,11 @@ export function shouldOfferWatchPartyViewerHint(input: {
   watching: boolean;
 }): boolean {
   return !input.seen && !input.automated && input.watching;
+}
+
+/** Not seen yet, and not an automated browser (which is never shown a hint). */
+export function featureHintEligible(id: FeatureHintId): boolean {
+  return !isAutomatedBrowser() && !isFeatureHintSeen(id);
 }
 
 /**

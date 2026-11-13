@@ -9,6 +9,7 @@
  * that contained other people's content would be a disclosure, not a right.
  */
 
+import { jamKeysForUser } from "./jam-keys.js";
 import { formatUserTag, type UserPreferences } from "@pqp/shared";
 import { retireAuthorStories } from "./stories.js";
 import { accountLocadoraSaveKeys } from "../apps/locadora-saves.js";
@@ -478,7 +479,7 @@ async function exportReportsFiled(
     `SELECT id::text, created_at, subject_type, context_kind, subject_label,
             channel_label, server_id, reason, details, status, resolved_at
      FROM reports
-     WHERE reporter_id = $1
+     WHERE reporter_id = $1 AND escalated_from IS NULL
      ORDER BY id ASC
      LIMIT $2`,
     [userId, MAX_EXPORT_REPORTS + 1],
@@ -807,6 +808,8 @@ export async function deleteAccount(
   const attachmentKeys = [
     ...(await accountAttachmentKeys(userId)),
     ...(await accountLocadoraSaveKeys(userId)),
+    // Their jam recordings: the track rows cascade with the account.
+    ...(await jamKeysForUser(userId)),
   ];
 
   const stamped = await getPool().query(
@@ -913,6 +916,7 @@ export async function sweepPendingAccountDeletions(): Promise<number> {
     const keys = await accountAttachmentKeys(row.id);
     // No hourly sweeper knows these, so they are deleted here, best effort.
     deleteObjectsInBackground(await accountLocadoraSaveKeys(row.id));
+    deleteObjectsInBackground(await jamKeysForUser(row.id));
     await retireAuthorStories(row.id);
     await getPool().query(`DELETE FROM users WHERE id = $1`, [row.id]);
     // Same reasoning as the primary path above: a deletion that was only

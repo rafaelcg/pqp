@@ -12,6 +12,7 @@ import {
   Lock,
   MessagesSquare,
   Mic,
+  Music2,
   type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -131,6 +132,21 @@ export function ChannelIcon({
   // A forum: conversations, not one chat. Distinct from `#` at 16 px.
   if (channel.type === "forum") {
     return <Glyph off={MessagesSquare} on={ChatsCircle} className={cn("shrink-0", className)} />;
+  }
+  // A Jam: an app, so the glyph sits in the guitar colour's rounded square
+  // instead of reading as a channel. Same 16 px footprint as the others.
+  if (channel.type === "jam") {
+    return (
+      <span
+        aria-hidden="true"
+        className={cn(
+          "grid shrink-0 place-items-center rounded-[5px] bg-inst-guitar text-on-inst",
+          className ?? "h-4 w-4",
+        )}
+      >
+        <Music2 className="h-2.5 w-2.5" />
+      </span>
+    );
   }
   return <Glyph off={Hash} on={HashBold} kind="symbol" className={cn("shrink-0", className)} />;
 }

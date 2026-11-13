@@ -85,7 +85,7 @@ jobs:
     # No Postgres service here: nothing in this job reads a database.
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
@@ -154,8 +154,8 @@ jobs:
 
       # Same reason as the monitor scripts above, with a sharper edge: this one
       # decides whether merging drops every live WebSocket. It used to be a
-      # `grep` inside deploy-api-fly.yml, where the only way to learn what it
-      # did was to merge something and watch.
+      # `grep` inside the old Fly deploy workflow, where the only way to learn
+      # what it did was to merge something and watch.
       - name: Test deploy relevance
         run: node --test scripts/deploy/*.test.mjs
 
@@ -294,7 +294,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
@@ -303,6 +303,13 @@ jobs:
       # compiled output from server/dist.
       - name: Build server
         run: pnpm --filter @pqp/server build
+
+      # A real ffmpeg (with libx264, AAC, libvpx and libopus: Ubuntu's has all
+      # four) for the tests that convert media. The Jam camera video's MP4
+      # copy is pinned by finding a flash and a click again in the output
+      # (`speech/video-transcode.test.ts`); without ffmpeg those tests skip.
+      - name: Install ffmpeg
+        run: command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
 
       - name: Test server (shard ${{ matrix.shard }}/3)
         run: pnpm --filter @pqp/server test --shard=${{ matrix.shard }}/3
@@ -321,7 +328,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
@@ -424,6 +431,7 @@ jobs:
             shards: "3 4"
             label: 3+4/4
           # No lanes: camera sync needs no API and no database (about 3 min).
+          # The jam engine rig rides in this job too (about 1 min).
           - suite: camera-sync
             label: synthetic live HLS
             camera: true
@@ -476,7 +484,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
@@ -496,7 +504,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -519,7 +527,7 @@ jobs:
       - name: Cache Playwright Firefox
         if: matrix.stale || matrix.appframe
         id: playwright-firefox-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright/firefox-*
           key: playwright-firefox-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -590,11 +598,30 @@ jobs:
           command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
           pnpm --filter @pqp/client e2e:camera-sync
 
+      # The jam audio engine (client/playwright.jam.config.ts): a take recorded
+      # over a backing through a fake microphone must land on the backing,
+      # through FLAC and real-time playback; plus how Chromium decodes each
+      # candidate upload codec (ffmpeg from the step above). Playwright's
+      # Chromium, no API, no database, about a minute.
+      - name: E2E jam engine (fake microphone, placement and playback)
+        if: matrix.camera
+        timeout-minutes: 5
+        run: pnpm --filter @pqp/client e2e:jam --project=chromium
+
+      # The public jam site (client/playwright.jam-site.config.ts): the page alone
+      # on a Vite server with the API mocked in the browser. No media on the home,
+      # a song plays on the engine's clock, the mosaic, the sign-up sheets and the
+      # intent they carry, the disabled page. Chromium, no API, no database.
+      - name: E2E public jam site (mocked API)
+        if: matrix.camera
+        timeout-minutes: 5
+        run: pnpm --filter @pqp/client e2e:jam-site
+
       # `cancelled()` too: a step that hit its timeout ends the job as a
       # cancellation, and that is exactly when the output is wanted.
       - name: Upload E2E artifacts
         if: failure() || cancelled()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           if-no-files-found: ignore
           # upload-artifact@v4 hard-fails on duplicate names across matrix jobs.

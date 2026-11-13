@@ -1,12 +1,12 @@
 # Fly.io configuration for the ambient-life runner.
 #
-# A SECOND, TINY APP — not a process group on `pqp-api`. Three reasons, in order
+# A SECOND, TINY APP — not a process group on the API. Three reasons, in order
 # of how much they would hurt:
 #
-#   1. The API machine is single-by-design (see the root fly.toml's banner:
-#      presence, voice rooms and rate-limit buckets are in-process Maps). Adding
-#      a process to it means every persona edit restarts the chat server for
-#      everybody. A separate app decouples the two deploy cadences entirely.
+#   1. The API is not a place for side processes (presence, voice rooms and
+#      rate-limit buckets are in-process Maps, so a restart drops every socket).
+#      Adding a process to it means every persona edit restarts the chat server
+#      for everybody. A separate app decouples the two deploy cadences entirely.
 #   2. Blast radius. This process holds ~25 WebSockets and calls an external API
 #      on a timer. If it wedges, leaks or gets rate-limited, the thing that goes
 #      down should be the ambient chatter, not the product.
@@ -43,7 +43,7 @@ kill_timeout = 15
   # Where the cast posts. The runner derives the WebSocket URL from this, so
   # there is one variable to point at an environment rather than two to
   # disagree.
-  PQP_API_URL = "https://pqp-api.fly.dev"
+  PQP_API_URL = "https://api.pqp.gg"
 
   # Read from the image; the file is content, not configuration.
   AMBIENT_CONFIG = "/app/tools/ambient/personas.yaml"

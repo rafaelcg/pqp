@@ -1083,8 +1083,56 @@ Each is a change that would move at least one risk level in this document.
 | Version | Date | Change |
 |---|---|---|
 | 1 | 2026-08-07 | First assessment. Written at public launch, against Risk Assessment Guidance V2.0 (25 June 2026). |
+| 1.1 | 2026-10-23 | Age gate changed (review trigger "Changing the age gate"), no risk level moved. See "Change record: age gate, 2026-10-23" below. |
 
 Superseded versions are to be retained for at least three years.
+
+#### Change record: age gate, 2026-10-23
+
+**What changed.** Three things on control C7, all aimed at one failure: a real
+adult (19) was treated as under 18 after mistyping his date of birth, because
+the gate takes one attempt per account and records whatever was typed as final.
+The arithmetic was audited and is correct; the gap was that a keyboard slip
+(for example a birth year equal to the current year) became a permanent block.
+
+1. **Plausibility floor.** A birth date less than 10 years before today (the
+   gate's own UTC+14 "today") is not accepted as a declaration. The server
+   answers 400 `birth_date_implausible` and the attempt is **not** consumed, so
+   the person types again. Implemented in `isPlausibleBirthDate`
+   (`packages/shared/src/age.ts`).
+2. **Read-back before sending** (web; the native apps follow). The date is said
+   back in words in the person's language, with "Está certo" and "Corrigir",
+   to everybody alike. Behind the runtime kill switch `age_gate_readback`
+   (default on; off is the old direct submit).
+3. **Faster appeal path, still manual.** The blocked screen now carries
+   `contato@pqp.gg` and says to write from the account's email address, as the
+   Terms already did, and `docs/DB_RUNBOOK.md` has the operator runbook for an
+   appeal. Resets stay a logged manual SQL; there is no admin route and no
+   in-app reset.
+
+**Why this does not move a risk level.**
+
+- *It reduces false blocks and adds no way for a minor to pass.* A child who
+  wants a passing date could always type an adult one on the first try, and
+  still can; the floor refuses only dates under 10 years back, which are never
+  a passing answer, so rejecting them cannot help anybody probe for one. The
+  read-back shows nothing the existing warning does not already say (the
+  answer is final, a date under 18 closes the account) and is shown before the
+  verdict exists, so it leaks no outcome.
+- *No retry was added.* Every plausible date is still final and still
+  one attempt; a self-serve correction window (for example 10 minutes, once)
+  was considered and **rejected**, because it is retry-until-pass for any
+  minor and the Terms say the answer is final.
+- *The control is still self-declaration.* C7's description stands unchanged:
+  it is not highly effective age assurance, it checks no document, and no
+  lower risk level may depend on it. Nothing here claims otherwise.
+
+**How it is watched.** One log line per answer, `age.declared passed=<bool>
+implausible=<bool>`, with no date and no user id, and counters `age.passed`,
+`age.blocked` and `age.implausible` on `GET /api/admin/metrics` (exported as
+`pqp_api_age_*`). A rising `implausible` is a form the gate should catch
+earlier; a rising `blocked` after the floor is the number this record would be
+re-read against.
 
 ---
 

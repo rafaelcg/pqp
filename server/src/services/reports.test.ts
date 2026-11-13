@@ -940,4 +940,209 @@ describeDb("reports", () => {
       ).status,
     ).toBe(403);
   });
+
+  // ----------------------------------------------------------- second look
+  //
+  // "We review every report within 24 hours" is a claim about the pqp team,
+  // and a report in a server's own queue can be closed by that server's owner
+  // without anybody at pqp ever seeing it. Closing it leaves a copy in the
+  // instance queue.
+
+  it("leaves a second look in the instance queue when a server's own staff closes a report", async () => {
+    const messageId = await say(channelId, nuisance.id, "buy followers");
+    const { report } = await createReport({
+      subjectType: "message",
+      reporterId: member.id,
+      messageId,
+      reason: "spam",
+      details: "third time today",
+    });
+    // Filed 30 hours ago: the clock must not restart when the owner closes it.
+    await getPool().query(
+      `UPDATE reports SET created_at = NOW() - INTERVAL '30 hours' WHERE id = $1`,
+      [report.id],
+    );
+
+    const res = await call(owner, "PATCH", `/api/reports/${report.id}`, {
+      status: "dismissed",
+      note: "not spam",
+    });
+    expect(res.status).toBe(200);
+
+    process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+    const instance = await call<{
+      reports: Array<{
+        id: string;
+        status: string;
+        contextKind: string;
+        messageId: string;
+        contentSnapshot: string;
+        details: string;
+        createdAt: string;
+      }>;
+    }>(operator, "GET", "/api/reports/instance?status=open");
+    expect(instance.status).toBe(200);
+    expect(instance.body.reports).toHaveLength(1);
+    const copy = instance.body.reports[0]!;
+    expect(copy.id).not.toBe(report.id);
+    expect(copy.status).toBe("open");
+    expect(copy.contextKind).toBe("none");
+    expect(copy.messageId).toBe(messageId);
+    expect(copy.contentSnapshot).toBe("buy followers");
+    expect(copy.details).toContain("third time today");
+    expect(copy.details).toContain(`report #${report.id}`);
+    expect(copy.details).toContain("dismissed");
+    expect(Date.now() - new Date(copy.createdAt).getTime()).toBeGreaterThan(
+      29 * 3_600_000,
+    );
+
+    // The clock the Grafana rules read sees it, 30 hours old.
+    const { reportQueueStats } = await import("./report-queue.js");
+    const stats = await reportQueueStats();
+    expect(stats.open).toBe(1);
+    expect(stats.openOver24h).toBe(1);
+    expect(stats.oldestOpenAgeSeconds).toBeGreaterThan(29 * 3600);
+    expect(stats.last24h).toBe(0);
+
+    // What the owner sees is what it always was: their one report, closed.
+    const queue = await listServerReports(serverId, PAGE);
+    expect(queue.reports.map((r) => r.id)).toEqual([report.id]);
+    expect(queue.reports[0]!.status).toBe("dismissed");
+
+    // The reporter still has one report, not two.
+    const mine = await listReportsByReporter(member.id, PAGE);
+    expect(mine.reports.map((r) => r.id)).toEqual([report.id]);
+
+    // And the pqp team can close the copy like any instance report.
+    const closed = await call(operator, "PATCH", `/api/reports/${copy.id}`, {
+      status: "actioned",
+      note: "removed",
+    });
+    expect(closed.status).toBe(200);
+    expect((await reportQueueStats()).open).toBe(0);
+  });
+
+  it("writes the second look once, however the close is repeated", async () => {
+    const messageId = await say(channelId, nuisance.id, "buy followers");
+    const { report } = await createReport({
+      subjectType: "message",
+      reporterId: member.id,
+      messageId,
+      reason: "spam",
+    });
+    const first = await resolveReport(report.id, owner.id, "actioned", null, {
+      secondLook: true,
+    });
+    expect(first).not.toBeNull();
+    // A second close and a concurrent one both lose the `status = 'open'` race.
+    expect(
+      await resolveReport(report.id, admin.id, "dismissed", null, {
+        secondLook: true,
+      }),
+    ).toBeNull();
+    expect(
+      (await call(admin, "PATCH", `/api/reports/${report.id}`, {
+        status: "dismissed",
+      })).status,
+    ).toBe(409);
+    const copies = await getPool().query(
+      `SELECT id FROM reports WHERE escalated_from = $1`,
+      [report.id],
+    );
+    expect(copies.rowCount).toBe(1);
+    // A copy is never escalated again, whoever closes it.
+    const copyId = String(copies.rows[0].id);
+    await resolveReport(copyId, admin.id, "dismissed", null, {
+      secondLook: true,
+    });
+    expect(
+      (await getPool().query(`SELECT 1 FROM reports`)).rowCount,
+    ).toBe(2);
+  });
+
+  it("does not copy a report an instance moderator closed, or a scanner's", async () => {
+    process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+    const messageId = await say(channelId, nuisance.id, "buy followers");
+    const { report } = await createReport({
+      subjectType: "message",
+      reporterId: member.id,
+      messageId,
+      reason: "spam",
+    });
+    expect(
+      (await call(operator, "PATCH", `/api/reports/${report.id}`, {
+        status: "dismissed",
+      })).status,
+    ).toBe(200);
+
+    await createAutomatedReport({
+      reportedUserId: nuisance.id,
+      channelId,
+      reason: "violence",
+      details: "Automated image scan returned rejected for an attachment.",
+    });
+    const automated = (await listServerReports(serverId, PAGE)).reports.find(
+      (r) => r.reporterId === null,
+    );
+    expect(automated).toBeDefined();
+    expect(
+      (await call(owner, "PATCH", `/api/reports/${automated!.id}`, {
+        status: "dismissed",
+      })).status,
+    ).toBe(200);
+
+    expect(
+      (await getPool().query(`SELECT 1 FROM reports`)).rowCount,
+    ).toBe(2);
+    expect(
+      (await getPool().query(`SELECT 1 FROM reports WHERE escalated_from IS NOT NULL`))
+        .rowCount,
+    ).toBe(0);
+  });
+
+  it("reaches the instance queue even when the owner reports and closes in their own server", async () => {
+    // The review account owns its own server and may file and close a report
+    // there; the pqp team must still get it.
+    const messageId = await say(channelId, nuisance.id, "buy followers");
+    const { report } = await createReport({
+      subjectType: "message",
+      reporterId: owner.id,
+      messageId,
+      reason: "harassment",
+    });
+    expect(
+      (await call(owner, "PATCH", `/api/reports/${report.id}`, {
+        status: "dismissed",
+      })).status,
+    ).toBe(200);
+    process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+    const instance = await listInstanceReports({ ...PAGE, status: "open" });
+    expect(instance.reports).toHaveLength(1);
+    expect(instance.reports[0]!.messageId).toBe(messageId);
+  });
+
+  it("does not count a second look against the reporter's hourly cap", async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const messageId = await say(channelId, nuisance.id, `spam ${i}`);
+      const { report } = await createReport({
+        subjectType: "message",
+        reporterId: member.id,
+        messageId,
+        reason: "spam",
+      });
+      await resolveReport(report.id, owner.id, "dismissed", null, {
+        secondLook: true,
+      });
+    }
+    // 5 filed + 5 copies would be 10 and trip REPORTS_PER_HOUR.
+    const messageId = await say(channelId, nuisance.id, "one more");
+    await expect(
+      createReport({
+        subjectType: "message",
+        reporterId: member.id,
+        messageId,
+        reason: "spam",
+      }),
+    ).resolves.toBeDefined();
+  });
 });

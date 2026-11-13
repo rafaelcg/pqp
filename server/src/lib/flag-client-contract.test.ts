@@ -6,6 +6,7 @@ import { FEATURE_FLAGS } from "./flags.js";
 import { shareConfigForServer } from "./share-config.js";
 import { voiceConfigForServer } from "./voice-config.js";
 import { forumConfigForServer } from "./forum-config.js";
+import { jamConfigForServer } from "./jam-config.js";
 import { liveHlsConfig } from "../voice/hls-egress.js";
 
 /**
@@ -83,6 +84,7 @@ describe("GET /api/share/config against the client that reads it", () => {
         "shareGameCaptureHint",
         "shareFastStartQuality",
         "linuxDesktopSystemAudio",
+        "macDesktopSystemAudio",
       ]),
     );
     for (const field of read) {
@@ -223,6 +225,28 @@ describe("GET /api/voice/config against the client that reads it", () => {
       "utf8",
     );
     expect(dashboard).toMatch(/\bclean_voice_default:\s*"/);
+  });
+
+  it("voice_gate is global, on by default, read off the global config and handed to every live gate", () => {
+    const def = FEATURE_FLAGS.voice_gate;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(true);
+    expect(def.clientVia).toBe("GET /api/voice/config (voiceGate)");
+    expect(served).toContain("voiceGate");
+    const flag = readFileSync(path.join(clientSrc, "lib/voice-gate/voice-gate-flag.ts"), "utf8");
+    // The global ask (no server). Absent (an older API) is the code default,
+    // on; only an explicit false is the kill switch.
+    expect(flag).toContain("fetchGlobalVoiceConfig()");
+    expect(flag).toMatch(/answer\.voiceGate !== false/);
+    // The answer reaches a gate that is already running, not only new ones.
+    expect(flag).toContain("setBypass(");
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toContain("startVoiceGateFlag()");
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bvoice_gate:\s*"/);
   });
 });
 
@@ -549,6 +573,154 @@ describe("forum_channels against the forum config the client reads", () => {
       "utf8",
     );
     expect(dashboard).toMatch(/\bforum_channels:\s*"/);
+  });
+});
+
+/**
+ * `jam_channels`, born with the jam server PR. Per server, off by default,
+ * served as `enabled` on `GET /api/jam/config?serverId=`. No client reads it
+ * yet (the UI is its own PR), so the client half pinned here is the contract
+ * in `@pqp/shared` that the client will import: the config schema names the
+ * same fields the server sends. Every other half is pinned by name like the
+ * forum's: the route, the per-server read, the create guard the flag exists
+ * for, and the guard on every write route.
+ */
+describe("jam_channels against the jam config", () => {
+  it("is per server, off by default, and served as `enabled`", () => {
+    const def = FEATURE_FLAGS.jam_channels;
+    expect(def.perServer).toBe(true);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/jam/config?serverId= (enabled)");
+    expect(Object.keys(jamConfigForServer(null))).toEqual(["enabled", "uploads"]);
+    expect(jamConfigForServer(null).enabled).toBe(false);
+  });
+
+  it("the shared contract names exactly the fields the server sends", () => {
+    const shared = readFileSync(
+      path.resolve(here, "../../../packages/shared/src/jam.ts"),
+      "utf8",
+    );
+    const body = /export const jamConfigSchema = z\.object\(\{([\s\S]*?)\n\}\);/.exec(shared)?.[1];
+    expect(body, "jamConfigSchema not found in jam.ts").toBeTruthy();
+    const declared = [...body!.matchAll(/^ {2}([A-Za-z]\w*):/gm)].map((match) => match[1]!);
+    expect(declared).toEqual(Object.keys(jamConfigForServer(null)));
+  });
+
+  it("the route is mounted, asked per server, and answers from the flag", () => {
+    const routes = readFileSync(path.join(serverSrc, "api/jam-routes.ts"), "utf8");
+    const route = /router\.get\("\/api\/jam\/config"[\s\S]*?\);/.exec(routes)?.[0];
+    expect(route, "GET /api/jam/config is not mounted").toBeTruthy();
+    expect(route).toContain("jamConfigForServer(");
+    expect(route).toContain('searchParams.get("serverId")');
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    expect(api).toContain("registerJamRoutes(router)");
+    const lib = readFileSync(path.join(serverSrc, "lib/jam-config.ts"), "utf8");
+    expect(lib).toMatch(/isEnabled\("jam_channels",\s*\{\s*serverId\s*\}\)/);
+  });
+
+  it("creating a jam channel is refused unless the flag is on for that server", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.post\(\s*"\/api\/servers\/:serverId\/channels"[\s\S]*?\n\);/.exec(
+      api,
+    )?.[0];
+    expect(route, "POST /api/servers/:serverId/channels not found").toBeTruthy();
+    expect(route).toMatch(
+      /body\.type === "jam" && !jamChannelsEnabled\(serverId!\)[\s\S]*?JAM_CHANNELS_OFF/,
+    );
+  });
+
+  it("every write route asks the flag, and only the four removals do not", () => {
+    const routes = readFileSync(path.join(serverSrc, "api/jam-routes.ts"), "utf8");
+    // Every handler registration, cut at the next one.
+    const handlers = routes
+      .split(/\n {2}router\.(?=get|post|patch|put|delete)/)
+      .slice(1)
+      .map((chunk) => ({
+        verb: chunk.slice(0, chunk.indexOf("(")),
+        route: /"(\/api[^"]*)"/.exec(chunk)?.[1],
+        body: chunk,
+      }));
+    expect(handlers.length).toBeGreaterThanOrEqual(11);
+    const ungated = handlers
+      .filter(({ verb, body }) => verb !== "get" && !body.includes("requireOn("))
+      .map(({ verb, route }) => `${verb} ${route}`);
+    // The vote is the one route whose gate is inside the shared helper, so
+    // PUT shows up here through `vote(`; the DELETE of it is the removal.
+    expect(ungated.sort()).toEqual(
+      [
+        "delete /api/jam-songs/:songId",
+        // A picture somebody should not see stays removable while the feature is paused.
+        "delete /api/jam-songs/:songId/cover",
+        "delete /api/jam-tracks/:trackId",
+        "delete /api/jam-tracks/:trackId/vote",
+        "put /api/jam-tracks/:trackId/vote",
+      ].sort(),
+    );
+    expect(routes).toMatch(/if \(voted\) \{\s*requireOn\(channel\.server_id\);/);
+  });
+
+  it("the dashboard has a note for it", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bjam_channels:\s*"/);
+  });
+});
+
+/**
+ * `jam_public`, born with the public jams server PR. Global, off by default,
+ * served as `enabled` on `GET /api/public/jams/config` (signed out) and
+ * `GET /api/jam-public/config` (signed in). No client reads it yet (the
+ * website, the in-app UI and the phones are their own PRs), so the client
+ * half pinned here is the contract in `@pqp/shared` they will import. The
+ * behaviour (routes unmatched while off, writes refused) is pinned on a real
+ * Postgres in `api/jam-public.test.ts`.
+ */
+describe("jam_public against the public jam configs", () => {
+  it("is global, off by default, and served as `enabled` on both configs", () => {
+    const def = FEATURE_FLAGS.jam_public;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe(
+      "GET /api/public/jams/config (enabled), GET /api/jam-public/config (enabled)",
+    );
+  });
+
+  it("the shared contract's public config is `{ enabled }` and nothing else, as the route sends it", () => {
+    const shared = readFileSync(
+      path.resolve(here, "../../../packages/shared/src/jam-public.ts"),
+      "utf8",
+    );
+    const body = /export const publicJamConfigSchema = z\.object\(\{([\s\S]*?)\n\}\);/.exec(shared)?.[1];
+    expect(body, "publicJamConfigSchema not found in jam-public.ts").toBeTruthy();
+    expect([...body!.matchAll(/^ {2}([A-Za-z]\w*):/gm)].map((match) => match[1])).toEqual(["enabled"]);
+    const routes = readFileSync(path.join(serverSrc, "api/jam-public-routes.ts"), "utf8");
+    expect(routes).toContain("sendPublic(req, res, { enabled: jamPublicEnabled() }, 60)");
+    const lib = readFileSync(path.join(serverSrc, "lib/jam-public-config.ts"), "utf8");
+    expect(lib).toMatch(/isEnabled\("jam_public"\)/);
+  });
+
+  it("every public route but config is behind the flag, and the handler runs before the Bearer resolution", () => {
+    const routes = readFileSync(path.join(serverSrc, "api/jam-public-routes.ts"), "utf8");
+    const handler = /export async function handleJamPublicPublicRoute[\s\S]*?\n\}/.exec(routes)?.[0];
+    expect(handler).toBeTruthy();
+    // Config is answered first; then nothing is matched while the flag is off.
+    expect(handler!.indexOf("CONFIG_PATH")).toBeLessThan(handler!.indexOf("if (!jamPublicEnabled())"));
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const publicAt = api.indexOf("await handleJamPublicPublicRoute(req, res, pathname)");
+    const authAt = api.indexOf("resolveAuthSession(req.headers.authorization)");
+    expect(publicAt).toBeGreaterThan(0);
+    expect(publicAt).toBeLessThan(authAt);
+    expect(api).toContain("registerJamPublicRoutes(router)");
+  });
+
+  it("the dashboard has a note for it", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bjam_public:\s*"/);
   });
 });
 
