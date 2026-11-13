@@ -41,7 +41,9 @@ const ICON: Record<EmptyStateSize, string> = {
  * to land the drawing as far from the title as the icon disc is.
  */
 const MASCOT: Record<EmptyStateSize, string> = {
+  // 4px under the 80px box (12px with the toggle off).
   page: "redesign:mb-1",
+  // 0px under the 56px box (12px with the toggle off).
   inline: "redesign:mb-0",
 };
 
