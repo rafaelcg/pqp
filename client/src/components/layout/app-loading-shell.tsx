@@ -203,8 +203,9 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
   const { t } = useTranslation();
   const redesign = useRedesign();
   // The network failure is an English line built in `lib/api.ts`. Under the
-  // redesign the reader gets their own sentence, and the line moves into the
-  // self-hosters' details, where it still helps whoever runs the server.
+  // redesign the reader gets their own sentence, which leaves both causes
+  // open (their connection, or pqp being down: a 52x without CORS headers
+  // looks the same), and the line moves into the self-hosters' details.
   const unreachable = redesign && isApiUnreachableMessage(message);
   const deploy = (
     <>
@@ -246,7 +247,11 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
               <Icon icon={CaretRight} kind="symbol" size="sm" className="text-text-tertiary transition-transform duration-[var(--duration-fast)] group-open:rotate-90 motion-reduce:transition-none" />
               {t("bootstrapError.deploy.details")}
             </summary>
-            {unreachable ? <p className="mt-2 font-mono text-xs">{message}</p> : null}
+            {unreachable ? (
+              <p className="mt-2 font-mono text-xs text-text-tertiary">
+                {t("bootstrapError.rawCause")} {message}
+              </p>
+            ) : null}
             <p className="mt-2">{deploy}</p>
           </details>
         ) : (

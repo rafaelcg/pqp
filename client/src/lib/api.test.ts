@@ -98,4 +98,19 @@ describe("apiFetch token-provider resilience", () => {
     expect(isApiUnreachableMessage((caught as ApiError).message)).toBe(true);
     expect(isApiUnreachableMessage("Not found")).toBe(false);
   });
+
+  it("recognises the timeout line too", async () => {
+    setAuthTokenProvider(async () => "fresh-token");
+    fetchSpy.mockRejectedValue(new DOMException("The operation was aborted.", "AbortError"));
+
+    let caught: unknown;
+    try {
+      await setMemberVoiceMuted("server-1", "user-1", false);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).message).toBe("API request timed out.");
+    expect(isApiUnreachableMessage((caught as ApiError).message)).toBe(true);
+  });
 });
