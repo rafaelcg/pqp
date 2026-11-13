@@ -68,8 +68,10 @@ export function EmptyState({
   actions,
   role,
   className,
+  redesignClassName,
   iconClassName,
   titleClassName,
+  titleHeading,
   bodyClassName,
   actionsClassName,
   ...data
@@ -89,9 +91,20 @@ export function EmptyState({
   role?: "alert" | "status";
   /** The toggle-off look, per caller. */
   className?: string;
+  /**
+   * `redesign:` classes applied after the primitive's own, for a screen whose
+   * room differs (the phone's Conversas tab clears its floating button).
+   */
+  redesignClassName?: string;
   /** The icon's own classes. Not applied to a mascot. */
   iconClassName?: string;
   titleClassName?: string;
+  /**
+   * The title is a heading at this level. It stays a `p` with the heading
+   * role: a real `h2` takes the unlayered `h1, h2` rule in `index.css`,
+   * whose font and tracking outrank the title's utilities.
+   */
+  titleHeading?: 2 | 3;
   bodyClassName?: string;
   actionsClassName?: string;
 } & { [key: `data-${string}`]: string | undefined }) {
@@ -105,7 +118,7 @@ export function EmptyState({
       role={role}
       data-empty-state={size}
       {...data}
-      className={cn("flex flex-col items-center text-center", className, ROOT[size])}
+      className={cn("flex flex-col items-center text-center", className, ROOT[size], redesignClassName)}
     >
       {mascot ? (
         <div aria-hidden="true" data-empty-mascot={mascot} className={cn("mb-3 flex justify-center", MASCOT[size])}>
@@ -126,7 +139,13 @@ export function EmptyState({
           {glyph}
         </div>
       ) : null}
-      <p className={cn(titleClassName, TITLE[size])}>{title}</p>
+      <p
+        role={titleHeading ? "heading" : undefined}
+        aria-level={titleHeading}
+        className={cn(titleClassName, TITLE[size])}
+      >
+        {title}
+      </p>
       {body ? <p className={cn(bodyClassName, BODY[size])}>{body}</p> : null}
       {actions ? (
         <div
