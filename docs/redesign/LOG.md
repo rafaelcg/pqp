@@ -144,6 +144,69 @@ compared pixel by pixel (`~/pqp-redesign/verify-2026-10-28/toggle-off/`). The
   in the call scenes, and a button caught at a different point of its
   hover-out fade.
 
+## Brand pass (v2)
+
+Started 2026-11-13. The brand changed after Phase 2 ended. This pass checks
+every merged element against those changes and reworks the ones they reach.
+Branches are `rd2/<id>`. Screenshots are in `~/pqp-redesign/v2/<id>/`. The
+council is the same: Codex (gpt-6.1-terra, high) for the middle rounds and
+Opus for the sign-off.
+
+Setup: local `redesign` fast-forwarded to `origin/redesign` (43 commits from
+2026-11-01), then `main` merged in (111 commits). The merge keeps main's two
+Jam hints beside the 2026-11-01 hint removal (open question 9).
+
+### Brand delta
+
+The source is the "Breu" section of `docs/DESIGN.md` and the commits on
+`origin/redesign` from 2026-11-01. `main` brought no brand change: its new
+tokens are the Jam instruments, the Jam tiles, the media scrim and the Baú+
+motion, all for new surfaces.
+
+1. Mascot. `<Breu mood>` (`components/breu/breu.tsx`) shows on rare moments
+   only, in both looks. `EmptyState` takes it through `mascot`, in place of
+   the icon. Six moods map to surfaces: panic (root error), sad (API
+   unreachable, forum or communities failed), focused (loading, updating,
+   forced update), hello (empty channel, no DMs, no friends, a phone with no
+   servers), curious (owner's empty channel, search with no match, empty
+   communities, a free handle), asleep (a forum with no posts).
+2. Mascot exclusions. No Breu in a live call or its dock, watch party chrome,
+   moderation and reports, legal pages and the age gate refusal, compact
+   lists and settings rows, or frequent warnings.
+3. Motion. Breu has a working loop on the loading screen and a drop, sway and
+   speech bubble on the API failure page under the new look. Transforms and
+   opacity only, on HTML wrappers. Reduced motion holds him still.
+4. High contrast. Under the new look, edge and rule tokens read the border
+   pair instead of an alpha of the text (`:root[data-redesign][data-contrast="more"]`).
+   Hairlines take `--color-border`, the edge of a floating surface or a field
+   takes `--color-border-strong`.
+5. Avatar tint. A person with no picture on a room card is a disc in their
+   own hue at one fixed depth (`.avatar-tint`, `--avatar-tint-*`, through
+   `UserAvatar`'s `tint`).
+6. Fewer hints. The unsolicited corner cards, coach marks and strips are gone.
+   The watch party host and viewer coach marks, the voice note notice, the
+   arrival banner and the watch-now strip stay.
+7. Rail foot. An always-on update button and a Novo visual switch, both on
+   the rail tile tokens.
+8. Smaller fixes on elements that were already merged: room cards for
+   everyone in a voice call, music on the stage, the call split without a band,
+   the phone header, only the server list scrolls in the rail, the user panel at
+   narrow widths, the Baú row face, a disabled tooltip (`Tooltip disabled`) and
+   the channel row bubble above the row, a friend row that opens the profile card,
+   leave and notification levels in the server header menu, and copy (tap on
+   touch, category delete, Cargos role names).
+
+Items 5 to 8 were made in the new look by the commits that introduced them.
+Items 1 to 4 left gaps, listed per element in
+[`INVENTORY.md`](./INVENTORY.md) under "Brand pass (v2)".
+
+| Element | Brand pass status |
+|---|---|
+| `t-color` | Re-check |
+| `p-empty` | Re-check |
+| `f-states` | Re-check |
+| `f-dm-home` | Re-check |
+
 ## Phase 0: directions
 
 The mockups live on branch `rd/directions` (not merged). Open
@@ -2111,6 +2174,12 @@ test user's random tag. No new copy.
 8. New conversation: the no-match line says "tente nome#0000" (você)
    inside dialogs that say tu ("Escolhe", "Marca", "Procura"). Change it to
    "tenta"? It shows with the toggle off too.
+9. Jam hints (2026-11-13): `main` added a coach mark on the Jam wall ("Cada
+   tile é uma música") and an in-studio tip ("Bota o fone") after the
+   2026-11-01 removal of the unsolicited hints. The merge keeps both, so no
+   feature is lost. The studio tip says what the screen cannot. The wall tip
+   points at a control the screen shows, like the ones removed. Keep the wall
+   tip or remove it?
 
 ## Decisions
 

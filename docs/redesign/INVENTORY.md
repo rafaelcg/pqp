@@ -139,3 +139,88 @@ Top to bottom, as a person sees it. The whole shell is `MainAppContent` in `App.
 `ios/`, `android/`, marketing and public pages (`pages/home*`, `/@handle`,
 `/c/<slug>`, blog, Locadora guest page), `tools/admin-dashboard`, and server
 behaviour.
+
+## Brand pass (v2)
+
+Each merged element checked against the brand delta in [`LOG.md`](./LOG.md)
+("Brand pass (v2)"), 2026-11-13. "Re-check" means a brand rule reaches the
+element and the element does not follow it yet. "Ok" says why not.
+
+| Id | Verdict | Why |
+|---|---|---|
+| `t-type` | ok | The delta changes no face, size or weight. |
+| `t-spacing` | ok | No spacing rule changed. |
+| `t-radius` | ok | No radius changed. Breu's bubble is part of `f-states`. |
+| `t-elevation` | ok | No shadow or level changed. |
+| `t-color` | re-check | High contrast misses `--picker-border`, `--slider-thumb-border` and three inline text-alpha edges (role rank list, connection badges, app session card). |
+| `t-icons` | ok | No icon rule changed. |
+| `t-motion` | ok | Breu's loops are new keyframes on transforms only, already off under reduced motion. |
+| `t-density` | ok | No control height changed. |
+| `p-button` | ok | Not touched by the delta. |
+| `p-icon-button` | ok | Not touched by the delta. |
+| `p-tooltip` | ok | `disabled` was added in the new look by the commit that needed it. |
+| `p-input` | ok | Field edges already read `--color-field-border`, which high contrast strengthens. |
+| `p-select` | ok | Not touched by the delta. |
+| `p-checkbox` | ok | Rings read `--choice-edge`, built on the border pair. |
+| `p-menu` | ok | `--menu-separator` is in the high contrast block. |
+| `p-popover` | ok | `--popover-border` is in the high contrast block. |
+| `p-sheet` | ok | `--sheet-edge` is in the high contrast block. |
+| `p-radio` | ok | Rings read `--choice-edge`. |
+| `p-tabs` | ok | `--tabs-rule` reads `--color-border`. |
+| `p-slider` | ok | Its thumb edge is fixed under `t-color`. |
+| `p-banner` | ok | Not touched by the delta; frequent warnings stay without Breu. |
+| `p-badge` | ok | Not touched by the delta. |
+| `p-toast` | ok | Frequent notices stay without Breu. |
+| `p-scroll` | ok | Not touched by the delta. |
+| `p-avatar` | ok | The hue tint is opt-in (`tint`) and only room cards use it, as the rule says. |
+| `p-list-row` | ok | Compact lists stay without Breu. |
+| `p-card` | ok | `--card-border` is in the high contrast block. |
+| `p-section-header` | ok | Not touched by the delta. |
+| `p-loading` | ok | Skeletons and spinners are unchanged; the loading screen is `f-states`. |
+| `p-empty` | re-check | The new `mascot` slot does not follow the redesign's empty state rhythm (gap and size beside the icon disc). |
+| `p-settings-kit` | ok | Settings rows stay without Breu. |
+| `s-frame` | ok | Not touched by the delta. |
+| `s-rail` | ok | The update button and Novo visual switch were built on the rail tile tokens. |
+| `s-sidebar-header` | ok | The new menu items use the shared menu rows. |
+| `s-sidebar-special` | ok | The Baú row face fix was made in the new look. |
+| `s-category` | ok | Only copy changed (category delete). |
+| `s-channel-row` | ok | The bubble above the row was made in the new look. Main's Jam row is a new surface, outside this pass. |
+| `s-voice-row` | ok | Only copy changed (tap on touch). |
+| `s-sidebar-rail` | ok | Not touched by the delta. |
+| `s-voice-strip` | ok | Not touched by the delta. |
+| `s-user-panel` | ok | The narrow-width fix was made in the new look. |
+| `s-header` | ok | Not touched by the delta. |
+| `s-banners` | ok | The removed strips are gone; the ones left are unchanged. |
+| `s-message-row` | ok | Not touched by the delta. |
+| `s-message-content` | ok | Not touched by the delta. |
+| `s-message-chrome` | ok | Not touched by the delta. |
+| `s-log-chrome` | ok | The empty channel's Breu goes through `EmptyState`, covered by `p-empty`. |
+| `s-composer` | ok | `--composer-border*` are in the high contrast block. |
+| `s-member-list` | ok | The status dot fix was not a look change. |
+| `f-dm-home` | re-check | The Conversas home list says "no conversations yet" as a plain line, where the mood table puts Breu (hello). |
+| `f-friends` | ok | "No friends yet" already shows Breu; the profile card from a row was made in the new look. |
+| `f-new-dm` | ok | Not touched by the delta. |
+| `f-user-settings` | ok | `--settings-rule` is in the high contrast block. |
+| `f-server-settings` | ok | Only copy changed (Cargos role names). |
+| `f-invites` | ok | Not touched by the delta. |
+| `f-call` | ok | Room cards, the music stage and the split were made in the new look; no Breu in a call. |
+| `f-dm-call` | ok | Only behaviour changed (a first DM call opens the conversation). |
+| `f-watch-party` | ok | Its two coach marks stay; no Breu in party chrome. |
+| `f-forum` | ok | Breu is on its empty and failed states through `EmptyState`. |
+| `f-bau` | ok | Not touched by the delta. |
+| `f-stories` | ok | Not touched by the delta. |
+| `f-apps` | ok | Its session card edge is fixed under `t-color`. |
+| `f-onboarding` | ok | The removed hints are gone; the ones left were redesigned in Phase 2. Main's Jam hints wait on open question 9. |
+| `f-search` | ok | Search with no match already shows Breu. |
+| `f-profile` | ok | Not touched by the delta. |
+| `f-communities` | ok | Breu is on its empty and failed states. |
+| `f-connections` | ok | Its badge edge is fixed under `t-color`. |
+| `f-bots` | ok | Bots already wear Breu's face; nothing new. |
+| `f-states` | re-check | The API failure page's speech bubble draws the old look's edge, fill and radius; the loading and failure Breu need a check against the state layout. |
+| `m-shell` | ok | The phone header and the no-servers Breu were made in the new look. |
+| `m-breakpoints` | ok | Not touched by the delta. |
+| `m-sheets` | ok | Not touched by the delta. |
+
+Not in this inventory: the Jam surfaces (wall, song, studio, sidebar row)
+arrived on `main` after Phase 2, behind `jam_channels`. They are a new
+element, not a re-check.
