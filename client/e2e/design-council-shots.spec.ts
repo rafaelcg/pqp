@@ -2011,6 +2011,17 @@ test("captures the phone shell", async ({ browser }) => {
       });
       await emptyPage.waitForTimeout(300);
       await shoot(emptyPage, `m-shell-conversas-empty-short-large-${theme}`);
+      // Text at 200%: the screen scrolls, and its end clears the button.
+      await emptyPage.evaluate(() => {
+        document.documentElement.style.fontSize = "200%";
+      });
+      await emptyPage.waitForTimeout(300);
+      await shoot(emptyPage, `m-shell-conversas-empty-short-huge-${theme}`);
+      await emptyPage.locator("[data-conversations-rows]").evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+      });
+      await emptyPage.waitForTimeout(300);
+      await shoot(emptyPage, `m-shell-conversas-empty-short-huge-end-${theme}`);
       await empty.close();
     }
   } finally {
