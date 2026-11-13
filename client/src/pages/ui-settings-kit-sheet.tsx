@@ -448,13 +448,13 @@ export function SettingsKitSheet() {
 
             <SettingsGroup title={t("qaUi.kit.group.choiceDescriptions")} surface="plain">
               <div data-testid="qa-settings-kit-choices">
-              <SettingsChoiceGrid
-                label={t("qaUi.kit.group.choiceDescriptions")}
-                value={mode}
-                onValueChange={setMode}
-                options={modeOptions}
-                columns={2}
-              />
+                <SettingsChoiceGrid
+                  label={t("qaUi.kit.group.choiceDescriptions")}
+                  value={mode}
+                  onValueChange={setMode}
+                  options={modeOptions}
+                  columns={2}
+                />
               </div>
             </SettingsGroup>
 

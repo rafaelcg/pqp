@@ -932,6 +932,9 @@
   --app-card-edge: color-mix(in oklab, var(--color-text) 18%, transparent);
   --connection-tile-edge: color-mix(in oklab, var(--color-text) 14%, transparent);
   --role-swatch-ring: color-mix(in oklab, var(--color-text) 24%, transparent);
+  /* A filled field (a textarea or a pasted line on a 5% text fill) draws
+     no edge; high contrast gives it one. */
+  --field-fill-edge: transparent;
   /* The hairline between groups of call controls. */
   --call-control-rule: color-mix(in oklab, var(--color-text) 14%, transparent);
 
@@ -2661,6 +2664,9 @@
   /* A tooltip floats (strong edge); a search pill's edge is a hairline. */
   --color-tooltip-border: var(--color-border-strong);
   --sidebar-search-border: var(--color-border);
+  --field-fill-edge: var(--color-border-strong);
+  /* A banner's edge is a share of its own tone (28% dark, 22% light). */
+  --banner-edge: 60%;
   /* The one fill this block moves: the empty part of a slider's track is
      what shows where the range ends. */
   --slider-track: var(--color-border);

@@ -390,16 +390,18 @@ reach them through `--color-border`. The block
 `:root[data-redesign][data-contrast="more"]` moves every edge token to the
 border pair. A hairline (a rule, a separator, a search pill's edge) takes
 `--color-border`. The edge of a surface that floats or holds a field (a
-card, a popover, a tooltip) takes `--color-border-strong`. A hover or open edge takes
-`--color-text`. An edge inside a dark brand tile takes a light alpha in both
-brightnesses (`--connection-tile-edge`).
+card, a popover, a tooltip, a filled field) takes `--color-border-strong`.
+A hover or open edge takes `--color-text`. An edge inside a dark brand tile
+takes a light alpha in both brightnesses (`--connection-tile-edge`). A
+banner's edge is a share of its own tone, raised to 60% (`--banner-edge`).
 
 An edge drawn in a component reads a named token (`--card-border-hover`,
 `--app-card-edge`, `--connection-tile-edge`, `--role-swatch-ring`,
-`--call-control-rule`), never an inline `color-mix` of the text, so the
-block can move it. Fills stay as they are, with one exception: the empty
-part of a slider's track (`--slider-track`) takes `--color-border`, because
-it shows where the range ends. The light tooltip keeps no edge.
+`--call-control-rule`, `--field-fill-edge`), never an inline `color-mix` of
+the text, so the block can move it. Fills stay as they are, with one
+exception: the empty part of a slider's track (`--slider-track`) takes
+`--color-border`, because it shows where the range ends. The light tooltip
+keeps no edge.
 
 | Token | Toggle off | Redesign |
 |---|---|---|
