@@ -385,6 +385,16 @@ of it). So a look wins over the shape block, and high contrast and the custom
 accent win over every redesign colour block. Do not quote the light or look
 selectors in a comment in `index.css`: the bench finds blocks by regex.
 
+Edges under the redesign are an alpha of the text, so high contrast does not
+reach them through `--color-border`. The block
+`:root[data-redesign][data-contrast="more"]` moves every edge token to the
+border pair: a hairline (a rule, a separator) to `--color-border`, the edge of
+a surface that floats or holds a field to `--color-border-strong`, and a hover
+or open edge to `--color-text`. An edge drawn in a component reads a named
+token (`--card-border-hover`, `--app-card-edge`, `--connection-tile-edge`,
+`--role-swatch-ring`), never an inline `color-mix` of the text, so the block
+can move it. Fills stay as they are.
+
 | Token | Toggle off | Redesign |
 |---|---|---|
 | `--radius-tick` / `control` / `card` / `panel` | 3 / 6 / 8 / 16 px | 4 / 10 / 14 / 20 px |

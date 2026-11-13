@@ -899,6 +899,8 @@
      cut (stacked faces on a card in chat). */
   --card-bg-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-main));
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+  /* A choice card's edge firming under the pointer (bot and settings choices). */
+  --card-border-hover: color-mix(in oklab, var(--color-text) 18%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
   /* A whole card under the pointer: one step over the card's own fill. */
   --card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
@@ -922,6 +924,14 @@
      the conversation rather than a stripe across it. */
   --banner-radius: 0.75rem;
   --banner-edge: 28%;
+
+  /* Three small edges drawn as an alpha of the text, named so high contrast
+     can move them to the border pair: an app session card's outline, the
+     inset ring on a dark connection tile, and the ring around a role's
+     colour swatch. */
+  --app-card-edge: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --connection-tile-edge: color-mix(in oklab, var(--color-text) 14%, transparent);
+  --role-swatch-ring: color-mix(in oklab, var(--color-text) 24%, transparent);
 
   /* Badges (ui/badge.tsx): a small pill in sentence case; a tag beside a
      name is a step smaller. Counts are a touch larger in type than the old
@@ -2636,6 +2646,14 @@
   --sidebar-invite-border: var(--color-border-strong);
   --forum-card-hover-border: var(--color-border-strong);
   --forum-card-open-border: var(--color-text);
+  /* The emoji picker maps its own border to this one. */
+  --picker-border: var(--color-border-strong);
+  --slider-thumb-border: var(--color-border-strong);
+  --app-card-edge: var(--color-border-strong);
+  --connection-tile-edge: var(--color-border-strong);
+  --role-swatch-ring: var(--color-border-strong);
+  /* Firmer than the strong edge at rest, so hover still reads. */
+  --card-border-hover: var(--color-text);
 }
 
 /*
