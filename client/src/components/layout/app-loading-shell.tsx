@@ -211,20 +211,11 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
       <code className="text-signal redesign:text-accent-text">docs/DEPLOY.md</code>.
     </>
   );
-  return (
-    <div
-      className={
-        redesign
-          ? // A wide screen puts the big Breu beside the text. Plain
-            // `justify-center` here: a `redesign:` one would outrank `sm:`.
-            // It scrolls on a short screen (the hosting notes open), and its
-            // two children centre themselves with auto margins, which give way
-            // to the top instead of clipping it the way `justify-center` does.
-            "relative flex h-full flex-col items-start overflow-y-auto overflow-x-hidden bg-pane-main p-8 sm:flex-row sm:justify-between sm:gap-8 sm:p-12"
-          : "relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12 redesign:justify-center redesign:bg-pane-main"
-      }
-    >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)] redesign:bg-[radial-gradient(circle_at_85%_0%,var(--glow-danger),transparent_35%)]" />
+  const glow = (
+    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)] redesign:bg-[radial-gradient(circle_at_85%_0%,var(--glow-danger),transparent_35%)]" />
+  );
+  const content = (
+    <>
       {/* Under the redesign the failure is announced, and focus lands on the retry. */}
       <div className={cn("relative z-10 max-w-lg", redesign && "my-auto")} role={redesign ? "alert" : undefined}>
         {/* Its own line: inline, it sat beside "pqp.gg" on the baseline and floated above the text.
@@ -276,6 +267,26 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
           <Breu mood="sad" size="xl" motion="oops" className="max-lg:h-48 max-lg:w-48" />
         </div>
       ) : null}
+    </>
+  );
+  if (redesign) {
+    // The frame holds the glow, so it stays in the corner while the inner box
+    // scrolls on a short screen (the hosting notes open). The box's two
+    // children centre themselves with auto margins, which give way to the
+    // top instead of clipping it the way `justify-center` does.
+    return (
+      <div className="relative h-full overflow-hidden bg-pane-main">
+        {glow}
+        <div className="relative flex h-full flex-col items-start overflow-y-auto overflow-x-hidden p-8 sm:flex-row sm:justify-between sm:gap-8 sm:p-12">
+          {content}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12 redesign:justify-center redesign:bg-pane-main">
+      {glow}
+      {content}
     </div>
   );
 }
