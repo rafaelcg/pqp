@@ -1588,7 +1588,7 @@ line).
 
 Breu is the pqp mascot. Bots wear its face; the app also shows it on a few rare moments.
 
-Use `<Breu mood>` (`client/src/components/breu/breu.tsx`). It is the bots' `BotFace`, always lime, in the full drawing. It is decorative: the text next to it says what happened. In an empty state, pass `mascot` to `EmptyState` instead of `icon`.
+Use `<Breu mood>` (`client/src/components/breu/breu.tsx`). It is the bots' `BotFace`, always lime, in the full drawing. It is decorative: the text next to it says what happened. In an empty state, pass `mascot` to `EmptyState` instead of `icon`. With `mascot`, a failure takes no warning disc: the sad face carries it. Under the new look the mascot's margin is cut (4px on a page, 0 inline) so the drawing sits as far from the title as the icon disc does.
 
 | Mood | Face | Where |
 |---|---|---|

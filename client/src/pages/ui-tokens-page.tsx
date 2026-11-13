@@ -1354,8 +1354,9 @@ function PrimitiveSheet() {
 
       {/* Empty states with Breu: an empty channel (hello), a forum that did
           not load (sad), a search that found nothing (curious, inline), and
-          the same search in a narrow column with a long query. */}
-      <div data-testid="qa-primitive-empty-mascot" className="grid gap-4 sm:grid-cols-[1fr_1fr_1fr_12rem]">
+          the same search in a narrow column with a long query, and with a
+          query that has no spaces and a hint line. */}
+      <div data-testid="qa-primitive-empty-mascot" className="grid gap-4 sm:grid-cols-[1fr_1fr_1fr_12rem_12rem]">
         <div className="rounded-[var(--radius-pane)] bg-pane-main">
           <EmptyState
             mascot="hello"
@@ -1397,6 +1398,18 @@ function PrimitiveSheet() {
             size="inline"
             mascot="curious"
             title={t("search.noMatch", { query: "campeonato de fliperama de sábado" })}
+            iconClassName="hidden redesign:block"
+            className="h-full w-full justify-center gap-1 px-4"
+            titleClassName="text-sm text-text"
+            bodyClassName="text-xs text-text-muted"
+          />
+        </div>
+        <div className="flex h-72 rounded-[var(--radius-pane)] bg-pane-main">
+          <EmptyState
+            size="inline"
+            mascot="curious"
+            title={t("search.noMatch", { query: "kkkkkkkkkkkkkkkkkkkkkkkkkkkk" })}
+            body={t("search.wholeWords")}
             iconClassName="hidden redesign:block"
             className="h-full w-full justify-center gap-1 px-4"
             titleClassName="text-sm text-text"

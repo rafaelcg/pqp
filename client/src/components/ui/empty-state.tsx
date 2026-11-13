@@ -49,7 +49,8 @@ const MASCOT: Record<EmptyStateSize, string> = {
 
 const TITLE: Record<EmptyStateSize, string> = {
   page: "redesign:font-[family-name:var(--type-title-font)] redesign:text-[length:var(--empty-title-size)] redesign:leading-tight redesign:font-bold redesign:text-text redesign:text-balance",
-  inline: "redesign:font-sans redesign:text-sm redesign:font-medium redesign:text-text-secondary",
+  // A query with no spaces (a link, "kkkkkk") breaks instead of spilling.
+  inline: "redesign:font-sans redesign:text-sm redesign:font-medium redesign:text-text-secondary redesign:[overflow-wrap:anywhere]",
 };
 
 const BODY: Record<EmptyStateSize, string> = {
