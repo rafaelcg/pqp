@@ -247,6 +247,11 @@ import {
   joinLeaveAutoMuteEnabled,
   shouldSuppressJoinLeaveSound,
 } from "@/lib/large-room-sounds";
+import {
+  loadPeerVolumes,
+  savePeerVolumes,
+  withPeerVolume,
+} from "@/lib/peer-volume-pref";
 
 export type VoiceStatus = "idle" | "joining" | "connected";
 
@@ -575,7 +580,11 @@ export interface VoiceState {
   speakLockedPeerIds: string[];
   /** channelId → participants currently in that voice channel */
   occupancy: Record<string, VoiceParticipant[]>;
-  /** userId → 0..1 playback multiplier, persisted for the session. */
+  /**
+   * userId → 0..1 playback multiplier. Remembered in this browser across
+   * reloads (`peer-volume-pref.ts`); before #1592 it lasted only until the
+   * page reloaded.
+   */
   peerVolumes: Record<string, number>;
   /**
    * userId → 0..1 multiplier for that person's SCREEN audio, separate from
@@ -588,7 +597,7 @@ export interface VoiceState {
    * 4 Sep 2026: "a separacao das faixas de audio entre a live do amigo e a voz
    * do amigo".
    *
-   * Keyed on userId like `peerVolumes`, and session-scoped the same way.
+   * Keyed on userId like `peerVolumes`, and remembered the same way.
    */
   screenVolumes: Record<string, number>;
   /** True when media is flowing through an SFU rather than a peer mesh. */
@@ -2064,6 +2073,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
   /** Webcam id for the next capture. Empty means the browser default. */
   let cameraDeviceId = "";
+  // What this browser remembered from an earlier session (#1592).
+  const storedVolumes = loadPeerVolumes();
   let state: VoiceState = {
     status: "idle",
     peerId: null,
@@ -2095,8 +2106,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     audienceChange: null,
     speakLockedPeerIds: [],
     occupancy: {},
-    peerVolumes: {},
-    screenVolumes: {},
+    peerVolumes: storedVolumes.peer,
+    screenVolumes: storedVolumes.screen,
     usingSfu: false,
     transportFailure: null,
     roomTransport: null,
@@ -8278,19 +8289,23 @@ export function createVoiceController(transport: RealtimeTransport) {
      * that person reconnected.
      */
     setPeerVolume(userId: string, volume: number) {
-      state.peerVolumes = {
-        ...state.peerVolumes,
-        [userId]: Math.min(1, Math.max(0, volume)),
-      };
+      state.peerVolumes = withPeerVolume(
+        state.peerVolumes,
+        userId,
+        Math.min(1, Math.max(0, volume)),
+      );
+      savePeerVolumes({ peer: state.peerVolumes, screen: state.screenVolumes });
       emit();
     },
 
     /** The same knob for a person's screen audio. See `screenVolumes`. */
     setScreenVolume(userId: string, volume: number) {
-      state.screenVolumes = {
-        ...state.screenVolumes,
-        [userId]: Math.min(1, Math.max(0, volume)),
-      };
+      state.screenVolumes = withPeerVolume(
+        state.screenVolumes,
+        userId,
+        Math.min(1, Math.max(0, volume)),
+      );
+      savePeerVolumes({ peer: state.peerVolumes, screen: state.screenVolumes });
       emit();
     },
 
