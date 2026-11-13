@@ -177,7 +177,7 @@ element and the element does not follow it yet. "Ok" says why not.
 | `p-card` | ok | `--card-border` is in the high contrast block. |
 | `p-section-header` | ok | Not touched by the delta. |
 | `p-loading` | ok | Skeletons and spinners are unchanged; the loading screen is `f-states`. |
-| `p-empty` | re-check | The new `mascot` slot does not follow the redesign's empty state rhythm (gap and size beside the icon disc). |
+| `p-empty` | done (v2 merged) | The new `mascot` slot does not follow the redesign's empty state rhythm (gap and size beside the icon disc). |
 | `p-settings-kit` | ok | Settings rows stay without Breu. |
 | `s-frame` | ok | Not touched by the delta. |
 | `s-rail` | ok | The update button and Novo visual switch were built on the rail tile tokens. |

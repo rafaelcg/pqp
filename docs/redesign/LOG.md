@@ -216,10 +216,26 @@ council shots skip Novidades when the rail has no button for it, and gained
 a choice card hover shot. Toggle off: the primitives and the full screens
 set compared pixel by pixel; only animation, camera and random-code noise.
 
+### p-empty (v2)
+
+Breu's empty states now sit where the icon disc does. Per size, the mascot
+loses the room the drawing already leaves around itself: about 20px to the
+title on a page, about 11px inline, against the disc's 21px and 14px. A
+mascot failure (the sad face) draws no warning disc; `docs/DESIGN.md` §Breu
+and the component header say so. A long query in a narrow inline state now
+wraps. The QA sheet gained a mascot block: hello, sad with a retry, inline
+curious, a long query and a query with no spaces.
+
+Rounds: r1 Codex 8.6, r2 Codex 8.8, r3 Opus 8.8, r4 Codex 8.9, r5 Opus 9.0.
+No MUST in any round. After r5, comments only: the mascot wins over `icon`
+and `iconClassName`, and the communities failure comment no longer names a
+disc. Toggle off: the primitives compared pixel by pixel; only animation
+noise (0.13% at most).
+
 | Element | Brand pass status |
 |---|---|
 | `t-color` | Merged (Opus 9.1 r5, no MUST) |
-| `p-empty` | Re-check |
+| `p-empty` | Merged (Opus 9.0 r5, no MUST) |
 | `f-states` | Re-check |
 | `f-dm-home` | Re-check |
 
