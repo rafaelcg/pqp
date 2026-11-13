@@ -20,6 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 import { useRedesign } from "@/lib/redesign";
+import { isApiUnreachableMessage } from "@/lib/api";
 import { CaretRight } from "@phosphor-icons/react";
 import { Icon } from "@/components/ui/icon";
 import {
@@ -201,6 +202,11 @@ interface AppBootstrapErrorProps {
 export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) {
   const { t } = useTranslation();
   const redesign = useRedesign();
+  // The network failure is an English line built in `lib/api.ts`. Under the
+  // redesign the reader gets their own sentence, which leaves both causes
+  // open (their connection, or pqp being down: a 52x without CORS headers
+  // looks the same), and the line moves into the self-hosters' details.
+  const unreachable = redesign && isApiUnreachableMessage(message);
   const deploy = (
     <>
       {t("bootstrapError.deploy.1")}{" "}
@@ -211,19 +217,13 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
       <code className="text-signal redesign:text-accent-text">docs/DEPLOY.md</code>.
     </>
   );
-  return (
-    <div
-      className={
-        redesign
-          ? // A wide screen puts the big Breu beside the text. Plain
-            // `justify-center` here: a `redesign:` one would outrank `sm:`.
-            "relative flex h-full flex-col items-start justify-center overflow-hidden bg-pane-main p-8 sm:flex-row sm:items-center sm:justify-between sm:gap-8 sm:p-12"
-          : "relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12 redesign:justify-center redesign:bg-pane-main"
-      }
-    >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)] redesign:bg-[radial-gradient(circle_at_85%_0%,var(--glow-danger),transparent_35%)]" />
+  const glow = (
+    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)] redesign:bg-[radial-gradient(circle_at_85%_0%,var(--glow-danger),transparent_35%)]" />
+  );
+  const content = (
+    <>
       {/* Under the redesign the failure is announced, and focus lands on the retry. */}
-      <div className="relative z-10 max-w-lg" role={redesign ? "alert" : undefined}>
+      <div className={cn("relative z-10 max-w-lg", redesign && "my-auto")} role={redesign ? "alert" : undefined}>
         {/* Its own line: inline, it sat beside "pqp.gg" on the baseline and floated above the text.
             Under the redesign only on a narrow screen: a wide one has the big Breu. */}
         <Breu mood="sad" size="md" className={cn("mb-2 block", redesign && "sm:hidden")} />
@@ -236,7 +236,9 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
         <h1 className="font-display text-4xl font-extrabold leading-[0.95] sm:text-5xl redesign:font-[family-name:var(--type-title-font)] redesign:font-bold redesign:text-balance">
           {t("bootstrapError.title")}
         </h1>
-        <p className="mt-4 text-paper-muted redesign:text-text-secondary">{message}</p>
+        <p className="mt-4 text-paper-muted redesign:text-text-secondary">
+          {unreachable ? t("bootstrapError.network") : message}
+        </p>
         {redesign ? (
           // The deploy notes are for whoever hosts pqp, so under the redesign
           // they fold behind a disclosure instead of greeting every reader.
@@ -245,6 +247,11 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
               <Icon icon={CaretRight} kind="symbol" size="sm" className="text-text-tertiary transition-transform duration-[var(--duration-fast)] group-open:rotate-90 motion-reduce:transition-none" />
               {t("bootstrapError.deploy.details")}
             </summary>
+            {unreachable ? (
+              <p className="mt-2 font-mono text-xs text-text-tertiary">
+                {t("bootstrapError.rawCause")} {message}
+              </p>
+            ) : null}
             <p className="mt-2">{deploy}</p>
           </details>
         ) : (
@@ -265,7 +272,7 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
         <div
           aria-hidden="true"
           data-bootstrap-breu=""
-          className="pointer-events-none relative z-10 hidden shrink-0 sm:mr-[4%] sm:block"
+          className="pointer-events-none relative z-10 my-auto hidden shrink-0 sm:mr-[4%] sm:block"
         >
           <BreuSpeechBubble className="absolute right-[72%] top-[4%]">
             {t("bootstrapError.bubble")}
@@ -273,6 +280,26 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
           <Breu mood="sad" size="xl" motion="oops" className="max-lg:h-48 max-lg:w-48" />
         </div>
       ) : null}
+    </>
+  );
+  if (redesign) {
+    // The frame holds the glow, so it stays in the corner while the inner box
+    // scrolls on a short screen (the hosting notes open). The box's two
+    // children centre themselves with auto margins, which give way to the
+    // top instead of clipping it the way `justify-center` does.
+    return (
+      <div className="relative h-full overflow-hidden bg-pane-main">
+        {glow}
+        <div className="relative flex h-full flex-col items-start overflow-y-auto overflow-x-hidden p-8 sm:flex-row sm:justify-between sm:gap-8 sm:p-12">
+          {content}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12 redesign:justify-center redesign:bg-pane-main">
+      {glow}
+      {content}
     </div>
   );
 }

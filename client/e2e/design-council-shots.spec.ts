@@ -1087,6 +1087,8 @@ const PRIMITIVES: {
   open?: { button: string; menu: string; arrows: number; hoverText?: string };
   /** A tall block, cut into shots this tall (`<id>-<n>-<theme>.png`). */
   tiles?: number;
+  /** Milliseconds to wait before the shot, for a block that animates in; its shot freezes animations at their end. */
+  settle?: number;
 }[] = [
   {
     id: "p-button",
@@ -1171,7 +1173,8 @@ const PRIMITIVES: {
   { id: "f-onboarding", testId: "qa-onboarding", focus: "Entendi" },
   { id: "s-message-content", testId: "qa-shell-message-content" },
   // The boot shell and the cannot-reach-the-API page, in desktop frames.
-  { id: "f-states", testId: "qa-shell-states", focus: "Tentar de novo" },
+  // Settled: Breu drops in, then his bubble pops at 0.8s.
+  { id: "f-states", testId: "qa-shell-states", focus: "Tentar de novo", settle: 1600 },
   // Bia's reply hovered, its toolbar up and "Mais" open.
   {
     id: "s-message-chrome",
@@ -1255,7 +1258,7 @@ test("captures the primitives", async ({ browser }) => {
         await page.keyboard.press("Escape");
         continue;
       }
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(primitive.settle ?? 300);
       if (primitive.tiles) {
         const box = (await block.boundingBox())!;
         const top = box.y + (await page.evaluate(() => window.scrollY));
@@ -1268,7 +1271,13 @@ test("captures the primitives", async ({ browser }) => {
         }
         continue;
       }
-      await block.screenshot({ path: path.join(OUT!, `${primitive.id}-${theme}.png`) });
+      // A block that animates in is shot at its end state: an element shot
+      // taller than the viewport resizes the page first, which restarts a
+      // CSS animation, so it would be caught at its first frame.
+      await block.screenshot({
+        path: path.join(OUT!, `${primitive.id}-${theme}.png`),
+        animations: primitive.settle ? "disabled" : "allow",
+      });
     }
     await context.close();
   }

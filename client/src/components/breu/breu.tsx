@@ -130,6 +130,11 @@ export function Breu({
  * a Breu drawn below and to the right of it. It pops in once, after `oops`
  * has landed, and stays; under `motion-reduce` it is shown at once.
  * Decorative: the text beside Breu says what happened.
+ *
+ * Drawn only under the new look (the API failure page), as a small floating
+ * surface: the popover's fill and edge, the card radius and the title face.
+ * The lift is a drop shadow on the whole bubble, so the tail carries it too
+ * (in light the popover fill is the pane's own white).
  */
 export function BreuSpeechBubble({
   children,
@@ -143,12 +148,12 @@ export function BreuSpeechBubble({
       aria-hidden="true"
       data-breu-bubble=""
       className={cn(
-        "relative inline-block origin-bottom-right rounded-2xl border border-border bg-surface-1 px-3.5 py-1.5 text-lg font-bold leading-tight text-text will-change-transform animate-[breu-bubble-pop_0.32s_ease-out_0.8s_both] motion-reduce:animate-none",
+        "relative inline-block origin-bottom-right rounded-[var(--radius-card)] border border-[color:var(--popover-border,var(--color-border))] bg-[color:var(--popover-surface,var(--color-surface-1))] px-3.5 py-1.5 font-[family-name:var(--type-title-font)] text-lg font-bold leading-tight text-text [filter:var(--breu-bubble-shadow,none)] will-change-transform animate-[breu-bubble-pop_0.32s_ease-out_0.8s_both] motion-reduce:animate-none",
         className,
       )}
     >
       {children}
-      <span className="absolute -bottom-[7px] right-4 h-3 w-3 rotate-45 border-r border-b border-border bg-surface-1" />
+      <span className="absolute -bottom-[7px] right-4 h-3 w-3 rotate-45 border-r border-b border-[color:var(--popover-border,var(--color-border))] bg-[color:var(--popover-surface,var(--color-surface-1))]" />
     </span>
   );
 }
