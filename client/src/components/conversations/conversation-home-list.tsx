@@ -45,6 +45,7 @@ import { useTranslation } from "@/lib/i18n";
 import { resolveNotificationLevel } from "@/lib/notifications";
 import { useRedesign } from "@/lib/redesign";
 import { cn, formatFullTimestamp, formatRecency } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
 import { CountBadge } from "@/components/ui/count-badge";
 import { GROUP_SIZE_REDESIGN } from "@/components/ui/badge";
 import { Icon, IconSwap } from "@/components/ui/icon";
@@ -407,6 +408,16 @@ export function ConversationHomeList({
       >
         {isLoading ? (
           <ChannelListSkeleton />
+        ) : conversations.length === 0 && phoneShell && redesign ? (
+          // The phone's Conversas tab is the whole screen: no hero beside it
+          // (the desktop's sits in the main pane), so Breu says hello here.
+          <EmptyState
+            data-conversations-empty=""
+            mascot="hello"
+            title={t("conversations.emptyHero.title")}
+            body={t("conversations.emptyHero.body")}
+            className="min-h-full justify-center pb-24"
+          />
         ) : conversations.length === 0 ? (
           <p
             data-conversations-empty=""
