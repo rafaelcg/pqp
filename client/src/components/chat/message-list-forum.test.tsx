@@ -62,6 +62,7 @@ function mount(props: {
   onToggleAnswer?: (id: string) => void;
   messages?: ChatMessage[];
   afterOpening?: ReactNode;
+  windowing?: boolean;
 }) {
   host = document.createElement("div");
   document.body.append(host);
@@ -75,6 +76,7 @@ function mount(props: {
           channelId={CHANNEL}
           onToggleReaction={() => {}}
           unreadSince={props.unreadSince ?? null}
+          windowing={props.windowing}
           forumPost={{
             authorId: ME,
             acceptedAnswerId: null,
@@ -115,6 +117,9 @@ describe("forum post transcript", () => {
     const onToggleAnswer = vi.fn();
     mount({ onToggleAnswer });
     const row = rowOf(3);
+    // The windowed list builds the toolbar when focus or a pointer reaches the
+    // row, not for every row up front.
+    act(() => row.focus());
     const more = [...row.querySelectorAll("button")].find(
       (one) => one.getAttribute("aria-haspopup") === "menu",
     );
@@ -144,9 +149,29 @@ describe("forum post transcript", () => {
     expect(rowOf(2).hasAttribute("data-group-start")).toBe(true);
   });
 
+  it("builds the hover toolbar on first focus, and up front when the list is not windowed", () => {
+    const toolbarOf = (row: HTMLElement) =>
+      [...row.querySelectorAll("button")].some(
+        (one) => one.getAttribute("aria-haspopup") === "menu",
+      );
+    mount({ onToggleAnswer: vi.fn(), windowing: true });
+    expect(toolbarOf(rowOf(3))).toBe(false);
+    act(() => rowOf(3).focus());
+    expect(toolbarOf(rowOf(3))).toBe(true);
+    // A row nobody reached still has none.
+    expect(toolbarOf(rowOf(2))).toBe(false);
+    act(() => root?.unmount());
+    host?.remove();
+
+    mount({ onToggleAnswer: vi.fn(), windowing: false });
+    expect(toolbarOf(rowOf(3))).toBe(true);
+    expect(toolbarOf(rowOf(2))).toBe(true);
+  });
+
   it("does not offer it on the opening message", () => {
     mount({ onToggleAnswer: vi.fn() });
     const row = rowOf(1);
+    act(() => row.focus());
     const more = [...row.querySelectorAll("button")].find(
       (one) => one.getAttribute("aria-haspopup") === "menu",
     );

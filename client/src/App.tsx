@@ -526,6 +526,7 @@ import {
   startCleanVoiceDefaultFlag,
   useCleanVoiceDefaultMode,
 } from "@/lib/clean-voice-default";
+import { startMessageListWindowingFlag } from "@/lib/message-list-windowing";
 import { startVoiceGateFlag } from "@/lib/voice-gate/voice-gate-flag";
 import { withEffectiveNoiseSuppression } from "@/components/settings/local-settings";
 import {
@@ -3075,6 +3076,13 @@ function MainAppContent({
   // default for a device that never chose. Same refresh, same reason to wait.
   useEffect(
     () => (notifyConfigUserId ? startCleanVoiceDefaultFlag() : undefined),
+    [notifyConfigUserId],
+  );
+  // `message_list_windowing` (`lib/message-list-windowing.ts`): the transcript
+  // mounts only the rows near the viewport. On unless the server says off;
+  // same refresh, same reason to wait for an account.
+  useEffect(
+    () => (notifyConfigUserId ? startMessageListWindowingFlag() : undefined),
     [notifyConfigUserId],
   );
   // `voice_gate` (`lib/voice-gate/voice-gate-flag.ts`): the kill switch for the

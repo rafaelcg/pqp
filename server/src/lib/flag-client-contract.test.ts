@@ -227,6 +227,29 @@ describe("GET /api/voice/config against the client that reads it", () => {
     expect(dashboard).toMatch(/\bclean_voice_default:\s*"/);
   });
 
+  it("message_list_windowing is global, on by default, read off the global config, and decides how the transcript renders", () => {
+    const def = FEATURE_FLAGS.message_list_windowing;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(true);
+    expect(def.clientVia).toBe("GET /api/voice/config (messageListWindowing)");
+    expect(served).toContain("messageListWindowing");
+    const flag = readFileSync(path.join(clientSrc, "lib/message-list-windowing.ts"), "utf8");
+    // The global ask (no server), and only an explicit false is the switch:
+    // an older API that sends nothing leaves the list windowed.
+    expect(flag).toContain("fetchGlobalVoiceConfig()");
+    expect(flag).toMatch(/answer\.messageListWindowing !== false/);
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toContain("startMessageListWindowingFlag()");
+    // The answer reaches the component that renders the rows.
+    const list = readFileSync(path.join(clientSrc, "components/chat/message-list.tsx"), "utf8");
+    expect(list).toContain("useMessageListWindowing()");
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bmessage_list_windowing:\s*"/);
+  });
+
   it("voice_gate is global, on by default, read off the global config and handed to every live gate", () => {
     const def = FEATURE_FLAGS.voice_gate;
     expect(def.perServer).toBe(false);

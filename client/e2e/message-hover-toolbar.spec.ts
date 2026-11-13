@@ -71,6 +71,34 @@ test("the hover toolbar is not clipped at the top of the row", async ({
 test("the row still skips off-screen work", async ({ page }) => {
   await openApp(page);
   const row = await sendMessage(page, `skip-${Date.now()}`);
+  // Windowed (the default), the transcript keeps off-screen rows out of the
+  // DOM altogether, which is cheaper than skipping their layout, and the rows
+  // it does mount are laid out in full so their measured heights are true.
+  // `message-window.spec.ts` holds the numbers; here it is the mode.
+  await expect(page.locator("[data-message-window]")).toHaveCount(1);
+  const styles = await row.evaluate((node) =>
+    [node, ...Array.from(node.children)].map(
+      (el) => getComputedStyle(el).contentVisibility,
+    ),
+  );
+  expect(styles).not.toContain("auto");
+});
+
+test("with message_list_windowing off the row skips off-screen work as it always did", async ({
+  page,
+}) => {
+  // The kill switch: the API says off, and the old list comes back.
+  await page.route("**/api/voice/config*", async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as Record<string, unknown>;
+    await route.fulfill({
+      response,
+      json: { ...body, messageListWindowing: false },
+    });
+  });
+  await openApp(page);
+  const row = await sendMessage(page, `skip-off-${Date.now()}`);
+  await expect(page.locator("[data-message-window]")).toHaveCount(0);
   // Wherever the containment sits (the row or its inner wrapper), it has to
   // stay: it is what keeps a long transcript cheap to scroll.
   const styles = await row.evaluate((node) =>
@@ -79,4 +107,6 @@ test("the row still skips off-screen work", async ({ page }) => {
     ),
   );
   expect(styles).toContain("auto");
+  // And the toolbar is built up front, hovered or not.
+  await expect(row.locator("button").filter({ hasText: /^\p{Extended_Pictographic}$/u }).first()).toHaveCount(1);
 });
