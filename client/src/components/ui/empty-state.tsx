@@ -35,6 +35,16 @@ const ICON: Record<EmptyStateSize, string> = {
   inline: "redesign:mb-2 redesign:text-text-tertiary",
 };
 
+/**
+ * Breu's drawing sits inside its box with room around it (about 13px at the
+ * page size, 9px inline), so the box's own margin is cut under the redesign
+ * to land the drawing as far from the title as the icon disc is.
+ */
+const MASCOT: Record<EmptyStateSize, string> = {
+  page: "redesign:mb-1",
+  inline: "redesign:mb-0",
+};
+
 const TITLE: Record<EmptyStateSize, string> = {
   page: "redesign:font-[family-name:var(--type-title-font)] redesign:text-[length:var(--empty-title-size)] redesign:leading-tight redesign:font-bold redesign:text-text redesign:text-balance",
   inline: "redesign:font-sans redesign:text-sm redesign:font-medium redesign:text-text-secondary",
@@ -90,7 +100,7 @@ export function EmptyState({
       className={cn("flex flex-col items-center text-center", className, ROOT[size])}
     >
       {mascot ? (
-        <div aria-hidden="true" data-empty-mascot={mascot} className="mb-3 flex justify-center">
+        <div aria-hidden="true" data-empty-mascot={mascot} className={cn("mb-3 flex justify-center", MASCOT[size])}>
           <Breu mood={mascot} size={size === "page" ? "md" : "sm"} />
         </div>
       ) : glyph ? (
