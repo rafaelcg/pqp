@@ -398,10 +398,13 @@ export function ConversationHomeList({
         </div>
       )}
 
-      {/* A size container under the new look, in rem: with very large text
-          (about 200%, under 16rem across) the empty tab puts "Nova conversa"
-          in its own flow instead of floating it over the title. */}
-      <div className={cn("relative flex min-h-0 flex-1 flex-col", phoneShell && "redesign:@container/convs")}>
+      {/* A size container under the new look, read in rem so it follows the
+          text size. When the empty tab has too little room for the floating
+          "Nova conversa" (under 16rem across, or under 20.5rem tall: the
+          state needs about 15.7rem plus the list's 5.25rem of padding), it
+          carries the action in its own flow instead. On a 390x568 phone that
+          is text at 150% and up; 125% still fits. */}
+      <div className={cn("relative flex min-h-0 flex-1 flex-col", phoneShell && "redesign:[container:convs/size]")}>
       <div
         ref={rowsRef}
         data-conversations-rows=""
@@ -409,7 +412,7 @@ export function ConversationHomeList({
           "min-h-0 flex-1 overflow-y-auto px-2 pt-1 redesign:px-3",
           phoneShell ? "pb-20" : "pb-2",
           // No floating button to clear when the empty tab carries it in flow.
-          phoneShell && redesign && !isLoading && conversations.length === 0 && "@max-[16rem]/convs:pb-2",
+          phoneShell && redesign && !isLoading && conversations.length === 0 && "[@container_convs_(width<16rem)_or_(height<20.5rem)]:pb-2",
         )}
       >
         {isLoading ? (
@@ -421,8 +424,9 @@ export function ConversationHomeList({
             data-conversations-empty=""
             mascot="hello"
             title={t("conversations.emptyHero.title")}
-            // The tab's only heading, as the desktop hero's title is.
-            titleHeading
+            // A heading under the tab's own "Conversas" (h2), as the desktop
+            // hero's title is one.
+            titleHeading={3}
             body={t("conversations.emptyHero.body")}
             className="min-h-full justify-center"
             // Less room above than a pane's empty state. The list's own
@@ -437,7 +441,7 @@ export function ConversationHomeList({
                 {t("conversations.new")}
               </Button>
             }
-            actionsClassName="hidden @max-[16rem]/convs:flex"
+            actionsClassName="hidden [@container_convs_(width<16rem)_or_(height<20.5rem)]:flex"
           />
         ) : conversations.length === 0 ? (
           <p
@@ -492,7 +496,7 @@ export function ConversationHomeList({
           data-conversations-new=""
           onClick={onStartConversation}
           className={cn(
-            conversations.length === 0 && !isLoading && redesign && "@max-[16rem]/convs:hidden",
+            conversations.length === 0 && !isLoading && redesign && "[@container_convs_(width<16rem)_or_(height<20.5rem)]:hidden",
             "absolute bottom-4 right-4 z-10 flex h-12 animate-pop-in items-center gap-2 rounded-[var(--radius-card)] bg-accent px-4 text-sm font-semibold text-on-accent shadow-[var(--shadow-2)] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring redesign:rounded-full redesign:pl-4 redesign:pr-5 redesign:shadow-[var(--button-primary-shadow,var(--shadow-2))] redesign:hover:bg-accent-hover",
           )}
         >

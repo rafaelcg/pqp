@@ -71,7 +71,7 @@ export function EmptyState({
   redesignClassName,
   iconClassName,
   titleClassName,
-  titleHeading = false,
+  titleHeading,
   bodyClassName,
   actionsClassName,
   ...data
@@ -100,11 +100,11 @@ export function EmptyState({
   iconClassName?: string;
   titleClassName?: string;
   /**
-   * The title is the screen's heading (level 2). It stays a `p` with the
-   * heading role: a real `h2` takes the unlayered `h1, h2` rule in
-   * `index.css`, whose font and tracking outrank the title's utilities.
+   * The title is a heading at this level. It stays a `p` with the heading
+   * role: a real `h2` takes the unlayered `h1, h2` rule in `index.css`,
+   * whose font and tracking outrank the title's utilities.
    */
-  titleHeading?: boolean;
+  titleHeading?: 2 | 3;
   bodyClassName?: string;
   actionsClassName?: string;
 } & { [key: `data-${string}`]: string | undefined }) {
@@ -141,7 +141,7 @@ export function EmptyState({
       ) : null}
       <p
         role={titleHeading ? "heading" : undefined}
-        aria-level={titleHeading ? 2 : undefined}
+        aria-level={titleHeading}
         className={cn(titleClassName, TITLE[size])}
       >
         {title}

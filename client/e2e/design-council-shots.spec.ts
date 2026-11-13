@@ -2029,6 +2029,14 @@ test("captures the phone shell", async ({ browser }) => {
       });
       await emptyPage.waitForTimeout(300);
       await shoot(emptyPage, `m-shell-conversas-empty-short-large-${theme}`);
+      // Text at 150% and 175%: between the floating button and the in-flow one.
+      for (const size of [150, 175]) {
+        await emptyPage.evaluate((pct) => {
+          document.documentElement.style.fontSize = `${pct}%`;
+        }, size);
+        await emptyPage.waitForTimeout(300);
+        await shoot(emptyPage, `m-shell-conversas-empty-short-${size}-${theme}`);
+      }
       // Text at 200%: the screen scrolls, and its end clears the button.
       await emptyPage.evaluate(() => {
         document.documentElement.style.fontSize = "200%";
