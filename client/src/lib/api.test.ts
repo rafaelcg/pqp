@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, setAuthTokenProvider, setMemberVoiceMuted } from "./api";
+import { ApiError, isApiUnreachableMessage, setAuthTokenProvider, setMemberVoiceMuted } from "./api";
 
 /**
  * Regression coverage for the moderator "cannot un-mute" report: a server
@@ -94,5 +94,8 @@ describe("apiFetch token-provider resilience", () => {
     }
     expect(caught).toBeInstanceOf(ApiError);
     expect((caught as ApiError).message).toContain("Network error reaching API");
+    // The boot failure screen recognises it, and nothing else.
+    expect(isApiUnreachableMessage((caught as ApiError).message)).toBe(true);
+    expect(isApiUnreachableMessage("Not found")).toBe(false);
   });
 });

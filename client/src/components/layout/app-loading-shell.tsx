@@ -20,6 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 import { useRedesign } from "@/lib/redesign";
+import { isApiUnreachableMessage } from "@/lib/api";
 import { CaretRight } from "@phosphor-icons/react";
 import { Icon } from "@/components/ui/icon";
 import {
@@ -201,6 +202,10 @@ interface AppBootstrapErrorProps {
 export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) {
   const { t } = useTranslation();
   const redesign = useRedesign();
+  // The network failure is an English line built in `lib/api.ts`. Under the
+  // redesign the reader gets their own sentence, and the line moves into the
+  // self-hosters' details, where it still helps whoever runs the server.
+  const unreachable = redesign && isApiUnreachableMessage(message);
   const deploy = (
     <>
       {t("bootstrapError.deploy.1")}{" "}
@@ -230,7 +235,9 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
         <h1 className="font-display text-4xl font-extrabold leading-[0.95] sm:text-5xl redesign:font-[family-name:var(--type-title-font)] redesign:font-bold redesign:text-balance">
           {t("bootstrapError.title")}
         </h1>
-        <p className="mt-4 text-paper-muted redesign:text-text-secondary">{message}</p>
+        <p className="mt-4 text-paper-muted redesign:text-text-secondary">
+          {unreachable ? t("bootstrapError.network") : message}
+        </p>
         {redesign ? (
           // The deploy notes are for whoever hosts pqp, so under the redesign
           // they fold behind a disclosure instead of greeting every reader.
@@ -239,6 +246,7 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
               <Icon icon={CaretRight} kind="symbol" size="sm" className="text-text-tertiary transition-transform duration-[var(--duration-fast)] group-open:rotate-90 motion-reduce:transition-none" />
               {t("bootstrapError.deploy.details")}
             </summary>
+            {unreachable ? <p className="mt-2 font-mono text-xs">{message}</p> : null}
             <p className="mt-2">{deploy}</p>
           </details>
         ) : (

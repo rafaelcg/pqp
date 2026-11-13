@@ -890,6 +890,7 @@
   "bootstrapError.retry": "Tentar de novo",
   "bootstrapError.home": "Voltar para o início",
   "bootstrapError.bubble": "pqp!",
+  "bootstrapError.network": "Confere tua conexão e tenta de novo.",
   "empty.noServers.title": "Nenhuma comunidade ainda",
   "empty.noServers.body": "Crie uma comunidade ou entre com um código de convite.",
   "empty.pickChannel.title": "Escolha um canal",
