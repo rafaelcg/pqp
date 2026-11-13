@@ -21,7 +21,8 @@ import { cn } from "@/lib/utils";
  * `mascot` draws Breu in place of the icon, in both looks: for the empty
  * states a person meets early and rarely (a new channel, no DMs yet, a forum
  * with no posts, a search that found nothing). Not for compact lists, where
- * Breu would take over the row.
+ * Breu would take over the row. A page failure with an icon draws the warning
+ * disc; with `mascot` (the sad face) there is no disc, the face carries it.
  */
 export type EmptyStateSize = "page" | "inline";
 
