@@ -252,12 +252,32 @@ pt-BR title, because that key renders in both looks and toggle off must not
 change. Toggle off: the primitives compared pixel by pixel; only loading
 animation noise (0.07% at most).
 
+### f-dm-home (v2)
+
+The phone's Conversas tab with no conversation now shows Breu (hello) with
+the desktop hero's own title and line, through `EmptyState`, instead of a
+plain line. The desktop list keeps its line, so Breu shows once per screen.
+The title is a level 3 heading under the tab's "Conversas". The list's
+`pb-20` is the one clearance for the floating "Nova conversa". When the
+room left is too small for it (a size container read in rem: under 16rem
+across or 20.5rem tall, which on a 390x568 phone is text at 150% and up),
+the empty tab carries the action in its own flow and the pill hides.
+`EmptyState` gained `redesignClassName` and `titleHeading`.
+
+Rounds: r1 Codex 8.3, r2 Codex 8.7, r3 Opus 8.6, r4 Codex 8.6, r5 Opus 8.8
+(cap). No MUST in any round. Fixed along the way: two stacked bottom paddings
+that scrolled 200% text into blank space (r2), the pill over the title at
+200% (r4), and at 150% (r5, the height condition). Not done: hiding the
+list's scrollbar (a desktop capture artefact; phones overlay it, and it would
+change the filled list too). Toggle off: every phone shell shot, the 14 empty
+tab shots included, compared against the old components; only avatar noise.
+
 | Element | Brand pass status |
 |---|---|
 | `t-color` | Merged (Opus 9.1 r5, no MUST) |
 | `p-empty` | Merged (Opus 9.0 r5, no MUST) |
 | `f-states` | Merged (Opus 8.9 r5, cap, no MUST) |
-| `f-dm-home` | Re-check |
+| `f-dm-home` | Merged (Opus 8.8 r5, cap, no MUST) |
 
 ## Phase 0: directions
 

@@ -197,7 +197,7 @@ element and the element does not follow it yet. "Ok" says why not.
 | `s-log-chrome` | ok | The empty channel's Breu goes through `EmptyState`, covered by `p-empty`. |
 | `s-composer` | ok | `--composer-border*` are in the high contrast block. |
 | `s-member-list` | ok | The status dot fix was not a look change. |
-| `f-dm-home` | re-check | The Conversas home list says "no conversations yet" as a plain line, where the mood table puts Breu (hello). |
+| `f-dm-home` | done (v2 merged) | The Conversas home list says "no conversations yet" as a plain line, where the mood table puts Breu (hello). |
 | `f-friends` | ok | "No friends yet" already shows Breu; the profile card from a row was made in the new look. |
 | `f-new-dm` | ok | Not touched by the delta. |
 | `f-user-settings` | ok | `--settings-rule` is in the high contrast block. |
