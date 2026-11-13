@@ -48,6 +48,28 @@ function sanitize(raw: unknown): Record<string, number> {
   return Object.fromEntries(kept.slice(-MAX_STORED_VOLUMES));
 }
 
+/**
+ * `map` with `userId` set to `volume` and moved to the END of the map.
+ *
+ * The cap keeps the tail, so a person must move there every time they are
+ * adjusted: `{ ...map, [userId]: v }` alone keeps an existing key in its old
+ * insertion slot, and somebody adjusted a minute ago could be the one dropped.
+ */
+export function withPeerVolume(
+  map: Readonly<Record<string, number>>,
+  userId: string,
+  volume: number,
+): Record<string, number> {
+  const next: Record<string, number> = {};
+  for (const [key, value] of Object.entries(map)) {
+    if (key !== userId) {
+      next[key] = value;
+    }
+  }
+  next[userId] = volume;
+  return next;
+}
+
 /** Parse a stored blob; anything unreadable is an empty map, never a throw. */
 export function parseStoredPeerVolumes(raw: string | null): StoredPeerVolumes {
   if (!raw) {

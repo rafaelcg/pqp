@@ -247,7 +247,11 @@ import {
   joinLeaveAutoMuteEnabled,
   shouldSuppressJoinLeaveSound,
 } from "@/lib/large-room-sounds";
-import { loadPeerVolumes, savePeerVolumes } from "@/lib/peer-volume-pref";
+import {
+  loadPeerVolumes,
+  savePeerVolumes,
+  withPeerVolume,
+} from "@/lib/peer-volume-pref";
 
 export type VoiceStatus = "idle" | "joining" | "connected";
 
@@ -8285,20 +8289,22 @@ export function createVoiceController(transport: RealtimeTransport) {
      * that person reconnected.
      */
     setPeerVolume(userId: string, volume: number) {
-      state.peerVolumes = {
-        ...state.peerVolumes,
-        [userId]: Math.min(1, Math.max(0, volume)),
-      };
+      state.peerVolumes = withPeerVolume(
+        state.peerVolumes,
+        userId,
+        Math.min(1, Math.max(0, volume)),
+      );
       savePeerVolumes({ peer: state.peerVolumes, screen: state.screenVolumes });
       emit();
     },
 
     /** The same knob for a person's screen audio. See `screenVolumes`. */
     setScreenVolume(userId: string, volume: number) {
-      state.screenVolumes = {
-        ...state.screenVolumes,
-        [userId]: Math.min(1, Math.max(0, volume)),
-      };
+      state.screenVolumes = withPeerVolume(
+        state.screenVolumes,
+        userId,
+        Math.min(1, Math.max(0, volume)),
+      );
       savePeerVolumes({ peer: state.peerVolumes, screen: state.screenVolumes });
       emit();
     },

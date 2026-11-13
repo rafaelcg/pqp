@@ -6,6 +6,7 @@ import {
   parseStoredPeerVolumes,
   resetPeerVolumesForTests,
   savePeerVolumes,
+  withPeerVolume,
 } from "./peer-volume-pref";
 
 /** vitest's `node` environment has no `localStorage`; just enough of it. */
@@ -115,6 +116,23 @@ describe("remembered per-person volumes (#1592)", () => {
     // The newest are kept, the oldest forgotten.
     expect(kept).toContain(`user${MAX_STORED_VOLUMES + 49}`);
     expect(kept).not.toContain("user0");
+  });
+
+  it("re-adjusting somebody makes them the newest, so the cap keeps them", () => {
+    let map: Record<string, number> = {};
+    for (let i = 0; i < MAX_STORED_VOLUMES; i += 1) {
+      map = withPeerVolume(map, `user${i}`, 0.5);
+    }
+    // user0 is the oldest; adjusting them again must move them to the end.
+    map = withPeerVolume(map, "user0", 0.3);
+    map = withPeerVolume(map, "newcomer", 0.4);
+    savePeerVolumes({ peer: map, screen: {} });
+    vi.runAllTimers();
+    const kept = loadPeerVolumes().peer;
+    expect(Object.keys(kept)).toHaveLength(MAX_STORED_VOLUMES);
+    expect(kept.user0).toBe(0.3);
+    expect(kept.newcomer).toBe(0.4);
+    expect(kept).not.toHaveProperty("user1");
   });
 
   it("works with no storage at all: nothing loads, nothing throws", () => {
