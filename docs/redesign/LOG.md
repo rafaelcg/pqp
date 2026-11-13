@@ -2252,6 +2252,11 @@ test user's random tag. No new copy.
    feature is lost. The studio tip says what the screen cannot. The wall tip
    points at a control the screen shows, like the ones removed. Keep the wall
    tip or remove it?
+10. Boot failure (2026-11-13): the pt-BR title says "Não dá para falar com
+    a API" above a body that now says "Pode ser a tua conexão ou o
+    servidor". The council suggests "Não dá pra" to match the casual
+    register. The key renders in both looks, so it changes the app with the
+    toggle off. Change it?
 
 ## Decisions
 
