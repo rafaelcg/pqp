@@ -848,6 +848,9 @@
   /* The menu rung: a dialog keeps the deeper --shadow-3 in both themes. */
   --popover-highlight: oklch(1 0 0 / 0.07);
   --popover-shadow: inset 0 1px 0 var(--popover-highlight), var(--shadow-2);
+  /* Breu's speech bubble (`BreuSpeechBubble`): a drop shadow, so its tail
+     lifts with it. */
+  --breu-bubble-shadow: drop-shadow(0 1px 1px oklch(0.1 0.02 262 / 0.18)) drop-shadow(0 6px 14px oklch(0.1 0.02 262 / 0.16));
   /* Menus: the highlight is a tint of the text, so it shows on the menu's own
      surface (the old one was that surface's colour and did not show). Rows
      sit concentric inside the panel; icons are quieter than their label and
@@ -1565,6 +1568,8 @@
   --dialog-surface: var(--color-surface-0);
   --popover-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --popover-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-2);
+  /* Lighter on the light page, where the bubble is white on white. */
+  --breu-bubble-shadow: drop-shadow(0 1px 1px oklch(0.4 0.02 262 / 0.14)) drop-shadow(0 4px 10px oklch(0.4 0.02 262 / 0.1));
   /* Light raises the thumb as a white chip on the grey track. */
   --segmented-thumb: var(--color-surface-0);
   --segmented-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 0 0 0.5px oklch(0.4 0.02 262 / 0.12);

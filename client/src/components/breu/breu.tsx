@@ -148,7 +148,7 @@ export function BreuSpeechBubble({
       aria-hidden="true"
       data-breu-bubble=""
       className={cn(
-        "relative inline-block origin-bottom-right rounded-[var(--radius-card)] border border-[color:var(--popover-border,var(--color-border))] bg-[color:var(--popover-surface,var(--color-surface-1))] px-3.5 py-1.5 font-[family-name:var(--type-title-font)] text-lg font-bold leading-tight text-text [filter:drop-shadow(0_1px_1px_oklch(0.1_0.02_262/0.18))_drop-shadow(0_6px_14px_oklch(0.1_0.02_262/0.16))] will-change-transform animate-[breu-bubble-pop_0.32s_ease-out_0.8s_both] motion-reduce:animate-none",
+        "relative inline-block origin-bottom-right rounded-[var(--radius-card)] border border-[color:var(--popover-border,var(--color-border))] bg-[color:var(--popover-surface,var(--color-surface-1))] px-3.5 py-1.5 font-[family-name:var(--type-title-font)] text-lg font-bold leading-tight text-text [filter:var(--breu-bubble-shadow,none)] will-change-transform animate-[breu-bubble-pop_0.32s_ease-out_0.8s_both] motion-reduce:animate-none",
         className,
       )}
     >
