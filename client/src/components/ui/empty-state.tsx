@@ -71,7 +71,7 @@ export function EmptyState({
   redesignClassName,
   iconClassName,
   titleClassName,
-  titleAs: Title = "p",
+  titleHeading = false,
   bodyClassName,
   actionsClassName,
   ...data
@@ -99,8 +99,12 @@ export function EmptyState({
   /** The icon's own classes. Not applied to a mascot. */
   iconClassName?: string;
   titleClassName?: string;
-  /** The title's element. A screen whose title is its only heading passes `h2`. */
-  titleAs?: "p" | "h2";
+  /**
+   * The title is the screen's heading (level 2). It stays a `p` with the
+   * heading role: a real `h2` takes the unlayered `h1, h2` rule in
+   * `index.css`, whose font and tracking outrank the title's utilities.
+   */
+  titleHeading?: boolean;
   bodyClassName?: string;
   actionsClassName?: string;
 } & { [key: `data-${string}`]: string | undefined }) {
@@ -135,7 +139,13 @@ export function EmptyState({
           {glyph}
         </div>
       ) : null}
-      <Title className={cn(titleClassName, TITLE[size])}>{title}</Title>
+      <p
+        role={titleHeading ? "heading" : undefined}
+        aria-level={titleHeading ? 2 : undefined}
+        className={cn(titleClassName, TITLE[size])}
+      >
+        {title}
+      </p>
       {body ? <p className={cn(bodyClassName, BODY[size])}>{body}</p> : null}
       {actions ? (
         <div
