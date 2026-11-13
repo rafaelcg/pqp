@@ -18,6 +18,11 @@ on:
     branches: [main]
     paths-ignore:
       - "docs/**"
+      # `rust/**` is a separate cargo workspace with its own gate (rust.yml).
+      # A Rust-only change cannot reach the Node build, and the Node suite
+      # cannot catch a regression in the Rust port, so routing Rust through this
+      # matrix would only spend the runner.
+      - "rust/**"
       - "android/**"
       - "ios/**"
       - "README.md"

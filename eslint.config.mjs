@@ -107,6 +107,9 @@ export default tseslint.config(
       "packages/app-sdk/scripts/**/*.mjs",
       "client/scripts/**/*.mjs",
       "server/scripts/**/*.mjs",
+      // The Rust port's fixture generators: plain Node ESM run from the repo
+      // root, the same shape as every other script folder here.
+      "rust/scripts/**/*.mjs",
       "client/bench/**/*.mjs",
       "client/e2e/bandwidth/**/*.mjs",
       "client/e2e/share-audio-echo/**/*.mjs",

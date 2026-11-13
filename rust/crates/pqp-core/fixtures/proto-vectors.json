@@ -1,0 +1,1960 @@
+{
+  "_generatedBy": "rust/scripts/gen-proto-vectors.mjs",
+  "note": "Canonical forms are zod's own parse output, mapped by the field rules in crates/pqp-core/src/proto.rs. Do not edit by hand.",
+  "client": {
+    "types": [
+      "join-voice-room",
+      "leave-voice-room",
+      "set-sharing-screen",
+      "offer",
+      "answer",
+      "ice-candidate",
+      "call-ring",
+      "call-decline",
+      "set-camera",
+      "set-voice-state",
+      "set-raised-hand",
+      "voice-still-here",
+      "set-watch-party",
+      "set-voice-track-mode",
+      "set-music",
+      "set-music-listening",
+      "live-reaction",
+      "soundboard-play",
+      "watch-live"
+    ],
+    "vectors": [
+      {
+        "type": "join-voice-room",
+        "label": "join-voice-room#1",
+        "input": {
+          "type": "join-voice-room",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333"
+        },
+        "canonical": {
+          "type": "join-voice-room",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333"
+        }
+      },
+      {
+        "type": "join-voice-room",
+        "label": "join-voice-room#2",
+        "input": {
+          "type": "join-voice-room",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "transports": [
+            "mesh",
+            "livekit"
+          ],
+          "resumePeerId": "11111111-1111-4111-8111-111111111111",
+          "resumeToken": "tok"
+        },
+        "canonical": {
+          "type": "join-voice-room",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "transports": [
+            "mesh",
+            "livekit"
+          ],
+          "resumePeerId": "11111111-1111-4111-8111-111111111111",
+          "resumeToken": "tok"
+        }
+      },
+      {
+        "type": "leave-voice-room",
+        "label": "leave-voice-room#1",
+        "input": {
+          "type": "leave-voice-room"
+        },
+        "canonical": {
+          "type": "leave-voice-room"
+        }
+      },
+      {
+        "type": "leave-voice-room",
+        "label": "leave-voice-room#2",
+        "input": {
+          "type": "leave-voice-room",
+          "resumePeerId": "11111111-1111-4111-8111-111111111111",
+          "resumeToken": "tok"
+        },
+        "canonical": {
+          "type": "leave-voice-room",
+          "resumePeerId": "11111111-1111-4111-8111-111111111111",
+          "resumeToken": "tok"
+        }
+      },
+      {
+        "type": "set-sharing-screen",
+        "label": "set-sharing-screen",
+        "input": {
+          "type": "set-sharing-screen",
+          "sharing": true,
+          "audioStreamId": "cap-1",
+          "uplinkBps": 2500000,
+          "sourceHeight": 1080,
+          "audioNeedsSfu": true
+        },
+        "canonical": {
+          "type": "set-sharing-screen",
+          "sharing": true,
+          "audioStreamId": "cap-1",
+          "uplinkBps": 2500000,
+          "sourceHeight": 1080,
+          "audioNeedsSfu": true
+        }
+      },
+      {
+        "type": "offer",
+        "label": "offer",
+        "input": {
+          "type": "offer",
+          "from": "peer-a",
+          "to": "peer-b",
+          "sdp": "v=0\r\n"
+        },
+        "canonical": {
+          "type": "offer",
+          "from": "peer-a",
+          "to": "peer-b",
+          "sdp": "v=0\r\n"
+        }
+      },
+      {
+        "type": "answer",
+        "label": "answer",
+        "input": {
+          "type": "answer",
+          "from": "peer-b",
+          "to": "peer-a",
+          "sdp": "v=0\r\n"
+        },
+        "canonical": {
+          "type": "answer",
+          "from": "peer-b",
+          "to": "peer-a",
+          "sdp": "v=0\r\n"
+        }
+      },
+      {
+        "type": "ice-candidate",
+        "label": "ice-candidate#1",
+        "input": {
+          "type": "ice-candidate",
+          "from": "peer-a",
+          "to": "peer-b",
+          "candidate": {
+            "candidate": "candidate:1 1 udp 1 1.2.3.4 5 typ host",
+            "sdpMid": "0",
+            "sdpMLineIndex": 0,
+            "usernameFragment": null
+          }
+        },
+        "canonical": {
+          "type": "ice-candidate",
+          "from": "peer-a",
+          "to": "peer-b",
+          "candidate": {
+            "candidate": "candidate:1 1 udp 1 1.2.3.4 5 typ host",
+            "sdpMid": "0",
+            "sdpMLineIndex": 0,
+            "usernameFragment": null
+          }
+        }
+      },
+      {
+        "type": "ice-candidate",
+        "label": "ice-candidate#2",
+        "input": {
+          "type": "ice-candidate",
+          "from": "peer-a",
+          "to": "peer-b",
+          "candidate": null
+        },
+        "canonical": {
+          "type": "ice-candidate",
+          "from": "peer-a",
+          "to": "peer-b",
+          "candidate": null
+        }
+      },
+      {
+        "type": "call-ring",
+        "label": "call-ring",
+        "input": {
+          "type": "call-ring",
+          "conversationId": "44444444-4444-4444-8444-444444444444"
+        },
+        "canonical": {
+          "type": "call-ring",
+          "conversationId": "44444444-4444-4444-8444-444444444444"
+        }
+      },
+      {
+        "type": "call-decline",
+        "label": "call-decline",
+        "input": {
+          "type": "call-decline",
+          "conversationId": "44444444-4444-4444-8444-444444444444"
+        },
+        "canonical": {
+          "type": "call-decline",
+          "conversationId": "44444444-4444-4444-8444-444444444444"
+        }
+      },
+      {
+        "type": "set-camera",
+        "label": "set-camera",
+        "input": {
+          "type": "set-camera",
+          "streamId": null
+        },
+        "canonical": {
+          "type": "set-camera",
+          "streamId": null
+        }
+      },
+      {
+        "type": "set-voice-state",
+        "label": "set-voice-state",
+        "input": {
+          "type": "set-voice-state",
+          "muted": true,
+          "deafened": false
+        },
+        "canonical": {
+          "type": "set-voice-state",
+          "muted": true,
+          "deafened": false
+        }
+      },
+      {
+        "type": "set-raised-hand",
+        "label": "set-raised-hand",
+        "input": {
+          "type": "set-raised-hand",
+          "raised": true
+        },
+        "canonical": {
+          "type": "set-raised-hand",
+          "raised": true
+        }
+      },
+      {
+        "type": "voice-still-here",
+        "label": "voice-still-here",
+        "input": {
+          "type": "voice-still-here"
+        },
+        "canonical": {
+          "type": "voice-still-here"
+        }
+      },
+      {
+        "type": "set-watch-party",
+        "label": "set-watch-party#1",
+        "input": {
+          "type": "set-watch-party",
+          "state": {
+            "videoId": "dQw4w9WgXcQ",
+            "status": "playing",
+            "positionMs": 4200,
+            "atMs": 1700000000000,
+            "rev": 7,
+            "actorId": "11111111-1111-4111-8111-111111111111"
+          }
+        },
+        "canonical": {
+          "type": "set-watch-party",
+          "state": {
+            "videoId": "dQw4w9WgXcQ",
+            "status": "playing",
+            "positionMs": 4200,
+            "atMs": 1700000000000,
+            "rev": 7,
+            "actorId": "11111111-1111-4111-8111-111111111111"
+          }
+        }
+      },
+      {
+        "type": "set-watch-party",
+        "label": "set-watch-party#2",
+        "input": {
+          "type": "set-watch-party",
+          "state": null
+        },
+        "canonical": {
+          "type": "set-watch-party",
+          "state": null
+        }
+      },
+      {
+        "type": "set-voice-track-mode",
+        "label": "set-voice-track-mode",
+        "input": {
+          "type": "set-voice-track-mode",
+          "separated": true
+        },
+        "canonical": {
+          "type": "set-voice-track-mode",
+          "separated": true
+        }
+      },
+      {
+        "type": "set-music",
+        "label": "set-music#1",
+        "input": {
+          "type": "set-music",
+          "state": {
+            "current": {
+              "id": "t1",
+              "provider": "youtube",
+              "videoId": "dQw4w9WgXcQ",
+              "title": "A song",
+              "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+              "thumbnailUrl": null,
+              "durationMs": 211000,
+              "addedByUserId": "11111111-1111-4111-8111-111111111111",
+              "addedByName": "Rafa"
+            },
+            "queue": [
+              {
+                "id": "t2",
+                "provider": "youtube",
+                "videoId": "dQw4w9WgXcQ",
+                "title": "A song",
+                "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+                "thumbnailUrl": null,
+                "durationMs": 211000,
+                "addedByUserId": "11111111-1111-4111-8111-111111111111",
+                "addedByName": "Rafa"
+              }
+            ],
+            "status": "playing",
+            "positionMs": 1000,
+            "atMs": 1700000000000,
+            "rev": 3,
+            "actorId": "11111111-1111-4111-8111-111111111111",
+            "repeat": "all",
+            "skipVotes": [
+              "22222222-2222-4222-8222-222222222222"
+            ],
+            "autoplay": true,
+            "history": [
+              {
+                "id": "t3",
+                "provider": "youtube",
+                "videoId": "dQw4w9WgXcQ",
+                "title": "A song",
+                "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+                "thumbnailUrl": null,
+                "durationMs": 211000,
+                "addedByUserId": "11111111-1111-4111-8111-111111111111",
+                "addedByName": "Rafa"
+              }
+            ]
+          }
+        },
+        "canonical": {
+          "type": "set-music",
+          "state": {
+            "current": {
+              "id": "t1",
+              "provider": "youtube",
+              "videoId": "dQw4w9WgXcQ",
+              "title": "A song",
+              "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+              "thumbnailUrl": null,
+              "durationMs": 211000,
+              "addedByUserId": "11111111-1111-4111-8111-111111111111",
+              "addedByName": "Rafa"
+            },
+            "queue": [
+              {
+                "id": "t2",
+                "provider": "youtube",
+                "videoId": "dQw4w9WgXcQ",
+                "title": "A song",
+                "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+                "thumbnailUrl": null,
+                "durationMs": 211000,
+                "addedByUserId": "11111111-1111-4111-8111-111111111111",
+                "addedByName": "Rafa"
+              }
+            ],
+            "status": "playing",
+            "positionMs": 1000,
+            "atMs": 1700000000000,
+            "rev": 3,
+            "actorId": "11111111-1111-4111-8111-111111111111",
+            "repeat": "all",
+            "skipVotes": [
+              "22222222-2222-4222-8222-222222222222"
+            ],
+            "history": [
+              {
+                "id": "t3",
+                "provider": "youtube",
+                "videoId": "dQw4w9WgXcQ",
+                "title": "A song",
+                "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+                "thumbnailUrl": null,
+                "durationMs": 211000,
+                "addedByUserId": "11111111-1111-4111-8111-111111111111",
+                "addedByName": "Rafa"
+              }
+            ],
+            "autoplay": true
+          }
+        }
+      },
+      {
+        "type": "set-music",
+        "label": "set-music#2",
+        "input": {
+          "type": "set-music",
+          "state": {
+            "current": null,
+            "queue": [],
+            "status": "paused",
+            "positionMs": 0,
+            "atMs": 1700000000000,
+            "rev": 9,
+            "actorId": "11111111-1111-4111-8111-111111111111"
+          }
+        },
+        "canonical": {
+          "type": "set-music",
+          "state": {
+            "current": null,
+            "queue": [],
+            "status": "paused",
+            "positionMs": 0,
+            "atMs": 1700000000000,
+            "rev": 9,
+            "actorId": "11111111-1111-4111-8111-111111111111"
+          }
+        }
+      },
+      {
+        "type": "set-music",
+        "label": "set-music#3",
+        "input": {
+          "type": "set-music",
+          "state": null
+        },
+        "canonical": {
+          "type": "set-music",
+          "state": null
+        }
+      },
+      {
+        "type": "set-music-listening",
+        "label": "set-music-listening",
+        "input": {
+          "type": "set-music-listening",
+          "listening": true
+        },
+        "canonical": {
+          "type": "set-music-listening",
+          "listening": true
+        }
+      },
+      {
+        "type": "live-reaction",
+        "label": "live-reaction",
+        "input": {
+          "type": "live-reaction",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "emoji": "🔥"
+        },
+        "canonical": {
+          "type": "live-reaction",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "emoji": "🔥"
+        }
+      },
+      {
+        "type": "soundboard-play",
+        "label": "soundboard-play",
+        "input": {
+          "type": "soundboard-play",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "soundId": "11111111-1111-4111-8111-111111111111"
+        },
+        "canonical": {
+          "type": "soundboard-play",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "soundId": "11111111-1111-4111-8111-111111111111"
+        }
+      },
+      {
+        "type": "watch-live",
+        "label": "watch-live",
+        "input": {
+          "type": "watch-live",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "watching": true
+        },
+        "canonical": {
+          "type": "watch-live",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "watching": true
+        }
+      }
+    ]
+  },
+  "server": {
+    "types": [
+      "welcome",
+      "peer-joined",
+      "peer-updated",
+      "peer-left",
+      "voice-roster",
+      "voice-roster-delta",
+      "voice-room-full",
+      "voice-transport-unsupported",
+      "voice-transport-changed",
+      "voice-join-refused",
+      "screen-share-denied",
+      "camera-denied",
+      "offer",
+      "answer",
+      "ice-candidate",
+      "call-incoming",
+      "call-ring-cancelled",
+      "call-declined",
+      "voice-moderation",
+      "voice-speak-changed",
+      "voice-audience",
+      "voice-idle-warning",
+      "voice-idle-warning-cancelled",
+      "watch-party",
+      "music",
+      "channel-music",
+      "live-reactions",
+      "soundboard-play",
+      "voice-stream",
+      "channel-live"
+    ],
+    "pending": [],
+    "vectors": [
+      {
+        "type": "welcome",
+        "label": "welcome#1",
+        "input": {
+          "type": "welcome",
+          "peerId": "peer-a",
+          "peers": [
+            {
+              "peerId": "peer-a",
+              "userId": "11111111-1111-4111-8111-111111111111",
+              "displayName": "Rafa",
+              "avatarUrl": null
+            },
+            {
+              "peerId": "peer-b",
+              "userId": "22222222-2222-4222-8222-222222222222",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "muted": true,
+              "handRaisedAt": 1700000000000
+            }
+          ],
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "self": {
+            "peerId": "peer-a",
+            "userId": "11111111-1111-4111-8111-111111111111",
+            "displayName": "Rafa",
+            "avatarUrl": null,
+            "canSpeak": true,
+            "canStream": false,
+            "handRaisedAt": 1700000000000
+          },
+          "transport": "livekit",
+          "resumed": true,
+          "resumeToken": "tok",
+          "canSpeak": true,
+          "speakReason": "permission",
+          "audience": {
+            "since": 1700000000000,
+            "byUserId": "11111111-1111-4111-8111-111111111111",
+            "speakerUserIds": [
+              "22222222-2222-4222-8222-222222222222"
+            ],
+            "unenforcedUserIds": []
+          }
+        },
+        "canonical": {
+          "type": "welcome",
+          "peerId": "peer-a",
+          "peers": [
+            {
+              "peerId": "peer-a",
+              "userId": "11111111-1111-4111-8111-111111111111",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "sharingScreen": false,
+              "cameraStreamId": null,
+              "screenAudioStreamId": null,
+              "muted": false,
+              "deafened": false,
+              "serverMuted": false,
+              "handRaisedAt": null
+            },
+            {
+              "peerId": "peer-b",
+              "userId": "22222222-2222-4222-8222-222222222222",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "sharingScreen": false,
+              "cameraStreamId": null,
+              "screenAudioStreamId": null,
+              "muted": true,
+              "deafened": false,
+              "serverMuted": false,
+              "handRaisedAt": 1700000000000
+            }
+          ],
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "self": {
+            "peerId": "peer-a",
+            "userId": "11111111-1111-4111-8111-111111111111",
+            "displayName": "Rafa",
+            "avatarUrl": null,
+            "sharingScreen": false,
+            "cameraStreamId": null,
+            "screenAudioStreamId": null,
+            "muted": false,
+            "deafened": false,
+            "canSpeak": true,
+            "serverMuted": false,
+            "canStream": false,
+            "handRaisedAt": 1700000000000
+          },
+          "transport": "livekit",
+          "resumed": true,
+          "resumeToken": "tok",
+          "canSpeak": true,
+          "speakReason": "permission",
+          "audience": {
+            "since": 1700000000000,
+            "byUserId": "11111111-1111-4111-8111-111111111111",
+            "speakerUserIds": [
+              "22222222-2222-4222-8222-222222222222"
+            ],
+            "unenforcedUserIds": []
+          }
+        }
+      },
+      {
+        "type": "welcome",
+        "label": "welcome#2",
+        "input": {
+          "type": "welcome",
+          "peerId": "peer-a",
+          "peers": [
+            {
+              "peerId": "peer-a",
+              "userId": "11111111-1111-4111-8111-111111111111",
+              "displayName": "Rafa",
+              "avatarUrl": null
+            },
+            {
+              "peerId": "peer-b",
+              "userId": "22222222-2222-4222-8222-222222222222",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "muted": true,
+              "handRaisedAt": 1700000000000
+            }
+          ],
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "self": {
+            "peerId": "peer-a",
+            "userId": "11111111-1111-4111-8111-111111111111",
+            "displayName": "Rafa",
+            "avatarUrl": null,
+            "canSpeak": true,
+            "canStream": false,
+            "handRaisedAt": 1700000000000
+          },
+          "transport": "livekit",
+          "resumed": true,
+          "resumeToken": "tok",
+          "canSpeak": true,
+          "speakReason": "permission",
+          "audience": null
+        },
+        "canonical": {
+          "type": "welcome",
+          "peerId": "peer-a",
+          "peers": [
+            {
+              "peerId": "peer-a",
+              "userId": "11111111-1111-4111-8111-111111111111",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "sharingScreen": false,
+              "cameraStreamId": null,
+              "screenAudioStreamId": null,
+              "muted": false,
+              "deafened": false,
+              "serverMuted": false,
+              "handRaisedAt": null
+            },
+            {
+              "peerId": "peer-b",
+              "userId": "22222222-2222-4222-8222-222222222222",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "sharingScreen": false,
+              "cameraStreamId": null,
+              "screenAudioStreamId": null,
+              "muted": true,
+              "deafened": false,
+              "serverMuted": false,
+              "handRaisedAt": 1700000000000
+            }
+          ],
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "self": {
+            "peerId": "peer-a",
+            "userId": "11111111-1111-4111-8111-111111111111",
+            "displayName": "Rafa",
+            "avatarUrl": null,
+            "sharingScreen": false,
+            "cameraStreamId": null,
+            "screenAudioStreamId": null,
+            "muted": false,
+            "deafened": false,
+            "canSpeak": true,
+            "serverMuted": false,
+            "canStream": false,
+            "handRaisedAt": 1700000000000
+          },
+          "transport": "livekit",
+          "resumed": true,
+          "resumeToken": "tok",
+          "canSpeak": true,
+          "speakReason": "permission",
+          "audience": null
+        }
+      },
+      {
+        "type": "peer-joined",
+        "label": "peer-joined#1",
+        "input": {
+          "type": "peer-joined",
+          "peer": {
+            "peerId": "peer-a",
+            "userId": "11111111-1111-4111-8111-111111111111",
+            "displayName": "Rafa",
+            "avatarUrl": null
+          }
+        },
+        "canonical": {
+          "type": "peer-joined",
+          "peer": {
+            "peerId": "peer-a",
+            "userId": "11111111-1111-4111-8111-111111111111",
+            "displayName": "Rafa",
+            "avatarUrl": null,
+            "sharingScreen": false,
+            "cameraStreamId": null,
+            "screenAudioStreamId": null,
+            "muted": false,
+            "deafened": false,
+            "serverMuted": false,
+            "handRaisedAt": null
+          }
+        }
+      },
+      {
+        "type": "peer-joined",
+        "label": "peer-joined#2",
+        "input": {
+          "type": "peer-joined",
+          "peer": {
+            "peerId": "peer-b",
+            "userId": "22222222-2222-4222-8222-222222222222",
+            "displayName": "Rafa",
+            "avatarUrl": null,
+            "handRaisedAt": 1700000000000
+          }
+        },
+        "canonical": {
+          "type": "peer-joined",
+          "peer": {
+            "peerId": "peer-b",
+            "userId": "22222222-2222-4222-8222-222222222222",
+            "displayName": "Rafa",
+            "avatarUrl": null,
+            "sharingScreen": false,
+            "cameraStreamId": null,
+            "screenAudioStreamId": null,
+            "muted": false,
+            "deafened": false,
+            "serverMuted": false,
+            "handRaisedAt": 1700000000000
+          }
+        }
+      },
+      {
+        "type": "peer-updated",
+        "label": "peer-updated",
+        "input": {
+          "type": "peer-updated",
+          "peer": {
+            "peerId": "peer-a",
+            "userId": "11111111-1111-4111-8111-111111111111",
+            "displayName": "Rafa",
+            "avatarUrl": null,
+            "muted": true,
+            "handRaisedAt": 1700000000000
+          }
+        },
+        "canonical": {
+          "type": "peer-updated",
+          "peer": {
+            "peerId": "peer-a",
+            "userId": "11111111-1111-4111-8111-111111111111",
+            "displayName": "Rafa",
+            "avatarUrl": null,
+            "sharingScreen": false,
+            "cameraStreamId": null,
+            "screenAudioStreamId": null,
+            "muted": true,
+            "deafened": false,
+            "serverMuted": false,
+            "handRaisedAt": 1700000000000
+          }
+        }
+      },
+      {
+        "type": "peer-left",
+        "label": "peer-left",
+        "input": {
+          "type": "peer-left",
+          "peerId": "peer-a"
+        },
+        "canonical": {
+          "type": "peer-left",
+          "peerId": "peer-a"
+        }
+      },
+      {
+        "type": "voice-roster",
+        "label": "voice-roster",
+        "input": {
+          "type": "voice-roster",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "participants": [
+            {
+              "peerId": "peer-a",
+              "userId": "11111111-1111-4111-8111-111111111111",
+              "displayName": "Rafa",
+              "avatarUrl": null
+            },
+            {
+              "peerId": "peer-b",
+              "userId": "22222222-2222-4222-8222-222222222222",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "handRaisedAt": 1700000000000
+            }
+          ],
+          "transport": "mesh",
+          "seq": 12
+        },
+        "canonical": {
+          "type": "voice-roster",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "participants": [
+            {
+              "peerId": "peer-a",
+              "userId": "11111111-1111-4111-8111-111111111111",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "sharingScreen": false,
+              "cameraStreamId": null,
+              "screenAudioStreamId": null,
+              "muted": false,
+              "deafened": false,
+              "serverMuted": false,
+              "handRaisedAt": null
+            },
+            {
+              "peerId": "peer-b",
+              "userId": "22222222-2222-4222-8222-222222222222",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "sharingScreen": false,
+              "cameraStreamId": null,
+              "screenAudioStreamId": null,
+              "muted": false,
+              "deafened": false,
+              "serverMuted": false,
+              "handRaisedAt": 1700000000000
+            }
+          ],
+          "transport": "mesh",
+          "seq": 12
+        }
+      },
+      {
+        "type": "voice-roster-delta",
+        "label": "voice-roster-delta",
+        "input": {
+          "type": "voice-roster-delta",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "seq": 13,
+          "size": 2,
+          "transport": "mesh",
+          "joined": [
+            {
+              "peerId": "peer-b",
+              "userId": "22222222-2222-4222-8222-222222222222",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "handRaisedAt": 1700000000000
+            }
+          ],
+          "updated": [
+            {
+              "peerId": "peer-a",
+              "userId": "11111111-1111-4111-8111-111111111111",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "handRaisedAt": 1700000000000
+            }
+          ],
+          "left": [
+            "peer-c"
+          ]
+        },
+        "canonical": {
+          "type": "voice-roster-delta",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "seq": 13,
+          "size": 2,
+          "transport": "mesh",
+          "joined": [
+            {
+              "peerId": "peer-b",
+              "userId": "22222222-2222-4222-8222-222222222222",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "sharingScreen": false,
+              "cameraStreamId": null,
+              "screenAudioStreamId": null,
+              "muted": false,
+              "deafened": false,
+              "serverMuted": false,
+              "handRaisedAt": 1700000000000
+            }
+          ],
+          "updated": [
+            {
+              "peerId": "peer-a",
+              "userId": "11111111-1111-4111-8111-111111111111",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "sharingScreen": false,
+              "cameraStreamId": null,
+              "screenAudioStreamId": null,
+              "muted": false,
+              "deafened": false,
+              "serverMuted": false,
+              "handRaisedAt": 1700000000000
+            }
+          ],
+          "left": [
+            "peer-c"
+          ]
+        }
+      },
+      {
+        "type": "voice-room-full",
+        "label": "voice-room-full",
+        "input": {
+          "type": "voice-room-full",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "limit": 500
+        },
+        "canonical": {
+          "type": "voice-room-full",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "limit": 500
+        }
+      },
+      {
+        "type": "voice-transport-unsupported",
+        "label": "voice-transport-unsupported",
+        "input": {
+          "type": "voice-transport-unsupported",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "transport": "livekit",
+          "reason": "promoted"
+        },
+        "canonical": {
+          "type": "voice-transport-unsupported",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "transport": "livekit",
+          "reason": "promoted"
+        }
+      },
+      {
+        "type": "voice-transport-changed",
+        "label": "voice-transport-changed",
+        "input": {
+          "type": "voice-transport-changed",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "transport": "livekit",
+          "reason": "room-size",
+          "participants": [
+            {
+              "peerId": "peer-a",
+              "userId": "11111111-1111-4111-8111-111111111111",
+              "displayName": "Rafa",
+              "avatarUrl": null
+            },
+            {
+              "peerId": "peer-b",
+              "userId": "22222222-2222-4222-8222-222222222222",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "handRaisedAt": 1700000000000
+            }
+          ]
+        },
+        "canonical": {
+          "type": "voice-transport-changed",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "transport": "livekit",
+          "reason": "room-size",
+          "participants": [
+            {
+              "peerId": "peer-a",
+              "userId": "11111111-1111-4111-8111-111111111111",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "sharingScreen": false,
+              "cameraStreamId": null,
+              "screenAudioStreamId": null,
+              "muted": false,
+              "deafened": false,
+              "serverMuted": false,
+              "handRaisedAt": null
+            },
+            {
+              "peerId": "peer-b",
+              "userId": "22222222-2222-4222-8222-222222222222",
+              "displayName": "Rafa",
+              "avatarUrl": null,
+              "sharingScreen": false,
+              "cameraStreamId": null,
+              "screenAudioStreamId": null,
+              "muted": false,
+              "deafened": false,
+              "serverMuted": false,
+              "handRaisedAt": 1700000000000
+            }
+          ]
+        }
+      },
+      {
+        "type": "voice-join-refused",
+        "label": "voice-join-refused",
+        "input": {
+          "type": "voice-join-refused",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "reason": "mesh-multi-instance"
+        },
+        "canonical": {
+          "type": "voice-join-refused",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "reason": "mesh-multi-instance"
+        }
+      },
+      {
+        "type": "screen-share-denied",
+        "label": "screen-share-denied",
+        "input": {
+          "type": "screen-share-denied",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333"
+        },
+        "canonical": {
+          "type": "screen-share-denied",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333"
+        }
+      },
+      {
+        "type": "camera-denied",
+        "label": "camera-denied",
+        "input": {
+          "type": "camera-denied",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333"
+        },
+        "canonical": {
+          "type": "camera-denied",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333"
+        }
+      },
+      {
+        "type": "offer",
+        "label": "offer",
+        "input": {
+          "type": "offer",
+          "from": "peer-a",
+          "to": "peer-b",
+          "sdp": "v=0\r\n"
+        },
+        "canonical": {
+          "type": "offer",
+          "from": "peer-a",
+          "to": "peer-b",
+          "sdp": "v=0\r\n"
+        }
+      },
+      {
+        "type": "answer",
+        "label": "answer",
+        "input": {
+          "type": "answer",
+          "from": "peer-b",
+          "to": "peer-a",
+          "sdp": "v=0\r\n"
+        },
+        "canonical": {
+          "type": "answer",
+          "from": "peer-b",
+          "to": "peer-a",
+          "sdp": "v=0\r\n"
+        }
+      },
+      {
+        "type": "ice-candidate",
+        "label": "ice-candidate#1",
+        "input": {
+          "type": "ice-candidate",
+          "from": "peer-a",
+          "to": "peer-b",
+          "candidate": null
+        },
+        "canonical": {
+          "type": "ice-candidate",
+          "from": "peer-a",
+          "to": "peer-b",
+          "candidate": null
+        }
+      },
+      {
+        "type": "ice-candidate",
+        "label": "ice-candidate#2",
+        "input": {
+          "type": "ice-candidate",
+          "from": "peer-a",
+          "to": "peer-b",
+          "candidate": {
+            "candidate": "candidate:1 1 udp 1 1.2.3.4 5 typ host",
+            "sdpMid": "0",
+            "sdpMLineIndex": 0,
+            "usernameFragment": null
+          }
+        },
+        "canonical": {
+          "type": "ice-candidate",
+          "from": "peer-a",
+          "to": "peer-b",
+          "candidate": {
+            "candidate": "candidate:1 1 udp 1 1.2.3.4 5 typ host",
+            "sdpMid": "0",
+            "sdpMLineIndex": 0,
+            "usernameFragment": null
+          }
+        }
+      },
+      {
+        "type": "call-incoming",
+        "label": "call-incoming",
+        "input": {
+          "type": "call-incoming",
+          "conversationId": "44444444-4444-4444-8444-444444444444",
+          "kind": "dm",
+          "caller": {
+            "userId": "11111111-1111-4111-8111-111111111111",
+            "displayName": "Rafa",
+            "avatarUrl": null
+          }
+        },
+        "canonical": {
+          "type": "call-incoming",
+          "conversationId": "44444444-4444-4444-8444-444444444444",
+          "kind": "dm",
+          "caller": {
+            "userId": "11111111-1111-4111-8111-111111111111",
+            "displayName": "Rafa",
+            "avatarUrl": null
+          }
+        }
+      },
+      {
+        "type": "call-ring-cancelled",
+        "label": "call-ring-cancelled",
+        "input": {
+          "type": "call-ring-cancelled",
+          "conversationId": "44444444-4444-4444-8444-444444444444",
+          "reason": "timeout"
+        },
+        "canonical": {
+          "type": "call-ring-cancelled",
+          "conversationId": "44444444-4444-4444-8444-444444444444",
+          "reason": "timeout"
+        }
+      },
+      {
+        "type": "call-declined",
+        "label": "call-declined",
+        "input": {
+          "type": "call-declined",
+          "conversationId": "44444444-4444-4444-8444-444444444444",
+          "userId": "11111111-1111-4111-8111-111111111111"
+        },
+        "canonical": {
+          "type": "call-declined",
+          "conversationId": "44444444-4444-4444-8444-444444444444",
+          "userId": "11111111-1111-4111-8111-111111111111"
+        }
+      },
+      {
+        "type": "voice-moderation",
+        "label": "voice-moderation",
+        "input": {
+          "type": "voice-moderation",
+          "action": "moved",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "movedToChannelId": "33333333-3333-4333-8333-333333333333",
+          "message": "Você foi movido",
+          "reason": "idle",
+          "aloneMinutes": 15
+        },
+        "canonical": {
+          "type": "voice-moderation",
+          "action": "moved",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "movedToChannelId": "33333333-3333-4333-8333-333333333333",
+          "message": "Você foi movido",
+          "reason": "idle",
+          "aloneMinutes": 15
+        }
+      },
+      {
+        "type": "voice-speak-changed",
+        "label": "voice-speak-changed",
+        "input": {
+          "type": "voice-speak-changed",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "canSpeak": false,
+          "speakReason": "audience"
+        },
+        "canonical": {
+          "type": "voice-speak-changed",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "canSpeak": false,
+          "speakReason": "audience"
+        }
+      },
+      {
+        "type": "voice-audience",
+        "label": "voice-audience#1",
+        "input": {
+          "type": "voice-audience",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "audience": null
+        },
+        "canonical": {
+          "type": "voice-audience",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "audience": null
+        }
+      },
+      {
+        "type": "voice-audience",
+        "label": "voice-audience#2",
+        "input": {
+          "type": "voice-audience",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "audience": {
+            "since": 1700000000000,
+            "byUserId": "11111111-1111-4111-8111-111111111111",
+            "speakerUserIds": [
+              "22222222-2222-4222-8222-222222222222"
+            ],
+            "unenforcedUserIds": [
+              "11111111-1111-4111-8111-111111111111"
+            ]
+          }
+        },
+        "canonical": {
+          "type": "voice-audience",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "audience": {
+            "since": 1700000000000,
+            "byUserId": "11111111-1111-4111-8111-111111111111",
+            "speakerUserIds": [
+              "22222222-2222-4222-8222-222222222222"
+            ],
+            "unenforcedUserIds": [
+              "11111111-1111-4111-8111-111111111111"
+            ]
+          }
+        }
+      },
+      {
+        "type": "voice-audience",
+        "label": "voice-audience#3",
+        "input": {
+          "type": "voice-audience",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "audience": {
+            "since": 1700000000000,
+            "byUserId": "11111111-1111-4111-8111-111111111111",
+            "speakerUserIds": [
+              "22222222-2222-4222-8222-222222222222"
+            ]
+          },
+          "change": {
+            "kind": "speaker-added",
+            "byUserId": "11111111-1111-4111-8111-111111111111",
+            "userId": "22222222-2222-4222-8222-222222222222"
+          }
+        },
+        "canonical": {
+          "type": "voice-audience",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "audience": {
+            "since": 1700000000000,
+            "byUserId": "11111111-1111-4111-8111-111111111111",
+            "speakerUserIds": [
+              "22222222-2222-4222-8222-222222222222"
+            ]
+          },
+          "change": {
+            "kind": "speaker-added",
+            "byUserId": "11111111-1111-4111-8111-111111111111",
+            "userId": "22222222-2222-4222-8222-222222222222"
+          }
+        }
+      },
+      {
+        "type": "voice-audience",
+        "label": "voice-audience#4",
+        "input": {
+          "type": "voice-audience",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "audience": null,
+          "change": {
+            "kind": "off",
+            "byUserId": null,
+            "reason": "no-host"
+          }
+        },
+        "canonical": {
+          "type": "voice-audience",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "audience": null,
+          "change": {
+            "kind": "off",
+            "byUserId": null,
+            "reason": "no-host"
+          }
+        }
+      },
+      {
+        "type": "voice-idle-warning",
+        "label": "voice-idle-warning",
+        "input": {
+          "type": "voice-idle-warning",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "disconnectAt": 1700000060000
+        },
+        "canonical": {
+          "type": "voice-idle-warning",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333",
+          "disconnectAt": 1700000060000
+        }
+      },
+      {
+        "type": "voice-idle-warning-cancelled",
+        "label": "voice-idle-warning-cancelled",
+        "input": {
+          "type": "voice-idle-warning-cancelled",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333"
+        },
+        "canonical": {
+          "type": "voice-idle-warning-cancelled",
+          "voiceChannelId": "33333333-3333-4333-8333-333333333333"
+        }
+      },
+      {
+        "type": "watch-party",
+        "label": "watch-party#1",
+        "input": {
+          "type": "watch-party",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": null
+        },
+        "canonical": {
+          "type": "watch-party",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": null
+        }
+      },
+      {
+        "type": "watch-party",
+        "label": "watch-party#2",
+        "input": {
+          "type": "watch-party",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": {
+            "videoId": "dQw4w9WgXcQ",
+            "status": "paused",
+            "positionMs": 4200,
+            "atMs": 1700000000000,
+            "rev": 7,
+            "actorId": "11111111-1111-4111-8111-111111111111"
+          }
+        },
+        "canonical": {
+          "type": "watch-party",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": {
+            "videoId": "dQw4w9WgXcQ",
+            "status": "paused",
+            "positionMs": 4200,
+            "atMs": 1700000000000,
+            "rev": 7,
+            "actorId": "11111111-1111-4111-8111-111111111111"
+          }
+        }
+      },
+      {
+        "type": "watch-party",
+        "label": "watch-party#3",
+        "input": {
+          "type": "watch-party",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": {
+            "videoId": null,
+            "status": "ended",
+            "positionMs": 4200,
+            "atMs": 1700000000000,
+            "rev": 7,
+            "actorId": "11111111-1111-4111-8111-111111111111"
+          }
+        },
+        "canonical": {
+          "type": "watch-party",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": {
+            "videoId": null,
+            "status": "ended",
+            "positionMs": 4200,
+            "atMs": 1700000000000,
+            "rev": 7,
+            "actorId": "11111111-1111-4111-8111-111111111111"
+          }
+        }
+      },
+      {
+        "type": "music",
+        "label": "music#1",
+        "input": {
+          "type": "music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": null
+        },
+        "canonical": {
+          "type": "music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": null
+        }
+      },
+      {
+        "type": "music",
+        "label": "music#2",
+        "input": {
+          "type": "music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": {
+            "current": {
+              "id": "t1",
+              "provider": "youtube",
+              "videoId": "dQw4w9WgXcQ",
+              "title": "A song",
+              "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+              "thumbnailUrl": null,
+              "durationMs": 211000,
+              "addedByUserId": "11111111-1111-4111-8111-111111111111",
+              "addedByName": "Rafa"
+            },
+            "queue": [
+              {
+                "id": "t2",
+                "provider": "youtube",
+                "videoId": "dQw4w9WgXcQ",
+                "title": "A song",
+                "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+                "thumbnailUrl": null,
+                "durationMs": 211000,
+                "addedByUserId": "11111111-1111-4111-8111-111111111111",
+                "addedByName": "Rafa"
+              }
+            ],
+            "status": "playing",
+            "positionMs": 1000,
+            "atMs": 1700000000000,
+            "rev": 3,
+            "actorId": "11111111-1111-4111-8111-111111111111"
+          }
+        },
+        "canonical": {
+          "type": "music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": {
+            "current": {
+              "id": "t1",
+              "provider": "youtube",
+              "videoId": "dQw4w9WgXcQ",
+              "title": "A song",
+              "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+              "thumbnailUrl": null,
+              "durationMs": 211000,
+              "addedByUserId": "11111111-1111-4111-8111-111111111111",
+              "addedByName": "Rafa"
+            },
+            "queue": [
+              {
+                "id": "t2",
+                "provider": "youtube",
+                "videoId": "dQw4w9WgXcQ",
+                "title": "A song",
+                "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+                "thumbnailUrl": null,
+                "durationMs": 211000,
+                "addedByUserId": "11111111-1111-4111-8111-111111111111",
+                "addedByName": "Rafa"
+              }
+            ],
+            "status": "playing",
+            "positionMs": 1000,
+            "atMs": 1700000000000,
+            "rev": 3,
+            "actorId": "11111111-1111-4111-8111-111111111111",
+            "openControls": false,
+            "repeat": "off",
+            "skipVotes": [],
+            "history": []
+          }
+        }
+      },
+      {
+        "type": "music",
+        "label": "music#3",
+        "input": {
+          "type": "music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": {
+            "current": null,
+            "queue": [],
+            "status": "paused",
+            "positionMs": 0,
+            "atMs": 1700000000000,
+            "rev": 3,
+            "actorId": "11111111-1111-4111-8111-111111111111",
+            "openControls": true,
+            "repeat": "all",
+            "skipVotes": [
+              "22222222-2222-4222-8222-222222222222"
+            ],
+            "history": [
+              {
+                "id": "t1",
+                "provider": "youtube",
+                "videoId": "dQw4w9WgXcQ",
+                "title": "A song",
+                "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+                "thumbnailUrl": null,
+                "durationMs": 211000,
+                "addedByUserId": "11111111-1111-4111-8111-111111111111",
+                "addedByName": "Rafa"
+              }
+            ],
+            "autoplay": true
+          },
+          "forced": true
+        },
+        "canonical": {
+          "type": "music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "state": {
+            "current": null,
+            "queue": [],
+            "status": "paused",
+            "positionMs": 0,
+            "atMs": 1700000000000,
+            "rev": 3,
+            "actorId": "11111111-1111-4111-8111-111111111111",
+            "openControls": true,
+            "repeat": "all",
+            "skipVotes": [
+              "22222222-2222-4222-8222-222222222222"
+            ],
+            "history": [
+              {
+                "id": "t1",
+                "provider": "youtube",
+                "videoId": "dQw4w9WgXcQ",
+                "title": "A song",
+                "sourceUrl": "https://youtube.com/watch?v=dQw4w9WgXcQ",
+                "thumbnailUrl": null,
+                "durationMs": 211000,
+                "addedByUserId": "11111111-1111-4111-8111-111111111111",
+                "addedByName": "Rafa"
+              }
+            ],
+            "autoplay": true
+          },
+          "forced": true
+        }
+      },
+      {
+        "type": "channel-music",
+        "label": "channel-music#1",
+        "input": {
+          "type": "channel-music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "track": null
+        },
+        "canonical": {
+          "type": "channel-music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "track": null
+        }
+      },
+      {
+        "type": "channel-music",
+        "label": "channel-music#2",
+        "input": {
+          "type": "channel-music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "track": {
+            "videoId": "dQw4w9WgXcQ",
+            "title": "A song",
+            "thumbnailUrl": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+            "listeners": 3
+          }
+        },
+        "canonical": {
+          "type": "channel-music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "track": {
+            "videoId": "dQw4w9WgXcQ",
+            "title": "A song",
+            "thumbnailUrl": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+            "listeners": 3
+          }
+        }
+      },
+      {
+        "type": "channel-music",
+        "label": "channel-music#3",
+        "input": {
+          "type": "channel-music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "track": {
+            "videoId": "dQw4w9WgXcQ",
+            "title": "A song",
+            "thumbnailUrl": null
+          }
+        },
+        "canonical": {
+          "type": "channel-music",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "track": {
+            "videoId": "dQw4w9WgXcQ",
+            "title": "A song",
+            "thumbnailUrl": null
+          }
+        }
+      },
+      {
+        "type": "live-reactions",
+        "label": "live-reactions#1",
+        "input": {
+          "type": "live-reactions",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "items": [
+            {
+              "emoji": "🔥",
+              "count": 3
+            }
+          ],
+          "seq": 4
+        },
+        "canonical": {
+          "type": "live-reactions",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "items": [
+            {
+              "emoji": "🔥",
+              "count": 3
+            }
+          ],
+          "seq": 4
+        }
+      },
+      {
+        "type": "live-reactions",
+        "label": "live-reactions#2",
+        "input": {
+          "type": "live-reactions",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "items": [
+            {
+              "emoji": "👍",
+              "count": 1
+            },
+            {
+              "emoji": "❤️",
+              "count": 12
+            },
+            {
+              "emoji": "😂",
+              "count": 7
+            },
+            {
+              "emoji": "😮",
+              "count": 2
+            },
+            {
+              "emoji": "🎉",
+              "count": 9
+            }
+          ],
+          "seq": 5
+        },
+        "canonical": {
+          "type": "live-reactions",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "items": [
+            {
+              "emoji": "👍",
+              "count": 1
+            },
+            {
+              "emoji": "❤️",
+              "count": 12
+            },
+            {
+              "emoji": "😂",
+              "count": 7
+            },
+            {
+              "emoji": "😮",
+              "count": 2
+            },
+            {
+              "emoji": "🎉",
+              "count": 9
+            }
+          ],
+          "seq": 5
+        }
+      },
+      {
+        "type": "soundboard-play",
+        "label": "soundboard-play",
+        "input": {
+          "type": "soundboard-play",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "soundId": "11111111-1111-4111-8111-111111111111",
+          "userId": "11111111-1111-4111-8111-111111111111",
+          "displayName": "Rafa",
+          "emoji": "🔊",
+          "playedAt": 1700000000000
+        },
+        "canonical": {
+          "type": "soundboard-play",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "soundId": "11111111-1111-4111-8111-111111111111",
+          "userId": "11111111-1111-4111-8111-111111111111",
+          "displayName": "Rafa",
+          "emoji": "🔊",
+          "playedAt": 1700000000000
+        }
+      },
+      {
+        "type": "voice-stream",
+        "label": "voice-stream#1",
+        "input": {
+          "type": "voice-stream",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": null
+        },
+        "canonical": {
+          "type": "voice-stream",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": null
+        }
+      },
+      {
+        "type": "voice-stream",
+        "label": "voice-stream#2",
+        "input": {
+          "type": "voice-stream",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": {
+            "hlsUrl": "/api/voice/hls-playlist/a.m3u8",
+            "startedAt": 1700000000000,
+            "presenterPeerId": "peer-a"
+          }
+        },
+        "canonical": {
+          "type": "voice-stream",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": {
+            "hlsUrl": "/api/voice/hls-playlist/a.m3u8",
+            "startedAt": 1700000000000,
+            "presenterPeerId": "peer-a"
+          }
+        }
+      },
+      {
+        "type": "voice-stream",
+        "label": "voice-stream#3",
+        "input": {
+          "type": "voice-stream",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": {
+            "hlsUrl": "/api/voice/hls-playlist/a.m3u8",
+            "startedAt": 1700000000000,
+            "presenterPeerId": "peer-a",
+            "presenterUserId": "11111111-1111-4111-8111-111111111111",
+            "delaySeconds": 3,
+            "topHeight": 1080,
+            "topFramerate": 60,
+            "hasAudio": true,
+            "cameraHlsUrl": "/api/voice/hls-playlist/cam.m3u8",
+            "cameraHasVideo": true,
+            "cameraHasVoiceAudio": false,
+            "mode": "ll",
+            "partTargetMs": 200
+          }
+        },
+        "canonical": {
+          "type": "voice-stream",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": {
+            "hlsUrl": "/api/voice/hls-playlist/a.m3u8",
+            "startedAt": 1700000000000,
+            "presenterPeerId": "peer-a",
+            "presenterUserId": "11111111-1111-4111-8111-111111111111",
+            "delaySeconds": 3,
+            "topHeight": 1080,
+            "topFramerate": 60,
+            "hasAudio": true,
+            "cameraHlsUrl": "/api/voice/hls-playlist/cam.m3u8",
+            "cameraHasVideo": true,
+            "cameraHasVoiceAudio": false,
+            "mode": "ll",
+            "partTargetMs": 200
+          }
+        }
+      },
+      {
+        "type": "channel-live",
+        "label": "channel-live#1",
+        "input": {
+          "type": "channel-live",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": null,
+          "watching": 0,
+          "ended": true
+        },
+        "canonical": {
+          "type": "channel-live",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": null,
+          "watching": 0,
+          "ended": true
+        }
+      },
+      {
+        "type": "channel-live",
+        "label": "channel-live#2",
+        "input": {
+          "type": "channel-live",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": null,
+          "watching": 2,
+          "viewers": 2
+        },
+        "canonical": {
+          "type": "channel-live",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": null,
+          "watching": 2,
+          "viewers": 2
+        }
+      },
+      {
+        "type": "channel-live",
+        "label": "channel-live#3",
+        "input": {
+          "type": "channel-live",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": {
+            "hlsUrl": "/api/voice/hls-playlist/a.m3u8",
+            "startedAt": 1700000000000,
+            "presenterPeerId": "peer-a",
+            "presenterUserId": "11111111-1111-4111-8111-111111111111",
+            "delaySeconds": 3,
+            "topHeight": 1080,
+            "topFramerate": 60,
+            "hasAudio": true,
+            "cameraHlsUrl": "/api/voice/hls-playlist/cam.m3u8",
+            "cameraHasVideo": true,
+            "cameraHasVoiceAudio": false,
+            "mode": "ll",
+            "partTargetMs": 200
+          },
+          "watching": 4,
+          "viewers": 11
+        },
+        "canonical": {
+          "type": "channel-live",
+          "channelId": "33333333-3333-4333-8333-333333333333",
+          "stream": {
+            "hlsUrl": "/api/voice/hls-playlist/a.m3u8",
+            "startedAt": 1700000000000,
+            "presenterPeerId": "peer-a",
+            "presenterUserId": "11111111-1111-4111-8111-111111111111",
+            "delaySeconds": 3,
+            "topHeight": 1080,
+            "topFramerate": 60,
+            "hasAudio": true,
+            "cameraHlsUrl": "/api/voice/hls-playlist/cam.m3u8",
+            "cameraHasVideo": true,
+            "cameraHasVoiceAudio": false,
+            "mode": "ll",
+            "partTargetMs": 200
+          },
+          "watching": 4,
+          "viewers": 11
+        }
+      }
+    ]
+  }
+}
