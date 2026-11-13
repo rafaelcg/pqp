@@ -928,10 +928,12 @@
   /* Three small edges drawn as an alpha of the text, named so high contrast
      can move them to the border pair: an app session card's outline, the
      inset ring on a dark connection tile, and the ring around a role's
-     colour swatch. */
+     colour swatch. The rule between call control groups is a hairline. */
   --app-card-edge: color-mix(in oklab, var(--color-text) 18%, transparent);
   --connection-tile-edge: color-mix(in oklab, var(--color-text) 14%, transparent);
   --role-swatch-ring: color-mix(in oklab, var(--color-text) 24%, transparent);
+  /* The hairline between groups of call controls. */
+  --call-control-rule: color-mix(in oklab, var(--color-text) 14%, transparent);
 
   /* Badges (ui/badge.tsx): a small pill in sentence case; a tag beside a
      name is a step smaller. Counts are a touch larger in type than the old
@@ -2650,7 +2652,9 @@
   --picker-border: var(--color-border-strong);
   --slider-thumb-border: var(--color-border-strong);
   --app-card-edge: var(--color-border-strong);
-  --connection-tile-edge: var(--color-border-strong);
+  /* Inside a dark brand tile in both brightnesses, so a light edge. */
+  --connection-tile-edge: oklch(1 0 0 / 0.45);
+  --call-control-rule: var(--color-border);
   --role-swatch-ring: var(--color-border-strong);
   /* Firmer than the strong edge at rest, so hover still reads. */
   --card-border-hover: var(--color-text);

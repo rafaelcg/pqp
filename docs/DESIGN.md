@@ -390,9 +390,9 @@ reach them through `--color-border`. The block
 `:root[data-redesign][data-contrast="more"]` moves every edge token to the
 border pair: a hairline (a rule, a separator) to `--color-border`, the edge of
 a surface that floats or holds a field to `--color-border-strong`, and a hover
-or open edge to `--color-text`. An edge drawn in a component reads a named
+or open edge to `--color-text`. An edge drawn inside a dark brand tile takes a light alpha in both brightnesses (`--connection-tile-edge`). An edge drawn in a component reads a named
 token (`--card-border-hover`, `--app-card-edge`, `--connection-tile-edge`,
-`--role-swatch-ring`), never an inline `color-mix` of the text, so the block
+`--role-swatch-ring`, `--call-control-rule`), never an inline `color-mix` of the text, so the block
 can move it. Fills stay as they are.
 
 | Token | Toggle off | Redesign |

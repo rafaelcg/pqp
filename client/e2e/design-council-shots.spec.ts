@@ -1147,6 +1147,8 @@ const PRIMITIVES: {
   { id: "f-apps", testId: "qa-apps" },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
+  // A choice card under the pointer beside the chosen one.
+  { id: "p-choice-hover", testId: "qa-settings-kit-choices", hoverText: "Push-to-talk" },
   // Two real rails: Conversas open with people waiting, and a server open
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
