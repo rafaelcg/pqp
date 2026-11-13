@@ -77,7 +77,10 @@ export function EmptyState({
   size?: EmptyStateSize;
   /** A glyph, drawn on a soft disc under the redesign. */
   icon?: ReactNode;
-  /** Breu in place of the icon, with this face. */
+  /**
+   * Breu in place of the icon, with this face. It wins: `icon` and
+   * `iconClassName` are not drawn when it is set.
+   */
   mascot?: BreuMood;
   title: ReactNode;
   body?: ReactNode;
@@ -86,6 +89,7 @@ export function EmptyState({
   role?: "alert" | "status";
   /** The toggle-off look, per caller. */
   className?: string;
+  /** The icon's own classes. Not applied to a mascot. */
   iconClassName?: string;
   titleClassName?: string;
   bodyClassName?: string;
