@@ -385,6 +385,24 @@ of it). So a look wins over the shape block, and high contrast and the custom
 accent win over every redesign colour block. Do not quote the light or look
 selectors in a comment in `index.css`: the bench finds blocks by regex.
 
+Edges under the redesign are an alpha of the text, so high contrast does not
+reach them through `--color-border`. The block
+`:root[data-redesign][data-contrast="more"]` moves every edge token to the
+border pair. A hairline (a rule, a separator, a search pill's edge) takes
+`--color-border`. The edge of a surface that floats or holds a field (a
+card, a popover, a tooltip, a filled field) takes `--color-border-strong`.
+A hover or open edge takes `--color-text`. An edge inside a dark brand tile
+takes a light alpha in both brightnesses (`--connection-tile-edge`). A
+banner's edge is a share of its own tone, raised to 60% (`--banner-edge`).
+
+An edge drawn in a component reads a named token (`--card-border-hover`,
+`--app-card-edge`, `--connection-tile-edge`, `--role-swatch-ring`,
+`--call-control-rule`, `--field-fill-edge`), never an inline `color-mix` of
+the text, so the block can move it. Fills stay as they are, with one
+exception: the empty part of a slider's track (`--slider-track`) takes
+`--color-border`, because it shows where the range ends. The light tooltip
+keeps no edge.
+
 | Token | Toggle off | Redesign |
 |---|---|---|
 | `--radius-tick` / `control` / `card` / `panel` | 3 / 6 / 8 / 16 px | 4 / 10 / 14 / 20 px |
@@ -1588,7 +1606,7 @@ line).
 
 Breu is the pqp mascot. Bots wear its face; the app also shows it on a few rare moments.
 
-Use `<Breu mood>` (`client/src/components/breu/breu.tsx`). It is the bots' `BotFace`, always lime, in the full drawing. It is decorative: the text next to it says what happened. In an empty state, pass `mascot` to `EmptyState` instead of `icon`.
+Use `<Breu mood>` (`client/src/components/breu/breu.tsx`). It is the bots' `BotFace`, always lime, in the full drawing. It is decorative: the text next to it says what happened. In an empty state, pass `mascot` to `EmptyState` instead of `icon`. With `mascot`, a failure takes no warning disc: the sad face carries it. Under the new look the mascot's margin is cut (4px on a page, 0 inline) so the drawing sits as far from the title as the icon disc does.
 
 | Mood | Face | Where |
 |---|---|---|

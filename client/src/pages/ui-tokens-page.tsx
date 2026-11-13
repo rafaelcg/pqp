@@ -1352,6 +1352,75 @@ function PrimitiveSheet() {
         </div>
       </div>
 
+      {/* Empty states with Breu: an empty channel (hello), a forum that did
+          not load (sad), a search that found nothing (curious, inline), and
+          the same search in a narrow column with a long query, and with a
+          query that has no spaces and a hint line. */}
+      <div data-testid="qa-primitive-empty-mascot" className="grid gap-4 sm:grid-cols-3">
+        <div className="rounded-[var(--radius-pane)] bg-pane-main">
+          <EmptyState
+            mascot="hello"
+            title={t("chat.empty.title")}
+            body={t("chat.empty.body")}
+            className="justify-center gap-2 px-6 py-16"
+            iconClassName="hidden redesign:flex"
+            titleClassName="text-balance font-display text-xl font-bold text-text"
+            bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+          />
+        </div>
+        <div className="rounded-[var(--radius-pane)] bg-pane-main">
+          <EmptyState
+            role="alert"
+            mascot="sad"
+            title={t("forum.loadError")}
+            body={t("forum.loadError.body")}
+            actions={<Button variant="secondary">{t("forum.retry")}</Button>}
+            className="px-6 py-10"
+            iconClassName="text-text-secondary"
+            titleClassName="mt-4 forum-display text-xl font-bold text-text redesign:mt-0"
+            bodyClassName="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary"
+            actionsClassName="mt-5"
+          />
+        </div>
+        <div className="flex h-72 rounded-[var(--radius-pane)] bg-pane-main">
+          <EmptyState
+            size="inline"
+            mascot="curious"
+            title={t("search.noMatch", { query: "fliperama" })}
+            iconClassName="hidden redesign:block"
+            className="h-full w-full justify-center gap-1 px-8"
+            titleClassName="text-sm text-text"
+            bodyClassName="text-xs text-text-muted"
+          />
+        </div>
+        {/* The narrow column: a search pane squeezed to 12rem. */}
+        <div className="flex gap-4 sm:col-span-3">
+        <div className="flex h-72 w-48 rounded-[var(--radius-pane)] bg-pane-main">
+          <EmptyState
+            size="inline"
+            mascot="curious"
+            title={t("search.noMatch", { query: "campeonato de fliperama de sábado" })}
+            iconClassName="hidden redesign:block"
+            className="h-full w-full justify-center gap-1 px-4"
+            titleClassName="text-sm text-text"
+            bodyClassName="text-xs text-text-muted"
+          />
+        </div>
+        <div className="flex h-72 w-48 rounded-[var(--radius-pane)] bg-pane-main">
+          <EmptyState
+            size="inline"
+            mascot="curious"
+            title={t("search.noMatch", { query: "kkkkkkkkkkkkkkkkkkkkkkkkkkkk" })}
+            body={t("search.wholeWords")}
+            iconClassName="hidden redesign:block"
+            className="h-full w-full justify-center gap-1 px-4"
+            titleClassName="text-sm text-text"
+            bodyClassName="text-xs text-text-muted"
+          />
+        </div>
+        </div>
+      </div>
+
       {/* Loading: spinners at the sizes callers draw, in a status line and in
           a button; the channel and message skeletons on their panes. */}
       <div data-testid="qa-primitive-loading" className="grid gap-4 sm:grid-cols-[14rem_1fr]">

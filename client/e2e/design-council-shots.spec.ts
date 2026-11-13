@@ -656,10 +656,16 @@ test("captures the design council screens", async ({ browser }) => {
       } catch {
         console.log("communities shot skipped");
       }
-      // Novidades: a pane of its own beside the rail.
-      await page.getByRole("button", { name: /^Novidades/ }).first().click();
-      await page.waitForTimeout(1200);
-      await shoot(page, `18-whats-new-${theme}`);
+      // Novidades: a pane of its own beside the rail. Since 2026-11-01 the
+      // rail has no Novidades button; the notes open from the update popover,
+      // which only shows with an update waiting. Skipped when not on screen.
+      try {
+        await page.getByRole("button", { name: /^Novidades/ }).first().click({ timeout: 3_000 });
+        await page.waitForTimeout(1200);
+        await shoot(page, `18-whats-new-${theme}`);
+      } catch {
+        console.log("whats new shot skipped");
+      }
 
       // Friends: the add panel open, then Pendentes with a real request from
       // Duda, withdrawn again so the scenes after this one are unchanged.
@@ -1081,6 +1087,8 @@ const PRIMITIVES: {
   open?: { button: string; menu: string; arrows: number; hoverText?: string };
   /** A tall block, cut into shots this tall (`<id>-<n>-<theme>.png`). */
   tiles?: number;
+  /** Milliseconds to wait before the shot, for a block that animates in; its shot freezes animations at their end. */
+  settle?: number;
 }[] = [
   {
     id: "p-button",
@@ -1122,6 +1130,7 @@ const PRIMITIVES: {
   { id: "p-badge", testId: "qa-primitive-badge" },
   { id: "p-scroll", testId: "qa-primitive-scroll" },
   { id: "p-empty", testId: "qa-primitive-empty", hover: "Copiar convite" },
+  { id: "p-empty-mascot", testId: "qa-primitive-empty-mascot", focus: "Tentar de novo" },
   { id: "p-loading", testId: "qa-primitive-loading" },
   { id: "p-section-header", testId: "qa-primitive-section-header" },
   // Focus a person row, hover a plain channel.
@@ -1141,6 +1150,8 @@ const PRIMITIVES: {
   { id: "f-apps", testId: "qa-apps" },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
+  // A choice card under the pointer beside the chosen one.
+  { id: "p-choice-hover", testId: "qa-settings-kit-choices", hoverText: "Push-to-talk" },
   // Two real rails: Conversas open with people waiting, and a server open
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
@@ -1162,7 +1173,8 @@ const PRIMITIVES: {
   { id: "f-onboarding", testId: "qa-onboarding", focus: "Entendi" },
   { id: "s-message-content", testId: "qa-shell-message-content" },
   // The boot shell and the cannot-reach-the-API page, in desktop frames.
-  { id: "f-states", testId: "qa-shell-states", focus: "Tentar de novo" },
+  // Settled: Breu drops in, then his bubble pops at 0.8s.
+  { id: "f-states", testId: "qa-shell-states", focus: "Tentar de novo", settle: 1600 },
   // Bia's reply hovered, its toolbar up and "Mais" open.
   {
     id: "s-message-chrome",
@@ -1246,7 +1258,7 @@ test("captures the primitives", async ({ browser }) => {
         await page.keyboard.press("Escape");
         continue;
       }
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(primitive.settle ?? 300);
       if (primitive.tiles) {
         const box = (await block.boundingBox())!;
         const top = box.y + (await page.evaluate(() => window.scrollY));
@@ -1259,7 +1271,13 @@ test("captures the primitives", async ({ browser }) => {
         }
         continue;
       }
-      await block.screenshot({ path: path.join(OUT!, `${primitive.id}-${theme}.png`) });
+      // A block that animates in is shot at its end state: an element shot
+      // taller than the viewport resizes the page first, which restarts a
+      // CSS animation, so it would be caught at its first frame.
+      await block.screenshot({
+        path: path.join(OUT!, `${primitive.id}-${theme}.png`),
+        animations: primitive.settle ? "disabled" : "allow",
+      });
     }
     await context.close();
   }

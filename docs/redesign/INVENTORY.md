@@ -152,7 +152,7 @@ element and the element does not follow it yet. "Ok" says why not.
 | `t-spacing` | ok | No spacing rule changed. |
 | `t-radius` | ok | No radius changed. Breu's bubble is part of `f-states`. |
 | `t-elevation` | ok | No shadow or level changed. |
-| `t-color` | re-check | High contrast misses `--picker-border`, `--slider-thumb-border` and three inline text-alpha edges (role rank list, connection badges, app session card). |
+| `t-color` | done (v2 merged) | High contrast misses `--picker-border`, `--slider-thumb-border` and three inline text-alpha edges (role rank list, connection badges, app session card). |
 | `t-icons` | ok | No icon rule changed. |
 | `t-motion` | ok | Breu's loops are new keyframes on transforms only, already off under reduced motion. |
 | `t-density` | ok | No control height changed. |
@@ -177,7 +177,7 @@ element and the element does not follow it yet. "Ok" says why not.
 | `p-card` | ok | `--card-border` is in the high contrast block. |
 | `p-section-header` | ok | Not touched by the delta. |
 | `p-loading` | ok | Skeletons and spinners are unchanged; the loading screen is `f-states`. |
-| `p-empty` | re-check | The new `mascot` slot does not follow the redesign's empty state rhythm (gap and size beside the icon disc). |
+| `p-empty` | done (v2 merged) | The new `mascot` slot does not follow the redesign's empty state rhythm (gap and size beside the icon disc). |
 | `p-settings-kit` | ok | Settings rows stay without Breu. |
 | `s-frame` | ok | Not touched by the delta. |
 | `s-rail` | ok | The update button and Novo visual switch were built on the rail tile tokens. |
@@ -216,7 +216,7 @@ element and the element does not follow it yet. "Ok" says why not.
 | `f-communities` | ok | Breu is on its empty and failed states. |
 | `f-connections` | ok | Its badge edge is fixed under `t-color`. |
 | `f-bots` | ok | Bots already wear Breu's face; nothing new. |
-| `f-states` | re-check | The API failure page's speech bubble draws the old look's edge, fill and radius; the loading and failure Breu need a check against the state layout. |
+| `f-states` | done (v2 merged) | The API failure page's speech bubble draws the old look's edge, fill and radius; the loading and failure Breu need a check against the state layout. |
 | `m-shell` | ok | The phone header and the no-servers Breu were made in the new look. |
 | `m-breakpoints` | ok | Not touched by the delta. |
 | `m-sheets` | ok | Not touched by the delta. |

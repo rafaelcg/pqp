@@ -415,6 +415,8 @@ export function ConversationHomeList({
             data-conversations-empty=""
             mascot="hello"
             title={t("conversations.emptyHero.title")}
+            // The tab's only heading, as the desktop hero's title is.
+            titleAs="h2"
             body={t("conversations.emptyHero.body")}
             className="min-h-full justify-center"
             // Less room above than a pane's empty state. The list's own
