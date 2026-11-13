@@ -152,7 +152,7 @@ element and the element does not follow it yet. "Ok" says why not.
 | `t-spacing` | ok | No spacing rule changed. |
 | `t-radius` | ok | No radius changed. Breu's bubble is part of `f-states`. |
 | `t-elevation` | ok | No shadow or level changed. |
-| `t-color` | re-check | High contrast misses `--picker-border`, `--slider-thumb-border` and three inline text-alpha edges (role rank list, connection badges, app session card). |
+| `t-color` | done (v2 merged) | High contrast misses `--picker-border`, `--slider-thumb-border` and three inline text-alpha edges (role rank list, connection badges, app session card). |
 | `t-icons` | ok | No icon rule changed. |
 | `t-motion` | ok | Breu's loops are new keyframes on transforms only, already off under reduced motion. |
 | `t-density` | ok | No control height changed. |
