@@ -2658,7 +2658,7 @@
   --role-swatch-ring: var(--color-border-strong);
   /* Firmer than the strong edge at rest, so hover still reads. */
   --card-border-hover: var(--color-text);
-  /* A tooltip floats; the sidebar and member searches are fields. */
+  /* A tooltip floats (strong edge); a search pill's edge is a hairline. */
   --color-tooltip-border: var(--color-border-strong);
   --sidebar-search-border: var(--color-border);
   /* The one fill this block moves: the empty part of a slider's track is

@@ -388,9 +388,9 @@ selectors in a comment in `index.css`: the bench finds blocks by regex.
 Edges under the redesign are an alpha of the text, so high contrast does not
 reach them through `--color-border`. The block
 `:root[data-redesign][data-contrast="more"]` moves every edge token to the
-border pair. A hairline (a rule, a separator) takes `--color-border`. The
-edge of a surface that floats or holds a field (a card, a popover, a tooltip,
-a search) takes `--color-border-strong`. A hover or open edge takes
+border pair. A hairline (a rule, a separator, a search pill's edge) takes
+`--color-border`. The edge of a surface that floats or holds a field (a
+card, a popover, a tooltip) takes `--color-border-strong`. A hover or open edge takes
 `--color-text`. An edge inside a dark brand tile takes a light alpha in both
 brightnesses (`--connection-tile-edge`).
 
