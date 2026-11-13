@@ -216,7 +216,7 @@ element and the element does not follow it yet. "Ok" says why not.
 | `f-communities` | ok | Breu is on its empty and failed states. |
 | `f-connections` | ok | Its badge edge is fixed under `t-color`. |
 | `f-bots` | ok | Bots already wear Breu's face; nothing new. |
-| `f-states` | re-check | The API failure page's speech bubble draws the old look's edge, fill and radius; the loading and failure Breu need a check against the state layout. |
+| `f-states` | done (v2 merged) | The API failure page's speech bubble draws the old look's edge, fill and radius; the loading and failure Breu need a check against the state layout. |
 | `m-shell` | ok | The phone header and the no-servers Breu were made in the new look. |
 | `m-breakpoints` | ok | Not touched by the delta. |
 | `m-sheets` | ok | Not touched by the delta. |

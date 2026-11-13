@@ -232,11 +232,31 @@ and `iconClassName`, and the communities failure comment no longer names a
 disc. Toggle off: the primitives compared pixel by pixel; only animation
 noise (0.13% at most).
 
+### f-states (v2)
+
+Breu's speech bubble now uses the popover surface: `--popover-surface` and
+`--popover-border`, `--radius-card`, the title font, and one token shadow
+(`--breu-bubble-shadow`) over the bubble and its tail. The failure page
+became an outer frame that holds the corner glow and an inner box that
+scrolls, so the glow stays put and a short window never clips the top. The
+forced update screen's error line takes the dialog footer rule. Under the
+redesign the network failure reads in the reader's language ("Pode ser a tua
+conexão ou o servidor. Tenta de novo daqui a pouco."), and the raw English
+line moves into the self-hosters' details, labelled "Erro:".
+
+Rounds: r1 Codex 8.6, r2 Codex 8.8, r3 Opus 8.9, r4 Codex 8.9, r5 Opus 8.9
+(cap). No MUST in any round. After r5: the neutral sentence (its SHOULD: a
+pqp outage without CORS headers looks like a network error), the labelled
+raw line, and a test for the timeout line. Not done: "para" to "pra" in the
+pt-BR title, because that key renders in both looks and toggle off must not
+change. Toggle off: the primitives compared pixel by pixel; only loading
+animation noise (0.07% at most).
+
 | Element | Brand pass status |
 |---|---|
 | `t-color` | Merged (Opus 9.1 r5, no MUST) |
 | `p-empty` | Merged (Opus 9.0 r5, no MUST) |
-| `f-states` | Re-check |
+| `f-states` | Merged (Opus 8.9 r5, cap, no MUST) |
 | `f-dm-home` | Re-check |
 
 ## Phase 0: directions
