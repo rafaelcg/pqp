@@ -54,6 +54,7 @@ export function EmptyState({
   actions,
   role,
   className,
+  redesignClassName,
   iconClassName,
   titleClassName,
   bodyClassName,
@@ -72,6 +73,11 @@ export function EmptyState({
   role?: "alert" | "status";
   /** The toggle-off look, per caller. */
   className?: string;
+  /**
+   * `redesign:` classes applied after the primitive's own, for a screen whose
+   * room differs (the phone's Conversas tab clears its floating button).
+   */
+  redesignClassName?: string;
   iconClassName?: string;
   titleClassName?: string;
   bodyClassName?: string;
@@ -87,7 +93,7 @@ export function EmptyState({
       role={role}
       data-empty-state={size}
       {...data}
-      className={cn("flex flex-col items-center text-center", className, ROOT[size])}
+      className={cn("flex flex-col items-center text-center", className, ROOT[size], redesignClassName)}
     >
       {mascot ? (
         <div aria-hidden="true" data-empty-mascot={mascot} className="mb-3 flex justify-center">

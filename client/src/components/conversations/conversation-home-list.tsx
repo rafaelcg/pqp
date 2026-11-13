@@ -416,7 +416,11 @@ export function ConversationHomeList({
             mascot="hello"
             title={t("conversations.emptyHero.title")}
             body={t("conversations.emptyHero.body")}
-            className="min-h-full justify-center pb-24"
+            className="min-h-full justify-center"
+            // Less room above than a pane's empty state, and the floating
+            // "Nova conversa" button's height kept clear below, so a short
+            // phone with large text never puts the button over the line.
+            redesignClassName="redesign:pt-6 redesign:pb-24"
           />
         ) : conversations.length === 0 ? (
           <p

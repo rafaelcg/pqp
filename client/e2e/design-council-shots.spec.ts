@@ -2002,6 +2002,15 @@ test("captures the phone shell", async ({ browser }) => {
       await emptyPage.locator(`[data-phone-tab="conversas"]`).click();
       await emptyPage.waitForTimeout(800);
       await shoot(emptyPage, `m-shell-conversas-empty-${theme}`);
+      // A short phone (iPhone SE, 390x568 here) and then text at 125%.
+      await emptyPage.setViewportSize({ width: 390, height: 568 });
+      await emptyPage.waitForTimeout(300);
+      await shoot(emptyPage, `m-shell-conversas-empty-short-${theme}`);
+      await emptyPage.evaluate(() => {
+        document.documentElement.style.fontSize = "125%";
+      });
+      await emptyPage.waitForTimeout(300);
+      await shoot(emptyPage, `m-shell-conversas-empty-short-large-${theme}`);
       await empty.close();
     }
   } finally {
