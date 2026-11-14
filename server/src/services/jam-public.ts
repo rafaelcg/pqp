@@ -1542,20 +1542,22 @@ const ADMIN_SONG_SELECT = `
          s.author_id AS starter_id, au.display_name AS starter_name, au.handle AS starter_handle,
          EXISTS (SELECT 1 FROM jam_public_blocks b WHERE b.user_id = s.author_id) AS starter_blocked,
          s.server_id, sv.name AS server_name,
-         (SELECT COUNT(DISTINCT r.reporter_id)::int FROM jam_public_reports r
-           WHERE r.song_id = p.song_id
-             AND r.created_at > GREATEST(NOW() - make_interval(hours => $1),
-                                         COALESCE(p.reviewed_at, '-infinity'::timestamptz))) AS reports,
-         (SELECT COUNT(DISTINCT r.reporter_id)::int FROM jam_public_reports r
-           WHERE r.song_id = p.song_id AND r.reason = 'copyright'
-             AND r.created_at > GREATEST(NOW() - make_interval(hours => $1),
-                                         COALESCE(p.reviewed_at, '-infinity'::timestamptz))) AS copyright_reports,
+         rc.reports, rc.copyright_reports,
          (SELECT COUNT(*)::int FROM jam_tracks pt WHERE pt.song_id = s.id AND ${publicTrackSql("pt")}) AS public_parts,
          EXISTS (SELECT 1 FROM users su WHERE su.id = s.author_id AND ${LISTED_SONG_SQL}) AS listed
     FROM jam_public_songs p
     JOIN jam_songs s ON s.id = p.song_id
     LEFT JOIN users au ON au.id = s.author_id
-    LEFT JOIN servers sv ON sv.id = s.server_id`;
+    LEFT JOIN servers sv ON sv.id = s.server_id
+    -- One pass over the song's reports for both numbers (a filtered distinct for the copyright subset).
+    CROSS JOIN LATERAL (
+      SELECT COUNT(DISTINCT r.reporter_id)::int AS reports,
+             (COUNT(DISTINCT r.reporter_id) FILTER (WHERE r.reason = 'copyright'))::int AS copyright_reports
+        FROM jam_public_reports r
+       WHERE r.song_id = p.song_id
+         AND r.created_at > GREATEST(NOW() - make_interval(hours => $1),
+                                     COALESCE(p.reviewed_at, '-infinity'::timestamptz))
+    ) rc`;
 
 function mapAdminSong(row: AdminSongRow): AdminJamPublicSong {
   const status = publicationStatus(row);

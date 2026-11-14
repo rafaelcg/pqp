@@ -1,4 +1,10 @@
-import { currentJamAttribution, jamMainHref, rememberJamAttribution, type JamAttribution } from "@/lib/jam-intent";
+import {
+  currentJamAttribution,
+  jamAttributionFromSearch,
+  jamMainHref,
+  rememberJamAttribution,
+  type JamAttribution,
+} from "@/lib/jam-intent";
 
 /**
  * The browser half of the public site's attribution (`lib/jam-intent.ts` has
@@ -17,13 +23,21 @@ function storage(): Storage | null {
   }
 }
 
+/**
+ * The arrival's parameters, kept in memory too: with storage denied (a private
+ * window) the site still moves with `pushState`, so the address stops saying
+ * it after the first click and this is all that is left.
+ */
+let arrival: JamAttribution | null = null;
+
 /** Once, at the site's boot, before anything navigates. */
 export function rememberArrival(): void {
+  arrival = jamAttributionFromSearch(window.location.search);
   rememberJamAttribution(storage(), window.location.search);
 }
 
 export function jamAttribution(): JamAttribution | null {
-  return currentJamAttribution(storage(), window.location.search);
+  return currentJamAttribution(storage(), window.location.search) ?? arrival;
 }
 
 /** A link to a path on the main site that keeps where the person came from. */
