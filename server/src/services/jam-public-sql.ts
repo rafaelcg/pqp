@@ -30,11 +30,16 @@ export const PUBLIC_SONG_SQL = `(
         SELECT 1 FROM server_bans sb WHERE sb.server_id = s.server_id AND sb.user_id = s.author_id))
 )`;
 
-/** A track of a song, `t` being `jam_tracks`, is in the public version. */
-export function publicTrackSql(t = "t"): string {
+/**
+ * A track of a song, `t` being `jam_tracks`, is in the public version.
+ * `requireMix: false` is the same rule without "in the mix": would this track
+ * be public if the starter put it there. Auto-accept asks exactly that, so its
+ * checks and the reads' can never drift apart.
+ */
+export function publicTrackSql(t = "t", requireMix = true): string {
   return `(
   ${t}.deleted_at IS NULL
-  AND ${t}.in_mix
+  ${requireMix ? `AND ${t}.in_mix` : ""}
   AND EXISTS (
     SELECT 1 FROM jam_public_tracks jpt
      WHERE jpt.track_id = ${t}.id AND jpt.removed_at IS NULL

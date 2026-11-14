@@ -53,6 +53,8 @@ export interface JamPublicPanelPieces {
   copyLink: (() => void) | undefined;
   /** The viewer started this song and public jams are on: the song's public state changed (refresh what depends on it). */
   refreshPublication: () => void;
+  /** The starter turned on auto-accept: outside parts go in the mix by themselves once the platform's checks clear. */
+  autoAccept: boolean;
 }
 
 export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPieces {
@@ -139,6 +141,8 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
   }, [sheetOpen, refreshPublication]);
 
   const publication = state.publication;
+  // The starter's and a participant's read says it; so does the public read a visitor holds.
+  const autoAccept = (publication ? publication.autoAcceptOutside : meta?.song.autoAcceptOutside) === true;
   const on = publication !== null && ["live", "review", "hidden"].includes(publication.status);
   const canPublish = me.enabled && isStarter && me.publishing !== "blocked" && song.channelId !== null;
   const showSheet = me.enabled && isStarter && (canPublish || on);
@@ -178,6 +182,9 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
   if (me.enabled && isStarter && on && publication) {
     // One fact and the way in. Who answered is in the sheet; the outside requests are listed below the stage.
     const bits = [t(`jam.public.status.short.${publication.status}` as MessageKey)];
+    if (publication.autoAcceptOutside) {
+      bits.push(t("jam.public.status.autoAccept"));
+    }
     lines.push(
       <p key="status" data-jam-public-line="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-semibold text-text-secondary">
         <Globe className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -258,7 +265,14 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
   if (me.enabled && waitsForStarter) {
     lines.push(
       <p key="waiting" data-jam-public-line="waiting" role="status" className="text-[13px] font-semibold text-text-secondary">
-        {t("jam.public.outside.waiting")}
+        {autoAccept ? t("jam.public.outside.waitingAuto") : t("jam.public.outside.waiting")}
+      </p>,
+    );
+  }
+  if (me.enabled && publicView && !isStarter && autoAccept && !waitsForStarter) {
+    lines.push(
+      <p key="auto" data-jam-public-line="auto-accept" className="text-[13px] font-semibold text-text-secondary">
+        {t("jam.public.status.autoAcceptPublic")}
       </p>,
     );
   }
@@ -343,5 +357,6 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
     reportTrack,
     copyLink: publicView && me.enabled ? copyLink : undefined,
     refreshPublication: () => void state.refresh(),
+    autoAccept,
   };
 }

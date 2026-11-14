@@ -113,6 +113,22 @@ import {
  * part (`DELETE /api/jam-tracks/:trackId`). A channel member recording through
  * the channel keeps the channel rules (`jam.ts`).
  *
+ * AUTO-ACCEPT. The starter may turn on `autoAcceptOutside` for ONE song
+ * (`PATCH /api/jam-songs/:songId/public`, default off, no expiry). It replaces
+ * the starter's tap and nothing else: an outside take recorded AFTER the switch
+ * went on is put in the mix by the server once nothing of the platform's still
+ * holds it, that is: not removed by an operator or by the daily take limit,
+ * not waiting for review (a new account's take), its author's answer still a
+ * yes, the song public and not hidden, blocked or under review, its video (if
+ * it has one) passed the frame scan, and the song's current picture not
+ * flagged or rejected. A take held by any of these is admitted by itself when
+ * the hold clears (an operator's approval, a passing scan, a sweep every
+ * minute). It is admitted ONCE: after that it is an ordinary part, so the
+ * starter taking it out of the mix, deleting it, or an operator removing it
+ * stays that way. Takes that were already waiting when the switch went on keep
+ * waiting for the starter. Turning it off stops future admissions and removes
+ * nothing already admitted.
+ *
  * Public access, read side: `GET /api/jam-songs/:songId` answers a caller with
  * public access too, but only with the public tracks plus the caller's own,
  * names as the account names itself (never a server nickname), and
@@ -328,6 +344,11 @@ export const publicJamSongSchema = z.object({
   needs: z.array(jamInstrumentSchema.catch("other")),
   /** Plays counted (once per song per address or account per hour). */
   plays: z.number().int().nonnegative(),
+  /**
+   * The starter turned on auto-accept: a part from outside goes in the mix by
+   * itself once it clears the platform's checks, with no tap from the starter.
+   */
+  autoAcceptOutside: z.boolean().default(false),
   /** Likes, one per account. Always exposed; the clients show it above 1. */
   likes: z.number().int().nonnegative(),
   startedBy: publicJamPersonSchema,
@@ -506,6 +527,8 @@ export const jamPublicationSchema = z.object({
   parts: z.array(jamPublicationPartSchema),
   /** Outside takes waiting for the starter to put them in the mix. */
   pendingTakes: z.number().int().nonnegative(),
+  /** The starter's switch: outside takes that clear every platform check are put in the mix without their tap. */
+  autoAcceptOutside: z.boolean().default(false),
 });
 export type JamPublication = z.infer<typeof jamPublicationSchema>;
 
@@ -557,10 +580,20 @@ export const publishJamSongSchema = z.object({
 });
 export type PublishJamSongRequest = z.infer<typeof publishJamSongSchema>;
 
-/** `PATCH /api/jam-songs/:songId/public`: the starter hides or shows the origin. */
-export const updateJamPublicationSchema = z.object({
-  showOrigin: z.boolean(),
-});
+/**
+ * `PATCH /api/jam-songs/:songId/public`: the starter hides or shows the origin,
+ * and/or turns auto-accept of outside takes on or off (see AUTO-ACCEPT in the
+ * header). At least one field. Turning it on again while it is on changes
+ * nothing; turning it off removes nothing already admitted.
+ */
+export const updateJamPublicationSchema = z
+  .object({
+    showOrigin: z.boolean().optional(),
+    autoAcceptOutside: z.boolean().optional(),
+  })
+  .refine((body) => body.showOrigin !== undefined || body.autoAcceptOutside !== undefined, {
+    message: "showOrigin or autoAcceptOutside is required",
+  });
 export type UpdateJamPublicationRequest = z.infer<typeof updateJamPublicationSchema>;
 
 /** `PUT /api/jam-songs/:songId/public-consent`: my answer for all my parts in it. */
@@ -670,7 +703,8 @@ export type JamPublicMineResponse = z.infer<typeof jamPublicMineResponseSchema>;
  * `jam-public-notice`, to one account:
  *
  *   consent       a song you have a part in was made public: answer.
- *   take          (to the starter) an outside take arrived, out of the mix.
+ *   take          (to the starter) an outside take arrived, out of the mix; with
+ *                 `admitted: true` it arrived and auto-accept already put it in.
  *   removed       (to the starter) an operator took your song down; `reason`.
  *   unpublished   (to the starter) a moderator of the origin server unpublished it.
  *   part-removed  (to the part's author) an operator removed your part; `reason`.
@@ -693,6 +727,8 @@ export const jamPublicNoticeSchema = z.object({
   title: z.string(),
   trackId: uuid.nullable().default(null),
   reason: z.string().nullable().default(null),
+  /** `take` only: auto-accept put the take in the mix, nothing waits for the starter. */
+  admitted: z.boolean().default(false),
 });
 export type JamPublicNotice = z.infer<typeof jamPublicNoticeSchema>;
 

@@ -272,7 +272,9 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
           )}
           <section>
             <h2 className="text-sm font-bold text-text-secondary">{jt("how.title")}</h2>
-            <p className="mt-2 text-[15px] leading-6 text-text-secondary">{jt("how.body", { who })}</p>
+            <p className="mt-2 text-[15px] leading-6 text-text-secondary" data-jam-auto-accept={song.autoAcceptOutside ? "on" : undefined}>
+              {song.autoAcceptOutside ? jt("how.auto") : jt("how.body", { who })}
+            </p>
           </section>
           <div className="flex flex-wrap gap-1 border-t border-border pt-3">
             <button

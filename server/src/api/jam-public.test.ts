@@ -1305,6 +1305,322 @@ describeDb("public jams", () => {
 
   // --------------------------------------------------------------- operator
 
+  // ------------------------------------------------ auto-accept outside takes
+
+  describe("auto-accept of outside takes", () => {
+    beforeEach(async () => {
+      await publicFlag(true);
+    });
+
+    const setAuto = (as: Actor, song: string, on: boolean) =>
+      call<{ publication: { autoAcceptOutside: boolean } | null; error?: string }>(
+        as,
+        "PATCH",
+        `/api/jam-songs/${song}/public`,
+        { autoAcceptOutside: on },
+      );
+
+    /** A standalone public jam of eve's with her own first take in. */
+    async function openSong(title = "Aberta"): Promise<string> {
+      const created = jamPublicSongCreatedSchema.parse(
+        (await call(eve, "POST", "/api/jam-public/songs", { title })).body,
+      );
+      await trackId(eve, created.song.id, "guitar", { publicConsent: "yes" });
+      return created.song.id;
+    }
+
+    const inboxIds = async (as: Actor) =>
+      jamPublicInboxResponseSchema.parse((await call(as, "GET", "/api/jam-public/inbox")).body).takes.map(
+        (one) => one.track.id,
+      );
+    const publicIds = async (song: string) => (await publicSong(song))!.tracks.map((one) => one.id);
+    const inMix = async (track: string) =>
+      (await getPool().query(`SELECT in_mix FROM jam_tracks WHERE id = $1`, [track])).rows[0].in_mix as boolean;
+
+    it("is off by default, and only the starter may change it", async () => {
+      const song = await openSong();
+      const reading = jamPublicationResponseSchema.parse((await call(eve, "GET", `/api/jam-songs/${song}/public`)).body);
+      expect(reading.publication!.autoAcceptOutside).toBe(false);
+      expect((await publicSong(song))!.song.autoAcceptOutside).toBe(false);
+      // Not the starter: a stranger cannot even see it, a participant is told it is not theirs.
+      expect((await setAuto(frank, song, true)).status).toBe(404);
+      await trackId(frank, song, "bass", { publicConsent: "yes" });
+      expect((await setAuto(frank, song, true)).status).toBe(403);
+      // An empty change is refused, and the switch is not touched.
+      expect((await call(eve, "PATCH", `/api/jam-songs/${song}/public`, {})).status).toBe(400);
+      const on = await setAuto(eve, song, true);
+      expect(on.status, JSON.stringify(on.body)).toBe(200);
+      expect(on.body.publication!.autoAcceptOutside).toBe(true);
+    });
+
+    it("off, an outside take waits for the starter exactly as before", async () => {
+      const song = await openSong();
+      const take = await addTrack(frank, song, "bass", { publicConsent: "yes" });
+      expect(take.body.track.inMix).toBe(false);
+      await sweepJamPublic();
+      expect(await inboxIds(eve)).toEqual([take.body.track.id]);
+      expect(await inMix(take.body.track.id)).toBe(false);
+    });
+
+    it("on, a take that clears every check goes in without a tap, and the starter is told", async () => {
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      takeJamPublicNoticesForTests();
+      const take = await addTrack(frank, song, "bass", { publicConsent: "yes" });
+      expect(take.status, JSON.stringify(take.body)).toBe(201);
+      const id = take.body.track.id;
+      expect(await inMix(id)).toBe(true);
+      expect(await publicIds(song)).toContain(id);
+      expect(await inboxIds(eve)).toEqual([]);
+      // One notice, and it says the take is already in.
+      const notices = takeJamPublicNoticesForTests().filter((one) => one.userId === eve.id);
+      expect(notices).toHaveLength(1);
+      expect(notices[0]!.notice).toMatchObject({ kind: "take", songId: song, trackId: id, admitted: true });
+      // The song page says it is on, in the list and the detail.
+      expect((await publicSong(song))!.song.autoAcceptOutside).toBe(true);
+      expect((await publicList()).songs.find((one) => one.id === song)!.autoAcceptOutside).toBe(true);
+      // Audited as the system's doing.
+      const audit = await getPool().query(
+        `SELECT action, actor_kind, track_id FROM jam_public_audit WHERE action LIKE 'auto-%' ORDER BY id`,
+      );
+      expect(audit.rows).toEqual([
+        { action: "auto-accept-on", actor_kind: "starter", track_id: null },
+        { action: "auto-admit", actor_kind: "system", track_id: id },
+      ]);
+      expect(jamPublicCounters().takesAutoAdmitted).toBe(1);
+    });
+
+    it("covers only the takes recorded after it went on, and turning it off stops the next one without removing the last", async () => {
+      const song = await openSong();
+      const waiting = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      // Turning it on again does not move the moment it began.
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      await sweepJamPublic();
+      expect(await inMix(waiting)).toBe(false);
+      expect(await inboxIds(eve)).toEqual([waiting]);
+
+      const admitted = await trackId(carol, song, "keys", { publicConsent: "yes" });
+      expect(await inMix(admitted)).toBe(true);
+
+      const off = await setAuto(eve, song, false);
+      expect(off.body.publication!.autoAcceptOutside).toBe(false);
+      expect(await inMix(admitted)).toBe(true);
+      expect(await publicIds(song)).toContain(admitted);
+      const later = await trackId(bob, song, "drums", { publicConsent: "yes" });
+      await sweepJamPublic();
+      expect(await inMix(later)).toBe(false);
+      expect(await inboxIds(eve)).toEqual([later, waiting]);
+    });
+
+    it("a take held by the platform's review queue is NOT admitted early, then goes in by itself when an operator approves it", async () => {
+      process.env.JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS = "72";
+      await getPool().query(`UPDATE users SET created_at = NOW() - INTERVAL '30 days' WHERE id <> $1`, [frank.id]);
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const take = await addTrack(frank, song, "bass", { publicConsent: "yes" });
+      const id = take.body.track.id;
+      // Held: not in the mix, not public, and the starter got the ordinary request notice.
+      expect(await inMix(id)).toBe(false);
+      expect(await publicIds(song)).not.toContain(id);
+      expect(
+        takeJamPublicNoticesForTests().filter((one) => one.userId === eve.id).map((one) => one.notice),
+      ).toEqual([expect.objectContaining({ kind: "take", trackId: id, admitted: false })]);
+      // The sweep, however often it runs, does not move it.
+      await sweepJamPublic();
+      await sweepJamPublic();
+      expect(await inMix(id)).toBe(false);
+      expect(await inboxIds(eve)).toEqual([id]);
+      const queue = adminJamPublicQueueSchema.parse((await operator("GET", "/api/admin/jam-public/queue")).body);
+      expect(queue.tracks.map((one) => one.trackId)).toEqual([id]);
+      // The operator's approval is what clears it, and the take goes in with no tap from eve.
+      expect(
+        (await operator("PUT", "/api/admin/jam-public/review", { kind: "track", id, decision: "approve" })).status,
+      ).toBe(200);
+      expect(await inMix(id)).toBe(true);
+      expect(await publicIds(song)).toContain(id);
+      expect(await inboxIds(eve)).toEqual([]);
+    });
+
+    it("a rejected take is never admitted", async () => {
+      process.env.JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS = "72";
+      await getPool().query(`UPDATE users SET created_at = NOW() - INTERVAL '30 days' WHERE id <> $1`, [frank.id]);
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const id = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      expect(
+        (await operator("PUT", "/api/admin/jam-public/review", { kind: "track", id, decision: "reject" })).status,
+      ).toBe(200);
+      await sweepJamPublic();
+      expect(await inMix(id)).toBe(false);
+      expect(await publicIds(song)).not.toContain(id);
+    });
+
+    it("the minute sweep admits a take whose hold cleared with no hook of its own", async () => {
+      process.env.JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS = "72";
+      await getPool().query(`UPDATE users SET created_at = NOW() - INTERVAL '30 days' WHERE id <> $1`, [frank.id]);
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const id = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      expect(await inMix(id)).toBe(false);
+      // Approved some other way (a restart between the approval and its hook).
+      await getPool().query(`UPDATE jam_public_tracks SET review_state = 'approved' WHERE track_id = $1`, [id]);
+      const swept = await sweepJamPublic();
+      expect(swept.admitted).toBe(1);
+      expect(await inMix(id)).toBe(true);
+    });
+
+    it("two sweeps at once admit a take once", async () => {
+      process.env.JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS = "72";
+      await getPool().query(`UPDATE users SET created_at = NOW() - INTERVAL '30 days' WHERE id <> $1`, [frank.id]);
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const id = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      await getPool().query(`UPDATE jam_public_tracks SET review_state = 'approved' WHERE track_id = $1`, [id]);
+      resetJamPublicCountersForTests();
+      const both = await Promise.all([sweepJamPublic(), sweepJamPublic()]);
+      expect(both.reduce((sum, one) => sum + one.admitted, 0)).toBe(1);
+      expect(jamPublicCounters().takesAutoAdmitted).toBe(1);
+      const audit = await getPool().query(`SELECT 1 FROM jam_public_audit WHERE action = 'auto-admit'`);
+      expect(audit.rowCount).toBe(1);
+    });
+
+    it("an operator's removal of an admitted part sticks, and so does one made before the admission", async () => {
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const id = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      expect(await publicIds(song)).toContain(id);
+      expect(
+        (await operator("PUT", "/api/admin/jam-public/remove-part", { trackId: id, reason: "áudio de outra pessoa" }))
+          .status,
+      ).toBe(200);
+      expect(await publicIds(song)).not.toContain(id);
+      // Nothing brings it back: not a sweep, not the starter turning the switch off and on.
+      await sweepJamPublic();
+      await setAuto(eve, song, false);
+      await setAuto(eve, song, true);
+      await sweepJamPublic();
+      expect(await publicIds(song)).not.toContain(id);
+      const row = await getPool().query(`SELECT removed_at FROM jam_public_tracks WHERE track_id = $1`, [id]);
+      expect(row.rows[0].removed_at).not.toBeNull();
+
+      // Removed while still waiting (a hold): the admission never touches it.
+      process.env.JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS = "72";
+      await getPool().query(`UPDATE users SET created_at = NOW() - INTERVAL '30 days' WHERE id <> $1`, [carol.id]);
+      const held = await trackId(carol, song, "keys", { publicConsent: "yes" });
+      expect(await inMix(held)).toBe(false);
+      await operator("PUT", "/api/admin/jam-public/remove-part", { trackId: held, reason: "spam" });
+      await operator("PUT", "/api/admin/jam-public/review", { kind: "track", id: held, decision: "approve" });
+      await sweepJamPublic();
+      expect(await inMix(held)).toBe(false);
+      expect(await publicIds(song)).not.toContain(held);
+    });
+
+    it("the starter taking an admitted part out of the mix, or deleting it, is not undone", async () => {
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const id = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      expect(await inMix(id)).toBe(true);
+      expect((await call(eve, "PATCH", `/api/jam-tracks/${id}`, { inMix: false })).status).toBe(200);
+      await sweepJamPublic();
+      expect(await inMix(id)).toBe(false);
+      expect(await publicIds(song)).not.toContain(id);
+      const other = await trackId(carol, song, "keys", { publicConsent: "yes" });
+      expect((await call(eve, "DELETE", `/api/jam-tracks/${other}`)).status).toBe(204);
+      await sweepJamPublic();
+      expect(await publicIds(song)).not.toContain(other);
+    });
+
+    it("a take whose author answered no while it was held is not admitted when the hold clears", async () => {
+      process.env.JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS = "72";
+      await getPool().query(`UPDATE users SET created_at = NOW() - INTERVAL '30 days' WHERE id <> $1`, [frank.id]);
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const id = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      expect((await consent(frank, song, "no")).status).toBe(200);
+      await operator("PUT", "/api/admin/jam-public/review", { kind: "track", id, decision: "approve" });
+      await sweepJamPublic();
+      expect(await inMix(id)).toBe(false);
+      expect(await publicIds(song)).not.toContain(id);
+    });
+
+    it("a take with a video waits for the frame scan, and a flagged video never goes in by itself", async () => {
+      scannerOn();
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const waiting = await trackId(frank, song, "bass", { publicConsent: "yes" }, { video: true });
+      expect(await inMix(waiting)).toBe(false);
+      await settleUploads();
+      await sweepJamPublic();
+      expect(await inMix(waiting)).toBe(false);
+      expect(await processOneJamVideo()).toBe("passed");
+      expect(await inMix(waiting)).toBe(true);
+      expect((await publicSong(song))!.tracks.find((one) => one.id === waiting)!.videoUrl).not.toBeNull();
+
+      scanner.verdict = "flag";
+      const flagged = await trackId(carol, song, "keys", { publicConsent: "yes" }, { video: true });
+      await settleUploads();
+      expect(await processOneJamVideo()).toBe("flagged");
+      await sweepJamPublic();
+      expect(await inMix(flagged)).toBe(false);
+      expect(await inboxIds(eve)).toEqual([flagged]);
+    });
+
+    it("with no scanner a take with a video is not admitted by itself, one without is", async () => {
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const withVideo = await trackId(frank, song, "bass", { publicConsent: "yes" }, { video: true });
+      const audioOnly = await trackId(carol, song, "keys", { publicConsent: "yes" });
+      await sweepJamPublic();
+      expect(await inMix(withVideo)).toBe(false);
+      expect(await inMix(audioOnly)).toBe(true);
+    });
+
+    it("a song whose picture the scanner flagged stops admitting until it is replaced", async () => {
+      scannerOn();
+      scanner.verdict = "flag";
+      const song = await openSong();
+      expect((await call(eve, "PUT", `/api/jam-songs/${song}/cover`, { uploadId: await upload(eve, song, "cover") })).status).toBe(
+        200,
+      );
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      await settleUploads();
+      expect(await processOneJamCover()).toBe("flagged");
+      const held = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      await sweepJamPublic();
+      expect(await inMix(held)).toBe(false);
+    });
+
+    it("works the same on a channel song, in the channel's own frame, and a member's take is not an outside one", async () => {
+      const song = await channelSong(alice);
+      expect((await publish(alice, song)).status).toBe(200);
+      expect((await setAuto(alice, song, true)).status).toBe(200);
+      // A stranger's take through public access goes in.
+      const outside = await trackId(eve, song, "bass", { publicConsent: "yes" });
+      expect(await inMix(outside)).toBe(true);
+      // A member's take keeps the channel's rule (a second guitar waits for the starter).
+      const member = await trackId(bob, song, "guitar", { publicConsent: "yes" });
+      expect(await inMix(member)).toBe(false);
+      await sweepJamPublic();
+      expect(await inMix(member)).toBe(false);
+    });
+
+    it("with the flag off nothing is admitted", async () => {
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const id = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      // (admitted at once: put it back as a held take, then switch the flag off)
+      await getPool().query(`UPDATE jam_tracks SET in_mix = FALSE WHERE id = $1`, [id]);
+      await getPool().query(`UPDATE jam_public_tracks SET auto_admitted_at = NULL WHERE track_id = $1`, [id]);
+      await publicFlag(false);
+      await sweepJamPublic();
+      expect(await inMix(id)).toBe(false);
+      await publicFlag(true);
+      await sweepJamPublic();
+      expect(await inMix(id)).toBe(true);
+    });
+  });
+
   describe("the operator", () => {
     beforeEach(async () => {
       await publicFlag(true);

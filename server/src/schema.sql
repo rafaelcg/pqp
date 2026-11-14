@@ -7932,6 +7932,11 @@ CREATE INDEX IF NOT EXISTS idx_jam_public_songs_publisher
 CREATE INDEX IF NOT EXISTS idx_jam_public_songs_queue
   ON jam_public_songs (published_at)
   WHERE review_state = 'pending' OR hidden_at IS NOT NULL;
+-- The starter's "auto-accept outside takes" switch. NULL is off (the default);
+-- a timestamp is on, and is WHEN it went on: only takes recorded at or after it
+-- are admitted without the starter's tap (`admitAutoAcceptedTakes`), so the
+-- requests already waiting keep waiting for a person. Nullable, no rewrite.
+ALTER TABLE jam_public_songs ADD COLUMN IF NOT EXISTS auto_accept_since TIMESTAMPTZ;
 
 -- One answer per person per song. No row is "not answered", which is no.
 CREATE TABLE IF NOT EXISTS jam_public_consents (
@@ -7988,6 +7993,14 @@ CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_recorded
   ON jam_public_tracks (author_id, created_at) WHERE origin = 'recorded';
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_video_pending
   ON jam_public_tracks (created_at) WHERE video_scan_status = 'pending';
+-- When auto-accept put this outside take in the mix. Set ONCE, in the same
+-- statement that sets `jam_tracks.in_mix`: after that the take is an ordinary
+-- part, so the starter taking it out of the mix again is not undone by the next
+-- sweep. NULL: not admitted that way.
+ALTER TABLE jam_public_tracks ADD COLUMN IF NOT EXISTS auto_admitted_at TIMESTAMPTZ;
+-- What the minute sweep reads: outside takes still out of the mix and never admitted.
+CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_auto_due
+  ON jam_public_tracks (song_id) WHERE outside AND auto_admitted_at IS NULL AND removed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_review
   ON jam_public_tracks (created_at) WHERE review_state = 'pending';
 

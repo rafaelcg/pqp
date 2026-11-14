@@ -30,9 +30,10 @@ function deliver(userId: string, notice: JamPublicNotice): void {
 
 export function notifyJamPublic(
   userId: string,
-  notice: Omit<JamPublicNotice, "type" | "trackId" | "reason"> & {
+  notice: Omit<JamPublicNotice, "type" | "trackId" | "reason" | "admitted"> & {
     trackId?: string | null;
     reason?: string | null;
+    admitted?: boolean;
   },
 ): void {
   const frame: JamPublicNotice = {
@@ -42,6 +43,7 @@ export function notifyJamPublic(
     title: notice.title,
     trackId: notice.trackId ?? null,
     reason: notice.reason ?? null,
+    admitted: notice.admitted ?? false,
   };
   if (sent.length < 1000) {
     sent.push({ userId, notice: frame });

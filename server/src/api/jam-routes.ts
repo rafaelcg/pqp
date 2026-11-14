@@ -32,6 +32,7 @@ import {
   getJamSongRow,
   getJamSongSummary,
   getJamSongSummaryPublicView,
+  getJamTrack,
   getJamTrackRow,
   JAM_NOT_FOUND,
   listJamSongs,
@@ -53,6 +54,8 @@ import {
   mayRecordPublicly,
   noteJamCoverChanged,
   noteJamTrackAdded,
+  noteStarterMixDecision,
+  setJamTakeAdmissionAnnouncer,
 } from "../services/jam-public.js";
 import { computeMemberPermissions } from "../services/permissions.js";
 import { findTimeoutForChannel, timeoutMessage } from "../services/sanctions.js";
@@ -161,6 +164,16 @@ function announceIn(channelId: string | null, build: (channelId: string) => JamF
     announceJam(build(channelId));
   }
 }
+
+// A take that auto-accept put in the mix reaches the channel's open clients
+// like the starter's own tap would have (`jam-track-updated`). Registered here
+// because the frame is a chat-socket concern; best effort, the reads are the truth.
+setJamTakeAdmissionAnnouncer(async (channelId, songId, trackId) => {
+  const [summary, track] = await Promise.all([getJamSongSummary(songId), getJamTrack(trackId)]);
+  if (summary && track) {
+    announceJam({ type: "jam-track-updated", channelId, song: summary, track });
+  }
+});
 
 /** A live song the caller can see, with how they reach it. */
 async function requireSong(
@@ -589,6 +602,9 @@ export function registerJamRoutes(router: Router): void {
       throw new HttpError(403, "Only the song's author or a moderator sets the mix");
     }
     const updated = await updateJamTrack(track, patch);
+    if (patch.inMix !== undefined && track.song_author_id === user.id) {
+      await noteStarterMixDecision(track.id);
+    }
     announceIn(song.channel_id, (channelId) => ({
       type: "jam-track-updated",
       channelId,

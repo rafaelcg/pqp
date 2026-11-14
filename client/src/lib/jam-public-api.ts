@@ -87,6 +87,10 @@ export const publishJamSong = (songId: string, showOrigin?: boolean) =>
 export const setJamShowOrigin = (songId: string, showOrigin: boolean) =>
   apiFetch<JamPublicationResponse>(`/api/jam-songs/${songId}/public`, json("PATCH", { showOrigin }));
 
+/** The starter's auto-accept switch for outside takes (docs/JAM_PUBLIC.md, "Auto-accept"). */
+export const setJamAutoAccept = (songId: string, autoAcceptOutside: boolean) =>
+  apiFetch<JamPublicationResponse>(`/api/jam-songs/${songId}/public`, json("PATCH", { autoAcceptOutside }));
+
 export const unpublishJamSong = (songId: string) =>
   apiFetch<JamPublicationResponse>(`/api/jam-songs/${songId}/public`, json("DELETE"));
 

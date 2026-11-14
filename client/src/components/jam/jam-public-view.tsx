@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 import { fetchJamSong } from "@/lib/jam-api";
 import type { JamIntent } from "@/lib/jam-intent";
-import { likePublicJam } from "@/lib/jam-public-api";
+import { fetchPublicSongForViewer, likePublicJam } from "@/lib/jam-public-api";
 import { takePublicJamIntent } from "@/lib/jam-public-nav";
 import { useJamPublicMe } from "@/lib/jam-public-store";
 import { pickInstrument } from "@/lib/jam-record";
@@ -87,6 +87,8 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
   const detail = songId ? held.details[songId] : undefined;
 
   const [load, setLoad] = useState<"loading" | "ready" | "gone" | "error">("loading");
+  // The starter's auto-accept switch, for what the studio tells an outside take. Best effort: off when unknown.
+  const [autoAccept, setAutoAccept] = useState(false);
   const [tries, setTries] = useState(0);
   const intentRef = useRef<JamIntent | null>(null);
   const handledIntent = useRef<string | null>(null);
@@ -130,6 +132,18 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
       cancelled = true;
     };
   }, [songId, me.enabled, key, tries]);
+
+  useEffect(() => {
+    if (!songId || !me.enabled || load !== "ready") {
+      return;
+    }
+    const controller = new AbortController();
+    void fetchPublicSongForViewer(songId, controller.signal).then(
+      (answer) => setAutoAccept(answer.song.autoAcceptOutside === true),
+      () => undefined,
+    );
+    return () => controller.abort();
+  }, [songId, me.enabled, load]);
 
   // Record or report: once the detail says what this person may do.
   useEffect(() => {
@@ -304,6 +318,7 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
           songDeleted={false}
           addable={detail?.viewer.addableInstruments ?? [studio.instrument]}
           initialInstrument={studio.instrument}
+          autoAcceptOutside={autoAccept}
           publicAccess
           onClose={() => setStudio(null)}
           onLeaveToWall={() => setStudio(null)}

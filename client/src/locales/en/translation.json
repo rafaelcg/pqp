@@ -7949,5 +7949,19 @@
   "jam.public.outside.sendPart": "Send my part",
   "jam.public.outside.sendHint": "Whoever started the jam decides if it joins the mix.",
   "jam.public.waiting.consentOne": "\"{title}\" went public with a part of yours.",
-  "jam.public.waiting.takeOne": "A part is waiting for you in \"{title}\"."
+  "jam.public.waiting.takeOne": "A part is waiting for you in \"{title}\".",
+  "jam.public.sheet.autoAccept": "Let outside parts in on their own",
+  "jam.public.sheet.autoAcceptHint": "A part from someone outside goes into the mix without you tapping Accept, once it passes the platform's checks.",
+  "jam.public.autoAccept.confirmTitle": "Accept outside parts on their own?",
+  "jam.public.autoAccept.confirmBody": "From now on, a part someone outside records on this song goes into the mix without you accepting it. It only goes in after it passes the platform's review and scans (new accounts, video, reports). Parts already waiting still wait for you. You can remove any part whenever you want, and switch this off at any time. Switching it off does not remove what already got in.",
+  "jam.public.autoAccept.confirmOn": "Turn on",
+  "jam.public.autoAccept.confirmCancel": "Not now",
+  "jam.public.status.autoAccept": "Lets outside parts in on its own",
+  "jam.public.status.autoAcceptPublic": "This jam lets outside parts in on their own.",
+  "jam.public.requests.hintAuto": "People outside sent these parts. They join the mix on their own once the platform's review is done, or you can accept now.",
+  "jam.public.outside.waitingAuto": "Your part arrived. It joins the mix when whoever started the jam accepts it, or on its own after the platform's review.",
+  "jam.public.outside.sendHintAuto": "This jam lets outside parts in on their own, after the platform's review.",
+  "jam.public.studio.outsideAuto": "This jam is public and lets outside parts in on their own. If your recording passes the platform's review, it goes in the mix, with your name.",
+  "jam.public.studio.doneOutsideAuto": "Sent. Once it passes the platform's review, it joins the mix on its own.",
+  "jam.public.notice.takeAdmitted": "A new part joined \"{title}\" on its own."
 }

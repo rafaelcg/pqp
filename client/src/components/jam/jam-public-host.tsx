@@ -171,7 +171,7 @@ function toastFor(
     case "take":
       return {
         key,
-        text: t("jam.public.notice.take", { title }),
+        text: t(notice.admitted ? "jam.public.notice.takeAdmitted" : "jam.public.notice.take", { title }),
         action: { label: t("jam.public.waiting.see"), run: () => openPublicJamById(notice.songId) },
       };
     case "removed":

@@ -138,5 +138,6 @@
   "ask.later": "Ahora no",
   "ask.rights": "Publica solo lo que hiciste o tienes derecho a usar.",
   "ask.rights.link": "Términos",
-  "ask.note": "¿Ya tienes una? Entra en la siguiente pantalla. Para escuchar y ver las jams nunca necesitas una."
+  "ask.note": "¿Ya tienes una? Entra en la siguiente pantalla. Para escuchar y ver las jams nunca necesitas una.",
+  "how.auto": "Esta jam deja entrar partes de afuera por su cuenta: la tuya entra en la mezcla cuando pase la revisión de la plataforma."
 }

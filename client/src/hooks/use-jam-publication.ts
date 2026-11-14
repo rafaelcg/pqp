@@ -4,6 +4,7 @@ import {
   fetchJamPublication,
   jamPublicErrorKind,
   publishJamSong,
+  setJamAutoAccept,
   setJamShowOrigin,
   unpublishJamSong,
   type JamPublicErrorKind,
@@ -31,6 +32,7 @@ export interface JamPublicationState {
   refresh: () => Promise<void>;
   publish: (showOrigin?: boolean) => Promise<boolean>;
   setShowOrigin: (showOrigin: boolean) => Promise<boolean>;
+  setAutoAccept: (on: boolean) => Promise<boolean>;
   unpublish: () => Promise<boolean>;
 }
 
@@ -120,6 +122,7 @@ export function useJamPublication(songId: string, active: boolean): JamPublicati
     refresh,
     publish: (showOrigin) => write(() => publishJamSong(songId, showOrigin)),
     setShowOrigin: (showOrigin) => write(() => setJamShowOrigin(songId, showOrigin)),
+    setAutoAccept: (on) => write(() => setJamAutoAccept(songId, on)),
     unpublish: () => write(() => unpublishJamSong(songId)),
   };
 }

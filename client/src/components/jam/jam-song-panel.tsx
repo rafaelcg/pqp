@@ -492,6 +492,7 @@ export function JamSongPanel({
           />
         )}
         <JamPublicRequests
+          autoAccept={pub.autoAccept}
           takes={requestTakes}
           auditioning={playback.audition}
           playing={playing}
@@ -726,7 +727,7 @@ export function JamSongPanel({
         )}
         {outsideRecord && reason === null && first && (
           <p data-jam-outside-hint="" className="text-center text-[13px] leading-snug text-text-secondary [text-wrap:pretty]">
-            {t("jam.public.outside.sendHint")}
+            {pub.autoAccept ? t("jam.public.outside.sendHintAuto") : t("jam.public.outside.sendHint")}
           </p>
         )}
       </footer>
