@@ -60,7 +60,7 @@ extension JamInstrument {
     /// `JamInstrumentColorTests` converts these back to oklch and compares them
     /// with the web file, so a token that moves there fails here.
     ///
-    ///     bass   oklch(0.64 0.15 255)     other  oklch(0.71 0.04 295)
+    ///     bass   oklch(0.64 0.15 255)     other  oklch(0.71 0.16 310)
     ///     drums  oklch(0.77 0.15 55)      vocals oklch(0.82 0.12 345)
     ///     keys   oklch(0.87 0.11 195)     guitar oklch(0.92 0.15 90)
     var rgb: (red: Double, green: Double, blue: Double) {
@@ -70,7 +70,7 @@ extension JamInstrument {
         case .drums: (0.989, 0.595, 0.299)
         case .vocals: (0.987, 0.643, 0.839)
         case .keys: (0.440, 0.921, 0.920)
-        case .other: (0.638, 0.616, 0.723)
+        case .other: (0.753, 0.510, 0.922)
         }
     }
 
