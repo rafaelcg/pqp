@@ -482,3 +482,30 @@ test("rotating the secret kills every URL already handed out", async () => {
   const h = harness(objects(), { JAM_PUBLIC_MEDIA_SECRET: "rotated" });
   assert.equal((await h.call(AUDIO.url)).status, 403);
 });
+
+test("an R2 fault is the same clean 502 and the same originError event for HEAD and GET", async () => {
+  const lines = [];
+  const realLog = console.log;
+  console.log = (line) => lines.push(String(line));
+  try {
+    const h = harness(objects());
+    h.bucket.head = async () => {
+      throw new Error("R2 is down");
+    };
+    h.bucket.get = async () => {
+      throw new Error("R2 is down");
+    };
+    const head = await h.call(AUDIO.url, { method: "HEAD", headers: { Origin: "https://jam.pqp.gg" } });
+    const get = await h.call(AUDIO.url, { headers: { Origin: "https://jam.pqp.gg" } });
+    for (const response of [head, get]) {
+      assert.equal(response.status, 502);
+      assert.equal(response.headers.get("Cache-Control"), "no-store");
+      assert.equal(response.headers.get("Access-Control-Allow-Origin"), "https://jam.pqp.gg");
+    }
+    assert.deepEqual(await get.json(), { error: "origin-error" });
+    assert.equal(lines.filter((line) => line.includes('"jamMedia.originError"')).length, 2);
+    assert.ok(!lines.some((line) => line.includes("jamMedia.unhandled")));
+  } finally {
+    console.log = realLog;
+  }
+});

@@ -298,7 +298,14 @@ async function fromBucket(
   const cacheKey = cacheKeyFor(request);
 
   if (request.method === "HEAD") {
-    const head = await bucket.head(key);
+    let head: R2Object | null;
+    try {
+      head = await bucket.head(key);
+    } catch {
+      // Same event and same answer as a GET that cannot reach R2.
+      logEvent("jamMedia.originError", {});
+      return withCors(failure(502, "origin-error"), env, request);
+    }
     const contentType = head ? servableContentType(head.httpMetadata?.contentType, key) : null;
     if (!head || !contentType) {
       return withCors(failure(404, "not-found"), env, request);
