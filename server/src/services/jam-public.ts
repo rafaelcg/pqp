@@ -1530,6 +1530,7 @@ interface AdminSongRow {
   server_id: string | null;
   server_name: string | null;
   reports: number;
+  copyright_reports: number;
   public_parts: number;
   listed: boolean;
 }
@@ -1545,6 +1546,10 @@ const ADMIN_SONG_SELECT = `
            WHERE r.song_id = p.song_id
              AND r.created_at > GREATEST(NOW() - make_interval(hours => $1),
                                          COALESCE(p.reviewed_at, '-infinity'::timestamptz))) AS reports,
+         (SELECT COUNT(DISTINCT r.reporter_id)::int FROM jam_public_reports r
+           WHERE r.song_id = p.song_id AND r.reason = 'copyright'
+             AND r.created_at > GREATEST(NOW() - make_interval(hours => $1),
+                                         COALESCE(p.reviewed_at, '-infinity'::timestamptz))) AS copyright_reports,
          (SELECT COUNT(*)::int FROM jam_tracks pt WHERE pt.song_id = s.id AND ${publicTrackSql("pt")}) AS public_parts,
          EXISTS (SELECT 1 FROM users su WHERE su.id = s.author_id AND ${LISTED_SONG_SQL}) AS listed
     FROM jam_public_songs p
@@ -1574,6 +1579,7 @@ function mapAdminSong(row: AdminSongRow): AdminJamPublicSong {
     plays: Number(row.plays_count),
     likes: row.likes_count,
     reports: row.reports,
+    copyrightReports: row.copyright_reports,
     publicParts: row.public_parts,
     hiddenAt: row.hidden_at ? row.hidden_at.toISOString() : null,
     removedReason: row.removed_reason ?? row.unpublish_reason ?? null,

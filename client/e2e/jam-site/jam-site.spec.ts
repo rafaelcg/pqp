@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { encodeWav } from "../../src/lib/jam/pcm";
 
@@ -8,6 +9,15 @@ import { encodeWav } from "../../src/lib/jam/pcm";
  * engine's clock, the mosaic and its spotlight, the sign-up sheet and the intent
  * it carries to the app, the disabled page, and 390 px.
  */
+
+/** Real-click screenshots for a PR's QA section, only when asked for (`PQP_QA_SHOTS=<dir>`). */
+async function shot(page: Page, name: string): Promise<void> {
+  const dir = process.env.PQP_QA_SHOTS;
+  if (!dir) return;
+  mkdirSync(dir, { recursive: true });
+  await page.waitForTimeout(500); // let a dialog finish its fade, so the picture is what a person sees
+  await page.screenshot({ path: path.join(dir, `${name}.png`) });
+}
 
 const SONG_A = "0b8f2c1e-4d5a-4e6f-8a7b-1c2d3e4f5a6b";
 const SONG_B = "7a1d3b2c-9e8f-4a5b-8c6d-0e1f2a3b4c5d";
@@ -477,6 +487,89 @@ test.describe("what needs an account", () => {
     await page.locator("[data-jam-ask-go]").click();
     await page.waitForURL(/\/app\?/);
     expect(new URL(page.url()).searchParams.get("jam")).toBe("new");
+  });
+
+  test("hands over where the visit came from: ref and utm_* from the arrival, kept across pages", async ({ page }) => {
+    await mockApi(page);
+    await page.route("**/app?*", (route) => route.fulfill({ body: "<html><body>app</body></html>", contentType: "text/html" }));
+    // arrived on a clip's link, moved around the site: the sign-up button is pages away from the address
+    await page.goto(`/jam/m/${SONG_A}?ref=clip-ana&utm_source=tiktok&utm_medium=social&gclid=zzz`);
+    await page.locator("header a", { hasText: /Explorar/ }).first().click();
+    await page.waitForURL(/\/jam$/);
+    expect(new URL(page.url()).searchParams.has("ref")).toBe(false);
+    await page.locator("[data-jam-start-strip]").click();
+    await shot(page, "01-site-start-sheet-rights-line");
+    await page.locator("[data-jam-ask-go]").click();
+    await page.waitForURL(/\/app\?/);
+    const url = new URL(page.url());
+    expect(url.searchParams.get("jam")).toBe("new");
+    expect(url.searchParams.get("ref")).toBe("clip-ana");
+    expect(url.searchParams.get("utm_source")).toBe("tiktok");
+    expect(url.searchParams.get("utm_medium")).toBe("social");
+    expect(url.searchParams.has("gclid")).toBe(false);
+  });
+
+  test("a visit with no ref says ref=jam, on the sheet and on the plain sign-in link", async ({ page }) => {
+    await mockApi(page);
+    await page.route("**/app?*", (route) => route.fulfill({ body: "<html><body>app</body></html>", contentType: "text/html" }));
+    await page.goto(`/jam/m/${SONG_A}`);
+    await expect(page.locator("header a", { hasText: /Entrar/ })).toHaveAttribute("href", /[?&]ref=jam(&|$)/);
+    await page.locator("[data-jam-record]").click();
+    await page.locator("[data-jam-ask-go]").click();
+    await page.waitForURL(/\/app\?/);
+    const url = new URL(page.url());
+    expect(url.searchParams.get("ref")).toBe("jam");
+    expect(url.searchParams.has("utm_source")).toBe(false);
+  });
+
+  test("the record sheet says to post only what is yours, with a link to the Terms; the like sheet does not", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    await page.locator("[data-jam-record]").click();
+    const rights = page.locator("dialog[open] [data-jam-rights]");
+    await expect(rights).toContainText("Só posta o que tu fez ou tem direito de usar.");
+    await expect(rights.locator("a")).toHaveAttribute("href", /\/terms$/);
+    await expect(rights.locator("a")).toHaveAttribute("target", "_blank");
+    await shot(page, "02-site-record-sheet-rights-line");
+    await page.getByRole("button", { name: "Agora não" }).click();
+    await page.locator("[data-jam-like]").click();
+    await expect(page.locator("dialog[open]")).toBeVisible();
+    await expect(page.locator("dialog[open] [data-jam-rights]")).toHaveCount(0);
+  });
+
+  test("copyright is its own item, on the song and in a part's menu, and the intent carries the reason", async ({ page }) => {
+    await mockApi(page);
+    await page.route("**/app?*", (route) => route.fulfill({ body: "<html><body>app</body></html>", contentType: "text/html" }));
+    await page.goto(`/jam/m/${SONG_A}`);
+    // the part's menu has two items and the arrows move between them
+    await page.locator("[data-jam-lane-menu]").first().click();
+    const report = page.locator("[data-jam-report-part]");
+    const copyright = page.locator("[data-jam-copyright-part]");
+    await expect(report).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(copyright).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(report).toBeFocused();
+    await shot(page, "03-site-part-menu-copyright");
+    await copyright.click();
+    await expect(page.locator("dialog[open]")).toContainText("direitos autorais");
+    await shot(page, "04-site-copyright-sheet");
+    await page.locator("[data-jam-ask-go]").click();
+    await page.waitForURL(/\/app\?/);
+    const part = new URL(page.url()).searchParams;
+    expect(part.get("jam")).toBe(SONG_A);
+    expect(part.get("act")).toBe("report");
+    expect(part.get("reason")).toBe("copyright");
+    expect(part.get("track")).toMatch(/-t0$/); // the mock's id for the first lane
+    // the song's own copyright button
+    await page.goto(`/jam/m/${SONG_A}`);
+    await page.locator("[data-jam-copyright]").click();
+    await page.locator("[data-jam-ask-go]").click();
+    await page.waitForURL(/\/app\?/);
+    const song = new URL(page.url()).searchParams;
+    expect(song.get("act")).toBe("report");
+    expect(song.get("reason")).toBe("copyright");
+    expect(song.has("track")).toBe(false);
   });
 
   test("shows the 'open in the app' state when the app sends somebody back", async ({ page }) => {

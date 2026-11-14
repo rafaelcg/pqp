@@ -146,6 +146,7 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
         songId,
         trackId: part ? part.id : null,
         subjectName: part ? (part.authorName ?? null) : song.title,
+        reason: intent.reason ?? null,
       });
       return;
     }

@@ -30,6 +30,13 @@ describe("jam host redirect (pure)", () => {
     expect(at("/m/a/b")).toBe("https://pqp.gg/m/a/b");
   });
 
+  it("carries ref and utm_* through, so a hand-over to the app keeps its attribution", () => {
+    const search = "?jam=new&ref=clip-ana&utm_source=tiktok&utm_campaign=jam-nov";
+    expect(at("/app", search)).toBe(`https://pqp.gg/app${search}`);
+    // the site's own address is served as it is, query and all
+    expect(at(`/m/${ID}`, "?ref=clip-ana")).toBeNull();
+  });
+
   it("keeps the jam site's own addresses and its static files", () => {
     for (const path of ["/", `/m/${ID}`, `/m/${ID}/`, "/assets/jam-site-abc.js", "/icons/favicon-32.png", "/images/og-image.jpg", "/favicon.ico", "/manifest.webmanifest", "/robots.txt"]) {
       expect(at(path), path).toBeNull();

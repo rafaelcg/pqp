@@ -1,4 +1,5 @@
 import { jt } from "@/lib/i18n/jam-site";
+import { mainHref } from "./attribution";
 import { AskProvider } from "./auth-sheet";
 import { useHead } from "./head";
 import { HomePage } from "./home";
@@ -30,7 +31,7 @@ function SoonPage() {
         </h1>
         <p className="mt-4 text-lg leading-7 text-text-secondary">{jt("soon.body")}</p>
         <div className="mt-8">
-          <a href={`${mainOrigin()}/`} className={button("secondary", "lg")}>
+          <a href={mainHref("/", mainOrigin())} className={button("secondary", "lg")}>
             {jt("soon.cta")}
           </a>
         </div>

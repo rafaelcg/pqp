@@ -2,6 +2,7 @@ import { MoonIcon as Moon, SunIcon as Sun, XIcon } from "./icons";
 import { useEffect, useState, type ReactNode } from "react";
 import { jt } from "@/lib/i18n/jam-site";
 import { useAsk } from "./auth-sheet";
+import { mainHref } from "./attribution";
 import { Link, mainOrigin, useJamRoute } from "./router";
 import { jamPath } from "./route";
 import { setBrightness, useBrightness } from "./theme";
@@ -63,7 +64,7 @@ export function Header() {
           </Link>
         </nav>
         <span className="flex-1" />
-        <a href={`${mainOrigin()}/app`} className={cn(button("ghost"), "max-sm:hidden")}>
+        <a href={mainHref("/app", mainOrigin())} className={cn(button("ghost"), "max-sm:hidden")}>
           {jt("nav.signIn")}
         </a>
         <button type="button" data-jam-start="" onClick={() => ask({ kind: "start" })} className={button("primary")}>
@@ -85,7 +86,7 @@ export function Footer() {
         <span className="flex-1 max-sm:hidden" />
         {/* the three links are one unit: on a phone they stay on one line under the sentence, never one orphaned word */}
         <nav className="flex flex-wrap gap-x-6 gap-y-2" aria-label={jt("footer.line")}>
-          <a className={link} href={`${origin}/`}>
+          <a className={link} href={mainHref("/", origin)}>
             {jt("footer.pqp")}
           </a>
           <a className={link} href={`${origin}/terms`}>
