@@ -81,6 +81,8 @@ export interface JamSongPanelProps {
    * and no chat share, but a like, a link, a report, and the song's origin.
    */
   publicView?: boolean;
+  /** Told when the song's auto-accept switch is known or changes (a public view hands it to its studio). */
+  onAutoAcceptChange?: (on: boolean) => void;
   /** The server this song's channel belongs to, for the publish sheet. Null outside a channel. */
   originName?: string | null;
 }
@@ -99,6 +101,7 @@ export function JamSongPanel({
   autoplay = true,
   playNonce = 0,
   publicView = false,
+  onAutoAcceptChange,
   originName = null,
 }: JamSongPanelProps) {
   const { t } = useTranslation();
@@ -193,6 +196,7 @@ export function JamSongPanel({
     tracks,
     publicView,
     originName,
+    onAutoAcceptChange,
   });
   const requestTakes = tracks.filter((track) => pub.pendingTakeIds.has(track.id));
   const [requestBusy, setRequestBusy] = useState<string | null>(null);

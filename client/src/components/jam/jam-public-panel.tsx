@@ -36,6 +36,8 @@ export interface UseJamPublicPanelArgs {
   publicView: boolean;
   /** The channel's server, for the "shown as coming from" line and the sheet. */
   originName: string | null;
+  /** Told whenever the song's auto-accept switch is known or changes, for a sibling (the studio) that words an outside take by it. */
+  onAutoAcceptChange?: (on: boolean) => void;
 }
 
 export interface JamPublicPanelPieces {
@@ -58,7 +60,7 @@ export interface JamPublicPanelPieces {
 }
 
 export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPieces {
-  const { song, viewerId, isStarter, tracks, publicView, originName } = args;
+  const { song, viewerId, isStarter, tracks, publicView, originName, onAutoAcceptChange } = args;
   const { t } = useTranslation();
   const me = useJamPublicMe();
   const waiting = useJamPublicWaiting();
@@ -143,6 +145,9 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
   const publication = state.publication;
   // The starter's and a participant's read says it; so does the public read a visitor holds.
   const autoAccept = (publication ? publication.autoAcceptOutside : meta?.song.autoAcceptOutside) === true;
+  useEffect(() => {
+    onAutoAcceptChange?.(autoAccept);
+  }, [autoAccept, onAutoAcceptChange]);
   const on = publication !== null && ["live", "review", "hidden"].includes(publication.status);
   const canPublish = me.enabled && isStarter && me.publishing !== "blocked" && song.channelId !== null;
   const showSheet = me.enabled && isStarter && (canPublish || on);

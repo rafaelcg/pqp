@@ -601,10 +601,10 @@ export function registerJamRoutes(router: Router): void {
     ) {
       throw new HttpError(403, "Only the song's author or a moderator sets the mix");
     }
-    const updated = await updateJamTrack(track, patch);
     if (patch.inMix !== undefined && track.song_author_id === user.id) {
       await noteStarterMixDecision(track.id);
     }
+    const updated = await updateJamTrack(track, patch);
     announceIn(song.channel_id, (channelId) => ({
       type: "jam-track-updated",
       channelId,

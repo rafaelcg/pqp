@@ -817,9 +817,17 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
           admitted: true,
         });
       }
-      if (row.channel_id && admissionAnnouncer) {
-        void admissionAnnouncer(row.channel_id, row.song_id, row.track_id).catch(() => undefined);
-      }
+    }
+    const announce = admissionAnnouncer;
+    if (announce) {
+      // One at a time: a sweep can admit up to 200 takes and each frame is two
+      // reads, so they are told in a chain, never all at once. Best effort.
+      const channelRows = result.rows.filter((row) => row.channel_id !== null);
+      void (async () => {
+        for (const row of channelRows) {
+          await announce(row.channel_id!, row.song_id, row.track_id).catch(() => undefined);
+        }
+      })();
     }
     return result.rows.map((row) => row.track_id);
   } catch (error) {
@@ -832,24 +840,21 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
 }
 
 /**
- * The starter put a track in or out of the mix by hand. That is their answer
- * for this take, so auto-accept never acts on it afterwards (without this a
- * take the starter took out of the mix would be put back by the next sweep).
- * Logged, never thrown: the change already answered.
+ * The starter is putting a track in or out of the mix by hand. That is their
+ * answer for this take, so auto-accept never acts on it afterwards (without
+ * this a take the starter took out of the mix would be put back by the next
+ * sweep). Called BEFORE the mix change and allowed to throw: if this write
+ * fails the request fails and the mix is untouched, and if the mix change then
+ * fails the take merely stays a request nobody auto-accepts (the starter taps
+ * again). Never the other order, which could answer "done" with the marker
+ * missing.
  */
 export async function noteStarterMixDecision(trackId: string): Promise<void> {
-  try {
-    await getPool().query(
-      `UPDATE jam_public_tracks SET auto_admitted_at = COALESCE(auto_admitted_at, NOW())
-        WHERE track_id = $1 AND outside AND auto_admitted_at IS NULL`,
-      [trackId],
-    );
-  } catch (error) {
-    console.error(
-      `[jam-public] could not note the mix decision on ${trackId}:`,
-      error instanceof Error ? error.message : error,
-    );
-  }
+  await getPool().query(
+    `UPDATE jam_public_tracks SET auto_admitted_at = COALESCE(auto_admitted_at, NOW())
+      WHERE track_id = $1 AND outside AND auto_admitted_at IS NULL`,
+    [trackId],
+  );
 }
 
 /**
