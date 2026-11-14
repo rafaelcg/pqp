@@ -601,10 +601,14 @@ export function registerJamRoutes(router: Router): void {
     ) {
       throw new HttpError(403, "Only the song's author or a moderator sets the mix");
     }
-    if (patch.inMix !== undefined && track.song_author_id === user.id) {
-      await noteStarterMixDecision(track.id);
-    }
-    const updated = await updateJamTrack(track, patch);
+    // The starter's own hand on the mix is written in the same transaction as
+    // the change, so auto-accept can never act on a take they decided about.
+    const starterDecided = patch.inMix !== undefined && track.song_author_id === user.id;
+    const updated = await updateJamTrack(
+      track,
+      patch,
+      starterDecided ? (client) => noteStarterMixDecision(track.id, client) : undefined,
+    );
     announceIn(song.channel_id, (channelId) => ({
       type: "jam-track-updated",
       channelId,

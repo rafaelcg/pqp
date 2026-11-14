@@ -687,7 +687,10 @@ export async function noteJamTrackAdded(input: {
       // With auto-accept on, a take nothing holds is in the mix by the time
       // this returns and the starter is told THAT (the admission's own
       // notice); a held one is a request like any other until the hold clears.
-      const admitted = await admitAutoAcceptedTakes({ songId: song.id });
+      // The row read above says whether the switch is on: off, nothing is scanned.
+      const admitted = publication.auto_accept_since
+        ? await admitAutoAcceptedTakes({ songId: song.id })
+        : [];
       if (!admitted.includes(trackId)) {
         notifyJamPublic(song.author_id, {
           kind: "take",
@@ -714,9 +717,26 @@ export async function noteJamTrackAdded(input: {
  * with no socket layer (the worker) nothing is registered and nobody is told
  * live: the starter's next read has the change, and so do the channel's.
  */
-const ANNOUNCE_MAX = 20;
+/** Admission frames in flight at once. */
+export const ANNOUNCE_CONCURRENCY = 4;
 type AdmissionAnnouncer = (channelId: string, songId: string, trackId: string) => Promise<void>;
 let admissionAnnouncer: AdmissionAnnouncer | null = null;
+
+/** Tell every admitted take, at most `ANNOUNCE_CONCURRENCY` at a time. Never throws. */
+export async function announceInPool(
+  items: ReadonlyArray<{ channelId: string; songId: string; trackId: string }>,
+  announce: AdmissionAnnouncer,
+  concurrency: number = ANNOUNCE_CONCURRENCY,
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++]!;
+      await announce(item.channelId, item.songId, item.trackId).catch(() => undefined);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+}
 export function setJamTakeAdmissionAnnouncer(fn: AdmissionAnnouncer | null): void {
   admissionAnnouncer = fn;
 }
@@ -780,6 +800,7 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
           ORDER BY t.created_at, t.id
           LIMIT 200
           FOR UPDATE OF pt SKIP LOCKED
+          FOR SHARE OF p
        ),
        claimed AS (
          UPDATE jam_public_tracks pt SET auto_admitted_at = NOW()
@@ -821,15 +842,14 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
     }
     const announce = admissionAnnouncer;
     if (announce) {
-      // One at a time, and at most ANNOUNCE_MAX per call: a sweep can admit up
-      // to 200 takes and each frame is two reads. The rest are not lost, a
-      // client reads a song's tracks again when it opens it. Best effort.
-      const channelRows = result.rows.filter((row) => row.channel_id !== null).slice(0, ANNOUNCE_MAX);
-      void (async () => {
-        for (const row of channelRows) {
-          await announce(row.channel_id!, row.song_id, row.track_id).catch(() => undefined);
-        }
-      })();
+      // Every admitted take is told, through a small pool: a sweep can admit
+      // up to 200 takes and each frame is two reads, so never all at once and
+      // never dropped. Best effort (the reads are the truth).
+      const channelRows = result.rows.filter((row) => row.channel_id !== null);
+      void announceInPool(
+        channelRows.map((row) => ({ channelId: row.channel_id!, songId: row.song_id, trackId: row.track_id })),
+        announce,
+      );
     }
     return result.rows.map((row) => row.track_id);
   } catch (error) {
@@ -845,14 +865,15 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
  * The starter is putting a track in or out of the mix by hand. That is their
  * answer for this take, so auto-accept never acts on it afterwards (without
  * this a take the starter took out of the mix would be put back by the next
- * sweep). Called BEFORE the mix change and allowed to throw: if this write
- * fails the request fails and the mix is untouched, and if the mix change then
- * fails the take merely stays a request nobody auto-accepts (the starter taps
- * again). Never the other order, which could answer "done" with the marker
- * missing.
+ * sweep). It runs on the SAME transaction as the mix change
+ * (`updateJamTrack`'s `alsoInTransaction`): both commit or neither does, so a
+ * transient failure can never leave a take the starter decided about eligible
+ * for auto-admission. It takes the take's row lock first, so an admission in
+ * flight either finished before (the starter's change then wins, it is later)
+ * or skips the take.
  */
-export async function noteStarterMixDecision(trackId: string): Promise<void> {
-  await getPool().query(
+export async function noteStarterMixDecision(trackId: string, db: Db = getPool()): Promise<void> {
+  await db.query(
     `UPDATE jam_public_tracks SET auto_admitted_at = COALESCE(auto_admitted_at, NOW())
       WHERE track_id = $1 AND outside AND auto_admitted_at IS NULL`,
     [trackId],

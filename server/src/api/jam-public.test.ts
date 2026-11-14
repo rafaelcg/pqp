@@ -104,8 +104,14 @@ const { resetSharedRateLimit } = await import("../lib/cluster-rate-limit.js");
 const { resetFeatureFlagsForTests, setGlobalFlag, setServerFlagOverride, startFeatureFlags } =
   await import("../lib/flags.js");
 const { jamPlays, JamPlayCounter, jamPlayViewer } = await import("../services/jam-public-plays.js");
-const { sweepJamPublic, jamPublicTableMetrics, resetJamPublicCountersForTests, jamPublicCounters } =
-  await import("../services/jam-public.js");
+const {
+  sweepJamPublic,
+  jamPublicTableMetrics,
+  resetJamPublicCountersForTests,
+  jamPublicCounters,
+  announceInPool,
+  ANNOUNCE_CONCURRENCY,
+} = await import("../services/jam-public.js");
 const {
   processOneJamCover,
   processOneJamVideo,
@@ -1531,6 +1537,89 @@ describeDb("public jams", () => {
       expect(await publicIds(song)).not.toContain(other);
     });
 
+    const youngFrank = async () => {
+      process.env.JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS = "72";
+      await getPool().query(`UPDATE users SET created_at = NOW() - INTERVAL '30 days' WHERE id <> $1`, [frank.id]);
+    };
+    const markerOf = async (track: string) =>
+      (await getPool().query(`SELECT auto_admitted_at FROM jam_public_tracks WHERE track_id = $1`, [track])).rows[0]
+        .auto_admitted_at as Date | null;
+
+    it("the starter's mix decision and its marker commit together: a failed write rolls back both", async () => {
+      await youngFrank();
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const id = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      expect(await inMix(id)).toBe(false);
+      // The mix write fails (a trigger stands in for a transient database error) AFTER the marker write ran.
+      const pool = getPool();
+      await pool.query(`CREATE TABLE aa_fail_flag (on_ boolean)`);
+      await pool.query(`CREATE FUNCTION aa_fail_mix() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF EXISTS (SELECT 1 FROM aa_fail_flag) THEN RAISE EXCEPTION 'forced failure'; END IF; RETURN NEW; END $$`);
+      await pool.query(`CREATE TRIGGER aa_fail_mix BEFORE UPDATE ON jam_tracks FOR EACH ROW EXECUTE FUNCTION aa_fail_mix()`);
+      await pool.query(`INSERT INTO aa_fail_flag VALUES (TRUE)`);
+      try {
+        const failed = await call(eve, "PATCH", `/api/jam-tracks/${id}`, { inMix: true });
+        expect(failed.status).toBeGreaterThanOrEqual(500);
+      } finally {
+        await pool.query(`DROP TRIGGER aa_fail_mix ON jam_tracks`);
+        await pool.query(`DROP FUNCTION aa_fail_mix()`);
+        await pool.query(`DROP TABLE aa_fail_flag`);
+      }
+      // The whole decision rolled back: no marker, no mix change, and the take is still just held.
+      expect(await markerOf(id)).toBeNull();
+      expect(await inMix(id)).toBe(false);
+      // It never half-happened, so the review clearing still admits it by itself.
+      await operator("PUT", "/api/admin/jam-public/review", { kind: "track", id, decision: "approve" });
+      expect(await inMix(id)).toBe(true);
+    });
+
+    it("a decision of the starter on a held take beats the admission that comes later", async () => {
+      await youngFrank();
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const id = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      expect((await call(eve, "PATCH", `/api/jam-tracks/${id}`, { inMix: true })).status).toBe(200);
+      expect((await call(eve, "PATCH", `/api/jam-tracks/${id}`, { inMix: false })).status).toBe(200);
+      expect(await markerOf(id)).not.toBeNull();
+      await operator("PUT", "/api/admin/jam-public/review", { kind: "track", id, decision: "approve" });
+      await sweepJamPublic();
+      expect(await inMix(id)).toBe(false);
+    });
+
+    it("switching off beats an admission in flight: it waits for the toggle's lock and re-reads the switch", async () => {
+      await youngFrank();
+      const song = await openSong();
+      expect((await setAuto(eve, song, true)).status).toBe(200);
+      const id = await trackId(frank, song, "bass", { publicConsent: "yes" });
+      // The hold clears out of band: a sweep would admit this take now.
+      await getPool().query(`UPDATE jam_public_tracks SET review_state = 'approved' WHERE track_id = $1`, [id]);
+      // The starter's switch-off is mid-flight: row locked and changed, not yet committed.
+      const toggle = await getPool().connect();
+      try {
+        await toggle.query("BEGIN");
+        await toggle.query(`SELECT 1 FROM jam_public_songs WHERE song_id = $1 FOR UPDATE`, [song]);
+        await toggle.query(`UPDATE jam_public_songs SET auto_accept_since = NULL WHERE song_id = $1`, [song]);
+        let finished = false;
+        const sweep = sweepJamPublic().then((result) => {
+          finished = true;
+          return result;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        // It selected the take under the old switch and is parked on the song's lock, not committing.
+        expect(finished).toBe(false);
+        await toggle.query("COMMIT");
+        const swept = await sweep;
+        expect(swept.admitted).toBe(0);
+      } finally {
+        toggle.release();
+      }
+      expect(await inMix(id)).toBe(false);
+      await sweepJamPublic();
+      expect(await inMix(id)).toBe(false);
+      expect(await inboxIds(eve)).toEqual([id]);
+    });
+
     it("a take whose author answered no while it was held is not admitted when the hold clears", async () => {
       process.env.JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS = "72";
       await getPool().query(`UPDATE users SET created_at = NOW() - INTERVAL '30 days' WHERE id <> $1`, [frank.id]);
@@ -1712,6 +1801,33 @@ describeDb("public jams", () => {
 });
 
 // ------------------------------------------------------------------- units
+
+describe("admission announcements", () => {
+  it("tells every admitted take, a few at a time, and one failure stops nobody", async () => {
+    const items = Array.from({ length: 45 }, (_, index) => ({
+      channelId: "c",
+      songId: "s",
+      trackId: `t${index}`,
+    }));
+    let running = 0;
+    let peak = 0;
+    const told: string[] = [];
+    await announceInPool(items, async (_channel, _song, track) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      running -= 1;
+      told.push(track);
+      if (track === "t7") {
+        throw new Error("one frame failed");
+      }
+    });
+    expect(told).toHaveLength(45);
+    expect(new Set(told).size).toBe(45);
+    expect(peak).toBeLessThanOrEqual(ANNOUNCE_CONCURRENCY);
+    expect(peak).toBeGreaterThan(1);
+  });
+});
 
 describe("public jam media URLs", () => {
   it("presigned and stable inside a ten-minute window by default", () => {

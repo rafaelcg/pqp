@@ -116,6 +116,13 @@ What it does and does not do:
   the switch off and on again. A hand decision of the starter on a take
   (`PATCH inMix`) also marks it, so a take they took out is never put back.
 - Turning it off stops future admissions and removes nothing already admitted.
+  The switch-off and an admission cannot cross: the admission statement holds a
+  share lock on the song's row (`FOR SHARE OF p`) and re-reads the switch under
+  it, so a sweep that selected a take before the toggle either commits before the
+  starter is told "off" or finds it off.
+- The starter's hand on a take (`PATCH inMix`) writes its marker in the same
+  transaction as the mix change (`updateJamTrack`'s `alsoInTransaction`): both or
+  neither, so a failed write cannot leave a decided take eligible.
 - Everything is audited (`auto-accept-on`, `auto-accept-off` by the starter,
   `auto-admit` by `system`) and counted (`takesAutoAdmitted` in the process
   counters). The starter is told with the existing `jam-public-notice` frame,

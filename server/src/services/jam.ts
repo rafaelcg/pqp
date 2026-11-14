@@ -1530,35 +1530,53 @@ async function findClaimedTrack(
  * validates the trims against the STORED duration (a patch sending one of the
  * two trims is checked against the other as stored) and writes. The song is
  * bumped only when the change can alter the list row (`inMix`, offset, trims).
+ *
+ * The write, the song bump and `alsoInTransaction` (a caller's own write that
+ * must stand or fall with this edit) are ONE transaction: a failure anywhere
+ * leaves none of them.
  */
 export async function updateJamTrack(
   track: JamTrackRow,
   patch: UpdateJamTrackRequest,
+  alsoInTransaction?: (client: PoolClient) => Promise<void>,
 ): Promise<{ track: JamTrack; song: JamSongSummary }> {
   const trimStart = patch.trimStartMs ?? track.trim_start_ms;
   const trimEnd = patch.trimEndMs ?? track.trim_end_ms;
   if (trimStart + trimEnd >= track.duration_ms) {
     throw new HttpError(422, JAM_ERRORS.trimInvalid);
   }
-  const result = await getPool().query(
-    `UPDATE jam_tracks
-        SET label = $2, offset_ms = $3, trim_start_ms = $4, trim_end_ms = $5,
-            gain = $6, in_mix = $7
-      WHERE id = $1 AND deleted_at IS NULL`,
-    [
-      track.id,
-      patch.label !== undefined ? patch.label : track.label,
-      patch.offsetMs ?? track.offset_ms,
-      trimStart,
-      trimEnd,
-      patch.gain ?? track.gain,
-      patch.inMix ?? track.in_mix,
-    ],
-  );
-  if ((result.rowCount ?? 0) === 0) {
-    throw new HttpError(404, JAM_NOT_FOUND);
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    if (alsoInTransaction) {
+      await alsoInTransaction(client);
+    }
+    const result = await client.query(
+      `UPDATE jam_tracks
+          SET label = $2, offset_ms = $3, trim_start_ms = $4, trim_end_ms = $5,
+              gain = $6, in_mix = $7
+        WHERE id = $1 AND deleted_at IS NULL`,
+      [
+        track.id,
+        patch.label !== undefined ? patch.label : track.label,
+        patch.offsetMs ?? track.offset_ms,
+        trimStart,
+        trimEnd,
+        patch.gain ?? track.gain,
+        patch.inMix ?? track.in_mix,
+      ],
+    );
+    if ((result.rowCount ?? 0) === 0) {
+      throw new HttpError(404, JAM_NOT_FOUND);
+    }
+    await client.query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [track.song_id]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-  await getPool().query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [track.song_id]);
   const fresh = await getJamTrack(track.id);
   if (!fresh) {
     throw new HttpError(404, JAM_NOT_FOUND);
