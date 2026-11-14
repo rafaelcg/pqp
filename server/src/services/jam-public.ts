@@ -714,6 +714,7 @@ export async function noteJamTrackAdded(input: {
  * with no socket layer (the worker) nothing is registered and nobody is told
  * live: the starter's next read has the change, and so do the channel's.
  */
+const ANNOUNCE_MAX = 20;
 type AdmissionAnnouncer = (channelId: string, songId: string, trackId: string) => Promise<void>;
 let admissionAnnouncer: AdmissionAnnouncer | null = null;
 export function setJamTakeAdmissionAnnouncer(fn: AdmissionAnnouncer | null): void {
@@ -820,9 +821,10 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
     }
     const announce = admissionAnnouncer;
     if (announce) {
-      // One at a time: a sweep can admit up to 200 takes and each frame is two
-      // reads, so they are told in a chain, never all at once. Best effort.
-      const channelRows = result.rows.filter((row) => row.channel_id !== null);
+      // One at a time, and at most ANNOUNCE_MAX per call: a sweep can admit up
+      // to 200 takes and each frame is two reads. The rest are not lost, a
+      // client reads a song's tracks again when it opens it. Best effort.
+      const channelRows = result.rows.filter((row) => row.channel_id !== null).slice(0, ANNOUNCE_MAX);
       void (async () => {
         for (const row of channelRows) {
           await announce(row.channel_id!, row.song_id, row.track_id).catch(() => undefined);
