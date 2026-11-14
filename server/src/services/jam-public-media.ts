@@ -13,13 +13,16 @@ import { isStorageConfigured, presignGet } from "../lib/s3.js";
  *
  *  - SET (e.g. `https://media.pqp.gg`): `<base>/jam-media/<token>?e=<exp>&s=<sig>`,
  *    for an edge Worker on a pqp.gg hostname that serves the bytes from the
- *    bucket. The owner wants this so Cloudflare's zone-level CSAM scanning
- *    sees public jam bytes, which it cannot on the bucket's own endpoint.
+ *    bucket (`tools/jam-media-edge/`). The owner wants this so the bytes pass
+ *    through our zone, the precondition for Cloudflare's zone-level CSAM
+ *    scanning, which cannot see the bucket's own endpoint. That tool is
+ *    documented for images only: audio stays unscanned either way
+ *    (docs/CONTENT_SAFETY.md, docs/JAM_PUBLIC.md).
  *    `<token>` is the object key ENCRYPTED, so the URL names nothing: a
  *    channel song's key is `jam/<server id>/...`, and a presigned URL shows
  *    it (the origin server's id, even when the starter hid the origin); the
- *    edge URL does not. The Worker is NOT in this PR. What it must do, all of
- *    it, before serving:
+ *    edge URL does not. The Worker is `tools/jam-media-edge/`; what it does, all of
+ *    it, before serving, and what its tests pin:
  *
  *      1. `e` is an integer of unix seconds that is not in the past;
  *      2. `s` equals base64url(HMAC-SHA256(S, `${token}\n${e}`)), compared in
@@ -33,8 +36,10 @@ import { isStorageConfigured, presignGet } from "../lib/s3.js";
  *      5. only GET and HEAD, honouring `Range` (the audio engine and `<video>`
  *         both ask for ranges), with `Cache-Control` no longer than until `e`.
  *
- *    `verifyJamPublicMediaSignature` below is the server-side twin of that
- *    check, so the mint and the verify live together and a test pins both.
+ *    `openJamPublicMediaUrl` below is the server-side twin of that check, so
+ *    the mint and the verify live together and a test pins both, and
+ *    `jam-public-media-edge.test.ts` pins the exact URLs the Worker's own
+ *    tests open (tools/jam-media-edge/test/golden.json).
  *
  * Either way a URL is good for at least 50 minutes (`ttl` 60 minutes from the
  * start of its ten-minute window), and `mediaExpiresAt` says until when.

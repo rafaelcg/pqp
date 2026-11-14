@@ -176,7 +176,7 @@ the right to delete their own take.
 |---|---|---|---|
 | Cover | **yes** | the existing image scanner (`CONTENT_SCAN_PROVIDER`), on the worker, once per picture | it passed |
 | Camera video of a part | **yes** | ffmpeg samples the first frame, then one every 5 s (at most 24); each frame goes through the same scanner. Only a process with ffmpeg claims the job | every frame passed |
-| Audio | **no** | nothing here listens to audio | (never checked) |
+| Audio | **no** | nothing here listens to audio, and Cloudflare's CSAM Scanning Tool is not documented to cover audio either (see [the edge Worker](#media-urls-and-the-edge-seam)) | (never checked) |
 | Titles, artists, labels | the built-in text filter is not applied | | |
 
 - With **no provider configured** the cover and the video are recorded
@@ -308,20 +308,53 @@ song), the bound for a shared cache in front.
 **Known limit:** with media served as presigned URLs (the default), a channel
 song's object keys are `jam/<server id>/...` and the URL shows them, so the
 origin server's id is readable in a media URL even when the starter hid the
-origin. The edge path below encrypts the key and closes this.
+origin. The edge Worker below encrypts the key and closes this.
 
 ### Media URLs and the edge seam
 
 Media URLs are short-lived GETs (good for at least 50 minutes, identical inside a
 ten-minute window so a shared cache can hold a page). Today they are presigned
 bucket URLs. `JAM_PUBLIC_MEDIA_BASE_URL` (unset by default) switches them to
-`<base>/jam-media/<token>?e=<exp>&s=<sig>`, for an edge Worker on a pqp.gg
-hostname, so Cloudflare's zone-level CSAM scanning sees public jam bytes. The
-Worker is not built yet. What it must check is written in
-`server/src/services/jam-public-media.ts` (the signature, the expiry, decrypting
-the token to a `jam/` key, GET and HEAD with ranges only), and
-`openJamPublicMediaUrl` there is the reference implementation the tests pin. The
-Worker holds the derived secret as `JAM_PUBLIC_MEDIA_SECRET`, never the Clerk key.
+`<base>/jam-media/<token>?e=<exp>&s=<sig>`, for the edge Worker in
+`tools/jam-media-edge/` (its README is the deploy and rollback runbook). The
+token is the object key encrypted, so the URL names nothing, and the Worker
+accepts exactly this shape: setting the variable is the only switch, unsetting
+it is the rollback. The Worker checks the signature, the expiry and that the
+decrypted key is under `jam/`, then serves GET and HEAD with ranges from the
+bucket through the colo cache. It holds the derived secret as
+`JAM_PUBLIC_MEDIA_SECRET`, never the Clerk key, and
+`openJamPublicMediaUrl` in `jam-public-media.ts` is the reference it ports, pinned
+on both sides by `tools/jam-media-edge/test/golden.json`.
+
+**A removal reaches the Worker only as the URL's expiry.** The API stops handing
+out a removed song's or part's URL at once; a URL already out works until its
+own `e`, so an unpublish, a withdrawn consent, a removed part, a block or a
+quarantine stops being served **within 60 minutes**; an object deleted from the
+bucket within 10 minutes (the Worker's cache lifetime). The Worker's
+`MEDIA_SERVING=off` switch is the faster lever for an emergency.
+
+#### What this does and does not do for scanning
+
+The reason the Worker exists is that Cloudflare's CSAM Scanning Tool works on
+content served through a zone's cache, which a bucket's own endpoint is not.
+Read against Cloudflare's documentation (2026-11-14), and no further than it goes:
+
+- **Public audio stays unscanned.** The tool's documentation names images and
+  never mentions audio, and nothing of ours listens to audio. The Worker changes
+  nothing about that.
+- **Video is not documented as covered.** Our own control is the ffmpeg frame
+  sampling in the table above.
+- **Covers** are scanned by our image scanner before they are public; the
+  Cloudflare tool, if it applies, adds a hash-list check of the same pictures.
+- **Whether the Worker's cached responses are in the tool's scope is not
+  confirmed**: the documentation says nothing about Workers or the Cache API.
+  The runbook (README step 4.3) asks Cloudflare support. Until it is answered
+  in writing, the tool is not to be described as covering public jams.
+- It is a serving-path control: a daily email with file paths and a block "if
+  possible". It cannot stop bytes landing in R2.
+
+The Worker has one effect that is not about scanning: it closes the known limit
+above, because the encrypted token hides the origin server's id.
 
 ## In the app
 
@@ -360,7 +393,11 @@ votes on public songs (the contract has none).
 2. Check `CONTENT_SCAN_PROVIDER` is set on the API and the worker, and the worker
    image has ffmpeg (`<sha>-worker`). Without them covers and videos stay
    private (honest, but the site looks bare).
-3. Controles → interruptores → `jam_public`, or
+3. Optional, and before the flip rather than after: the edge media Worker
+   (`tools/jam-media-edge/README.md`, deploy, the Cloudflare dashboard steps,
+   then `JAM_PUBLIC_MEDIA_BASE_URL` on the API). It is not a prerequisite, and
+   it does not make audio scanned (above).
+4. Controles → interruptores → `jam_public`, or
    `PUT /api/admin/flags { key: "jam_public", enabled: true }`. Global, no
    restart. The website reads `GET /api/public/jams/config`.
 
@@ -411,6 +448,7 @@ and refusals by limit (`rateLimited`) and by address bucket (`addressRefused`).
 | `server/src/services/jam-public-scan.ts` | Cover and video scans, quarantine |
 | `server/src/services/jam-public-plays.ts` | The play counter |
 | `server/src/services/jam-public-media.ts` | Media URLs and the edge seam |
+| `tools/jam-media-edge/` | The edge Worker (R2 binding, colo cache, ranges); README is its runbook |
 | `server/src/services/jam-public-notify.ts` | The `jam-public-notice` frame |
 | `server/src/api/jam-public-routes.ts` | Public, authenticated and operator routes |
 | `server/src/api/jam-routes.ts` | The private routes, with public access |

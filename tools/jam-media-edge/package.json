@@ -1,0 +1,21 @@
+{
+  "name": "@pqp/jam-media-edge",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Cloudflare Worker that serves public jam media (audio, video, covers) from R2 on a hostname on our zone, so it is cached at the edge on our zone",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --env=\"\"",
+    "check": "tsc --noEmit",
+    "pretest": "tsc -p tsconfig.test-build.json",
+    "test": "node --test test/*.test.mjs",
+    "dry-run": "wrangler deploy --env=\"\" --dry-run --outdir .wrangler/dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261106.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.158.0"
+  }
+}

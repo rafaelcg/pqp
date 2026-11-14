@@ -173,9 +173,10 @@ import {
  * song's `mediaExpiresAt` (an hour at most, and stable for ten minutes so a
  * shared cache can hold a page). Today they are presigned object-store URLs.
  * With `JAM_PUBLIC_MEDIA_BASE_URL` set they are
- * `<base>/jam-media/<object key>?e=<unix seconds>&s=<signature>` instead, for a
- * pqp.gg hostname whose edge Worker checks the signature and serves the bytes
- * (so a zone-level scanner sees them). A client treats both as opaque URLs.
+ * `<base>/jam-media/<token>?e=<unix seconds>&s=<signature>` instead, where the
+ * token is the object key encrypted (`tools/jam-media-edge/`, a Worker on a
+ * pqp.gg hostname that checks the signature and serves the bytes through our
+ * zone). A client treats both as opaque URLs.
  *
  * -------------------------------------------------------------------------
  * THE FLAG

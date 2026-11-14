@@ -204,6 +204,19 @@ jobs:
       - name: Test HLS edge playlist token check
         run: node --test tools/hls-edge/test/*.test.mjs
 
+      # `tools/jam-media-edge`, the public jam media Worker, is outside the
+      # workspace for the same reasons. Its tests import the compiled `dist/`
+      # (`npm run pretest` builds it) and pin the URL scheme against
+      # `test/golden.json`, which the server's
+      # `jam-public-media-edge.test.ts` also pins: a drift on either side
+      # fails here or there, never in production as "every public jam is
+      # silent". See `tools/jam-media-edge/README.md`.
+      - name: Build and test jam media edge
+        working-directory: tools/jam-media-edge
+        run: |
+          npm install
+          npm test
+
       # The one test that opens the desktop app.
       #
       # Every other Electron test in this repo is a unit test of a helper, so
