@@ -27,6 +27,7 @@ import {
   scanReportReason,
   type ScanResult,
 } from "./content-scan.js";
+import { admitAutoAcceptedTakes } from "./jam-public.js";
 import { createAutomatedInstanceReport } from "./reports.js";
 
 /**
@@ -775,6 +776,10 @@ export async function processOneJamVideo(): Promise<
     // Written first, guarded by this claim (see the cover path).
     if (!(await finishVideo(claimed, verdict, result, paths.length))) {
       return "retry";
+    }
+    if (verdict === "passed") {
+      // The hold an auto-accepting song's take was waiting on just cleared.
+      await admitAutoAcceptedTakes({ songId: claimed.song_id });
     }
     if (verdict === "rejected" || verdict === "flagged") {
       await escalate({

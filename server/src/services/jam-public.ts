@@ -98,6 +98,8 @@ const counters = {
   likes: 0,
   takesRecorded: 0,
   takesQueuedForReview: 0,
+  /** Outside takes auto-accept put in the mix (this process). */
+  takesAutoAdmitted: 0,
   songsQueuedForReview: 0,
   rateLimited: { songs: 0, takes: 0, likes: 0, reports: 0 },
   /** Refusals of the public routes' address buckets (`jam-public-routes.ts`). */
@@ -211,6 +213,7 @@ interface PublicationRow {
   first_published_at: Date;
   published_by: string | null;
   show_origin: boolean;
+  auto_accept_since: Date | null;
   review_state: JamPublicReview;
   reviewed_at: Date | null;
   hidden_at: Date | null;
@@ -528,16 +531,49 @@ export async function unpublishJamSong(input: {
   return getPublication(song.id);
 }
 
-/** `PATCH /api/jam-songs/:songId/public`: show or hide the origin server. */
-export async function setJamPublicShowOrigin(songId: string, showOrigin: boolean): Promise<JamPublication> {
-  const result = await getPool().query(
-    `UPDATE jam_public_songs SET show_origin = $2 WHERE song_id = $1`,
-    [songId, showOrigin],
-  );
-  if ((result.rowCount ?? 0) === 0) {
-    throw new HttpError(404, JAM_NOT_FOUND);
-  }
-  return requirePublication(songId);
+/**
+ * `PATCH /api/jam-songs/:songId/public`: show or hide the origin server, turn
+ * auto-accept of outside takes on or off. The route checked the starter and
+ * the flag. Each field is optional and a field that does not change anything
+ * writes nothing (turning auto-accept on while it is on keeps the moment it
+ * went on, which is what decides which takes it covers).
+ */
+export async function updateJamPublicSettings(input: {
+  song: JamSongRow;
+  userId: string;
+  showOrigin?: boolean;
+  autoAcceptOutside?: boolean;
+}): Promise<JamPublication> {
+  const { song, userId } = input;
+  await withTransaction(async (client) => {
+    const current = await client.query<{ auto_accept_since: Date | null }>(
+      `SELECT auto_accept_since FROM jam_public_songs WHERE song_id = $1 FOR UPDATE`,
+      [song.id],
+    );
+    if ((current.rowCount ?? 0) === 0) {
+      throw new HttpError(404, JAM_NOT_FOUND);
+    }
+    const wasOn = current.rows[0]!.auto_accept_since !== null;
+    const flips = input.autoAcceptOutside !== undefined && input.autoAcceptOutside !== wasOn;
+    await client.query(
+      `UPDATE jam_public_songs
+          SET show_origin = COALESCE($2::boolean, show_origin),
+              auto_accept_since = CASE WHEN $3::boolean THEN NOW()
+                                       WHEN $4::boolean THEN NULL
+                                       ELSE auto_accept_since END
+        WHERE song_id = $1`,
+      [song.id, input.showOrigin ?? null, flips && input.autoAcceptOutside === true, flips && input.autoAcceptOutside === false],
+    );
+    if (flips) {
+      await audit(client, {
+        action: input.autoAcceptOutside ? "auto-accept-on" : "auto-accept-off",
+        songId: song.id,
+        userId,
+        actor: { kind: "starter", userId },
+      });
+    }
+  });
+  return requirePublication(song.id);
 }
 
 // ---------------------------------------------------------------- consent
@@ -564,6 +600,10 @@ export async function setJamPublicConsent(input: {
     throw new HttpError(403, JAM_PUBLIC_ERRORS.noPart);
   }
   await upsertConsent(getPool(), song.id, userId, choice);
+  if (choice !== "no") {
+    // A take held only by its author's missing yes can go in now.
+    await admitAutoAcceptedTakes({ songId: song.id });
+  }
   return getPublication(song.id);
 }
 
@@ -644,12 +684,21 @@ export async function noteJamTrackAdded(input: {
       counters.takesQueuedForReview += 1;
     }
     if (input.outside && song.author_id && song.author_id !== userId) {
-      notifyJamPublic(song.author_id, {
-        kind: "take",
-        songId: song.id,
-        title: song.title,
-        trackId,
-      });
+      // With auto-accept on, a take nothing holds is in the mix by the time
+      // this returns and the starter is told THAT (the admission's own
+      // notice); a held one is a request like any other until the hold clears.
+      // The row read above says whether the switch is on: off, nothing is scanned.
+      const admitted = publication.auto_accept_since
+        ? await admitAutoAcceptedTakes({ songId: song.id })
+        : [];
+      if (!admitted.includes(trackId)) {
+        notifyJamPublic(song.author_id, {
+          kind: "take",
+          songId: song.id,
+          title: song.title,
+          trackId,
+        });
+      }
     }
   } catch (error) {
     console.error(
@@ -657,6 +706,178 @@ export async function noteJamTrackAdded(input: {
       error instanceof Error ? error.message : error,
     );
   }
+}
+
+// ----------------------------------------------------------- auto-accept
+
+/**
+ * What the server does to the channel's open clients after it puts a take in
+ * the mix. Registered by `api/jam-routes.ts` (the frame is a chat-socket
+ * concern, and this service does not import the socket layer). On a process
+ * with no socket layer (the worker) nothing is registered and nobody is told
+ * live: the starter's next read has the change, and so do the channel's.
+ */
+/** Admission frames in flight at once. */
+export const ANNOUNCE_CONCURRENCY = 4;
+type AdmissionAnnouncer = (channelId: string, songId: string, trackId: string) => Promise<void>;
+let admissionAnnouncer: AdmissionAnnouncer | null = null;
+
+/** Tell every admitted take, at most `ANNOUNCE_CONCURRENCY` at a time. Never throws. */
+export async function announceInPool(
+  items: ReadonlyArray<{ channelId: string; songId: string; trackId: string }>,
+  announce: AdmissionAnnouncer,
+  concurrency: number = ANNOUNCE_CONCURRENCY,
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++]!;
+      await announce(item.channelId, item.songId, item.trackId).catch(() => undefined);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+}
+export function setJamTakeAdmissionAnnouncer(fn: AdmissionAnnouncer | null): void {
+  admissionAnnouncer = fn;
+}
+
+/**
+ * AUTO-ACCEPT (packages/shared/src/jam-public.ts, AUTO-ACCEPT). Puts into the
+ * mix every outside take whose song has the switch on and that nothing of the
+ * platform still holds, and returns their track ids. Idempotent and safe on two
+ * processes at once: ONE statement claims the rows (`FOR UPDATE SKIP LOCKED`,
+ * `auto_admitted_at` set in the same statement that sets `in_mix`), so a take is
+ * admitted once, by one process, and never again after the starter or an
+ * operator changed their mind about it.
+ *
+ * The checks are the reads' own (`publicTrackSql` without "in the mix",
+ * `PUBLIC_SONG_SQL`) plus the two that only matter before a take is admitted:
+ * its video, when it has one, passed the frame scan, and the song's current
+ * picture was not flagged or rejected. Whatever holds a take (a new account's
+ * review, the scanner, an operator's removal, the daily take limit, a hidden or
+ * unpublished song) leaves it waiting for the starter, and this runs again when
+ * the hold clears: after an operator's approval, after a passing scan, and from
+ * the minute sweep (the backstop for everything else, a consent turned back to
+ * yes, a block lifted, a restart in the middle of any of it).
+ *
+ * Never throws: the caller already answered. With the flag off nothing is
+ * admitted (nothing is public).
+ */
+export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): Promise<string[]> {
+  if (!jamPublicEnabled()) {
+    return [];
+  }
+  try {
+    const result = await getPool().query<{
+      track_id: string;
+      song_id: string;
+      channel_id: string | null;
+      author_id: string | null;
+      title: string;
+    }>(
+      `WITH due AS (
+         SELECT pt.track_id
+           FROM jam_public_tracks pt
+           JOIN jam_tracks t ON t.id = pt.track_id
+           JOIN jam_public_songs p ON p.song_id = pt.song_id
+           JOIN jam_songs s ON s.id = pt.song_id
+           JOIN users su ON su.id = s.author_id
+          WHERE ($1::uuid IS NULL OR pt.song_id = $1::uuid)
+            AND p.auto_accept_since IS NOT NULL
+            AND t.created_at >= p.auto_accept_since
+            AND pt.outside
+            AND pt.auto_admitted_at IS NULL
+            AND pt.removed_at IS NULL
+            AND pt.review_state IN ('none', 'approved')
+            AND pt.video_scan_status IN ('none', 'passed')
+            AND NOT t.in_mix
+            AND ${PUBLIC_SONG_SQL}
+            AND ${publicTrackSql("t", false)}
+            AND NOT EXISTS (
+              SELECT 1 FROM jam_song_covers sc
+                JOIN jam_public_cover_scans cs ON cs.upload_id = sc.upload_id
+               WHERE sc.song_id = s.id AND cs.status IN ('flagged', 'rejected'))
+          ORDER BY t.created_at, t.id
+          LIMIT 200
+          FOR UPDATE OF pt SKIP LOCKED
+          FOR SHARE OF p
+       ),
+       claimed AS (
+         UPDATE jam_public_tracks pt SET auto_admitted_at = NOW()
+           FROM due
+          WHERE pt.track_id = due.track_id AND pt.auto_admitted_at IS NULL
+          RETURNING pt.track_id, pt.song_id
+       ),
+       mixed AS (
+         UPDATE jam_tracks t SET in_mix = TRUE
+           FROM claimed
+          WHERE t.id = claimed.track_id AND t.deleted_at IS NULL AND NOT t.in_mix
+          RETURNING t.id AS track_id, t.song_id
+       ),
+       bumped AS (
+         UPDATE jam_songs SET updated_at = NOW()
+          WHERE id IN (SELECT song_id FROM mixed)
+          RETURNING id
+       ),
+       logged AS (
+         INSERT INTO jam_public_audit (action, song_id, track_id, actor_kind)
+         SELECT 'auto-admit', m.song_id, m.track_id, 'system' FROM mixed m
+         RETURNING id
+       )
+       SELECT m.track_id, m.song_id, s.channel_id, s.author_id, s.title
+         FROM mixed m JOIN jam_songs s ON s.id = m.song_id`,
+      [scope.songId ?? null],
+    );
+    for (const row of result.rows) {
+      counters.takesAutoAdmitted += 1;
+      if (row.author_id) {
+        notifyJamPublic(row.author_id, {
+          kind: "take",
+          songId: row.song_id,
+          title: row.title,
+          trackId: row.track_id,
+          admitted: true,
+        });
+      }
+    }
+    const announce = admissionAnnouncer;
+    if (announce) {
+      // Every admitted take is told, through a small pool: a sweep can admit
+      // up to 200 takes and each frame is two reads, so never all at once and
+      // never dropped. Best effort (the reads are the truth).
+      const channelRows = result.rows.filter((row) => row.channel_id !== null);
+      void announceInPool(
+        channelRows.map((row) => ({ channelId: row.channel_id!, songId: row.song_id, trackId: row.track_id })),
+        announce,
+      );
+    }
+    return result.rows.map((row) => row.track_id);
+  } catch (error) {
+    console.error(
+      "[jam-public] auto-accept failed:",
+      error instanceof Error ? error.message : error,
+    );
+    return [];
+  }
+}
+
+/**
+ * The starter is putting a track in or out of the mix by hand. That is their
+ * answer for this take, so auto-accept never acts on it afterwards (without
+ * this a take the starter took out of the mix would be put back by the next
+ * sweep). It runs on the SAME transaction as the mix change
+ * (`updateJamTrack`'s `alsoInTransaction`): both commit or neither does, so a
+ * transient failure can never leave a take the starter decided about eligible
+ * for auto-admission. It takes the take's row lock first, so an admission in
+ * flight either finished before (the starter's change then wins, it is later)
+ * or skips the take.
+ */
+export async function noteStarterMixDecision(trackId: string, db: Db = getPool()): Promise<void> {
+  await db.query(
+    `UPDATE jam_public_tracks SET auto_admitted_at = COALESCE(auto_admitted_at, NOW())
+      WHERE track_id = $1 AND outside AND auto_admitted_at IS NULL`,
+    [trackId],
+  );
 }
 
 /**
@@ -751,6 +972,7 @@ interface PublicSongRow {
   published_cursor: string;
   plays_count: string;
   likes_count: number;
+  auto_accept_outside: boolean;
   starter_name: string;
   starter_handle: string | null;
   starter_avatar: string | null;
@@ -784,6 +1006,7 @@ const PUBLIC_SONG_SELECT = `
   SELECT s.id, s.title, s.artist, s.join_mode, s.wanted_instruments,
          s.created_at, s.updated_at,
          p.published_at, p.plays_count::text AS plays_count, p.likes_count,
+         (p.auto_accept_since IS NOT NULL) AS auto_accept_outside,
          to_char(p.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS published_cursor,
          su.display_name AS starter_name, su.handle AS starter_handle, su.avatar_url AS starter_avatar,
          sv.name AS origin_name, sv.icon_url AS origin_icon,
@@ -858,6 +1081,7 @@ function mapPublicSong(row: PublicSongRow, nowMs: number): PublicJamSong {
         ? sortedInstruments(row.wanted_instruments.filter((one) => !present.has(one)))
         : [],
     plays: Number(row.plays_count),
+    autoAcceptOutside: row.auto_accept_outside === true,
     likes: row.likes_count,
     startedBy: { name: row.starter_name, handle: row.starter_handle, avatarUrl: row.starter_avatar },
     origin: row.origin_name
@@ -1179,6 +1403,7 @@ export async function getPublication(songId: string): Promise<JamPublication | n
       publicVideo: on && part.is_public_video,
     })),
     pendingTakes: parts.rows.filter((part) => part.outside === true && !part.in_mix).length,
+    autoAcceptOutside: row.auto_accept_since !== null,
   };
 }
 
@@ -1804,6 +2029,10 @@ export async function adminReviewJam(
         reason: body.reason ?? null,
       });
     }
+    if (body.decision === "approve") {
+      // Takes that only waited for the song's own review go in now.
+      await admitAutoAcceptedTakes({ songId: body.id });
+    }
     return { ok: true };
   }
   const track = await getPool().query<{ song_id: string; author_id: string; title: string }>(
@@ -1836,6 +2065,10 @@ export async function adminReviewJam(
     trackId: body.id,
     reason: body.reason ?? null,
   });
+  if (body.decision === "approve") {
+    // The hold that was this operator's decision just cleared.
+    await admitAutoAcceptedTakes({ songId: row.song_id });
+  }
   return { ok: true };
 }
 
@@ -1920,8 +2153,9 @@ export async function adminBlockJamPublisher(
  *    later). A channel song outlives its author, as it always did.
  *  - play marks older than three hours are deleted (the dedupe only needs the
  *    current hour).
+ *  - outside takes that auto-accept can now admit are admitted (`admitAutoAcceptedTakes`).
  */
-export async function sweepJamPublic(): Promise<{ orphans: number; playMarks: number }> {
+export async function sweepJamPublic(): Promise<{ orphans: number; playMarks: number; admitted: number }> {
   const orphans = await getPool().query<{ id: string }>(
     `SELECT id FROM jam_songs
       WHERE channel_id IS NULL AND author_id IS NULL AND deleted_at IS NULL
@@ -1937,7 +2171,11 @@ export async function sweepJamPublic(): Promise<{ orphans: number; playMarks: nu
     `DELETE FROM jam_public_play_marks
       WHERE hour_bucket < floor(EXTRACT(EPOCH FROM NOW()) / 3600)::int - 3`,
   );
-  return { orphans: deleted, playMarks: marks.rowCount ?? 0 };
+  // The backstop of auto-accept: whatever held an outside take cleared without
+  // a hook of its own (a block lifted, a scan that finished on another
+  // process, a restart in the middle of an admission).
+  const admitted = (await admitAutoAcceptedTakes()).length;
+  return { orphans: deleted, playMarks: marks.rowCount ?? 0, admitted };
 }
 
 // -------------------------------------------------------------- metrics

@@ -40,8 +40,13 @@ The public version holds only the parts that are allowed to be there:
   starter that arrives through public access (somebody who is not in the song's
   channel, or any take on a standalone song) is created out of the mix: a
   request in the starter's inbox (`GET /api/jam-public/inbox`). The starter puts
-  it in with one action (`PATCH /api/jam-tracks/:id { inMix: true }`) and can
-  remove any part.
+  it in with one action (`PATCH /api/jam-tracks/:id { inMix: true }`), or turns on
+  auto-accept for the song and the server does it once the platform's checks
+  clear. The starter can remove any part either way.
+- **Auto-accept.** A per-song switch of the starter, default off, no expiry
+  (`PATCH /api/jam-songs/:songId/public { autoAcceptOutside: true }`,
+  `jam_public_songs.auto_accept_since`). It replaces the starter's tap and
+  nothing else, see [Auto-accept](#auto-accept-of-outside-takes).
 - **Review.** A new account's first public jam and its takes on public jams wait
   for an operator (below).
 - **Scans.** The cover and each part's video are public only after the scanner
@@ -63,6 +68,7 @@ The public version holds only the parts that are allowed to be there:
 | Answer for a part | the part's author |
 | Record a part on a public jam | any account, through the ordinary three upload steps; the song's `joinMode` still applies |
 | Put an outside take in the mix, remove any part | the starter |
+| Turn auto-accept of outside takes on or off | its starter, for that song only |
 | Take a song down, remove a part, review, block | an operator |
 | Like, report | any signed-in account |
 
@@ -71,6 +77,62 @@ an operator blocked, an account being deleted, and, on a channel song, an accoun
 banned from its server. A song whose starter is blocked, banned from the origin,
 being deleted or gone is not public; a part whose author is blocked or being
 deleted is not public.
+
+### Auto-accept of outside takes
+
+Decision D3 of the Jam marketing plan. A song's starter may let outside takes in
+without tapping Accept. The switch is per song, default off, and has no expiry;
+it is not a list of accounts. It lives in the song's public settings sheet
+("Música pública"), which the starter reaches from the song's `...` menu or the
+status line under the title, and turning it **on** asks first, in plain words
+(`jam.public.autoAccept.confirmBody`). Turning it off needs no question.
+
+What it does and does not do:
+
+- It only replaces the starter's own tap (`in_mix = true`). Every platform gate
+  still applies, because the admission asks the reads' own rule
+  (`publicTrackSql(t, false)`, `PUBLIC_SONG_SQL`) and then a few more:
+  the take is not removed (an operator, the daily take limit), is not waiting
+  for review (a new account's take, `JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS`), its
+  author's answer is still a yes or "só o áudio", the song is public and not
+  hidden by reports, unpublished, blocked or banned from its origin, its video
+  (when it has one) **passed** the frame scan (so `pending`, `flagged`,
+  `rejected`, `unscanned` and `skipped` all hold it, which means no scanner, no
+  auto-accept for a take with a video), and the song's current picture is not
+  flagged or rejected.
+- Whatever holds a take leaves it in the starter's inbox exactly as before, and
+  the take is admitted by itself when the hold clears: after an operator's
+  approval (`adminReviewJam`), after a passing video scan
+  (`jam-public-scan.ts`), when its author answers yes again, and from the
+  minute sweep (`sweepJamPublic`), which is the backstop for everything without
+  a hook of its own (a restart in the middle of any of it, a block lifted).
+- Only takes recorded **after** the switch went on are covered
+  (`auto_accept_since`); the requests already waiting keep waiting for a person.
+- A take is admitted **once** (`jam_public_tracks.auto_admitted_at`, set in the
+  same statement that sets `in_mix`, one claiming statement with
+  `FOR UPDATE SKIP LOCKED`, so two processes cannot both do it). After that it
+  is an ordinary part: the starter taking it out of the mix or deleting it, or
+  an operator removing it (`remove-part`), stays that way, and so does turning
+  the switch off and on again. A hand decision of the starter on a take
+  (`PATCH inMix`) also marks it, so a take they took out is never put back.
+- Turning it off stops future admissions and removes nothing already admitted.
+  The switch-off and an admission cannot cross: the admission statement holds a
+  share lock on the song's row (`FOR SHARE OF p`) and re-reads the switch under
+  it, so a sweep that selected a take before the toggle either commits before the
+  starter is told "off" or finds it off.
+- The starter's hand on a take (`PATCH inMix`) writes its marker in the same
+  transaction as the mix change (`updateJamTrack`'s `alsoInTransaction`): both or
+  neither, so a failed write cannot leave a decided take eligible.
+- Everything is audited (`auto-accept-on`, `auto-accept-off` by the starter,
+  `auto-admit` by `system`) and counted (`takesAutoAdmitted` in the process
+  counters). The starter is told with the existing `jam-public-notice` frame,
+  kind `take`, `admitted: true`; the channel's open clients get the same
+  `jam-track-updated` the starter's tap would have sent (the worker process has
+  no socket layer and does not announce, the next read has it).
+- The song page says it is on: `PublicJamSong.autoAcceptOutside` (the list and
+  the detail, so jam.pqp.gg shows a line under "Como entra uma parte"), the
+  starter's status line, and what an outside recorder is told in the studio.
+  `jam.pqp.gg` never offers the switch; it is the starter's, in the app.
 
 ### Where a standalone song lives
 
@@ -269,7 +331,7 @@ that predates it: no menu entry, no strip, no shelf, no toast.
 
 | Where | What | Code |
 |---|---|---|
-| A song's `...` menu (its starter, channel song) | "Tornar pública", a sheet that says what becomes public (audio, video when allowed, names), the show-origin switch; once public the same entry is "Música pública": status, who answered what, outside requests waiting, unpublish | `jam-public-sheet.tsx`, `hooks/use-jam-publication.ts` |
+| A song's `...` menu (its starter, channel song) | "Tornar pública", a sheet that says what becomes public (audio, video when allowed, names), the show-origin switch; once public the same entry is "Música pública": status, who answered what, outside requests waiting, the show-origin switch, the auto-accept switch ("Aceitar partes de fora sozinho", asks before turning on), unpublish | `jam-public-sheet.tsx`, `hooks/use-jam-publication.ts` |
 | The Jam wall | a quiet row when songs wait for the person's answer (`/consents`) or outside takes wait for them (`/inbox`); each opens a dialog | `jam-public-waiting.tsx` |
 | A song with a part of mine, made public | the three answers (pode ir, só o áudio, não) in the song itself too | `jam-public-parts.tsx`, `jam-public-panel.tsx` |
 | The starter's song | "Pedidos de fora": outside takes listed apart from the band; "Ouvir com a banda" is the lane audition (in place of the same instrument, the rest playing), then Aceitar (`inMix: true`) or Recusar (delete) | `JamPublicRequests` |
@@ -345,7 +407,7 @@ and refusals by limit (`rateLimited`) and by address bucket (`addressRefused`).
 |---|---|
 | `packages/shared/src/jam-public.ts` | The contract |
 | `server/src/services/jam-public-sql.ts` | What "public" means, as SQL, once |
-| `server/src/services/jam-public.ts` | Publish, consent, reads, likes, reports, review, operator, sweep, metrics |
+| `server/src/services/jam-public.ts` | Publish, consent, reads, likes, reports, review, operator, sweep, metrics, auto-accept (`admitAutoAcceptedTakes`) |
 | `server/src/services/jam-public-scan.ts` | Cover and video scans, quarantine |
 | `server/src/services/jam-public-plays.ts` | The play counter |
 | `server/src/services/jam-public-media.ts` | Media URLs and the edge seam |

@@ -7949,5 +7949,19 @@
   "jam.public.outside.sendPart": "Mandar minha parte",
   "jam.public.outside.sendHint": "Quem começou a jam decide se ela entra na mix.",
   "jam.public.waiting.consentOne": "\"{title}\" virou pública com parte tua.",
-  "jam.public.waiting.takeOne": "Tem uma parte esperando tua resposta em \"{title}\"."
+  "jam.public.waiting.takeOne": "Tem uma parte esperando tua resposta em \"{title}\".",
+  "jam.public.sheet.autoAccept": "Aceitar partes de fora sozinho",
+  "jam.public.sheet.autoAcceptHint": "A parte de quem é de fora entra na mix sem tu tocar em Aceitar, depois de passar pelas checagens da plataforma.",
+  "jam.public.autoAccept.confirmTitle": "Aceitar partes de fora sozinho?",
+  "jam.public.autoAccept.confirmBody": "A partir de agora, a parte que alguém de fora gravar nessa música entra na mix sem tu aceitar. Ela só entra depois de passar pela revisão e pelo scan da plataforma (conta nova, vídeo, denúncias). O que já está esperando continua esperando tu. Tu pode tirar qualquer parte quando quiser e desligar isso a qualquer hora. Desligar não tira o que já entrou.",
+  "jam.public.autoAccept.confirmOn": "Ligar",
+  "jam.public.autoAccept.confirmCancel": "Agora não",
+  "jam.public.status.autoAccept": "Aceita partes de fora sozinha",
+  "jam.public.status.autoAcceptPublic": "Essa jam aceita partes de fora sozinha.",
+  "jam.public.requests.hintAuto": "Gente de fora mandou essas partes. Elas entram sozinhas quando a revisão da plataforma terminar, ou tu aceita agora.",
+  "jam.public.outside.waitingAuto": "Tua parte chegou. Ela entra na mix quando quem começou a jam aceitar, ou sozinha, depois da revisão da plataforma.",
+  "jam.public.outside.sendHintAuto": "Essa jam aceita partes de fora sozinha, depois da revisão da plataforma.",
+  "jam.public.studio.outsideAuto": "Essa jam é pública e aceita partes de fora sozinha. Se tua gravação passar pela revisão da plataforma, ela entra na mix, com teu nome.",
+  "jam.public.studio.doneOutsideAuto": "Mandamos. Quando passar pela revisão da plataforma, ela entra na mix sozinha.",
+  "jam.public.notice.takeAdmitted": "Uma parte nova entrou sozinha em \"{title}\"."
 }

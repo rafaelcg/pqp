@@ -87,6 +87,8 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
   const detail = songId ? held.details[songId] : undefined;
 
   const [load, setLoad] = useState<"loading" | "ready" | "gone" | "error">("loading");
+  // The starter's auto-accept switch, reported by the song panel (which already reads the song), for what the studio tells an outside take.
+  const [autoAccept, setAutoAccept] = useState(false);
   const [tries, setTries] = useState(0);
   const intentRef = useRef<JamIntent | null>(null);
   const handledIntent = useRef<string | null>(null);
@@ -289,6 +291,7 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
           freshTrackId={freshTrackId}
           autoplay={false}
           publicView
+          onAutoAcceptChange={setAutoAccept}
           onRecord={(instrument) => record(instrument)}
           onClose={onClose}
         />
@@ -304,6 +307,7 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
           songDeleted={false}
           addable={detail?.viewer.addableInstruments ?? [studio.instrument]}
           initialInstrument={studio.instrument}
+          autoAcceptOutside={autoAccept}
           publicAccess
           onClose={() => setStudio(null)}
           onLeaveToWall={() => setStudio(null)}

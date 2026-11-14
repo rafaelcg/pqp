@@ -66,6 +66,7 @@ export function JamPublicSheet({ open, onClose, songId, viewerId, songTitle, ori
 
   const answer = useConsentAnswer(answerConsent);
   const [confirmOff, setConfirmOff] = useState(false);
+  const [confirmAuto, setConfirmAuto] = useState(false);
   const errorText = error ? t(`jam.public.error.${error}` as MessageKey) : null;
 
   if (!on) {
@@ -223,6 +224,22 @@ export function JamPublicSheet({ open, onClose, songId, viewerId, songTitle, ori
             </div>
           )}
 
+          {pub.status !== "removed" && (
+            <div className="rounded-[var(--radius-card)] bg-surface-2 px-2 py-1" data-jam-auto-accept={pub.autoAcceptOutside ? "on" : "off"}>
+              <Switch
+                checked={pub.autoAcceptOutside}
+                busy={busy}
+                onCheckedChange={(next) => {
+                  // Turning it on says what it does first; turning it off needs no question.
+                  if (next) setConfirmAuto(true);
+                  else void state.setAutoAccept(false);
+                }}
+                label={t("jam.public.sheet.autoAccept")}
+                description={t("jam.public.sheet.autoAcceptHint")}
+              />
+            </div>
+          )}
+
           {pub.plays > 0 && (
             <p className="text-[13px]" data-jam-public-numbers="">
               {t("jam.public.plays", { count: pub.plays, countLabel: pub.plays })}
@@ -237,6 +254,19 @@ export function JamPublicSheet({ open, onClose, songId, viewerId, songTitle, ori
         </div>
       </DialogBody>
     </Dialog>
+    <ConfirmDialog
+      open={confirmAuto}
+      title={t("jam.public.autoAccept.confirmTitle")}
+      description={t("jam.public.autoAccept.confirmBody")}
+      confirmLabel={t("jam.public.autoAccept.confirmOn")}
+      destructive={false}
+      cancelLabel={t("jam.public.autoAccept.confirmCancel")}
+      onClose={() => setConfirmAuto(false)}
+      onConfirm={() => {
+        setConfirmAuto(false);
+        void state.setAutoAccept(true);
+      }}
+    />
     <ConfirmDialog
       open={confirmOff}
       title={t("jam.public.manage.offTitle")}

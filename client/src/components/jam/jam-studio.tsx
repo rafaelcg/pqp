@@ -82,6 +82,8 @@ export interface JamStudioProps {
    * person's consent, and a new song is a standalone public jam.
    */
   publicAccess?: boolean;
+  /** The song's starter lets outside takes in by themselves (changes what an outside take is told). */
+  autoAcceptOutside?: boolean;
 }
 
 export function JamStudio({
@@ -100,6 +102,7 @@ export function JamStudio({
   onStay,
   onPosted,
   publicAccess = false,
+  autoAcceptOutside = false,
 }: JamStudioProps) {
   const { t, locale } = useTranslation();
   const backing = useMemo(() => tracks.filter((track) => track.inMix), [tracks]);
@@ -755,7 +758,11 @@ export function JamStudio({
                   {studio.publicTake && (
                     <div data-jam-public-take="" className="flex flex-col gap-1 rounded-[var(--radius-card)] bg-surface-1 px-4 py-2.5 ring-1 ring-inset ring-border">
                       <p className="text-[13px] font-semibold leading-snug text-text-secondary">
-                        {outsideTake ? t("jam.public.studio.outside") : t("jam.public.studio.public")}
+                        {outsideTake
+                          ? autoAcceptOutside
+                            ? t("jam.public.studio.outsideAuto")
+                            : t("jam.public.studio.outside")
+                          : t("jam.public.studio.public")}
                       </p>
                       {studio.take?.video && (
                         <Switch
@@ -821,7 +828,9 @@ export function JamStudio({
               studio.swapFailed
                 ? t("jam.post.swapFailed")
                 : outsideTake
-                  ? t("jam.public.studio.doneOutside")
+                  ? autoAcceptOutside
+                    ? t("jam.public.studio.doneOutsideAuto")
+                    : t("jam.public.studio.doneOutside")
                   : t("jam.post.doneBody")
             }
             action={t("jam.post.view")}

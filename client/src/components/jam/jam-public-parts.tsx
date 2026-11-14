@@ -83,7 +83,9 @@ export function JamPublicRequests({
   onListen,
   onAccept,
   onDecline,
+  autoAccept = false,
 }: {
+  autoAccept?: boolean;
   takes: readonly JamTrack[];
   auditioning: string | null;
   playing: boolean;
@@ -106,7 +108,9 @@ export function JamPublicRequests({
           {t("jam.public.requests.count", { count: takes.length, countLabel: takes.length })}
         </span>
       </div>
-      <p className="text-[13px] leading-snug text-text-secondary">{t("jam.public.requests.hint")}</p>
+      <p className="text-[13px] leading-snug text-text-secondary" data-jam-requests-hint={autoAccept ? "auto" : "manual"}>
+        {autoAccept ? t("jam.public.requests.hintAuto") : t("jam.public.requests.hint")}
+      </p>
       <ul className="flex flex-col divide-y divide-border rounded-[var(--radius-card)] bg-surface-2">
         {takes.map((track) => {
           const look = JAM_INSTRUMENT_LOOK[track.instrument];

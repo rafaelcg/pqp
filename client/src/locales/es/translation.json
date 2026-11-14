@@ -8021,5 +8021,19 @@
   "jam.public.outside.sendPart": "Enviar mi parte",
   "jam.public.outside.sendHint": "Quien empezó la jam decide si entra en la mezcla.",
   "jam.public.waiting.consentOne": "\"{title}\" se hizo pública con una parte tuya.",
-  "jam.public.waiting.takeOne": "Una parte espera tu respuesta en \"{title}\"."
+  "jam.public.waiting.takeOne": "Una parte espera tu respuesta en \"{title}\".",
+  "jam.public.sheet.autoAccept": "Aceptar partes de afuera solo",
+  "jam.public.sheet.autoAcceptHint": "La parte de alguien de afuera entra en la mezcla sin que toques Aceptar, cuando pase los controles de la plataforma.",
+  "jam.public.autoAccept.confirmTitle": "¿Aceptar partes de afuera solo?",
+  "jam.public.autoAccept.confirmBody": "Desde ahora, la parte que alguien de afuera grabe en esta canción entra en la mezcla sin que la aceptes. Solo entra después de pasar la revisión y el escaneo de la plataforma (cuentas nuevas, video, denuncias). Lo que ya está esperando sigue esperando tu respuesta. Puedes quitar cualquier parte cuando quieras y apagar esto en cualquier momento. Apagarlo no quita lo que ya entró.",
+  "jam.public.autoAccept.confirmOn": "Activar",
+  "jam.public.autoAccept.confirmCancel": "Ahora no",
+  "jam.public.status.autoAccept": "Acepta partes de afuera solo",
+  "jam.public.status.autoAcceptPublic": "Esta jam deja entrar partes de afuera por su cuenta.",
+  "jam.public.requests.hintAuto": "Gente de afuera envió estas partes. Entran solas cuando termine la revisión de la plataforma, o puedes aceptarlas ahora.",
+  "jam.public.outside.waitingAuto": "Tu parte llegó. Entra en la mezcla cuando quien empezó la jam la acepte, o sola, después de la revisión de la plataforma.",
+  "jam.public.outside.sendHintAuto": "Esta jam deja entrar partes de afuera por su cuenta, después de la revisión de la plataforma.",
+  "jam.public.studio.outsideAuto": "Esta jam es pública y deja entrar partes de afuera por su cuenta. Si tu grabación pasa la revisión de la plataforma, entra en la mezcla, con tu nombre.",
+  "jam.public.studio.doneOutsideAuto": "Enviado. Cuando pase la revisión de la plataforma, entra en la mezcla sola.",
+  "jam.public.notice.takeAdmitted": "Una parte nueva entró sola en \"{title}\"."
 }

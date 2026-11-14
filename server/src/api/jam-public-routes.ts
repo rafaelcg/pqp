@@ -53,8 +53,8 @@ import {
   requireJamPublicOn,
   setJamPublicConsent,
   setJamPublicLike,
-  setJamPublicShowOrigin,
   unpublishJamSong,
+  updateJamPublicSettings,
   type JamPublicActor,
 } from "../services/jam-public.js";
 import { jamPlays, jamPlayViewer } from "../services/jam-public-plays.js";
@@ -373,7 +373,14 @@ export function registerJamPublicRoutes(router: Router): void {
       throw new HttpError(403, JAM_PUBLIC_ERRORS.notStarter);
     }
     const body = updateJamPublicationSchema.parse(await readJsonBody(req));
-    return { publication: await setJamPublicShowOrigin(song.id, body.showOrigin) } satisfies JamPublicationResponse;
+    return {
+      publication: await updateJamPublicSettings({
+        song,
+        userId: user.id,
+        showOrigin: body.showOrigin,
+        autoAcceptOutside: body.autoAcceptOutside,
+      }),
+    } satisfies JamPublicationResponse;
   });
 
   // Unpublish: the starter, or a moderator of the origin channel (with an
