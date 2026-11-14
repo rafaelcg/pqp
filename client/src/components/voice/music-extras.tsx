@@ -3,6 +3,8 @@ import {
   ExternalLink,
   HeadphoneOff,
   Headphones,
+  ArrowDown,
+  ArrowUp,
   ListStart,
   Infinity as InfinityIcon,
   MoreHorizontal,
@@ -16,6 +18,20 @@ import {
   Volume2,
   X,
 } from "lucide-react";
+import {
+  CaretRight as CaretRightGlyph,
+  DotsThree,
+  ArrowCounterClockwise as PlayAgainGlyph,
+  Shuffle as ShuffleGlyph,
+} from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
+import {
+  MUSIC_COVER_REDESIGN,
+  MUSIC_ICON_REDESIGN,
+  MUSIC_LABEL_REDESIGN,
+  MUSIC_ROW_STILL_REDESIGN,
+  MUSIC_TEXT_REDESIGN,
+} from "@/components/voice/music-classes";
 import type { MusicRepeat, MusicState, MusicTrack } from "@pqp/shared";
 import { musicSkipVotesNeeded } from "@pqp/shared";
 import { musicRelatedTracks } from "@/lib/music-related";
@@ -74,8 +90,10 @@ function repeatLabel(t: (key: MessageKey) => string, repeat: MusicRepeat): strin
   return t("music.repeat.off");
 }
 
-const ghostIcon =
-  "h-8 w-8 shrink-0 text-text-tertiary hover:bg-surface-2 hover:text-text";
+const ghostIcon = cn(
+  "h-8 w-8 shrink-0 text-text-tertiary hover:bg-surface-2 hover:text-text",
+  MUSIC_ICON_REDESIGN,
+);
 
 export function MusicRepeatButton({
   repeat,
@@ -185,7 +203,7 @@ export function MusicShuffleButton({
         disabled={disabled}
         onClick={() => shuffle()}
       >
-        <Shuffle className="h-4 w-4" aria-hidden="true" />
+        <IconSwap off={Shuffle} on={ShuffleGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
       </Button>
     </Tooltip>
   );
@@ -500,7 +518,7 @@ export function MusicOverflowMenu({
           className={triggerClassName}
           aria-label={t("music.overflow")}
         >
-          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+          <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" size="sm" offClassName="h-4 w-4" />
         </button>
       </Menu>
       <ConfirmDialog
@@ -595,12 +613,29 @@ export function MusicHistoryList({
           composer
             ? "text-text-secondary hover:text-text"
             : "text-paper-muted hover:text-paper",
+          MUSIC_LABEL_REDESIGN,
+          "redesign:rounded-[var(--radius-control)] redesign:px-1.5 redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text",
         )}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <span>{t("music.history")}</span>
-        <span className="tabular-nums">{history.length}</span>
+        {/* Under the redesign the count sits inline like "A seguir · 3", and a
+            trailing caret says the heading opens. */}
+        <span>
+          <span className="redesign:hidden">{t("music.history")}</span>
+          <span className="hidden redesign:inline">
+            {t("memberList.sectionHeading", { label: t("music.history"), count: history.length })}
+          </span>
+        </span>
+        <span className="tabular-nums redesign:hidden">{history.length}</span>
+        {/* In a 32px slot, so the caret sits on the row menus' column. */}
+        <span className="hidden w-8 shrink-0 justify-center redesign:flex">
+          <CaretRightGlyph
+            weight="bold"
+            aria-hidden
+            className={cn("h-3 w-3 transition-transform", open && "rotate-90")}
+          />
+        </span>
       </button>
       {open ? (
         <ol className="max-h-40 space-y-0.5 overflow-y-auto">
@@ -610,12 +645,20 @@ export function MusicHistoryList({
               className={cn(
                 "group/row flex items-center gap-2 rounded-md px-1 py-1",
                 composer ? "hover:bg-surface-3" : "hover:bg-ink-3",
+                MUSIC_ROW_STILL_REDESIGN,
               )}
             >
+              {/* The cover under the redesign, so a played song shares the queue's title column. */}
+              <span className={cn("relative hidden h-8 w-8 shrink-0 overflow-hidden redesign:block", MUSIC_COVER_REDESIGN)}>
+                {track.thumbnailUrl ? (
+                  <img src={track.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+                ) : null}
+              </span>
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-sm",
                   composer ? "text-text" : "text-paper",
+                  MUSIC_TEXT_REDESIGN,
                 )}
                 title={track.title}
               >
@@ -627,11 +670,11 @@ export function MusicHistoryList({
                   variant="ghost"
                   size="icon"
                   data-music-play-again=""
-                  className="h-8 w-8 shrink-0"
+                  className={cn("h-8 w-8 shrink-0", MUSIC_ICON_REDESIGN)}
                   aria-label={t("music.playAgain")}
                   onClick={() => readdFromHistory(track.id)}
                 >
-                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  <IconSwap off={Plus} on={PlayAgainGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
                 </Button>
               </Tooltip>
             </li>
@@ -648,17 +691,32 @@ export function queueRowMenuItems(input: {
   canRemove: boolean;
   href: string;
   openLabel: string;
-  onPlayNext: () => void;
+  /** Left out under the redesign for the song that already plays next. */
+  onPlayNext?: () => void;
   onRemove: () => void;
+  /**
+   * One step up or down, for a phone where dragging does nothing. Passed
+   * only under the redesign; each is left out at its end of the queue.
+   */
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 }): ContextMenuItemDef[] {
   const items: ContextMenuItemDef[] = [];
   if (input.canManage) {
-    items.push({
-      id: "play-next",
-      label: input.t("music.playNext"),
-      icon: ListStart,
-      onSelect: input.onPlayNext,
-    });
+    if (input.onPlayNext) {
+      items.push({
+        id: "play-next",
+        label: input.t("music.playNext"),
+        icon: ListStart,
+        onSelect: input.onPlayNext,
+      });
+    }
+    if (input.onMoveUp) {
+      items.push({ id: "move-up", label: input.t("music.moveUp"), icon: ArrowUp, onSelect: input.onMoveUp });
+    }
+    if (input.onMoveDown) {
+      items.push({ id: "move-down", label: input.t("music.moveDown"), icon: ArrowDown, onSelect: input.onMoveDown });
+    }
   }
   if (input.canRemove) {
     items.push({

@@ -1,6 +1,8 @@
 import { createContext, useContext } from "react";
+import { Hand as HandFill } from "@phosphor-icons/react";
 import { Hand } from "lucide-react";
 import { raisedHandQueue, type RaisedHandPerson } from "@pqp/shared";
+import { IconSwap } from "@/components/ui/icon";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -51,6 +53,8 @@ export function HandPositionBadge({
   const classes = cn(
     "flex shrink-0 items-center gap-0.5 font-semibold tabular-nums text-signal",
     className,
+    // Lime is too light for a mark on the light pane: the accent's text step.
+    "redesign:text-accent-text",
   );
   if (onLower) {
     const label = lowerLabel ?? t("voice.hand.lower");
@@ -73,7 +77,7 @@ export function HandPositionBadge({
             onLower();
           }}
         >
-          <Hand aria-hidden="true" className="h-3 w-3" />
+          <IconSwap off={Hand} on={HandFill} offClassName="h-3 w-3" className="h-3.5 w-3.5" />
           {position}
         </button>
       </Tooltip>
@@ -86,7 +90,7 @@ export function HandPositionBadge({
       data-hand-position={position}
       className={classes}
     >
-      <Hand aria-hidden="true" className="h-3 w-3" />
+      <IconSwap off={Hand} on={HandFill} offClassName="h-3 w-3" className="h-3.5 w-3.5" />
       {position}
     </span>
   );

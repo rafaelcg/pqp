@@ -3415,11 +3415,16 @@ describeDb("API authorization", () => {
      * writes so that the people around them read it, and it is bounded plain
      * text. Everything this guard is really for still holds, which is that no
      * clerk id, email, presence or last-seen may appear here.
+     *
+     * `handle` is on it too: it is public by definition (it is the address of
+     * the account's public page) and the profile card needs it from a friend
+     * row or a conversation.
      */
     const PUBLIC_KEYS = [
       "avatarUrl",
       "customStatus",
       "displayName",
+      "handle",
       "id",
       "tag",
       "username",
@@ -3528,6 +3533,7 @@ describeDb("API authorization", () => {
         "blockedAt",
         "customStatus",
         "displayName",
+        "handle",
         "id",
         "tag",
         "username",

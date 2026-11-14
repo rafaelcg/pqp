@@ -1,11 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { CaretRight } from "@phosphor-icons/react";
 import { ChevronRight } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
 import type { Channel, ForumSort, VoiceRoomTransport } from "@pqp/shared";
 import {
   isVoiceRoomChannelType,
   SLOWMODE_SECONDS_PRESETS,
 } from "@pqp/shared";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import {
@@ -24,6 +27,7 @@ import {
   type VoiceRoomSizeOption,
 } from "@/lib/channel-meta";
 import { cn } from "@/lib/utils";
+import { SETTINGS_CARD_REDESIGN } from "@/components/settings/kit/classes";
 import type { RecipeKind } from "@/lib/speak-recipe";
 
 const SLOWMODE_PRESET_KEYS: Record<number, MessageKey> = {
@@ -83,8 +87,11 @@ export function voiceRouteReasonKey(reason: string): MessageKey | null {
   return VOICE_ROUTE_REASON_KEYS.get(reason) ?? null;
 }
 
-const fieldClass =
-  "h-11 rounded-xl border-ink-4/70 bg-ink text-[15px] focus-visible:ring-signal/40";
+const fieldClass = cn(
+  "h-11 rounded-xl border-ink-4/70 bg-ink text-[15px] focus-visible:ring-signal/40",
+  // Under the redesign: the input's well, edge and ring.
+  "redesign:h-[var(--control-md)] redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:text-sm redesign:text-text redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]",
+);
 
 function SettingsGroup({
   title,
@@ -100,16 +107,16 @@ function SettingsGroup({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-2xl bg-ink-3/70 px-4 py-3.5">
+    <section className={cn("rounded-2xl bg-ink-3/70 px-4 py-3.5", SETTINGS_CARD_REDESIGN, "redesign:p-4")}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-[15px] font-semibold leading-tight tracking-tight text-paper">
+          <h3 className="text-[15px] font-semibold leading-tight tracking-tight text-paper redesign:text-text">
             {title}
           </h3>
           {hint && (
             <p
               id={hintId}
-              className="mt-0.5 text-[13px] leading-snug text-paper-muted"
+              className="mt-0.5 text-[13px] leading-snug text-paper-muted redesign:text-text-secondary"
             >
               {hint}
             </p>
@@ -234,7 +241,7 @@ export function ChannelOverviewSection({
     : null;
 
   return (
-    <div className="space-y-3.5">
+    <div className="space-y-3.5 redesign:space-y-4">
       <SettingsGroup
         title={t("channelSettings.name")}
         hint={t("channelSettings.nameHint")}
@@ -242,7 +249,7 @@ export function ChannelOverviewSection({
         <div className="flex items-center gap-3">
           <button
             type="button"
-            className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-ink text-lg ring-1 ring-ink-4 hover:ring-signal/50"
+            className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-ink text-lg ring-1 ring-ink-4 hover:ring-signal/50 redesign:h-[var(--control-md)] redesign:w-[var(--control-md)] redesign:text-base redesign:rounded-[var(--radius-control)] redesign:bg-[color:var(--input-bg)] redesign:ring-[color:var(--input-border)] redesign:hover:ring-[color:var(--input-hover-border)]"
             aria-expanded={iconOpen}
             aria-label={t("channelSettings.changeIcon")}
             onClick={() => onIconOpenChange(!iconOpen)}
@@ -380,7 +387,7 @@ export function ChannelOverviewSection({
                 : t("channelMeta.slowMode.hint")
           }
         >
-          <select
+          <Select
             value={String(draft.slowmodeSeconds)}
             aria-label={
               isForum ? t("forum.settings.slowMode") : t("channelMeta.slowMode")
@@ -401,7 +408,7 @@ export function ChannelOverviewSection({
                 {t(slowModeOptionKey(seconds), { seconds })}
               </option>
             ))}
-          </select>
+          </Select>
         </SettingsGroup>
       )}
 
@@ -410,7 +417,7 @@ export function ChannelOverviewSection({
           title={t("channelMeta.voiceRoomSize")}
           hint={t("channelMeta.voiceRoomSize.hint")}
         >
-          <select
+          <Select
             value={draft.voiceRoomSize}
             aria-label={t("channelMeta.voiceRoomSize")}
             className={cn(
@@ -429,7 +436,7 @@ export function ChannelOverviewSection({
                 {t(VOICE_ROOM_SIZE_KEYS[option])}
               </option>
             ))}
-          </select>
+          </Select>
         </SettingsGroup>
       )}
 
@@ -475,7 +482,7 @@ export function ChannelOverviewSection({
       )}
 
       {(showPrivateBridge || showRecipeBridge) && (
-        <div className="overflow-hidden rounded-2xl bg-ink-3/70">
+        <div className={cn("overflow-hidden rounded-2xl bg-ink-3/70", SETTINGS_CARD_REDESIGN, "redesign:divide-y")}>
           {showPrivateBridge && (
             <BridgeRow
               label={t("channelSettings.bridge.private")}
@@ -530,13 +537,13 @@ function BridgeRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-ink-3/80"
+      className={cn("flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-ink-3/80 redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-focus-ring")}
     >
-      <span className="min-w-0 flex-1 text-[15px] text-paper">{label}</span>
-      <span className="max-w-[45%] truncate text-[13px] text-paper-muted">
+      <span className="min-w-0 flex-1 text-[15px] text-paper redesign:text-sm redesign:text-text">{label}</span>
+      <span className="max-w-[45%] truncate text-[13px] text-paper-muted redesign:text-text-secondary">
         {value}
       </span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
+      <IconSwap off={ChevronRight} on={CaretRight} kind="symbol" size="sm" offClassName="h-4 w-4 shrink-0 text-paper-muted" className="text-text-tertiary" />
     </button>
   );
 }

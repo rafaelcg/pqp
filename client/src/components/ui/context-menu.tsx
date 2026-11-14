@@ -1,4 +1,5 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
+import { Plus as PhPlus } from "@phosphor-icons/react";
 import { type LucideIcon } from "lucide-react";
 import {
   useCallback,
@@ -11,6 +12,7 @@ import {
 import { horizontalShiftIntoView } from "@/lib/context-menu-placement";
 import { cn } from "@/lib/utils";
 import {
+  MENU_SURFACE,
   MenuItemRows,
   type MenuItemComponentProps,
   type MenuSeparatorComponentProps,
@@ -214,7 +216,8 @@ export function ContextMenu({
           // `translateY(14px)` over 650ms, so the menu spends half a second
           // visibly detached from the point it is anchored to.
           className={cn(
-            "elevation-3 z-[100] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto overscroll-contain rounded-[var(--radius-card)] p-1 animate-fade-in",
+            MENU_SURFACE,
+            "z-[100] max-h-[var(--radix-context-menu-content-available-height)]",
             // The strip sets the width: it is a fixed number of equal cells
             // laid out in a row, and a menu narrower than their natural width
             // would wrap them back into the column this exists to kill.
@@ -241,7 +244,7 @@ export function ContextMenu({
                     onSelect={reaction.onSelect}
                     data-quick-reaction=""
                     className={cn(
-                      "flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-[var(--radius-control)] text-base leading-none outline-none data-[highlighted]:bg-surface-2",
+                      "flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-[var(--menu-row-radius,var(--radius-control))] text-base leading-none outline-none redesign:h-[var(--menu-strip-h)] redesign:text-lg data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))]",
                       reaction.active && "bg-accent/15 ring-1 ring-accent/40",
                     )}
                   >
@@ -253,13 +256,16 @@ export function ContextMenu({
                     aria-label={moreReactionsLabel}
                     onSelect={onMoreReactions}
                     data-quick-reaction-more=""
-                    className="flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-[var(--radius-control)] border border-dashed border-border text-sm leading-none text-text-tertiary outline-none data-[highlighted]:bg-surface-2 data-[highlighted]:text-text"
+                    className="flex h-8 flex-1 redesign:h-[var(--menu-strip-h)] cursor-default select-none items-center justify-center rounded-[var(--menu-row-radius,var(--radius-control))] border border-dashed border-[color:var(--menu-more-edge,var(--color-border))] text-sm leading-none text-text-tertiary outline-none data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))] data-[highlighted]:text-text"
                   >
-                    <span aria-hidden="true">+</span>
+                    <span aria-hidden="true" className="redesign:hidden">+</span>
+                    <PhPlus aria-hidden="true" weight="bold" className="hidden size-4 redesign:block" />
                   </ContextMenuPrimitive.Item>
                 )}
               </div>
-              {items.length > 0 && <div className="mb-1 h-px bg-border" />}
+              {items.length > 0 && (
+                <div className="mb-1 redesign:mb-1.5 h-px bg-[color:var(--menu-separator,var(--color-border))]" />
+              )}
             </>
           )}
           <MenuItemRows

@@ -352,3 +352,21 @@ export function conversationUnreadTotals(
     { count: 0, mentions: 0 },
   );
 }
+
+/**
+ * Ids of conversations that are ringing but not in the list this device holds.
+ *
+ * A first call from somebody the account has never talked to rings before the
+ * conversation exists on this side: the server made it for the caller and sent
+ * the callee only the ring. The app fetches the list when this is non-empty,
+ * and again before opening the thread on answer.
+ */
+export function unknownRingingConversationIds(
+  ringing: readonly { conversationId: string }[],
+  conversations: readonly Pick<DmSummary, "channelId">[],
+): string[] {
+  const known = new Set(conversations.map((one) => one.channelId));
+  return ringing
+    .map((call) => call.conversationId)
+    .filter((conversationId) => !known.has(conversationId));
+}

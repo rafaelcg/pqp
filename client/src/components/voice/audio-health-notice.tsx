@@ -68,6 +68,7 @@ export function AudioHealthNotice({
             size="sm"
             className="rounded-full px-4"
             onClick={onRepair}
+            data-cta
             data-audio-health-repair={shown}
           >
             {t("voice.audioHealth.repair")}

@@ -1,6 +1,8 @@
+import { Check as CheckBold } from "@phosphor-icons/react";
 import { Check } from "lucide-react";
 import { SETTINGS_BUSY } from "@/components/settings/kit/classes";
 import { Button } from "@/components/ui/button";
+import { IconSwap } from "@/components/ui/icon";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -108,19 +110,30 @@ export function UnsavedChangesBar({
         <div
           className={cn(
             "pointer-events-auto mx-auto w-full max-w-[40rem] animate-pop-in rounded-[var(--radius-card)]",
-            blocked && !settled && "border border-danger",
+            // Under the redesign the red edge is the bar's own border (below),
+            // so a refused close never draws two edges.
+            blocked && !settled && "border border-danger redesign:border-0",
           )}
         >
           <div
             data-unsaved-bar=""
-            className="elevation-2 flex w-full flex-wrap items-center gap-3 rounded-[var(--radius-card)] px-4 py-3"
+            className={cn(
+              "elevation-2 flex w-full flex-wrap items-center gap-3 rounded-[var(--radius-card)] px-4 py-3",
+              blocked && !settled && "redesign:[--elevation-2-border:var(--color-danger)]",
+            )}
           >
             {/* `min-w-40`: on a phone the buttons wrap under the message rather
                 than squeezing it into a column of single words. */}
             <div className="min-w-40 flex-1">
               <p className="flex items-center gap-1.5 text-sm text-text">
                 {settled ? (
-                  <Check aria-hidden className="h-4 w-4 shrink-0 text-success" />
+                  <IconSwap
+                    off={Check}
+                    on={CheckBold}
+                    kind="symbol"
+                    offClassName="h-4 w-4 shrink-0 text-success"
+                    className="text-success"
+                  />
                 ) : null}
                 {message}
               </p>

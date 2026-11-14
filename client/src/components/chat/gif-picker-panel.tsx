@@ -1,5 +1,5 @@
 import type { Gif } from "@pqp/shared";
-import { Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import poweredByKlipyBlackUrl from "@/assets/klipy/powered-by-klipy-black.svg?url";
 import poweredByKlipyWhiteUrl from "@/assets/klipy/powered-by-klipy-white.svg?url";
@@ -8,6 +8,8 @@ import { useTheme } from "@/hooks/use-theme";
 import { fetchTrendingGifs, searchGifs } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { POPOVER_SURFACE } from "@/components/ui/popover";
+import { Spinner } from "@/components/ui/spinner";
 
 interface GifPickerPanelProps {
   onSelect: (gif: Gif) => void;
@@ -155,7 +157,8 @@ export function GifPickerPanel({
     <div
       ref={panelRef}
       className={cn(
-        "elevation-3 animate-rise z-50 flex h-[22rem] w-[21rem] flex-col overflow-hidden rounded-[var(--radius-card)]",
+        POPOVER_SURFACE,
+        "animate-rise z-50 flex h-[22rem] w-[21rem] flex-col overflow-hidden",
         className,
       )}
     >
@@ -176,7 +179,7 @@ export function GifPickerPanel({
           className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder:text-text-muted focus:outline-none"
         />
         {status === "loading" && (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-text-muted" />
+          <Spinner className="h-3.5 w-3.5 shrink-0 animate-spin text-text-muted" />
         )}
       </div>
 

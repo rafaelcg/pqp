@@ -12,9 +12,26 @@ import {
   FileVideo,
   ImageOff,
 } from "lucide-react";
+import {
+  DownloadSimple,
+  File as FileGlyph,
+  FileAudio as FileAudioGlyph,
+  FileText as FileTextGlyph,
+  FileVideo as FileVideoGlyph,
+  ImageBroken,
+  type Icon as Glyph,
+} from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ImageLightbox } from "@/components/chat/image-lightbox";
 import { VoiceNoteCard, type VoiceNoteMessage } from "@/components/chat/voice-note-card";
+import {
+  CONTENT_CARD_FOCUS_REDESIGN,
+  CONTENT_CARD_HOVER_REDESIGN,
+  CONTENT_CARD_REDESIGN,
+  CONTENT_GLYPH_TILE_REDESIGN,
+  CONTENT_MEDIA_REDESIGN,
+} from "@/components/ui/content-card";
+import { Icon as PhosphorIcon } from "@/components/ui/icon";
 import { fetchAttachmentUrl } from "@/lib/api";
 import { formatByteSize } from "@/lib/attachments";
 import { translateMessage } from "@/lib/i18n";
@@ -178,6 +195,9 @@ function ImageTile({
       className={cn(
         "block overflow-hidden rounded-md border border-ink-4 bg-ink-3/40 transition-colors hover:border-signal/60 focus-visible:border-signal focus-visible:outline-none",
         !box && "max-w-full",
+        CONTENT_MEDIA_REDESIGN,
+        "redesign:hover:border-[color:var(--color-border-strong)] redesign:focus-visible:border-transparent",
+        CONTENT_CARD_FOCUS_REDESIGN,
       )}
     >
       <img
@@ -232,7 +252,7 @@ function VideoTile({ attachment }: { attachment: Attachment }) {
   }
 
   return (
-    <div className="max-w-full overflow-hidden rounded-md border border-ink-4 bg-ink-3/40">
+    <div className={cn("max-w-full overflow-hidden rounded-md border border-ink-4 bg-ink-3/40", CONTENT_MEDIA_REDESIGN)}>
       <video
         src={src}
         controls
@@ -242,7 +262,7 @@ function VideoTile({ attachment }: { attachment: Attachment }) {
         style={{ maxHeight: `${MAX_TILE_HEIGHT_PX}px` }}
         className="block w-auto max-w-full"
       />
-      <div className="truncate px-2 py-1 text-xs text-text-muted">
+      <div className="truncate px-2 py-1 text-xs text-text-muted redesign:px-3 redesign:py-1.5 redesign:text-text-secondary">
         {attachment.filename}
       </div>
     </div>
@@ -273,7 +293,7 @@ function AudioTile({ attachment }: { attachment: Attachment }) {
   }
 
   return (
-    <div className="w-72 max-w-full rounded-md border border-ink-4 bg-ink-3/40 p-2">
+    <div className={cn("w-72 max-w-full rounded-md border border-ink-4 bg-ink-3/40 p-2", CONTENT_CARD_REDESIGN, "redesign:p-2.5")}>
       <audio
         src={src}
         controls
@@ -281,7 +301,7 @@ function AudioTile({ attachment }: { attachment: Attachment }) {
         onError={handleError}
         className="block w-full"
       />
-      <div className="truncate pt-1 text-xs text-text-muted">
+      <div className="truncate pt-1 text-xs text-text-muted redesign:px-1 redesign:pt-1.5 redesign:text-text-secondary">
         {attachment.filename}
       </div>
     </div>
@@ -301,6 +321,19 @@ function typeIcon(contentType: string) {
   return FileIcon;
 }
 
+function typeGlyph(contentType: string): Glyph {
+  if (contentType.startsWith("video/")) {
+    return FileVideoGlyph;
+  }
+  if (contentType.startsWith("audio/")) {
+    return FileAudioGlyph;
+  }
+  if (contentType === "application/pdf" || contentType.startsWith("text/")) {
+    return FileTextGlyph;
+  }
+  return FileGlyph;
+}
+
 function DownloadChip({
   attachment,
   unavailable = false,
@@ -309,6 +342,7 @@ function DownloadChip({
   unavailable?: boolean;
 }) {
   const Icon = unavailable ? ImageOff : typeIcon(attachment.contentType);
+  const glyph = unavailable ? ImageBroken : typeGlyph(attachment.contentType);
 
   return (
     <a
@@ -319,18 +353,33 @@ function DownloadChip({
       // tab on our own origin. This is here for the filename it suggests.
       download={attachment.filename}
       rel="noopener noreferrer"
-      className="flex max-w-[20rem] items-center gap-2.5 rounded-md border border-ink-4 bg-ink-3/60 px-3 py-2 text-sm text-paper transition-colors hover:border-signal/60 hover:bg-ink-3"
+      className={cn(
+        "flex max-w-[20rem] items-center gap-2.5 rounded-md border border-ink-4 bg-ink-3/60 px-3 py-2 text-sm text-paper transition-colors hover:border-signal/60 hover:bg-ink-3",
+        CONTENT_CARD_REDESIGN,
+        CONTENT_CARD_HOVER_REDESIGN,
+        CONTENT_CARD_FOCUS_REDESIGN,
+        "redesign:gap-3 redesign:py-2 redesign:pl-2 redesign:pr-3 redesign:text-text",
+      )}
     >
-      <Icon className="h-5 w-5 shrink-0 text-paper-muted" />
+      <Icon className="h-5 w-5 shrink-0 text-paper-muted redesign:hidden" />
+      <span className={cn("hidden", CONTENT_GLYPH_TILE_REDESIGN, unavailable && "redesign:text-text-tertiary")}>
+        <PhosphorIcon icon={glyph} size="md" />
+      </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate">{attachment.filename}</span>
-        <span className="block text-[11px] text-paper-muted">
+        <span className="block truncate redesign:font-medium">{attachment.filename}</span>
+        <span className="block text-[11px] text-paper-muted redesign:text-xs redesign:text-text-tertiary">
           {unavailable
             ? "Image unavailable"
             : formatByteSize(attachment.byteSize)}
         </span>
       </span>
-      <Download className="h-4 w-4 shrink-0 text-paper-muted" />
+      <Download className="h-4 w-4 shrink-0 text-paper-muted redesign:hidden" />
+      <PhosphorIcon
+        icon={DownloadSimple}
+        kind="symbol"
+        size="sm"
+        className="hidden text-text-secondary redesign:block"
+      />
     </a>
   );
 }

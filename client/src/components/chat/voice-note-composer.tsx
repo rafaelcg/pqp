@@ -613,7 +613,7 @@ export function VoiceNoteMicButton({
           data-voice-note-mic
           {...controller.micPointerHandlers}
           className={cn(
-            "h-8 w-8 shrink-0 touch-none select-none rounded-full",
+            "h-8 w-8 shrink-0 touch-none select-none rounded-full redesign:h-9 redesign:w-9",
             holding && "scale-125 ring-4 ring-accent/25",
           )}
         >

@@ -401,6 +401,136 @@ export function tileClickFullscreens(tileCount: number): boolean {
 }
 
 /**
+ * The room as cards (`showsRoomView`): how many cards, and how many columns.
+ *
+ * A card is a person with nothing to watch, so the grid is sized by the room,
+ * not by pictures: two people side by side, four in a square, nine in three
+ * rows, sixteen in four. Past sixteen the room does not grow the grid: fifteen
+ * cards and a "+N" card that opens the rest, the same bound the strip keeps for
+ * the same reason (a lobby of 200 is still one screen).
+ *
+ * Who keeps a card when the room is over the bound, in this order: us, then
+ * whoever is speaking, then raised hands in queue order, then the roster. The
+ * kept set is drawn in roster order, so a person who starts talking does not
+ * jump to the front and shove the grid around.
+ *
+ * Alone, the grid holds our card and the "só tu por aqui" card (invite a
+ * friend, put a song on), so it is laid out as two.
+ */
+export const ROOM_CARD_LIMIT = 15;
+
+export interface RoomCardPerson extends StripPerson {
+  handPosition?: number | null;
+  /** Their camera is drawn in their card. Kept ahead of the roster. */
+  camera?: boolean;
+}
+
+export interface RoomCardPlan<T> {
+  shown: T[];
+  /** People behind the "+N" card. Zero means the card is not drawn. */
+  overflow: number;
+  /** Cards plus the "+N" card plus the alone card. */
+  cells: number;
+  columns: number;
+}
+
+export function roomCardColumns(cells: number): number {
+  if (cells <= 1) {
+    return 1;
+  }
+  if (cells <= 4) {
+    return 2;
+  }
+  return cells <= 9 ? 3 : 4;
+}
+
+/** A card is a landscape tile, the shape a camera has when one turns on. */
+export const ROOM_CARD_RATIO = 16 / 9;
+
+export interface RoomCardFit {
+  columns: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * THE CARD SHAPE FOLLOWS THE PANE. A fixed column count drew two people beside
+ * a chat as two tall portraits, a column each, because the stage there is
+ * narrow and the full height of the window. So every column count is tried
+ * and the one that gives the largest 16:9 card wins: beside the chat that is
+ * one column of landscape cards, on a wide stage it is a row. The grid is
+ * centred in whatever is left over.
+ *
+ * An unmeasured box (zero, before the first layout) falls back to
+ * `roomCardColumns`, so the first paint is never a single giant card.
+ */
+export function fitRoomCards(
+  cells: number,
+  box: { width: number; height: number },
+  gap: number,
+  ratio = ROOM_CARD_RATIO,
+): RoomCardFit {
+  const count = Math.max(1, cells);
+  if (box.width <= 0 || box.height <= 0) {
+    return { columns: roomCardColumns(count), width: 0, height: 0 };
+  }
+  let best: RoomCardFit = { columns: 1, width: 0, height: 0 };
+  for (let columns = 1; columns <= count; columns += 1) {
+    const rows = Math.ceil(count / columns);
+    const cellWidth = (box.width - gap * (columns - 1)) / columns;
+    const cellHeight = (box.height - gap * (rows - 1)) / rows;
+    if (cellWidth <= 0 || cellHeight <= 0) {
+      continue;
+    }
+    const width = Math.min(cellWidth, cellHeight * ratio);
+    if (width > best.width + 0.5) {
+      best = { columns, width, height: width / ratio };
+    }
+  }
+  return {
+    columns: best.columns,
+    width: Math.floor(best.width),
+    height: Math.floor(best.height),
+  };
+}
+
+export function planRoomCards<T extends RoomCardPerson>(
+  people: readonly T[],
+  options: { aloneCard: boolean; limit?: number },
+): RoomCardPlan<T> {
+  const limit = options.limit ?? ROOM_CARD_LIMIT;
+  let shown: T[];
+  if (people.length <= limit + 1) {
+    // "+1" is never worth a face: with one person over, the card goes to them.
+    shown = [...people];
+  } else {
+    const index = new Map(people.map((person, at) => [person.key, at]));
+    const picked = new Map<string, T>();
+    const take = (person: T) => {
+      if (picked.size < limit) {
+        picked.set(person.key, person);
+      }
+    };
+    people.filter((person) => person.isSelf).forEach(take);
+    people.filter((person) => person.camera === true).forEach(take);
+    people.filter((person) => person.speaking).forEach(take);
+    people
+      .filter((person) => (person.handPosition ?? null) !== null)
+      .sort((a, b) => (a.handPosition ?? 0) - (b.handPosition ?? 0))
+      .forEach(take);
+    people.forEach(take);
+    shown = [...picked.values()].sort(
+      (a, b) => (index.get(a.key) ?? 0) - (index.get(b.key) ?? 0),
+    );
+  }
+  const overflow = people.length - shown.length;
+  const alone = people.length === 1 && people[0]?.isSelf === true;
+  const cells =
+    shown.length + (overflow > 0 ? 1 : 0) + (alone && options.aloneCard ? 1 : 0);
+  return { shown, overflow, cells, columns: roomCardColumns(cells) };
+}
+
+/**
  * How many listener chips fit before the overflow chip earns its place.
  *
  * Measured against the chip, not guessed: a chip is an avatar, a name clamped
@@ -409,6 +539,75 @@ export function tileClickFullscreens(tileCount: number): boolean {
  * them. Past that the row would scroll, and a row you have to scroll to find
  * out who is in it is the rail this replaced.
  */
+/**
+ * THE ROOM STAGE, under the redesign: the cards ARE the stage, and a picture
+ * lands in its owner's card instead of swapping the whole view for a grid.
+ *
+ * A camera is drawn inside the person's card, in the slot the card already
+ * had, so turning one on moves nobody. A share is the one thing that takes
+ * the stage: it goes above, and every card (cameras included) shrinks into one
+ * row under it. Who gets a live picture is still `planStage`'s answer, so the
+ * bound on decoders (`STAGE_TILE_LIMIT_WIDE`) holds: a camera the bound left
+ * out stays an avatar card, and no `<video>` is mounted for it.
+ */
+export interface RoomStagePlan<T extends { kind: string }> {
+  /** The tiles that still take the stage: shares (and the music clip). */
+  screens: T[];
+  /** Person keys whose camera is drawn inside their card. */
+  cameraKeys: ReadonlySet<string>;
+}
+
+export function planRoomStage<T extends { kind: string }>(
+  tiles: readonly T[],
+): RoomStagePlan<T> {
+  const cameraKeys = new Set<string>();
+  for (const tile of tiles) {
+    if (tile.kind === "camera" && "key" in tile && typeof tile.key === "string") {
+      cameraKeys.add(tile.key);
+    }
+  }
+  return {
+    screens: tiles.filter((tile) => tile.kind !== "camera"),
+    cameraKeys,
+  };
+}
+
+/** The row of cards under a share: never shorter or taller than this. */
+export const ROOM_STRIP_MIN_PX = 72;
+export const ROOM_STRIP_MAX_PX = 132;
+
+/**
+ * The card row under a share. The tallest card (a fifth of the stage, inside
+ * the bounds above) that still fits everybody in one row; when even the
+ * shortest card cannot, the shortest card and as many as fit, and the room
+ * shows `perRow - 1` of them beside the "+N" card, the same rule as the grid.
+ */
+export function roomStripFit(
+  box: { width: number; height: number },
+  gap: number,
+  count: number,
+  ratio = ROOM_CARD_RATIO,
+): { height: number; width: number; perRow: number } {
+  const tallest = Math.round(
+    Math.min(ROOM_STRIP_MAX_PX, Math.max(ROOM_STRIP_MIN_PX, box.height * 0.2)),
+  );
+  const at = (height: number) => {
+    const width = Math.floor(height * ratio);
+    return {
+      height,
+      width,
+      perRow: Math.max(1, Math.floor((box.width + gap) / (width + gap))),
+    };
+  };
+  for (let height = tallest; height >= ROOM_STRIP_MIN_PX; height -= 4) {
+    const fit = at(height);
+    if (fit.perRow >= count) {
+      return fit;
+    }
+  }
+  return at(ROOM_STRIP_MIN_PX);
+}
+
 export const STRIP_LIMIT_WIDE = 12;
 export const STRIP_LIMIT_NARROW = 4;
 

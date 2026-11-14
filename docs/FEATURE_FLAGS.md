@@ -655,6 +655,8 @@ per-server value would make the config endpoint and the transcoder disagree.
 
 ## `party_newcomer_experience` (per server, client presentation only)
 
+Client status: the context strip and the get-the-app suppression were removed on 2026-11-01. Only the phone layout remains.
+
 The newcomer's first minutes in a live watch party, behind one flag
 (`PARTY_NEWCOMER_EXPERIENCE`, default off, `perServer: true`). The client learns
 it from `GET /api/live-hls/config?serverId=` as `newcomerExperience` (absent on
@@ -740,6 +742,8 @@ Turn it off from controles → interruptores or `PUT /api/admin/flags
 
 ## `newcomer_invite_moment` (global, client presentation only)
 
+Client status: the strip and the first-run checklist were removed on 2026-11-01, so the client no longer reads this flag. The server still serves it.
+
 "Chama teus amigos pra cá". Behind `NEWCOMER_INVITE_MOMENT` (default off,
 global, born as a flag). The client learns it from `GET /api/onboarding/config`
 as `inviteMoment`, asked once the age gate has passed (every `/api` route is
@@ -823,6 +827,8 @@ config refresh (focus or 10 min). Merging this PR restarts the API
 
 ## `hint_diet` and `hint_budget` (global, client presentation only)
 
+Client status: on 2026-11-01 the diet list shrank to one id, the owner empty channel's "Copiar convite", because the other hints it hid were removed. The list in the first bullet is the earlier one.
+
 The two switches of the 2026-10-20 hints audit (`docs/ONBOARDING.md` §"The
 diet and the quiet contexts"). Both born as flags, default off (`HINT_DIET`,
 `HINT_BUDGET`, `exactTrue`), global (a hint belongs to a person's screen, and a
@@ -874,6 +880,24 @@ nothing persists (`lib/hints.ts`), so set `localStorage["pqp:hints-persist"] =
 "1"` to make dismissals stick like production, and know that an automated
 browser (`navigator.webdriver`, Playwright) never sees a hint at all.
 
+
+## `redesign` (global, client presentation only)
+
+The new look, built element by element (`docs/redesign/LOG.md`). Born as a
+flag, default off (`REDESIGN`, `exactTrue`), global: a look belongs to the
+person's screen, and a DM has no server to override it for. Served as
+`redesign` on `GET /api/onboarding/config` and applied by
+`client/src/lib/redesign.ts`, through the same loader as the hint switches.
+
+The flag is only the default for people who never chose. The person's own
+switch, Settings > Beta > Novo visual (`pqp-redesign` on the device), wins over
+it in both directions, and `?redesign=1` or `?redesign=0` on the URL wins over
+both for one page (the design council capture uses it). On, `<html>` carries
+`data-redesign` and the `redesign:` Tailwind variant applies. Off, nothing on
+screen differs.
+
+Do not turn it on until the redesign has shipped. Merging the change that adds
+it restarts the API (`restarts-api`): it touches `server/`.
 
 ## `conversations_home` and `conversations_home_phone_tabs` (global, client presentation only)
 
@@ -942,6 +966,8 @@ category is a dead row there. `server/src/lib/flag-client-contract.test.ts`
 pins the route, the field and the create guard.
 
 ## `forum_announcement` (per server, client presentation only)
+
+Client status: the card was removed on 2026-11-01, so the client no longer reads `announce`. The server still serves it.
 
 "O fórum abriu": a one-time corner card that tells the members of a server its
 forum is live, with **Abrir o fórum** and **Agora não**. Behind

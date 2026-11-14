@@ -9,6 +9,7 @@ import {
   formatMessagePreview,
   sortConversations,
   touchConversation,
+  unknownRingingConversationIds,
   unreadFromConversations,
   upsertConversation,
   type ConversationMessage,
@@ -436,5 +437,21 @@ describe("formatMessagePreview", () => {
     expect(
       formatMessagePreview(message(), { viewerId: null, isGroup: false }),
     ).toBe("bora hoje?");
+  });
+});
+
+describe("unknownRingingConversationIds", () => {
+  it("lists only the ringing conversations the list does not hold", () => {
+    const ringing = [{ conversationId: "c-new" }, { conversationId: "c-old" }];
+    expect(
+      unknownRingingConversationIds(ringing, [{ channelId: "c-old" }]),
+    ).toEqual(["c-new"]);
+  });
+
+  it("is empty when nothing rings or everything is known", () => {
+    expect(unknownRingingConversationIds([], [])).toEqual([]);
+    expect(
+      unknownRingingConversationIds([{ conversationId: "c" }], [{ channelId: "c" }]),
+    ).toEqual([]);
   });
 });

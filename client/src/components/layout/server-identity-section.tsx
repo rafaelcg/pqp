@@ -12,6 +12,9 @@ import { ApiError, deleteServerImage, fetchServerImageConfig } from "@/lib/api";
 import { uploadServerImage } from "@/lib/server-image-upload";
 import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation } from "@/lib/i18n";
+import { SectionLabel } from "@/components/ui/section-header";
+import { SETTINGS_CARD_REDESIGN } from "@/components/settings/kit/classes";
+import { cn } from "@/lib/utils";
 
 /**
  * Memoised for the life of the tab, like `avatar-picker.tsx` does with its own
@@ -63,16 +66,16 @@ export function ServerIdentitySection({
   }, []);
 
   return (
-    <section className="space-y-3 border-t border-ink-4 pt-5" data-server-identity>
-      <h4 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+    <section className={cn("space-y-3 border-t border-ink-4 pt-5", SETTINGS_CARD_REDESIGN, "redesign:p-4")} data-server-identity>
+      <SectionLabel as="h4" variant="group" className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
         {t("serverSettings.identity.title")}
-      </h4>
-      <p className="text-sm text-paper-muted">
+      </SectionLabel>
+      <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
         {t("serverSettings.identity.description")}
       </p>
 
       {!enabled ? (
-        <p className="text-sm text-paper-muted">
+        <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
           {t("serverSettings.identity.unconfigured")}
         </p>
       ) : (

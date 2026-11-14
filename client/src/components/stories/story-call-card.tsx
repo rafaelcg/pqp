@@ -224,6 +224,7 @@ export function StoryCallCard({
               style={{ marginLeft: index > 0 ? "-1.4cqw" : 0, boxShadow: "0 0 0 0.4cqw var(--story-card)" }}
             >
               <UserAvatar
+                ownPalette
                 name={person.displayName}
                 avatarUrl={person.avatarUrl}
                 rounded="full"

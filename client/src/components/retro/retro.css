@@ -161,7 +161,9 @@
   animation: retro-slide-up 450ms var(--ease-emphasized) both;
 }
 
-@media (min-width: 640px) {
+/* lib/breakpoints.ts SM_UP */
+
+@media (min-width: 40rem) {
   .retro-corner {
     right: 1rem;
     /* Clear of the composer and its send button. */

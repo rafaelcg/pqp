@@ -1,19 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
 
 /**
- * `party_newcomer_experience`: a runtime flag, per server, that changes what a
- * stranger sees in the first minutes of a live watch party.
+ * `party_newcomer_experience`: a runtime flag, per server, that changes the
+ * layout a stranger gets in the first minutes of a live watch party on a phone.
  *
  * WHY THIS EXISTS. Accounts created during MoonKase's party on 2026-09-26
  * stayed a median of 4 minutes; 65% were on phones, where the viewer saw the
  * film and none of the room (a 72px rail, the stage at 68% of the height, the
  * chat a sliver). This pins, through the real routes and the real flag:
  *
- *  1. flag OFF (the default): nothing changes, the rail is there, no strip;
+ *  1. flag OFF (the default): nothing changes, the rail is there;
  *  2. flag ON for that server: on a 390x844 phone the rail is put away and the
- *     chat keeps a usable height under the picture, and a new account gets a
- *     one-line "what is this" strip whose dismissal is remembered;
- *  3. flag ON on a laptop: the strip is there and the get-the-app strip is not.
+ *     chat keeps a usable height under the picture.
+ *
+ * The context strip and the get-the-app suppression were removed on 2026-11-01.
  *
  * The flip is `PUT /api/admin/flag-overrides` with the suite's machine token,
  * the same call the dashboard makes. The stream is stubbed exactly as
@@ -230,11 +230,6 @@ const PHONE = {
   hasTouch: true,
   colorScheme: "dark" as const,
 };
-const LAPTOP = {
-  viewport: { width: 1366, height: 768 },
-  colorScheme: "dark" as const,
-};
-
 test("flag off: a phone viewer of a live party sees exactly what it always did", async ({
   browser,
 }) => {
@@ -245,7 +240,6 @@ test("flag off: a phone viewer of a live party sees exactly what it always did",
   const page = await context.newPage();
   try {
     await arriveOnTheParty(page, slug, newcomer, channelId);
-    await expect(page.locator("[data-party-newcomer-strip]")).toHaveCount(0);
     await expect(page.locator("[data-rail-phone-hidden]")).toHaveCount(0);
     await expect(page.locator("[data-call-split-phone-floor]")).toHaveCount(0);
     const rail = await page.locator("nav[data-immersive-hide]").first().boundingBox();
@@ -255,7 +249,7 @@ test("flag off: a phone viewer of a live party sees exactly what it always did",
   }
 });
 
-test("flag on for the server: a phone newcomer gets the room, and the strip remembers", async ({
+test("flag on for the server: a phone newcomer gets the room", async ({
   browser,
 }) => {
   const host = suffixFor("nx-on-h");
@@ -279,19 +273,6 @@ test("flag on for the server: a phone newcomer gets the room, and the strip reme
     const composer = page.getByPlaceholder(/./).last();
     await expect(composer).toBeInViewport();
 
-    // What is this, once, and closing it sticks across a reload.
-    const strip = page.locator("[data-party-newcomer-strip]");
-    await expect(strip).toBeVisible();
-    await expect(strip).toContainText("Live watch party");
-    await expect(strip).toContainText("right below");
-    await page.locator("[data-party-newcomer-dismiss]").click();
-    await expect(strip).toHaveCount(0);
-    await page.reload();
-    await expect(page.getByTestId("watch-channel-stage")).toBeVisible({
-      timeout: 20_000,
-    });
-    await expect(page.locator("[data-party-newcomer-strip]")).toHaveCount(0);
-
     // The hamburger brings the rail back over the page.
     await page.getByRole("button", { name: "Open navigation" }).click();
     const rail = page.locator("nav[data-rail-phone-hidden]");
@@ -299,60 +280,5 @@ test("flag on for the server: a phone newcomer gets the room, and the strip reme
     expect((await rail.boundingBox())?.x).toBe(0);
   } finally {
     await context.close();
-  }
-});
-
-test("flag on: a laptop newcomer gets the strip and no get-the-app invite, a regular keeps it", async ({
-  browser,
-}) => {
-  const host = suffixFor("nx-lap-h");
-  const { slug, channelId, serverId } = await communityWithLiveParty(host);
-  await setFlag(serverId, true);
-  const newcomer = suffixFor("nx-lap-n");
-  await freshAccount(newcomer);
-  const context = await browser.newContext(LAPTOP);
-  const page = await context.newPage();
-  try {
-    await arriveOnTheParty(page, slug, newcomer, channelId);
-    const strip = page.locator("[data-party-newcomer-strip]");
-    await expect(strip).toBeVisible();
-    await expect(strip).toContainText("on the right");
-    await expect(page.getByText("Get the app")).toHaveCount(0);
-  } finally {
-    await context.close();
-  }
-
-  // The same party, an account that finished first-run long ago: no strip,
-  // and the invite it has always had.
-  const regular = suffixFor("nx-lap-r");
-  await onboardedAccount(regular);
-  await fetch(`${API}/api/me/preferences`, {
-    method: "PATCH",
-    headers: headersFor(regular),
-    body: JSON.stringify({
-      onboardedAt: new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString(),
-    }),
-  });
-  const joined = await fetch(`${API}/api/communities/${serverId}/join`, {
-    method: "POST",
-    headers: headersFor(regular),
-  });
-  expect(joined.status).toBeLessThan(300);
-  const second = await browser.newContext(LAPTOP);
-  const other = await second.newPage();
-  try {
-    await withFakeLiveStream(other, channelId);
-    await other.addInitScript((value) => {
-      localStorage.setItem("pqp:dev-user-suffix", value);
-      localStorage.setItem("pqp:watch-party-channels", "1");
-    }, regular);
-    await other.goto(`/app/server/${serverId}/channel/${channelId}`);
-    await expect(other.getByTestId("watch-channel-stage")).toBeVisible({
-      timeout: 20_000,
-    });
-    await expect(other.locator("[data-party-newcomer-strip]")).toHaveCount(0);
-    await expect(other.getByText("Get the app")).toBeVisible();
-  } finally {
-    await second.close();
   }
 });

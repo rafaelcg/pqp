@@ -36,6 +36,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Select } from "@/components/ui/select";
 import {
   ApiError,
   createAutomodRule,
@@ -51,6 +52,8 @@ import {
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { displayRoleName } from "@/lib/role-labels";
 import { cn } from "@/lib/utils";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
+import { badgeRedesignClasses } from "@/components/ui/badge";
 
 /**
  * AutoMod, its own section in Community settings.
@@ -177,16 +180,13 @@ function Field({
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-4">
-      <h5 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+      <h5 className={cn("text-[11px] font-semibold uppercase tracking-wider text-text-tertiary", SECTION_LABEL_REDESIGN)}>
         {title}
       </h5>
       {children}
     </section>
   );
 }
-
-const SELECT =
-  "h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:opacity-50 sm:w-auto sm:min-w-[14rem]";
 
 function describeMinutes(
   minutes: number,
@@ -378,10 +378,10 @@ function ExemptPicker({
       {remaining.length === 0 ? (
         <p className="text-xs text-text-tertiary">{emptyLabel}</p>
       ) : (
-        <select
+        <Select
           value=""
           aria-label={addLabel}
-          className="h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring sm:w-auto sm:min-w-[14rem]"
+          size="sm" className="text-text-secondary" wrapperClassName="sm:w-auto sm:min-w-[14rem]"
           onChange={(event) => {
             if (event.target.value) {
               onChange([...selected, event.target.value]);
@@ -394,7 +394,7 @@ function ExemptPicker({
               {option.label}
             </option>
           ))}
-        </select>
+        </Select>
       )}
     </div>
   );
@@ -753,7 +753,7 @@ export function AutomodSettingsSection({
                       {t("automod.response.block.hint")}
                     </p>
                   </div>
-                  <span className="mt-0.5 inline-flex h-5 items-center rounded-full bg-accent-soft px-2 text-[11px] font-semibold uppercase tracking-wider text-on-accent-soft">
+                  <span className={cn("mt-0.5 inline-flex h-5 items-center rounded-full bg-accent-soft px-2 text-[11px] font-semibold uppercase tracking-wider text-on-accent-soft", badgeRedesignClasses("accent"))}>
                     {t("automod.response.always")}
                   </span>
                 </div>
@@ -793,10 +793,10 @@ export function AutomodSettingsSection({
                   className="px-0"
                 />
                 {form.alertChannelId !== null && (
-                  <select
+                  <Select
                     value={form.alertChannelId}
                     aria-label={t("automod.response.alert.channel")}
-                    className={SELECT}
+                    size="sm" wrapperClassName="sm:w-auto sm:min-w-[14rem]"
                     onChange={(event) => patch({ alertChannelId: event.target.value })}
                   >
                     {textChannels.map((channel) => (
@@ -804,7 +804,7 @@ export function AutomodSettingsSection({
                         #{channel.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 )}
               </div>
 
@@ -817,10 +817,10 @@ export function AutomodSettingsSection({
                   className="px-0"
                 />
                 {form.timeoutMinutes > 0 && (
-                  <select
+                  <Select
                     value={form.timeoutMinutes}
                     aria-label={t("automod.response.timeout.duration")}
-                    className={SELECT}
+                    size="sm" wrapperClassName="sm:w-auto sm:min-w-[14rem]"
                     onChange={(event) => patch({ timeoutMinutes: Number(event.target.value) })}
                   >
                     {timeoutOptions(form.timeoutMinutes).map((minutes) => (
@@ -828,7 +828,7 @@ export function AutomodSettingsSection({
                         {describeMinutes(minutes, t)}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 )}
               </div>
             </div>

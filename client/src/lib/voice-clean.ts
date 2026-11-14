@@ -6,64 +6,10 @@ import { isHintSeen, rememberHint } from "./hints";
  * === "advanced"`). RNNoise itself is never named in the UI outside the
  * Settings description — see `docs/NOISE_SUPPRESSION.md`.
  *
- * This module holds the two things about it that have to be pure functions
- * to be tested without a DOM: whether the one-time nudge card is allowed to
- * show, and whether the NOVO dot in Settings is still owed.
+ * This module holds what has to be a pure function to be tested without a DOM:
+ * whether the NOVO dot in Settings is still owed. (The one-time corner card
+ * that offered to turn it on was removed on 2026-11-01.)
  */
-
-/**
- * The nudge is a `layout="inline"` `CornerCard`, same shell as every other
- * hint (`docs/ONBOARDING.md`), anchored above the user bar rather than the
- * bottom-right corner. It still goes through the corner queue
- * (`lib/corner-hints.ts`, `"voiceClean"`) so it can never be on screen at the
- * same time as another card — the priority sits after the first-run cards
- * and before the app-invite campaigns.
- *
- * Persisted per account (`preferences.voiceCleanNudgeDismissedAt`), not
- * localStorage: a new browser must not re-offer something already answered.
- * Below `VOICE_CLEAN_NUDGE_MIN_WIDTH_PX` the card does not show at all —
- * `docs/ONBOARDING.md` calls that "becomes a NOVO dot on the mic settings
- * entry" — the dot is `shouldShowVoiceCleanSettingsBadge` below, and stays
- * owed until a desktop session shows the card or Settings is opened once.
- */
-export const VOICE_CLEAN_NUDGE_MIN_WIDTH_PX = 640;
-
-export function shouldOfferVoiceCleanNudge(input: {
-  /** `preferences.voiceCleanNudgeDismissedAt` is set. */
-  dismissed: boolean;
-  automated: boolean;
-  /** `voiceState.status === "connected"`. */
-  inCall: boolean;
-  /** `!voiceState.isMuted`. */
-  micOn: boolean;
-  /** Sharing a screen in a `watch_party` channel. */
-  presentingWatchParty: boolean;
-  /** `window.innerWidth >= VOICE_CLEAN_NUDGE_MIN_WIDTH_PX`. */
-  isDesktopViewport: boolean;
-  /**
-   * The microphone already runs Voz limpa, by choice or because it is the
-   * default on this device (`lib/clean-voice-default.ts`): the card would
-   * offer something the person already has.
-   */
-  alreadyOn: boolean;
-}): boolean {
-  return (
-    !input.alreadyOn &&
-    !input.dismissed &&
-    !input.automated &&
-    input.inCall &&
-    input.micOn &&
-    !input.presentingWatchParty &&
-    input.isDesktopViewport
-  );
-}
-
-/** The preference patch written on either button — both are an answer. */
-export function voiceCleanNudgeDismissedPatch(
-  now: Date = new Date(),
-): { voiceCleanNudgeDismissedAt: string } {
-  return { voiceCleanNudgeDismissedAt: now.toISOString() };
-}
 
 // ------------------------------------------------------- settings NOVO dot
 
@@ -91,9 +37,8 @@ export function markVoiceCleanSettingsSeen(
 /**
  * The dot on the noise-suppression row clears the first time either happens:
  * the Voice section of Settings is opened (`markVoiceCleanSettingsSeen`), or
- * the nudge card was acted on (`preferences.voiceCleanNudgeDismissedAt`).
- * Whichever comes first, so someone who clicks "Ativar" from the nudge never
- * sees a dot pointing at a setting they just used.
+ * the account already answered the old nudge card
+ * (`preferences.voiceCleanNudgeDismissedAt`, no longer written by the client).
  */
 export function shouldShowVoiceCleanSettingsBadge(input: {
   settingsSeen: boolean;

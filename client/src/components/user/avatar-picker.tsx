@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { LinkSimple } from "@phosphor-icons/react";
 import { Link2, Upload } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
 import { AVATAR_MIME_ALLOWLIST, type User } from "@pqp/shared";
 import {
   SETTINGS_BUSY,
@@ -326,7 +328,7 @@ export function AvatarPicker({
           aria-controls={linkOpen ? linkId : undefined}
           onClick={() => setLinkOpen((open) => !open)}
         >
-          <Link2 aria-hidden className="h-3.5 w-3.5" />
+          <IconSwap off={Link2} on={LinkSimple} kind="symbol" offClassName="h-3.5 w-3.5" />
           {labels.useLink}
         </Button>
       </div>

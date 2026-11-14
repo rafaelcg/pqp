@@ -13,6 +13,8 @@ import {
 } from "react";
 import {
   Columns2,
+  EyeOff,
+  LayoutGrid,
   MessageSquare,
   PanelRightClose,
   Rows2,
@@ -21,6 +23,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Tabs } from "@/components/ui/tabs";
 import { useAppColumn } from "@/components/apps/app-column";
 import {
   appColumnStageTarget,
@@ -816,6 +819,7 @@ export function CallSplit({
       container,
       orientation,
       deltaPx,
+      bounds,
     });
     commitFraction(
       splitFraction(clampSplit({ fraction: nudged, container, ...bounds }), container),
@@ -952,6 +956,7 @@ export function CallSplit({
           <ChatPaneHeader
             header={chatHeader}
             videoHidden={collapsed === "stage"}
+            room={kind === "room"}
             // Beside an app the strip's Chat toggle is the one way to put the
             // chat away, and hiding the video would take the call's controls
             // with it (they live on the stage there, not in the composer).
@@ -1060,6 +1065,30 @@ function SplitDivider({
               ? "w-5 flex-1 cursor-col-resize border-x border-y-0 before:inset-y-0 before:-inset-x-1.5"
               : "h-5 flex-1 cursor-row-resize before:inset-x-0 before:-inset-y-1.5",
             dragging ? "bg-accent/25" : "hover:bg-ink-3",
+            // Under the redesign the bar is a hairline, the way an editor's
+            // pane edge is: 1px of border inside the same 20px hit area (so
+            // every clamp keeps its number), which turns accent and doubles
+            // on hover, focus and drag. The grip pill goes; the cursor and
+            // the tooltip are what say it moves.
+            //
+            // THE LINE SITS ON THE STAGE'S EDGE, not in the middle of the
+            // hit area. The area itself is transparent, so it shows the
+            // conversation pane's colour (`--color-pane-main`), while the
+            // stage paints `--call-stage-bg` (surface-0 on dark, the canvas
+            // grey on light). A centred line left 10px of that other tone
+            // between the stage and the line, which read as padding on the
+            // stage. Pinned to the leading edge, the whole strip behind the
+            // line is pane colour and merges with the chat. Stacked, the
+            // line starts 1px up so it covers the stage's own `border-b`
+            // instead of drawing a second hairline beside it.
+            "after:hidden after:content-[''] redesign:border-0 redesign:bg-transparent redesign:hover:bg-transparent redesign:focus-visible:ring-0 redesign:after:absolute redesign:after:block redesign:after:bg-[color:var(--color-border)] redesign:after:transition-[background-color,width,height] redesign:after:duration-[var(--duration-fast)] redesign:hover:after:bg-accent redesign:focus-visible:after:bg-accent motion-reduce:after:transition-none",
+            sideBySide
+              ? "redesign:after:inset-y-0 redesign:after:left-0 redesign:after:w-px redesign:hover:after:w-0.5 redesign:focus-visible:after:w-0.5"
+              : "redesign:after:inset-x-0 redesign:after:-top-px redesign:after:h-px redesign:hover:after:h-0.5 redesign:focus-visible:after:h-0.5",
+            dragging &&
+              (sideBySide
+                ? "redesign:after:w-0.5 redesign:after:bg-accent"
+                : "redesign:after:h-0.5 redesign:after:bg-accent"),
           )}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -1071,7 +1100,7 @@ function SplitDivider({
           <span
             aria-hidden="true"
             className={cn(
-              "rounded-full transition-colors",
+              "rounded-full transition-colors redesign:hidden",
               sideBySide ? "h-14 w-1.5" : "h-1.5 w-14",
               dragging ? "bg-accent" : "bg-paper-muted/60 group-hover:bg-paper",
             )}
@@ -1089,6 +1118,7 @@ function SplitDivider({
 function ChatPaneHeader({
   header,
   videoHidden,
+  room = false,
   canHideChat,
   onHideChat,
   onHideVideo,
@@ -1096,12 +1126,24 @@ function ChatPaneHeader({
 }: {
   header: CallSplitChatHeader;
   videoHidden: boolean;
+  /**
+   * A server voice call under the redesign: the stage is the room's cards
+   * whether or not anybody has a camera on, so it is "the call", not "the
+   * video", that goes away and comes back.
+   */
+  room?: boolean;
   canHideChat: boolean;
   onHideChat: () => void;
   onHideVideo: () => void;
   onShowVideo: () => void;
 }) {
   const { t } = useTranslation();
+  const restoreLabel = t(
+    room ? "call.split.restoreCall" : "call.split.restoreStage",
+  );
+  const collapseLabel = t(
+    room ? "call.split.collapseCall" : "call.split.collapseStage",
+  );
   const iconButton =
     "flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] text-paper-muted hover:bg-surface-2 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
   return (
@@ -1111,34 +1153,19 @@ function ChatPaneHeader({
     >
       <span className="flex min-w-0 flex-1 items-center gap-1 truncate text-xs">
         {header.tabs ? (
-          <span role="tablist" className="flex shrink-0 items-center gap-0.5">
-            {header.tabs.items.map((tab) => {
-              const active = tab.id === header.tabs?.active;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  data-watch-party-panel-tab={tab.id}
-                  className={cn(
-                    "rounded-[var(--radius-control)] px-2 py-0.5 font-semibold transition-colors",
-                    active
-                      ? "bg-surface-2 text-paper"
-                      : "text-paper-muted hover:bg-surface-2 hover:text-paper",
-                  )}
-                  onClick={() => header.tabs?.onSelect(tab.id)}
-                >
-                  {tab.label}
-                  {tab.count !== undefined && tab.count > 0 && (
-                    <span className="ml-1 rounded-full bg-signal/20 px-1.5 text-[10px] text-signal">
-                      {tab.count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </span>
+          <Tabs
+            variant="pill"
+            size="xs"
+            label={header.title}
+            value={header.tabs.active}
+            onValueChange={(id) => header.tabs?.onSelect(id)}
+            items={header.tabs.items.map((tab) => ({
+              id: tab.id,
+              label: tab.label,
+              count: tab.count,
+              data: { "data-watch-party-panel-tab": tab.id },
+            }))}
+          />
         ) : (
           <span className="font-semibold text-paper">{header.title}</span>
         )}
@@ -1185,33 +1212,41 @@ function ChatPaneHeader({
         </Tooltip>
       )}
       {videoHidden ? (
-        <Tooltip label={t("call.split.restoreStage")} side="bottom">
+        <Tooltip label={restoreLabel} side="bottom">
           <button
             type="button"
             data-testid="call-split-restore"
             data-call-split-restore="stage"
-            aria-label={t("call.split.restoreStage")}
+            aria-label={restoreLabel}
             className={iconButton}
             onClick={onShowVideo}
           >
-            <Video className="h-4 w-4" aria-hidden="true" />
+            {room ? (
+              <LayoutGrid className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <Video className="h-4 w-4" aria-hidden="true" />
+            )}
           </button>
         </Tooltip>
       ) : (
         canHideChat && (
           <Tooltip
-            label={t("call.split.collapseStage")}
+            label={collapseLabel}
             detail={t("call.split.collapseHint")}
             side="bottom"
           >
             <button
               type="button"
               data-testid="call-split-collapse-stage"
-              aria-label={t("call.split.collapseStage")}
+              aria-label={collapseLabel}
               className={iconButton}
               onClick={onHideVideo}
             >
-              <VideoOff className="h-4 w-4" aria-hidden="true" />
+              {room ? (
+                <EyeOff className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <VideoOff className="h-4 w-4" aria-hidden="true" />
+              )}
             </button>
           </Tooltip>
         )

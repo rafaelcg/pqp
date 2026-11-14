@@ -84,6 +84,7 @@ import { displayLayerFrom, type MentionTarget } from "./story-layers";
 import { StoryReportDialog } from "./story-report-dialog";
 import type { StoryViewerSelf } from "./story-strip";
 import { StoryViewersSheet } from "./story-viewers-sheet";
+import { SM_UP_QUERY } from "@/lib/breakpoints";
 
 /**
  * The story viewer: a modal over the app, never a route (design decision 32).
@@ -182,7 +183,7 @@ export function StoryViewer({
 }: StoryViewerProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
-  const wide = useMediaQuery("(min-width: 640px)", true);
+  const wide = useMediaQuery(SM_UP_QUERY, true);
   const cardSize = useStoryCardSize();
   const [state, dispatch] = useReducer(viewerReducer, request, (req) =>
     createViewerState(req.people, { personIndex: req.startIndex }),
@@ -1854,7 +1855,7 @@ function ArrowButton({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-text text-surface-0 opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+      className="z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-text text-surface-0 redesign:bg-[color:var(--story-on-media)] redesign:text-[color:var(--story-on-accent)] opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
     >
       {children}
     </button>

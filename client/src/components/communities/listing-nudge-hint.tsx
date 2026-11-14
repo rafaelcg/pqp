@@ -92,7 +92,7 @@ export function ListingNudgeHint({
         <div className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
-            className="cta-lift rounded-full px-4"
+            data-cta className="cta-lift rounded-full px-4"
             disabled={busy}
             onClick={() => void list()}
           >

@@ -175,6 +175,29 @@ describe("CallSplit keeps the stage mounted", () => {
   });
 });
 
+describe("CallSplit divider hairline under the new look", () => {
+  /** The divider's own class list, whatever order the attributes come in. */
+  function dividerClass(html: string): string {
+    const tag = /<div[^>]*data-testid="call-split-divider"[^>]*>/.exec(html)?.[0];
+    return /class="([^"]*)"/.exec(tag ?? "")?.[1] ?? "";
+  }
+
+  it("pins the line to the stage's edge, not the middle of the hit area", () => {
+    // The hit area is transparent, so a centred line leaves 10px of the
+    // conversation pane's colour between the stage and the line.
+    const side = dividerClass(
+      split({ preference: { ...DRAGGED, orientation: "side-by-side" } }),
+    );
+    expect(side).toContain("redesign:after:left-0");
+    expect(side).not.toContain("redesign:after:left-1/2");
+    expect(side).not.toContain("redesign:after:-translate-x-1/2");
+
+    const stacked = dividerClass(split());
+    expect(stacked).toContain("redesign:after:-top-px");
+    expect(stacked).not.toContain("redesign:after:top-1/2");
+  });
+});
+
 describe("CallSplit draws a divider only where one can move", () => {
   it("offers it on an expanded stage", () => {
     expect(split()).toContain('data-testid="call-split-divider"');

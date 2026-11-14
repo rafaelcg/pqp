@@ -580,9 +580,10 @@ async function listParticipants(
     username: string | null;
     discriminator: string | null;
     avatar_url: string | null;
+    handle: string | null;
   }>(
     `SELECT cm.channel_id, u.id, u.display_name, u.username, u.discriminator,
-            u.avatar_url
+            u.avatar_url, u.handle
      FROM channel_members cm
      JOIN users u ON u.id = cm.user_id
      WHERE cm.channel_id = ANY($1::uuid[]) AND cm.user_id <> $2

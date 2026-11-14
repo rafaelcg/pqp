@@ -13,6 +13,11 @@ describe("emojiPickerLocale", () => {
     );
   });
 
+  it("calls the heading over the results just Resultados", () => {
+    const picked = emojiPickerLocale("pt-BR", { pt, es });
+    expect((picked.i18n?.categories as Record<string, string>).search).toBe("Resultados");
+  });
+
   it("hands Spanish its own strings", () => {
     const picked = emojiPickerLocale("es", { pt, es });
     expect(picked.locale).toBe("es");

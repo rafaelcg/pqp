@@ -1,10 +1,13 @@
+import { ArrowSquareOut, CaretRight } from "@phosphor-icons/react";
 import { ChevronRight, ExternalLink } from "lucide-react";
 import type { ReactNode } from "react";
 import {
   SETTINGS_INSET_FOCUS,
+  SETTINGS_ROW_HOVER,
   SETTINGS_TRANSITION,
 } from "@/components/settings/kit/classes";
 import { useSettingsRow } from "@/components/settings/kit/use-settings-row";
+import { IconSwap } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 export interface SettingsLinkRowProps {
@@ -48,6 +51,7 @@ export function SettingsLinkRow({
     description ? "min-h-12" : "min-h-11",
     SETTINGS_TRANSITION,
     SETTINGS_INSET_FOCUS,
+    SETTINGS_ROW_HOVER,
   );
   const body = (
     <>
@@ -63,7 +67,13 @@ export function SettingsLinkRow({
         {value !== undefined && value !== null ? (
           <span className="flex items-center text-xs text-text-secondary">{value}</span>
         ) : null}
-        <Icon aria-hidden className="h-4 w-4 shrink-0 text-text-tertiary" />
+        <IconSwap
+          off={Icon}
+          on={external ? ArrowSquareOut : CaretRight}
+          kind="symbol"
+          offClassName="h-4 w-4 shrink-0 text-text-tertiary"
+          className="text-text-tertiary"
+        />
       </span>
     </>
   );

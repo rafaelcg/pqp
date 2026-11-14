@@ -57,7 +57,7 @@ export function CommunityHomePostHint({
       footer={
         <Button
           size="sm"
-          className="cta-lift rounded-full px-4"
+          data-cta className="cta-lift rounded-full px-4"
           onClick={onOpen}
         >
           {t("communityHome.toast.cta")}

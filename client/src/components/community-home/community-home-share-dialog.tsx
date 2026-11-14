@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Select } from "@/components/ui/select";
 import { ApiError, shareCommunityHomePost } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 
@@ -145,7 +146,7 @@ export function CommunityHomeShareDialog({
               <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">
                 {t("communityHome.share.channel")}
               </span>
-              <select
+              <Select
                 id={selectId}
                 value={channelId}
                 onChange={(event) => {
@@ -153,7 +154,7 @@ export function CommunityHomeShareDialog({
                   setError(null);
                 }}
                 disabled={busy}
-                className="h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+                size="sm"
                 data-home-share-channel
               >
                 {channels.map((one) => (
@@ -161,7 +162,7 @@ export function CommunityHomeShareDialog({
                     # {one.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label className="block">
               <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">

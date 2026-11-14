@@ -382,6 +382,12 @@ test("the marketing pages are ordinary scrolling documents", async ({
   for (const path of ["/", "/vem"]) {
     await page.goto(path);
     await page.waitForLoadState("networkidle");
+    // The page renders a beat after the network settles (a lazy route and,
+    // in the dev server, the icon package's bundle), so wait for it to be
+    // taller than the window before asking whether it scrolls.
+    await page.waitForFunction(
+      () => document.documentElement.scrollHeight > window.innerHeight + 400,
+    );
     const scrolled = await page.evaluate(async () => {
       const root = document.scrollingElement ?? document.documentElement;
       window.scrollTo({ top: 400, behavior: "instant" });

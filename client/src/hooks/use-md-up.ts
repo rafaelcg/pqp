@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { MD_UP_QUERY } from "@/lib/breakpoints";
 
 /**
  * Tailwind's `md` breakpoint, which in this shell is the line between "the
@@ -8,7 +9,7 @@ import { useSyncExternalStore } from "react";
  * icons-only rail is a column layout only, and asking for it while the list is
  * a drawer would collapse something that is already fully hidden.
  */
-export const MD_QUERY = "(min-width: 48rem)";
+export const MD_QUERY = MD_UP_QUERY;
 
 function query(): MediaQueryList | null {
   try {

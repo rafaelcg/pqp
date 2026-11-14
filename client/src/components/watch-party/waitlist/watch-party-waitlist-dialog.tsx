@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { WatchPartyFeatureList } from "@/components/watch-party/waitlist/watch-party-features";
 import { WatchPartyStageArt } from "@/components/watch-party/waitlist/watch-party-stage-art";
 import { ApiError } from "@/lib/api";
@@ -325,7 +326,7 @@ export function WatchPartyWaitlistDialog({
 
               {servers.length > 1 && (
                 <Field label={t("watchParty.waitlist.form.server")} htmlFor={ids.server}>
-                  <select
+                  <Select
                     id={ids.server}
                     value={serverId ?? ""}
                     disabled={busy}
@@ -334,14 +335,14 @@ export function WatchPartyWaitlistDialog({
                       setEditing(false);
                       setError(null);
                     }}
-                    className="h-[var(--control-lg)] w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+                    
                   >
                     {servers.map((server) => (
                       <option key={server.id} value={server.id}>
                         {server.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </Field>
               )}
 

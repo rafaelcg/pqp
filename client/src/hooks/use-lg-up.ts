@@ -1,11 +1,12 @@
 import { useSyncExternalStore } from "react";
+import { LG_UP_QUERY } from "@/lib/breakpoints";
 
 /**
  * Tailwind's `lg` breakpoint. Must stay in lockstep with `lg:` utilities:
  * the two-share split is mounted only when this matches, so a CSS hide cannot
  * leave a second live `<video>` decoding in the background.
  */
-export const LG_QUERY = "(min-width: 64rem)";
+export const LG_QUERY = LG_UP_QUERY;
 
 function query(): MediaQueryList | null {
   try {

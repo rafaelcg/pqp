@@ -21,9 +21,9 @@ import { HINTS_PERSIST_OVERRIDE_KEY } from "@/lib/hints";
  * Dismissing an attached hint writes to a set in `lib/feature-hints.ts`,
  * and the queue reads that set while it renders. Nothing subscribed to it,
  * so the winner was recomputed only when something ELSE happened to
- * re-render App: pressing Entendi on the call dock card left an empty slot
- * until the next unrelated state change, and the music card that was next
- * in line arrived minutes later or not at all.
+ * re-render App: pressing Entendi on one card left an empty slot until the
+ * next unrelated state change, and the card that was next in line arrived
+ * minutes later or not at all.
  */
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -46,11 +46,14 @@ function Card({ id }: { id: AttachedFeatureHintId }) {
 /** App's queue in miniature: both gates standing, one slot between them. */
 function Queue() {
   useFeatureHintsSpent();
-  const winner = winningFeatureHint({ callDock: true, music: true });
+  const winner = winningFeatureHint({
+    watchPartyHost: true,
+    watchPartyViewer: true,
+  });
   return (
     <FeatureHintProvider winner={winner}>
-      <Card id="callDock" />
-      <Card id="music" />
+      <Card id="watchPartyHost" />
+      <Card id="watchPartyViewer" />
     </FeatureHintProvider>
   );
 }
@@ -85,12 +88,12 @@ describe("the attached hint queue", () => {
   });
 
   it("hands the slot to the next card as soon as one is dismissed", () => {
-    expect(card("callDock")).not.toBeNull();
-    expect(card("music")).toBeNull();
+    expect(card("watchPartyHost")).not.toBeNull();
+    expect(card("watchPartyViewer")).toBeNull();
 
     // Nothing else changes: no gate moves, no other state is touched.
-    gotIt("callDock");
+    gotIt("watchPartyHost");
 
-    expect(card("music")).not.toBeNull();
+    expect(card("watchPartyViewer")).not.toBeNull();
   });
 });

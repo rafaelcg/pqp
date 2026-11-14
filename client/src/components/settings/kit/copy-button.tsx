@@ -1,6 +1,8 @@
+import { Check as CheckBold, Copy as CopyBold, XCircle } from "@phosphor-icons/react";
 import { Check, CircleX, Copy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { IconSwap } from "@/components/ui/icon";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -177,11 +179,22 @@ export function SettingsCopyButton({
   const copiedLabel = copiedLabelProp ?? t("settings.rail.copied");
   const { copied, failed, copy } = useCopyText(text, { selectOnFail });
   const icon = copied ? (
-    <Check aria-hidden className="h-3.5 w-3.5 shrink-0 animate-icon-swap text-success" />
+    <IconSwap
+      off={Check}
+      on={CheckBold}
+      kind="symbol"
+      offClassName="h-3.5 w-3.5 shrink-0 animate-icon-swap text-success"
+      className="animate-icon-swap text-success"
+    />
   ) : failed ? (
-    <CircleX aria-hidden className="h-3.5 w-3.5 shrink-0 animate-icon-swap text-danger" />
+    <IconSwap
+      off={CircleX}
+      on={XCircle}
+      offClassName="h-3.5 w-3.5 shrink-0 animate-icon-swap text-danger"
+      className="animate-icon-swap text-danger"
+    />
   ) : (
-    <Copy aria-hidden className="h-3.5 w-3.5 shrink-0" />
+    <IconSwap off={Copy} on={CopyBold} kind="symbol" offClassName="h-3.5 w-3.5 shrink-0" />
   );
   const announcement = (
     <span role="status" className="sr-only">

@@ -33,14 +33,11 @@ describe("StoryStrip", () => {
     expect(render({ ...base, enabled: false, items: [item("Bia", true)] })).toBe("");
   });
 
-  it("nothing live and no first run: draws nothing, not an empty row", () => {
+  it("nothing live: draws nothing, not an empty row", () => {
     expect(render(base)).toBe("");
   });
 
-  it("first run with no storage to remember a dismissal: stays quiet (lib/hints rule)", () => {
-    // A row that cannot remember being closed would come back on every
-    // navigation, so `isHintSeen` reads missing storage as seen. When it
-    // does show is `stripView`'s job, pinned in strip-state.test.ts.
+  it("the server's first-run hint draws no row", () => {
     expect(render({ ...base, firstRunHint: true })).toBe("");
   });
 

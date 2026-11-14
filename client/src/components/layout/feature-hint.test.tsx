@@ -19,8 +19,7 @@ import { isFeatureHintSpentForLoad } from "@/lib/feature-hints";
  * not remember the card on the discarded tree and hide it on the real one.
  * `open` had no such memory: it starts true on every mount. While a hint's
  * `wanting` was a standing condition that never moved during a call, the
- * two never met. A gate that follows live state (a track starting, a panel
- * opening) unmounts the card and hands it straight back, which is the
+ * two never met. A gate that follows live state (a party going on air) unmounts the card and hands it straight back, which is the
  * repeating card the onboarding rules say never to build.
  */
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -46,14 +45,14 @@ function mount(enabled = true) {
 
 /** The card as the call stage mounts it: enabled from the slot it holds. */
 function Card() {
-  const enabled = useFeatureHintEnabled("music");
-  return <FeatureHint id="music" enabled={enabled} body="A fila fica aqui." />;
+  const enabled = useFeatureHintEnabled("watchPartyViewer");
+  return <FeatureHint id="watchPartyViewer" enabled={enabled} body="Tu tá assistindo." />;
 }
 
 function render(enabled: boolean) {
   act(() => {
     root.render(
-      <FeatureHint id="music" enabled={enabled} body="A fila fica aqui." />,
+      <FeatureHint id="watchPartyViewer" enabled={enabled} body="Tu tá assistindo." />,
     );
   });
 }
@@ -79,7 +78,7 @@ describe("a dismissed feature hint", () => {
 
   it("does not come back when its gate flickers and remounts it", () => {
     mount();
-    expect(host.querySelector("[data-corner-card='music']")).not.toBeNull();
+    expect(host.querySelector("[data-corner-card='watchPartyViewer']")).not.toBeNull();
     // The X; the CTA below it closes the card the same way.
     const dismiss = host.querySelector("button") as HTMLButtonElement;
     act(() => dismiss.click());
@@ -87,47 +86,47 @@ describe("a dismissed feature hint", () => {
     act(() => {
       vi.advanceTimersByTime(1_000);
     });
-    expect(host.querySelector("[data-corner-card='music']")).toBeNull();
+    expect(host.querySelector("[data-corner-card='watchPartyViewer']")).toBeNull();
     unmount();
 
     mount();
-    expect(host.querySelector("[data-corner-card='music']")).toBeNull();
+    expect(host.querySelector("[data-corner-card='watchPartyViewer']")).toBeNull();
   });
 
   /*
    * The other half, and the one somebody actually hits: they never press
-   * Entendi, they just open the panel the card points at. The gate turns
-   * off, the card unmounts, and closing the panel used to hand it back.
+   * Entendi, the thing the card points at just changes. The gate turns
+   * off, the card unmounts, and the gate coming back used to hand it back.
    * A gate that turns off after the card has been shown has spent it; a
    * bare remount with the gate unchanged (the stage swapping its strip)
    * has not, which is what `eligibleThisLoad` is there for.
    */
   it("is spent by the gate turning off, not only by Entendi", () => {
     mount();
-    expect(host.querySelector("[data-corner-card='music']")).not.toBeNull();
-    // They open the Fila: nothing playing is no longer true.
+    expect(host.querySelector("[data-corner-card='watchPartyViewer']")).not.toBeNull();
+    // The party goes off air: the gate that justified the card is gone.
     render(false);
     act(() => {
       vi.advanceTimersByTime(1_000);
     });
     unmount();
 
-    // And close it again.
+    // And the gate comes back.
     mount();
-    expect(host.querySelector("[data-corner-card='music']")).toBeNull();
+    expect(host.querySelector("[data-corner-card='watchPartyViewer']")).toBeNull();
   });
 
   it("survives a remount that changed nothing, which is the strip swap", () => {
     mount();
-    expect(host.querySelector("[data-corner-card='music']")).not.toBeNull();
+    expect(host.querySelector("[data-corner-card='watchPartyViewer']")).not.toBeNull();
     unmount();
     mount();
-    expect(host.querySelector("[data-corner-card='music']")).not.toBeNull();
+    expect(host.querySelector("[data-corner-card='watchPartyViewer']")).not.toBeNull();
   });
 
   /*
    * A corner card taking the corner is not the gate turning off. A DM
-   * toast arriving while the music card is up used to spend it for the
+   * toast arriving while the card is up used to spend it for the
    * rest of the page load, and the impression is already in storage by
    * then, so for good.
    */
@@ -138,27 +137,27 @@ describe("a dismissed feature hint", () => {
     const draw = (yielding: boolean) => {
       act(() => {
         root.render(
-          <FeatureHintProvider winner="music" yielding={yielding}>
+          <FeatureHintProvider winner="watchPartyViewer" yielding={yielding}>
             <Card />
           </FeatureHintProvider>,
         );
       });
     };
     draw(false);
-    expect(host.querySelector("[data-corner-card='music']")).not.toBeNull();
+    expect(host.querySelector("[data-corner-card='watchPartyViewer']")).not.toBeNull();
 
     // A toast arrives: the card hides, and that must cost it nothing.
     draw(true);
     act(() => {
       vi.advanceTimersByTime(1_000);
     });
-    expect(host.querySelector("[data-corner-card='music']")).toBeNull();
-    expect(isFeatureHintSpentForLoad("music")).toBe(false);
+    expect(host.querySelector("[data-corner-card='watchPartyViewer']")).toBeNull();
+    expect(isFeatureHintSpentForLoad("watchPartyViewer")).toBe(false);
 
     // And comes back when the toast goes, rather than being gone for good,
     // including for a mount that happens after it.
     draw(false);
-    expect(host.querySelector("[data-corner-card='music']")).not.toBeNull();
-    expect(isFeatureHintSpentForLoad("music")).toBe(false);
+    expect(host.querySelector("[data-corner-card='watchPartyViewer']")).not.toBeNull();
+    expect(isFeatureHintSpentForLoad("watchPartyViewer")).toBe(false);
   });
 });

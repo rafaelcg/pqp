@@ -83,6 +83,45 @@ describe("the chat client preload", () => {
   });
 });
 
+describe("the chat client's own imports", () => {
+  const ENTRY_FILE = "/assets/index-abc123.js";
+  const deps = ["assets/user-avatar-1.js", "assets/index-abc123.js", "assets/menu-2.js"];
+  const html = deferEntryScript(`<head>${ENTRY}</head>`, "assets/App-xyz789.js", deps);
+  const source = scriptBody(html.slice(html.indexOf("<script>")));
+
+  it("preloads them on /app after the entry, at low priority, and never the entry twice", () => {
+    const env = inlineEnv({ route: "other", path: "/app/dm" });
+    env.run(source);
+    expect(env.appended.map((node) => node.href ?? node.src)).toEqual([
+      "/assets/App-xyz789.js",
+      ENTRY_FILE,
+      "/assets/user-avatar-1.js",
+      "/assets/menu-2.js",
+    ]);
+    for (const node of env.appended.slice(2)) {
+      expect(node).toMatchObject({ rel: "modulepreload", crossOrigin: "", fetchPriority: "low" });
+    }
+  });
+
+  it("asks for none of them off /app", () => {
+    for (const [route, path] of [
+      ["home", "/"],
+      ["other", "/vem"],
+      ["other", "/application"],
+    ] as const) {
+      const env = inlineEnv({ route, path });
+      env.run(source);
+      env.fire("pointerdown");
+      expect(env.appended.filter((node) => node.rel === "modulepreload"), path).toHaveLength(0);
+    }
+  });
+
+  it("cannot be closed early by a hostile chunk name", () => {
+    const out = deferEntryLoader(ENTRY_FILE, "/assets/App.js", ["/a</script><script>alert(1)//.js"]);
+    expect(out.match(/<\/script>/g)).toHaveLength(1);
+  });
+});
+
 describe("the loader, run as the browser would", () => {
   beforeEach(() => {
     vi.useFakeTimers();

@@ -1,3 +1,4 @@
+import { PuzzlePiece } from "@phosphor-icons/react";
 import { Puzzle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -65,6 +66,7 @@ export function AppsSection() {
         {list.length === 0 ? (
           <SettingsEmpty
             icon={Puzzle}
+            glyph={PuzzlePiece}
             title={loading && consents === null ? t("apps.settings.loading") : t("apps.settings.empty")}
             description={loading && consents === null ? undefined : t("apps.settings.emptyHint")}
           />

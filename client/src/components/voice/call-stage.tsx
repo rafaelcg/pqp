@@ -21,6 +21,29 @@ import {
   X,
 } from "lucide-react";
 import {
+  CornersIn,
+  CornersOut,
+  DotsThree,
+  HandPalm,
+  Microphone,
+  MicrophoneSlash,
+  MonitorArrowUp,
+  MusicNotes,
+  PhoneDisconnect,
+  PictureInPicture,
+  ShieldSlash,
+  VideoCamera,
+  VideoCameraSlash,
+} from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
+import {
+  CALL_BAR_REDESIGN,
+  CALL_CONTROL_REDESIGN,
+  CALL_TILE_REDESIGN,
+  TILE_BUTTON_REDESIGN,
+  TILE_GLASS_REDESIGN,
+} from "@/components/voice/call-control-classes";
+import {
   createContext,
   useCallback,
   useContext,
@@ -83,7 +106,6 @@ import {
   requestElementFullscreen,
   type WebkitFullscreenElement,
 } from "@/components/voice/document-fullscreen";
-import { CinemaHint } from "@/components/voice/cinema-hint";
 import { LinuxShareAudioHint } from "@/components/voice/linux-share-audio-hint";
 import { ShareSoundIndicator } from "@/components/voice/share-sound-indicator";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
@@ -133,9 +155,7 @@ import {
   videoSupportsNativeFullscreen,
   type StageFullscreenStrategy,
 } from "@/lib/fullscreen";
-import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { ChatMusicContext } from "@/components/layout/call-split";
-import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Tooltip } from "@/components/ui/tooltip";
 import { shareAppTarget } from "@/lib/share-app-hint";
 import {
@@ -169,6 +189,7 @@ import { OwnShareStrip } from "@/components/voice/own-share-strip";
 import {
   listenersOf,
   listenerStripSlots,
+  planRoomStage,
   planStage,
   screensDrawnOnStage,
   stageGridColumns,
@@ -179,6 +200,17 @@ import {
   STRIP_LIMIT_WIDE,
 } from "@/components/voice/stage-layout";
 import { ListenerStrip } from "@/components/voice/listener-strip";
+import {
+  RoomCards,
+  type RoomCardEntry,
+  type RoomCardMenuFor,
+} from "@/components/voice/room-cards";
+import {
+  roomCardMenuItems,
+  type StageOccupantModeration,
+} from "@/components/voice/room-card-menu";
+import { useProfilePopover } from "@/components/user/user-profile-popover";
+import { MusicStagePanel } from "@/components/voice/music-stage-panel";
 import {
   showsVideoQualityControl,
   videoQualityMenuOpen,
@@ -219,6 +251,7 @@ import {
 import { useAutoHideStageControls } from "@/lib/stage-controls-pref";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
+import { useRedesign } from "@/lib/redesign";
 import { useLiveHlsReady } from "@/hooks/use-live-hls-src";
 import {
   isCameraAtCap,
@@ -296,6 +329,7 @@ import {
   rememberStageCollapsed,
   rememberStagePinnedKey,
   shouldShowExpandedStage,
+  showsRoomView,
   stagePinnedKey,
   type PipCorner,
 } from "@/components/dm/call-stage-state";
@@ -325,6 +359,8 @@ export interface StagePerson {
    * (the muted person most of all) need to tell the two apart at a glance.
    */
   serverMuted: boolean;
+  /** They turned their sound off. Only the room cards draw it. */
+  deafened?: boolean;
   /** Their place in the room's queue of raised hands (1-based), or null. */
   handPosition?: number | null;
   connecting: boolean;
@@ -392,7 +428,7 @@ export function personAudioTracks(person: StagePerson): {
  * roles inside it come from `.on-media-scope`.
  */
 const STAGE_OVERLAY_PILL =
-  "inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1 rounded-full bg-black/70 px-2 py-0.5";
+  `inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1 rounded-full bg-black/70 px-2 py-0.5 ${TILE_GLASS_REDESIGN}`;
 
 const PIP_CORNER_CLASS: Record<PipCorner, string> = {
   tl: "left-3 top-3",
@@ -853,6 +889,13 @@ export interface CallStageProps {
    * a conversation call.
    */
   audienceHost?: AudienceModeHostControls | null;
+  /**
+   * What the right-click menu of a person's room card may do to them: server
+   * mute, disconnect, kick, with the permission answers the sidebar row's menu
+   * uses. Absent (a conversation call, a test), the card's menu still offers
+   * profile, mute for you and copy name.
+   */
+  occupantModeration?: StageOccupantModeration;
   /** Shrinks the listener chips. Same setting the old lobby grid used. */
   compactPeers?: boolean;
   /**
@@ -958,6 +1001,7 @@ export function CallStage({
   onLowerHand,
   onLowerAllHands,
   audienceHost = null,
+  occupantModeration,
   compactPeers = false,
   ringWhenAlone = true,
   fill = false,
@@ -1067,6 +1111,7 @@ export function CallStage({
       canLowerHands={canLowerHands}
       onLowerHand={onLowerHand}
       audienceHost={audienceHost}
+      occupantModeration={occupantModeration}
       compactPeers={compactPeers}
       ringWhenAlone={ringWhenAlone}
       fill={fill}
@@ -1126,6 +1171,7 @@ function ActiveCall({
   canLowerHands = false,
   onLowerHand,
   audienceHost = null,
+  occupantModeration,
   compactPeers = false,
   ringWhenAlone = true,
   fill = false,
@@ -1215,6 +1261,7 @@ function ActiveCall({
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
   audienceHost?: AudienceModeHostControls | null;
+  occupantModeration?: StageOccupantModeration;
   compactPeers?: boolean;
   ringWhenAlone?: boolean;
   fill?: boolean;
@@ -1243,18 +1290,30 @@ function ActiveCall({
   const musicPlacement = useMusicPlacement();
   const musicPresence = useMusicStagePresence();
   const musicOnStage = musicPlacement === "stage" && musicPresence.active;
+  const redesign = useRedesign();
+  const roomView = showsRoomView({
+    redesign,
+    serverCall: serverId !== null,
+    watchParty: watchPartyChrome || isWatchPartyChannel,
+    wide,
+  });
   // Cameras and shares take the overlay bar. Music on the stage is a clip.
   const chromeExpanded = shouldShowExpandedStage(
     hasVideo,
     userCollapsed,
     ringing,
+    roomView,
   );
-  const musicPictureOnly = isMusicPictureOnlyStage({
-    musicOnStage,
-    hasLiveVideo: hasVideo,
-    ringing,
-    watchPartyChrome,
-  });
+  // Not in the room view: there the clip sits above the cards like a share
+  // and the dock stays on the stage, so the stage is not "the picture only".
+  const musicPictureOnly =
+    !roomView &&
+    isMusicPictureOnlyStage({
+      musicOnStage,
+      hasLiveVideo: hasVideo,
+      ringing,
+      watchPartyChrome,
+    });
   const collapsed = !chromeExpanded && !musicPictureOnly;
   useEffect(() => {
     if (playOutgoingRingtone && callingOut) {
@@ -1309,6 +1368,7 @@ function ActiveCall({
           !voiceState.isMuted,
         muted: voiceState.isMuted,
         serverMuted: selfServerMuted,
+        deafened: voiceState.isDeafened,
         handPosition: handPositions.get(currentUser.id) ?? null,
         connecting: false,
         isSelf: true,
@@ -1330,6 +1390,7 @@ function ActiveCall({
       speaking: speaking.has(peer.peerId) && !serverMuted.has(peer.peerId),
       muted: rosterByPeerId.get(peer.peerId)?.muted ?? false,
       serverMuted: serverMuted.has(peer.peerId),
+      deafened: rosterByPeerId.get(peer.peerId)?.deafened ?? false,
       handPosition: peer.userId
         ? (handPositions.get(peer.userId) ?? null)
         : null,
@@ -1492,6 +1553,59 @@ function ActiveCall({
     ? voiceState.isSharingScreenAudio
     : receivedShareHasAudio;
   const allPeople: StagePerson[] = [...(self ? [self] : []), ...remotes];
+  // The right-click menu of a room card: the sidebar row's, built from the
+  // same actions (`room-card-menu.ts`).
+  const openProfile = useProfilePopover();
+  const roomCardMenuFor: RoomCardMenuFor = (entry, anchor) => {
+    const person = allPeople.find((candidate) => candidate.key === entry.key);
+    if (!person) {
+      return [];
+    }
+    const audienceSpeakers =
+      audienceHost && voiceState.audience
+        ? voiceState.audience.speakerUserIds
+        : null;
+    return roomCardMenuItems({
+      t,
+      userId: person.userId,
+      name: person.name,
+      isSelf: person.isSelf,
+      serverMuted: person.serverMuted,
+      handRaised: person.handPosition != null,
+      volume: person.volume,
+      onSetVolume: person.onSetVolume,
+      moderation: occupantModeration,
+      onLowerHand: canLowerHands ? onLowerHand : undefined,
+      audience:
+        audienceHost && audienceSpeakers && person.userId
+          ? {
+              action: audienceSpeakers.includes(person.userId)
+                ? "silence"
+                : rosterByPeerId.get(person.key)?.canSpeak === false
+                  ? "allow"
+                  : null,
+              onSet: (userId, allowed) =>
+                allowed
+                  ? audienceHost.onAllow(userId)
+                  : audienceHost.onSilence(userId),
+            }
+          : undefined,
+      openProfile: () => {
+        const element = anchor();
+        if (element && person.userId) {
+          openProfile(
+            {
+              id: person.userId,
+              displayName: person.name,
+              tag: null,
+              avatarUrl: person.avatarUrl,
+            },
+            element,
+          );
+        }
+      },
+    });
+  };
   const [pinnedTileId, setPinnedTileId] = useState(() =>
     stagePinnedKey(channelId),
   );
@@ -1577,8 +1691,6 @@ function ActiveCall({
     voiceState.peerId,
     overflowKeys,
   );
-  const gridColumns = stageGridColumns(staged.tiles.length, wide);
-  const clickFullscreens = tileClickFullscreens(staged.tiles.length);
   const anyVideo = hasVideo || musicOnStage;
   /**
    * The row exists only when somebody is in it, and only beside a stage.
@@ -1798,8 +1910,15 @@ function ActiveCall({
     // so the controls would have nowhere visible to be.
     (smallLandscape && anyVideo && chromeExpanded && !stageHidden) ||
     composerHidden;
+  // THE ONE EXCEPTION, under the redesign's room view: the stage is the room
+  // there (cards, cameras in them, a share above them), so the controls float
+  // on it the way every other voice app draws a call, and the composer is
+  // only the chat's. With the call hidden ("Esconder a call") they go back to
+  // the composer, which is then the only place left to put them.
   const dockControls =
-    !composerOutOfSight && !(chromeExpanded && watchPartyChrome);
+    !composerOutOfSight &&
+    !(chromeExpanded && watchPartyChrome) &&
+    !(roomView && chromeExpanded && !stageHidden);
   const dockComposer = dockControls && dockPublish !== null;
   // The control bar is drawn over the stage. Outside fullscreen the stage
   // keeps a band for it (a page with no composer); in fullscreen the bar
@@ -1834,7 +1953,37 @@ function ActiveCall({
   // the bar floats on the picture.
   const musicGivesWay = smallLandscape && barFloats && !immersive.immersive;
   const chatMusic = useContext(ChatMusicContext);
+  // THE ROOM STAGE (redesign): the cards stay the stage when a picture
+  // arrives. A camera is drawn in its owner's card and a share takes the
+  // space above a row of cards (`planRoomStage`). Not while one picture is
+  // blown up, which is the solo view's job, and not with the music clip on
+  // the stage, which `roomView` already rules out.
+  const roomStage =
+    roomView && !ringing && !soloPerson && !soloTile && !soloMusic;
+  const roomPlan = planRoomStage(staged.tiles);
+  // THE MUSIC ON THE ROOM STAGE: with no share above the cards, a track (on,
+  // or just ended) or the open queue takes that space as `MusicStagePanel`,
+  // and its mount tells App to leave the composer's bar out. Not collapsed or
+  // hidden, where the composer is the only place left to show it. A share
+  // keeps the space, so with one on the stage the music stays in the
+  // composer's bar (no strip beside the share yet). The clip on the stage
+  // (`placement: "stage"`) is not this: `roomView` already hands it the stage.
+  const stageMusic = useMusicDock();
+  const musicPanel =
+    roomStage &&
+    !collapsed &&
+    !stageHidden &&
+    roomPlan.screens.length === 0 &&
+    (stageMusic.on || stageMusic.open);
+  // Our own camera beside exactly one other picture is the floating preview
+  // on the ordinary stage (`selfPreview`). The room stage has no floating
+  // preview: our camera is our card, like everybody else's.
+  const roomCameraKeys =
+    stage.selfPreview && self?.stream
+      ? new Set([...roomPlan.cameraKeys, self.key])
+      : roomPlan.cameraKeys;
   const stripDrawn =
+    !roomStage &&
     showStrip &&
     !(musicGivesWay && chatMusic && !peerFailed) &&
     // Beside an app the column is too short for a row of chips as well as a
@@ -2335,7 +2484,6 @@ function ActiveCall({
         roseFrom={voiceState.capacityRoseFrom}
         visible={!chrome.hidden}
       />
-      <CinemaHint visible={screenStream !== null} />
       {/* Linux only (see `lib/linux-share-audio-hint.ts`): next to the
           share button, before the picker opens, since that is where the
           question actually gets asked. Gone once the share is already
@@ -2359,7 +2507,9 @@ function ActiveCall({
       collapsed={collapsed || dockComposer}
       videoOnStage={dockComposer && chromeExpanded}
       leading={collapsedLeading}
-      canExpand={hasVideo}
+      // The room view is a stage with or without a picture, so the way back
+      // from "Recolher" stays on the menu after the last camera goes off.
+      canExpand={hasVideo || roomView}
       userCollapsed={userCollapsed}
       fullscreenAvailable={fullscreen.available && chromeExpanded}
       isFullscreen={fullscreen.isFullscreen}
@@ -2520,6 +2670,142 @@ function ActiveCall({
           ? null
           : t("call.panel.inCall", { count: remotes.length + 1 })));
 
+  /**
+   * The grid of pictures. The ordinary stage draws every tile in it; the
+   * redesign's room stage draws only the shares here and keeps cameras in
+   * their owners' cards (`planRoomStage`).
+   */
+  const stageGrid = (gridTiles: typeof staged.tiles, gridFeatured: boolean) => {
+    const columns = stageGridColumns(gridTiles.length, wide);
+    const clickFull = tileClickFullscreens(gridTiles.length);
+    return (
+      <ul
+        data-testid="stage-grid"
+        data-columns={columns}
+        className={cn(
+          "grid h-full w-full",
+          // One publisher owns the stage edge to edge, the way a single
+          // share always has. Padding is what separates tiles from each
+          // other, so with nothing to separate it is only a border of
+          // wasted picture.
+          gridTiles.length > 1 && "gap-2 p-2",
+        )}
+        style={{
+          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+          // The featured row (a pin, or the one screen a crowded room
+          // is watching) gets twice the height of the rows under it.
+          // Without it a share at the top of a three-row grid is a third
+          // of the stage, which is not "featured" in any useful sense.
+          gridTemplateRows: gridFeatured ? "minmax(0, 2fr)" : undefined,
+          // Equal rows for the rest. Without this they size to content,
+          // and a tile whose picture is absolutely positioned has none.
+          gridAutoRows: "minmax(0, 1fr)",
+        }}
+      >
+        {gridTiles.map((tile, index) => {
+          const wideRow = gridFeatured && index === 0 && columns > 1;
+          const videoRef = index === 0 ? primaryVideoRef : undefined;
+          const pinned = pinnedTileId === tile.id;
+          if (tile.kind === "music") {
+            return (
+              <li
+                key={tile.id}
+                className={cn(
+                  "relative min-h-0 overflow-hidden bg-surface-0",
+                  gridTiles.length > 1 && "rounded-xl",
+                  wideRow && "col-span-full",
+                )}
+              >
+                <MusicStageTile
+                  title={musicPresence.title}
+                  addedByUserId={musicPresence.addedByUserId}
+                  addedByName={musicPresence.addedByName}
+                  voiceState={voiceState}
+                  clickToFullscreen={clickFull}
+                  onToggleFullscreen={() =>
+                    fullscreen.toggleScreen(MUSIC_STAGE_TILE_ID)
+                  }
+                  className="h-full w-full"
+                />
+              </li>
+            );
+          }
+          if (tile.kind === "screen") {
+            const screenTile = screenTiles.find(
+              (candidate) => candidate.peerId === tile.key,
+            );
+            if (!screenTile) {
+              return null;
+            }
+            return (
+              <li
+                key={tile.id}
+                className={cn(
+                  "relative min-h-0 overflow-hidden bg-black",
+                  gridTiles.length > 1 && cn("rounded-xl", CALL_TILE_REDESIGN.rounded),
+                  wideRow && "col-span-full",
+                )}
+              >
+                <ScreenTileFrame
+                  tile={screenTile}
+                  videoRef={videoRef}
+                  isFullscreen={false}
+                  stageFullscreen={fullscreen.isFullscreen}
+                  showName
+                  clickToFullscreen={clickFull}
+                  onToggleFullscreen={() => {
+                    // Keep the header's "X is presenting" line pointing
+                    // at the share the person just acted on.
+                    onFocusScreenShare?.(screenTile.peerId);
+                    fullscreen.toggleScreen(screenTile.peerId);
+                  }}
+                  onPin={
+                    gridTiles.length > 1
+                      ? () => togglePin(tile.id)
+                      : undefined
+                  }
+                  pinned={pinned}
+                  registerPipVideo={registerPipVideo}
+                  audio={shareAudioControl(screenTile)}
+                  dismissed={shareDismissControl(screenTile)}
+                  className="h-full w-full"
+                  mediaTitle={title}
+                  communityName={serverName}
+                  coverUrl={serverIconUrl}
+                />
+              </li>
+            );
+          }
+          const person = allPeople.find(
+            (candidate) => candidate.key === tile.key,
+          );
+          if (!person) {
+            return null;
+          }
+          return (
+            <CameraTile
+              key={tile.id}
+              person={person}
+              videoRef={videoRef}
+              youLabel={t("voice.tile.you")}
+              wideRow={wideRow}
+              rounded={gridTiles.length > 1}
+              clickToFullscreen={clickFull}
+              onToggleFullscreen={() => toggleCameraFullscreen(person.key)}
+              onPin={
+                gridTiles.length > 1
+                  ? () => togglePin(tile.id)
+                  : undefined
+              }
+              pinned={pinned}
+              hidden={cameraHideControl(person)}
+            />
+          );
+        })}
+      </ul>
+    );
+  };
+
   return (
     <WakePressContext.Provider value={isWakePress}>
     <TileMenuHoldContext.Provider value={reportTileMenu}>
@@ -2532,7 +2818,7 @@ function ActiveCall({
       data-music-picture={musicPictureOnly ? "" : undefined}
       data-chrome-hidden={chrome.hidden ? "true" : "false"}
       className={cn(
-        "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
+        "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--call-stage-bg)]",
         // The pointer goes with the controls, as in every player. `!` and the
         // descendant selector because the tiles set their own cursors, and the
         // pointer has to be gone over the picture whoever owns that element.
@@ -2551,7 +2837,13 @@ function ActiveCall({
               // the live pane: a second one here would fight it.
               "h-full min-h-0"
             : stageHeightClass({
-                anyVideo,
+                // A room of more than four cards needs the picture's height:
+                // four cards to a row in the short stage are thumbnails. So
+                // does the music panel, a cover and a row of cards under it.
+                anyVideo:
+                  anyVideo ||
+                  musicPanel ||
+                  (roomView && redesign && !ringing && listeners.length > 4),
                 musicPictureOnly,
                 // Sideways with the chat beside the floating bar, not under
                 // the takeover, where the chat is not on screen at all.
@@ -2783,6 +3075,48 @@ function ActiveCall({
               communityName={serverName}
               coverUrl={serverIconUrl}
             />
+          ) : roomStage ? (
+            <RoomCards
+              youLabel={t("voice.tile.you")}
+              menuFor={roomCardMenuFor}
+              stage={
+                roomPlan.screens.length > 0 ? (
+                  stageGrid(roomPlan.screens, false)
+                ) : musicPanel ? (
+                  <MusicStagePanel channelId={channelId} voiceState={voiceState} />
+                ) : undefined
+              }
+              people={allPeople.map((person) =>
+                roomCardEntry(person, roomCameraKeys.has(person.key)),
+              )}
+              renderCamera={(entry, style, className, first) => {
+                const person = allPeople.find(
+                  (candidate) => candidate.key === entry.key,
+                );
+                if (!person) {
+                  return null;
+                }
+                return (
+                  <CameraTile
+                    key={entry.key}
+                    person={person}
+                    // The first picture is the stage's primary video when
+                    // no share took that slot.
+                    videoRef={
+                      first && roomPlan.screens.length === 0
+                        ? primaryVideoRef
+                        : undefined
+                    }
+                    youLabel={t("voice.tile.you")}
+                    rounded
+                    onToggleFullscreen={() => toggleCameraFullscreen(person.key)}
+                    hidden={cameraHideControl(person)}
+                    style={style}
+                    className={className}
+                  />
+                );
+              }}
+            />
           ) : watchPartyChrome &&
             presenterStage &&
             localShare &&
@@ -2798,130 +3132,7 @@ function ActiveCall({
             screenTiles.length === 1 ? (
             presenterStage(localShare.stream)
           ) : staged.tiles.length > 0 ? (
-            <ul
-              data-testid="stage-grid"
-              data-columns={gridColumns}
-              className={cn(
-                "grid h-full w-full",
-                // One publisher owns the stage edge to edge, the way a single
-                // share always has. Padding is what separates tiles from each
-                // other, so with nothing to separate it is only a border of
-                // wasted picture.
-                staged.tiles.length > 1 && "gap-2 p-2",
-              )}
-              style={{
-                gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`,
-                // The featured row (a pin, or the one screen a crowded room
-                // is watching) gets twice the height of the rows under it.
-                // Without it a share at the top of a three-row grid is a third
-                // of the stage, which is not "featured" in any useful sense.
-                gridTemplateRows: staged.featured ? "minmax(0, 2fr)" : undefined,
-                // Equal rows for the rest. Without this they size to content,
-                // and a tile whose picture is absolutely positioned has none.
-                gridAutoRows: "minmax(0, 1fr)",
-              }}
-            >
-              {staged.tiles.map((tile, index) => {
-                const wideRow = staged.featured && index === 0 && gridColumns > 1;
-                const videoRef = index === 0 ? primaryVideoRef : undefined;
-                const pinned = pinnedTileId === tile.id;
-                if (tile.kind === "music") {
-                  return (
-                    <li
-                      key={tile.id}
-                      className={cn(
-                        "relative min-h-0 overflow-hidden bg-surface-0",
-                        staged.tiles.length > 1 && "rounded-xl",
-                        wideRow && "col-span-full",
-                      )}
-                    >
-                      <MusicStageTile
-                        title={musicPresence.title}
-                        addedByUserId={musicPresence.addedByUserId}
-                        addedByName={musicPresence.addedByName}
-                        voiceState={voiceState}
-                        clickToFullscreen={clickFullscreens}
-                        onToggleFullscreen={() =>
-                          fullscreen.toggleScreen(MUSIC_STAGE_TILE_ID)
-                        }
-                        className="h-full w-full"
-                      />
-                    </li>
-                  );
-                }
-                if (tile.kind === "screen") {
-                  const screenTile = screenTiles.find(
-                    (candidate) => candidate.peerId === tile.key,
-                  );
-                  if (!screenTile) {
-                    return null;
-                  }
-                  return (
-                    <li
-                      key={tile.id}
-                      className={cn(
-                        "relative min-h-0 overflow-hidden bg-black",
-                        staged.tiles.length > 1 && "rounded-xl",
-                        wideRow && "col-span-full",
-                      )}
-                    >
-                      <ScreenTileFrame
-                        tile={screenTile}
-                        videoRef={videoRef}
-                        isFullscreen={false}
-                        stageFullscreen={fullscreen.isFullscreen}
-                        showName
-                        clickToFullscreen={clickFullscreens}
-                        onToggleFullscreen={() => {
-                          // Keep the header's "X is presenting" line pointing
-                          // at the share the person just acted on.
-                          onFocusScreenShare?.(screenTile.peerId);
-                          fullscreen.toggleScreen(screenTile.peerId);
-                        }}
-                        onPin={
-                          staged.tiles.length > 1
-                            ? () => togglePin(tile.id)
-                            : undefined
-                        }
-                        pinned={pinned}
-                        registerPipVideo={registerPipVideo}
-                        audio={shareAudioControl(screenTile)}
-                        dismissed={shareDismissControl(screenTile)}
-                        className="h-full w-full"
-                        mediaTitle={title}
-                        communityName={serverName}
-                        coverUrl={serverIconUrl}
-                      />
-                    </li>
-                  );
-                }
-                const person = allPeople.find(
-                  (candidate) => candidate.key === tile.key,
-                );
-                if (!person) {
-                  return null;
-                }
-                return (
-                  <CameraTile
-                    key={tile.id}
-                    person={person}
-                    videoRef={videoRef}
-                    youLabel={t("voice.tile.you")}
-                    wideRow={wideRow}
-                    rounded={staged.tiles.length > 1}
-                    clickToFullscreen={clickFullscreens}
-                    onToggleFullscreen={() => toggleCameraFullscreen(person.key)}
-                    onPin={
-                      staged.tiles.length > 1
-                        ? () => togglePin(tile.id)
-                        : undefined
-                    }
-                    pinned={pinned}
-                    hidden={cameraHideControl(person)}
-                  />
-                );
-              })}
-            </ul>
+            stageGrid(staged.tiles, staged.featured)
           ) : ringing ? (
             <RingView
               faces={ringFaces}
@@ -2936,6 +3147,8 @@ function ActiveCall({
               people={listeners}
               youLabel={t("voice.tile.you")}
               othersOnly={ownShareHidden}
+              cards={redesign}
+              menuFor={roomCardMenuFor}
             />
           )}
           {/* Picking one stream and clicking away from it used to leave no
@@ -3042,7 +3255,7 @@ function ActiveCall({
           it — somebody else is publishing exactly one picture, so the stage
           belongs to them (`stage-layout.ts`). Hidden while our own camera is
           the thing blown up: a preview of the picture filling the screen. */}
-      {stage.selfPreview && self && !soloPerson?.isSelf && (
+      {stage.selfPreview && self && !soloPerson?.isSelf && !roomStage && (
         <div
           data-call-tile={self.name}
           data-call-pip=""
@@ -3269,7 +3482,7 @@ function ActiveCall({
             <CallDuration
               running={timerRunning}
               startedAt={startedAt}
-              className="rounded bg-black/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
+              className={cn("rounded bg-black/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted redesign:rounded-full redesign:px-2", TILE_GLASS_REDESIGN)}
             />
           )}
           {/* The way back from the landscape takeover, and the way into it
@@ -3643,17 +3856,7 @@ export function CallControls({
   const shareCursor = useShareCursor();
   const joinLeaveAutoMute = useJoinLeaveAutoMuteEnabled();
   const cursorLiveControl = useMemo(() => canControlShareCursor(), []);
-  const watchPartyHintEnabled = useFeatureHintEnabled("watchParty");
-  // "The controls moved down here." Once, the first time the dock opens.
-  // Pressing any control in the dock is proof enough that they were found,
-  // so one capture handler on the row closes the card; the impression is
-  // already recorded by then (`FeatureHint` remembers on first paint), so it
-  // does not come back either way.
-  const callDockHintEnabled = useFeatureHintEnabled("callDock");
   const hintHost = useCallDockHintHost();
-  const [dockControlUsed, setDockControlUsed] = useState(false);
-  const bringFriendsHintEnabled = useFeatureHintEnabled("bringFriends");
-  const musicHintEnabled = useFeatureHintEnabled("music");
   const musicDock = useMusicDock();
   // The pip outlives the card: it is spent by opening the panel, which the
   // card's own impression never waits for. `lib/music-pip.ts` says why the
@@ -3701,8 +3904,12 @@ export function CallControls({
     ? "h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11"
     : collapsed
       ? "h-9 w-9 @max-[24rem]:h-8 @max-[24rem]:w-8"
-      : "h-10 w-10";
-  const iconSize = collapsed ? "h-4 w-4" : "h-4 w-4";
+      : "h-10 w-10 redesign:h-11 redesign:w-11";
+  // The redesign's filled glyphs read small at 16 px in a 44 px well.
+  const iconSize = collapsed ? "h-4 w-4 redesign:h-[1.125rem] redesign:w-[1.125rem]" : "h-4 w-4 redesign:h-5 redesign:w-5";
+  // Docked in the composer the controls sit in a row of the composer's own
+  // icons, so at rest they are ghosts; on the open stage they are wells.
+  const idle = collapsed ? CALL_CONTROL_REDESIGN.dock : CALL_CONTROL_REDESIGN.idle;
   // On a narrow stage a cluster is not a unit: its tiles fold into the pill's
   // wrapping row one by one. The bell's group keeps its own rule (hidden
   // below `sm`), which a `contents` here would override. The docked strip
@@ -3711,7 +3918,11 @@ export function CallControls({
   // mute alone on a line and pushed hang-up off a phone's screen.
   const stageGroup = collapsed
     ? "@max-[35rem]:contents"
-    : "@max-[40rem]:contents";
+    : cn(
+        "@max-[40rem]:contents",
+        // The open stage's wells sit on the bar's own 8px rhythm.
+        !appColumn.active && "redesign:gap-2",
+      );
   // SPEAK denied locks mute. STREAM denied hides camera and share. The two
   // bits are independent: a stage can let someone present without talking.
   // In a watch_party channel the server answers `canStream` from
@@ -3883,10 +4094,14 @@ export function CallControls({
                 // that looks like a button.
                 "bg-accent text-on-accent ring-2 ring-accent/40 hover:bg-accent-hover"
               : "bg-ink-3 text-paper hover:bg-ink-4",
+          CALL_CONTROL_REDESIGN.base,
+          handRaised
+            ? CALL_CONTROL_REDESIGN.on
+            : !audienceLocked && idle,
         )}
         onClick={onToggleRaisedHand}
       >
-        <Hand className={iconSize} />
+        <IconSwap off={Hand} on={HandPalm} offClassName={iconSize} className={iconSize} />
       </button>
     </Tooltip>
   ) : null;
@@ -3900,6 +4115,7 @@ export function CallControls({
         onToggle={audienceHost.onToggle}
         size={size}
         iconSize={iconSize}
+        idleClassName={idle}
       />
     ) : null;
 
@@ -3911,14 +4127,12 @@ export function CallControls({
       )}
     >
       {/* ABOVE THE BAR, OUT OF THE FLOW.
-          These sat in the column and pushed the bar (and with it the whole
-          composer) down by the height of whichever card was up, so the
-          controls moved the moment a card explaining them appeared. Docked,
-          they go through `useCallDockHintHost` into a host the outlet hangs
-          above its own clipped row; on the expanded stage there is no dock
-          and nothing clips, so the same markup is anchored here. Either way
-          the wrapper passes pointer events through, so the row underneath
-          still takes the click that spends the call dock card. */}
+          A line that appears here must not push the bar (and with it the whole
+          composer) down, or the controls move the moment it shows. Docked, it
+          goes through `useCallDockHintHost` into a host the outlet hangs above
+          its own clipped row; on the expanded stage there is no dock and
+          nothing clips, so the same markup is anchored here. Either way the
+          wrapper passes pointer events through. */}
       {renderCallHints(
         hintHost,
         <div
@@ -3929,45 +4143,10 @@ export function CallControls({
               "pointer-events-none absolute bottom-full left-0 z-30 mb-2 w-full [&>*]:pointer-events-auto",
           )}
         >
-        {collapsed && callDockHintEnabled && (
-          <div className="mb-1">
-            <FeatureHint
-              id="callDock"
-              enabled={!dockControlUsed}
-              title={t("featureHint.callDock.title")}
-              body={t("featureHint.callDock.body")}
-            />
-          </div>
-        )}
-        {watchPartyHintEnabled && canWatchParty && !listenOnly && !noVideo && (
-          <div className="mb-1">
-            <FeatureHint
-              id="watchParty"
-              enabled
-              body={t("featureHint.watchParty.body")}
-            />
-          </div>
-        )}
-        {bringFriendsHintEnabled && voiceState.isSharingScreen && (!collapsed || videoOnStage) && (
-          <div className="mb-1">
-            <BringFriendsHint enabled />
-          </div>
-        )}
-        {/* Mounted whether or not it wins, so the card can tell "the gate
-            turned off" (a track started, the panel opened) from "the strip
-            swapped under me". The first spends it; the second must not. */}
-        <div className={cn(musicHintEnabled && "mb-1")}>
-          <FeatureHint
-            id="music"
-            enabled={musicHintEnabled}
-            title={t("featureHint.music.title")}
-            body={t("featureHint.music.body")}
+          <PttFocusHint
+            show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
+            className="text-center"
           />
-        </div>
-        <PttFocusHint
-          show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
-          className="text-center"
-        />
         </div>,
       )}
 
@@ -4031,20 +4210,6 @@ export function CallControls({
             ? "w-full flex-col @min-[35rem]:flex-row @min-[35rem]:flex-wrap @min-[35rem]:gap-x-3 @min-[35rem]:gap-y-2"
             : "flex-wrap justify-center",
         )}
-        // Capture, so the pill's pointerdown and every tile's click count,
-        // including the ones that open a menu and stop propagation.
-        onPointerDownCapture={
-          collapsed && callDockHintEnabled && !dockControlUsed
-            ? (event) => {
-                if (
-                  event.target instanceof Element &&
-                  event.target.closest("button")
-                ) {
-                  setDockControlUsed(true);
-                }
-              }
-            : undefined
-        }
       >
         {collapsed && leading && (
           <div
@@ -4102,8 +4267,8 @@ export function CallControls({
           : appColumn.active
             ? // The column beside an app is ~300 px: six 44 px touch tiles fit
               // one row only with the tighter gap and padding.
-              "max-w-full flex-wrap justify-center gap-0.5 rounded-[1.625rem] bg-ink-2/90 px-1.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur"
-            : "max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1",
+              cn("max-w-full flex-wrap justify-center gap-0.5 rounded-[1.625rem] bg-ink-2/90 px-1.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur", CALL_BAR_REDESIGN, "redesign:gap-1")
+            : cn("max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1", CALL_BAR_REDESIGN, "redesign:px-2 redesign:py-2"),
       )}
     >
       {/* Every control in this bar used to carry a `title` beside its
@@ -4169,15 +4334,21 @@ export function CallControls({
                     ? "bg-danger/20 text-danger"
                     : "bg-ink-3 text-paper hover:bg-ink-4",
                 listenOnly && "opacity-60",
+                CALL_CONTROL_REDESIGN.base,
+                !listenOnly && voiceState.self?.serverMuted
+                  ? CALL_CONTROL_REDESIGN.warn
+                  : micShownOff
+                    ? CALL_CONTROL_REDESIGN.off
+                    : idle,
               )}
               onClick={onToggleMute}
             >
               {!listenOnly && voiceState.self?.serverMuted ? (
-                <ShieldBan className={iconSize} />
+                <IconSwap off={ShieldBan} on={ShieldSlash} offClassName={iconSize} className={iconSize} />
               ) : micShownOff ? (
-                <MicOff className={iconSize} />
+                <IconSwap off={MicOff} on={MicrophoneSlash} offClassName={iconSize} className={iconSize} />
               ) : (
-                <Mic className={iconSize} />
+                <IconSwap off={Mic} on={Microphone} offClassName={iconSize} className={iconSize} />
               )}
             </button>
           </span>
@@ -4186,7 +4357,7 @@ export function CallControls({
       {listenOnly && !collapsed && !audienceLocked && (
         <span
           data-listen-only
-          className="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warning"
+          className="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warning redesign:rounded-full redesign:px-2 redesign:text-[11px] redesign:font-medium redesign:normal-case redesign:tracking-normal"
         >
           {t("voice.bar.listenOnly")}
         </span>
@@ -4221,6 +4392,10 @@ export function CallControls({
             voiceState.isCameraOn
               ? "bg-signal/20 text-signal"
               : "bg-ink-3 text-paper hover:bg-ink-4",
+            CALL_CONTROL_REDESIGN.base,
+            voiceState.isCameraOn
+              ? CALL_CONTROL_REDESIGN.on
+              : idle,
           )}
           onClick={() => {
             if (cameraCappedOut) {
@@ -4230,9 +4405,9 @@ export function CallControls({
           }}
         >
           {voiceState.isCameraOn ? (
-            <Video className={iconSize} />
+            <IconSwap off={Video} on={VideoCamera} offClassName={iconSize} className={iconSize} />
           ) : (
-            <VideoOff className={iconSize} />
+            <IconSwap off={VideoOff} on={VideoCameraSlash} offClassName={iconSize} className={iconSize} />
           )}
         </button>
       </Tooltip>
@@ -4264,6 +4439,7 @@ export function CallControls({
           participantCount={voiceState.remotePeers.length + 1}
           buttonClassName={size}
           iconClassName={iconSize}
+          idleClassName={idle}
         />
       )}
       {/* Whether your mouse pointer goes out with the share.
@@ -4289,12 +4465,14 @@ export function CallControls({
             className={cn(
               "flex items-center justify-center rounded-full bg-ink-3 text-paper opacity-50",
               size,
+              CALL_CONTROL_REDESIGN.base,
+              idle,
             )}
             onClick={() =>
               setShareHint(screenShareUnavailableMessage("no-api"))
             }
           >
-            <ScreenShare className={iconSize} />
+            <IconSwap off={ScreenShare} on={MonitorArrowUp} offClassName={iconSize} className={iconSize} />
           </button>
         </Tooltip>
       )}
@@ -4329,6 +4507,10 @@ export function CallControls({
               voiceState.isSharingScreen
                 ? "bg-signal/20 text-signal"
                 : "bg-ink-3 text-paper hover:bg-ink-4",
+              CALL_CONTROL_REDESIGN.base,
+              voiceState.isSharingScreen
+                ? CALL_CONTROL_REDESIGN.on
+                : idle,
             )}
             onClick={() => {
               if (shareCappedOut) {
@@ -4342,9 +4524,9 @@ export function CallControls({
             }}
           >
             {voiceState.isSharingScreen ? (
-              <ScreenShareOff className={iconSize} />
+              <IconSwap off={ScreenShareOff} on={MonitorArrowUp} offClassName={iconSize} className={iconSize} />
             ) : (
-              <ScreenShare className={iconSize} />
+              <IconSwap off={ScreenShare} on={MonitorArrowUp} offClassName={iconSize} className={iconSize} />
             )}
           </button>
         </Tooltip>
@@ -4377,6 +4559,7 @@ export function CallControls({
         canManage={voiceState.canManageSoundboard}
         size={size}
         iconSize={iconSize}
+        idleClassName={idle}
       />
       {!musicFolded && (
       <Tooltip
@@ -4393,17 +4576,21 @@ export function CallControls({
             musicDock.open
               ? "bg-signal/20 text-signal"
               : "bg-ink-3 text-paper hover:bg-ink-4",
+            CALL_CONTROL_REDESIGN.base,
+            musicDock.open
+              ? CALL_CONTROL_REDESIGN.on
+              : idle,
           )}
           onClick={toggleMusicOpen}
         >
-          <Music className={iconSize} />
+          <IconSwap off={Music} on={MusicNotes} offClassName={iconSize} className={iconSize} />
           {/* NOVO, until the panel has been opened once. Never beside the
               dot below: that one needs a track on and this one needs none. */}
           {musicPip ? (
             <span
               data-music-pip=""
               aria-hidden="true"
-              className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+              className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", collapsed ? CALL_CONTROL_REDESIGN.pipDock : CALL_CONTROL_REDESIGN.pip)}
             />
           ) : null}
           {/* The room has music and this machine is not hearing it. Nothing
@@ -4412,7 +4599,7 @@ export function CallControls({
             <span
               data-music-dock-dot=""
               aria-hidden="true"
-              className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+              className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", collapsed ? CALL_CONTROL_REDESIGN.pipDock : CALL_CONTROL_REDESIGN.pip)}
             />
           ) : null}
         </button>
@@ -4429,10 +4616,12 @@ export function CallControls({
               "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
               size,
               pip.active && "text-signal",
+              CALL_CONTROL_REDESIGN.base,
+              pip.active ? CALL_CONTROL_REDESIGN.on : idle,
             )}
             onClick={pip.toggle}
           >
-            <PictureInPicture2 className={iconSize} />
+            <IconSwap off={PictureInPicture2} on={PictureInPicture} offClassName={iconSize} className={iconSize} />
           </button>
         </Tooltip>
       )}
@@ -4455,19 +4644,21 @@ export function CallControls({
             className={cn(
               "relative flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4",
               size,
+              CALL_CONTROL_REDESIGN.base,
+              idle,
             )}
           >
-            <MoreHorizontal className={iconSize} aria-hidden="true" />
+            <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName={iconSize} className={iconSize} />
             {musicAttention ? (
               <span
                 data-music-dock-dot=""
                 aria-hidden="true"
-                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+                className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", collapsed ? CALL_CONTROL_REDESIGN.pipDock : CALL_CONTROL_REDESIGN.pip)}
               />
             ) : joinLeaveMuted ? (
               <span
                 aria-hidden="true"
-                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning ring-2 ring-ink"
+                className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning ring-2 ring-ink", collapsed ? CALL_CONTROL_REDESIGN.pipDock : CALL_CONTROL_REDESIGN.pip)}
               />
             ) : null}
           </button>
@@ -4490,11 +4681,13 @@ export function CallControls({
               ? "h-9 w-12 pointer-coarse:h-11 pointer-coarse:w-11"
               : collapsed
                 ? size
-                : "h-10 w-14",
+                : "h-10 w-14 redesign:h-11 redesign:w-16",
+            CALL_CONTROL_REDESIGN.base,
+            CALL_CONTROL_REDESIGN.leave,
           )}
           onClick={onLeave}
         >
-          <PhoneOff className={iconSize} />
+          <IconSwap off={PhoneOff} on={PhoneDisconnect} offClassName={iconSize} className={iconSize} />
         </button>
       </Tooltip>
       </div>
@@ -4678,9 +4871,9 @@ function TileOverlay({
               type="button"
               data-testid="tile-more"
               aria-label={t("call.tile.more", { name })}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4"
+              className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4", TILE_BUTTON_REDESIGN)}
             >
-              <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+              <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
             </button>
           </Menu>
         )}
@@ -4698,13 +4891,13 @@ function TileOverlay({
               type="button"
               data-testid="camera-fullscreen"
               aria-pressed={isFullscreen}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
+              className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4", TILE_BUTTON_REDESIGN)}
               onClick={onToggleFullscreen}
             >
               {isFullscreen ? (
-                <Minimize2 className="h-3.5 w-3.5" />
+                <IconSwap off={Minimize2} on={CornersIn} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
               ) : (
-                <Maximize2 className="h-3.5 w-3.5" />
+                <IconSwap off={Maximize2} on={CornersOut} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
               )}
             </button>
           </Tooltip>
@@ -4768,6 +4961,8 @@ function PrimaryTile({
       className={cn(
         "group relative h-full w-full bg-ink-2",
         person.speaking && "ring-2 ring-inset ring-success",
+        CALL_TILE_REDESIGN.surface,
+        person.speaking && "redesign:ring-[color:var(--call-speaking)]",
       )}
     >
       {person.stream ? (
@@ -4848,10 +5043,15 @@ export function CameraTile({
   onPin,
   pinned = false,
   hidden,
+  style,
+  className,
 }: {
   person: StagePerson;
   videoRef?: RefObject<WebkitFullscreenVideo | null>;
   youLabel: string;
+  /** A size handed down by a layout that is not a CSS grid (the room's cards). */
+  style?: CSSProperties;
+  className?: string;
   /**
    * This viewer hid the camera (`voiceState.dismissedCameraPeerIds`). The
    * tile stays where it was and says so, with the way back on it, the same
@@ -4875,11 +5075,16 @@ export function CameraTile({
     <li
       ref={boxRef}
       data-call-tile={person.name}
+      style={style}
       className={cn(
+        className,
         "group relative min-h-0 overflow-hidden bg-ink-2",
         rounded && "rounded-xl",
         wideRow && "col-span-full",
         person.speaking && "ring-2 ring-success",
+        CALL_TILE_REDESIGN.surface,
+        rounded && CALL_TILE_REDESIGN.rounded,
+        person.speaking && CALL_TILE_REDESIGN.speaking,
         person.connecting && "opacity-70",
       )}
     >
@@ -5005,10 +5210,33 @@ function TileClickTarget({
  * same people the strip would, larger and centred, with the same overflow rule
  * so a lobby of 200 is still one screen.
  */
+/** A stage person as a room card (`room-cards.tsx`). */
+function roomCardEntry(person: StagePerson, camera: boolean): RoomCardEntry {
+  return {
+    key: person.key,
+    userId: person.userId,
+    name: person.name,
+    avatarUrl: person.avatarUrl,
+    speaking: person.speaking,
+    muted: person.muted,
+    deafened: person.deafened === true,
+    serverMuted: person.serverMuted,
+    handPosition: person.handPosition ?? null,
+    connecting: person.connecting,
+    isSelf: person.isSelf,
+    failed: person.failed,
+    onRetry: person.onRetry,
+    camera,
+    audio: personAudioTracks(person),
+  };
+}
+
 export function RoomView({
   people,
   youLabel,
   othersOnly = false,
+  cards = false,
+  menuFor,
 }: {
   people: StagePerson[];
   youLabel: string;
@@ -5017,8 +5245,21 @@ export function RoomView({
    * be false: the line says nobody ELSE is.
    */
   othersOnly?: boolean;
+  /** The redesign's room: a card per person (`room-cards.tsx`). */
+  cards?: boolean;
+  /** The right-click menu of a card. See `RoomCards`. */
+  menuFor?: RoomCardMenuFor;
 }) {
   const { t } = useTranslation();
+  if (cards) {
+    return (
+      <RoomCards
+        youLabel={youLabel}
+        people={people.map((person) => roomCardEntry(person, false))}
+        menuFor={menuFor}
+      />
+    );
+  }
   const slots = listenerStripSlots(people, ROOM_VIEW_LIMIT);
   return (
     <div
@@ -5085,7 +5326,7 @@ function RoomFace({
             muted={person.muted}
             size="lg"
           />
-          <span className="max-w-[5rem] truncate text-[11px] text-paper-muted">
+          <span className="max-w-[5rem] truncate text-[11px] text-paper-muted redesign:text-xs redesign:text-text-secondary">
             {person.name}
           </span>
         </button>
@@ -5098,7 +5339,7 @@ function RoomFace({
             muted={person.muted}
             size="lg"
           />
-          <span className="max-w-full truncate text-[11px] text-paper-muted">
+          <span className="max-w-full truncate text-[11px] text-paper-muted redesign:text-xs redesign:text-text-secondary">
             {person.isSelf ? `${person.name} ${youLabel}` : person.name}
           </span>
         </>
@@ -5149,7 +5390,7 @@ function RingView({
               name={person.displayName}
               avatarUrl={person.avatarUrl}
               rounded="full"
-              className="relative h-20 w-20 ring-2 ring-ink-2 sm:h-24 sm:w-24"
+              className="relative h-20 w-20 ring-2 ring-ink-2 sm:h-24 sm:w-24 redesign:ring-4 redesign:ring-[color:var(--call-stage-bg)]"
               fallbackClassName="bg-ink-4 text-2xl text-paper"
             />
           </span>
@@ -5215,21 +5456,24 @@ function TileBadge({
     <span
       className={cn(
         "flex max-w-full items-center gap-1 truncate bg-ink/70 text-paper",
+        TILE_GLASS_REDESIGN,
+        "redesign:font-medium",
         inline
           ? // On a very narrow picture the name steps aside, so the mute
             // button is not pushed under "⋯". What the badge says about
             // the person (muted, moderator-muted, connecting) stays; a
             // badge with nothing but the name goes with it.
             cn(
-              "min-w-[4.5rem] rounded-md @max-[12rem]/picture:min-w-0",
+              "min-w-[4.5rem] rounded-md @max-[12rem]/picture:min-w-0 redesign:rounded-full",
               !muted &&
                 !serverMuted &&
                 !connecting &&
                 handPosition === null &&
-                "@max-[12rem]/picture:hidden",
+                // A badge with only the name hugs it under the redesign, no empty tail.
+                "@max-[12rem]/picture:hidden redesign:min-w-0",
             )
-          : cn("absolute bottom-0 left-0 rounded-tr-md", STAGE_LAYER.labels),
-        prominent ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-[10px]",
+          : cn("absolute bottom-0 left-0 rounded-tr-md redesign:bottom-2 redesign:left-2 redesign:rounded-full", STAGE_LAYER.labels),
+        prominent ? "px-2 py-1 text-xs redesign:px-2.5" : "px-1.5 py-0.5 text-[10px] redesign:px-2 redesign:text-[11px]",
       )}
     >
       {serverMuted ? (
@@ -5775,9 +6019,9 @@ export function ScreenTileFrame({
             ? t("call.share.moreSelf")
             : t("call.share.more", { name: tile.presenterName })
         }
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4"
+        className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4", TILE_BUTTON_REDESIGN)}
       >
-        <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+        <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
       </button>
     </Menu>
   );
@@ -5791,10 +6035,12 @@ export function ScreenTileFrame({
         className={cn(
           "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
           pip.active && "text-signal",
+          TILE_BUTTON_REDESIGN,
+          pip.active && "redesign:text-accent",
         )}
         onClick={pip.toggle}
       >
-        <PictureInPicture2 className="h-3.5 w-3.5" />
+        <IconSwap off={PictureInPicture2} on={PictureInPicture} offClassName="h-3.5 w-3.5" className="h-4 w-4" />
       </button>
     </Tooltip>
   ) : null;
@@ -5807,13 +6053,13 @@ export function ScreenTileFrame({
           // alone cannot tell a test which one it pressed.
           data-testid="share-fullscreen"
           aria-pressed={isFullscreen}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
+          className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4", TILE_BUTTON_REDESIGN)}
           onClick={onToggleFullscreen}
         >
           {isFullscreen ? (
-            <Minimize2 className="h-3.5 w-3.5" />
+            <IconSwap off={Minimize2} on={CornersIn} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
           ) : (
-            <Maximize2 className="h-3.5 w-3.5" />
+            <IconSwap off={Maximize2} on={CornersOut} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
           )}
         </button>
       </Tooltip>

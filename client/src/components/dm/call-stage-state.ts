@@ -46,8 +46,9 @@ export function sharePeerIdsIncludingLocal(
 }
 
 /**
- * The expanded stage is for watching something, or for an outgoing ring.
- * Voice-only occupancy stays a slim bar. Collapsing is a user choice
+ * The expanded stage is for watching something, for an outgoing ring, or,
+ * under the redesign, for the room itself (`showsRoomView`). Otherwise
+ * voice-only occupancy stays a slim bar. Collapsing is a user choice
  * remembered for the session.
  *
  * `hasVideo` is live cameras and shares only (`hasWatchableVideo`). Do not
@@ -57,8 +58,33 @@ export function shouldShowExpandedStage(
   hasVideo: boolean,
   userCollapsed: boolean,
   ringing = false,
+  roomView = false,
 ): boolean {
-  return (hasVideo || ringing) && !userCollapsed;
+  return (hasVideo || ringing || roomView) && !userCollapsed;
+}
+
+/**
+ * THE ROOM IS THE PICTURE, under the redesign. Joining a server voice channel
+ * opens the stage with a card per person even when nobody publishes, the way
+ * every other voice app draws a call: the old slim bar over the transcript
+ * read as "the call has no screen" to people who came from Discord.
+ *
+ * Only where there is room and nothing else owns the stage. Not a DM or group
+ * call (later), not a watch party's room, which has its own chrome, not under
+ * a phone's width, where the slim bar is the call.
+ *
+ * The music clip on the stage is a picture like a share: the room keeps its
+ * cards and its dock around it (`planRoomStage` counts the clip as a screen).
+ * Only where there is no room view does the clip take the whole picture pane
+ * (`isMusicPictureOnlyStage`).
+ */
+export function showsRoomView(input: {
+  redesign: boolean;
+  serverCall: boolean;
+  watchParty: boolean;
+  wide: boolean;
+}): boolean {
+  return input.redesign && input.serverCall && !input.watchParty && input.wide;
 }
 
 /**

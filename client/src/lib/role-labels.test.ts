@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Translator } from "@/lib/i18n";
-import { displayRoleName } from "./role-labels";
+import { displayRoleName, rankRoles } from "./role-labels";
 
 const t = ((key: string) => key) as Translator["t"];
 
@@ -59,5 +59,17 @@ describe("displayRoleName", () => {
     const seed = { id: "1", name: "Moderator", systemKey: "moderator" as const };
     const vip = { id: "2", name: "VIP", systemKey: null };
     expect(displayRoleName(seed, tPt, [seed, vip])).toBe("Mod");
+  });
+});
+
+describe("rankRoles", () => {
+  it("pins Dono first, orders by position, and puts @everyone last", () => {
+    const roles = [
+      { id: "e", name: "@everyone", isEveryone: true, position: 0 },
+      { id: "v", name: "VIP", systemKey: "vip" as const, position: 90 },
+      { id: "m", name: "Moderator", systemKey: "moderator" as const, position: 50 },
+      { id: "o", name: "Owner", systemKey: "owner" as const, position: 10 },
+    ];
+    expect(rankRoles(roles).map((role) => role.id)).toEqual(["o", "v", "m", "e"]);
   });
 });

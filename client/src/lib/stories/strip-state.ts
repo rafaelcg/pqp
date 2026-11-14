@@ -12,7 +12,7 @@ import type { StoryStrip, StoryStripItem } from "@pqp/shared";
  *   leaves on the client's own clock, and the strip asks for a timer at the
  *   next expiry so it leaves on time without a poll.
  * - The strip is drawn only while something is live. An empty strip costs a
- *   row of every sidebar forever; the one exception is the first-run row.
+ *   row of every sidebar forever.
  */
 
 function expiresAtMs(item: Pick<StoryStripItem, "expiresAt">): number {
@@ -75,27 +75,22 @@ export function msUntilNextExpiry(
 
 export type StripView =
   | { kind: "hidden" }
-  | { kind: "first-run" }
   | { kind: "strip"; own: StoryStripItem | null; items: StoryStripItem[] };
 
 /**
- * Which of the three faces a strip shows.
+ * Which of the two faces a strip shows.
  *
- * - `hidden`: the flag is off for this audience, or nothing is live and the
- *   first-run row does not apply (or was dismissed).
- * - `first-run`: the one-off dashed row, only while the server says so, only
- *   for someone who may post, and only until it is dismissed.
+ * - `hidden`: the flag is off for this audience, or nothing is live.
  * - `strip`: at least one ring, the viewer's own or somebody else's. With
  *   `ownSlot`, the "Teu story" bubble alone is a ring too: the Conversas
- *   strip of somebody with friends (design §3.4), where no first-run row
- *   ever comes and the bubble is the way in to posting for Amigos.
+ *   strip of somebody with friends (design §3.4), where the bubble is the way
+ *   in to posting for Amigos.
  */
 export function stripView(
   strip: StoryStrip,
   options: {
     now: number;
     seenIds: ReadonlySet<string>;
-    firstRunDismissed: boolean;
     ownSlot?: boolean;
   },
 ): StripView {
@@ -106,9 +101,6 @@ export function stripView(
   const items = visibleStripItems(strip.items, options.now, options.seenIds);
   if (own || items.length > 0) {
     return { kind: "strip", own, items };
-  }
-  if (strip.firstRunHint && strip.canPost && !options.firstRunDismissed) {
-    return { kind: "first-run" };
   }
   if (options.ownSlot && strip.canPost) {
     return { kind: "strip", own: null, items: [] };

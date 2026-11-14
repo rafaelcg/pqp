@@ -26,7 +26,7 @@ export function NotifyOfferHint({
   onDismiss,
 }: {
   enabled: boolean;
-  /** Frees the corner for the queue; see `CargosHint` for why it matters. */
+  /** Frees the corner for the queue: App keeps offering it to a card nobody sees until told. */
   onDismiss?: () => void;
 }) {
   const { t } = useTranslation();
@@ -77,7 +77,7 @@ export function NotifyOfferHint({
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            className="cta-lift rounded-full px-4"
+            data-cta className="cta-lift rounded-full px-4"
             disabled={busy}
             onClick={() => void turnOn()}
           >

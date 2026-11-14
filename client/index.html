@@ -167,6 +167,29 @@
       }
     </script>
     <!--
+      The redesign toggle (client/src/lib/redesign.ts), before the first paint
+      for the same reason as the theme above. `?redesign=1|0` wins, then the
+      person's choice under `pqp-redesign`. The runtime flag is only known once
+      the app has asked the API, so a flag-only rollout applies a moment later.
+    -->
+    <script>
+      try {
+        const param = new URLSearchParams(location.search).get("redesign");
+        const choice = localStorage.getItem("pqp-redesign");
+        const on =
+          param === "1" || param === "on"
+            ? true
+            : param === "0" || param === "off"
+              ? false
+              : choice === "on";
+        if (on) {
+          document.documentElement.dataset.redesign = "";
+        }
+      } catch {
+        // Storage blocked: the app applies it after boot.
+      }
+    </script>
+    <!--
       Fonts are self-hosted (src/fonts.css), so there is no remote stylesheet
       to block on and no font host to preconnect to. These two files are what
       the first screen is set in: Gabarito (headline, eyebrow) and Instrument
