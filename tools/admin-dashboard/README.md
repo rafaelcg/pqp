@@ -234,7 +234,7 @@ yet; they are here so a takedown never waits for one.
 
 | Route | What it does |
 |---|---|
-| `GET /api/admin/jam-public/songs?status=live\|review\|hidden\|removed\|unpublished\|all&cursor=` | published songs, newest first, 50 a page: status, `listed`, the starter (id, name, handle, whether blocked), the origin server, plays, likes, distinct reporters in the auto-hide window, public parts, `hiddenAt`, `removedReason`. Names people, like the feedback queue |
+| `GET /api/admin/jam-public/songs?status=live\|review\|hidden\|removed\|unpublished\|all&cursor=` | published songs, newest first, 50 a page: status, `listed`, the starter (id, name, handle, whether blocked), the origin server, plays, likes, distinct reporters in the auto-hide window (and, of those, `copyrightReports`: the ones whose reason was copyright), public parts, `hiddenAt`, `removedReason`. Names people, like the feedback queue |
 | `GET /api/admin/jam-public/queue` | what waits for a human: songs in `review` (a new account's first) or `hidden` (reports), takes in review, and parts whose video the scanner flagged or rejected |
 | `PUT /api/admin/jam-public/unpublish` `{songId, reason}` | takes a song down (`removed`): out of every public read at once, the starter is told with the reason (`jam-public-notice`, kind `removed`) and cannot republish it (409 `jam_public_removed`) |
 | `PUT /api/admin/jam-public/review` `{kind: "song" \| "track", id, decision: "approve" \| "reject", reason?}` | a queued item. `song` approve lists it (and clears a report hide, and restores a `removed` song); reject removes it with the reason. `track` approve makes a new account's take public; reject keeps it out (the track itself stays in its song) |

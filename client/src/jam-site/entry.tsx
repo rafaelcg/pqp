@@ -5,6 +5,7 @@ import { applyDocumentLocale, detectLocale } from "@/lib/locale";
 import "../fonts.css";
 import "../index.css";
 import "./jam-site.css";
+import { rememberArrival } from "./attribution";
 import { JamSite } from "./site";
 
 /**
@@ -17,6 +18,9 @@ import { JamSite } from "./site";
  */
 
 document.documentElement.dataset.jamSite = "";
+// The address the person arrived on may carry `ref` / `utm_*` (a clip's link);
+// the site moves with pushState and the sign-up buttons are pages away.
+rememberArrival();
 
 const locale = detectLocale();
 void loadJamLocale(locale)

@@ -1,10 +1,11 @@
 import type { PublicJamSongDetail } from "@pqp/shared";
-import { ArrowLeftIcon as ArrowLeft, FlagIcon as Flag } from "./icons";
+import { ArrowLeftIcon as ArrowLeft, CopyrightIcon as Copyright, FlagIcon as Flag } from "./icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { jt } from "@/lib/i18n/jam-site";
 import { detectLocale } from "@/lib/locale";
 import type { JamInstrumentName } from "@/lib/jam-intent";
 import { noteJamPlay } from "./api";
+import { mainHref } from "./attribution";
 import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
 import { SongCover } from "./art";
@@ -58,7 +59,7 @@ function OriginCard({ origin }: { origin: NonNullable<PublicJamSongDetail["song"
         <p className="text-[13px] text-text-secondary">{origin.slug ? jt("origin.community") : jt("origin.server")}</p>
       </div>
       {origin.slug && (
-        <a href={`${main}/c/${origin.slug}`} className={button("secondary")}>
+        <a href={mainHref(`/c/${origin.slug}`, main)} className={button("secondary")}>
           {jt("origin.visit")}
         </a>
       )}
@@ -258,6 +259,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
           player={player}
           spot={spot}
           onReport={(trackId) => ask({ kind: "reportPart", songId: song.id, trackId })}
+          onCopyright={(trackId) => ask({ kind: "copyrightPart", songId: song.id, trackId })}
         />
         <aside className="flex flex-col gap-6">
           {song.origin && (
@@ -281,6 +283,15 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
             >
               <Flag className="h-4 w-4" aria-hidden />
               {jt("report.song")}
+            </button>
+            <button
+              type="button"
+              onClick={() => ask({ kind: "copyright", songId: song.id })}
+              data-jam-copyright=""
+              className={button("ghost", "md", "gap-2 px-3")}
+            >
+              <Copyright className="h-4 w-4" aria-hidden />
+              {jt("report.copyright")}
             </button>
           </div>
         </aside>

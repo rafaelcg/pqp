@@ -7832,6 +7832,8 @@
   "jam.public.sheet.video": "The video of the recordings, when the person allows it",
   "jam.public.sheet.names": "The name, @handle and photo of whoever played",
   "jam.public.sheet.consent": "Whoever recorded chooses: fine, audio only, or no. With no answer, their part stays out.",
+  "jam.public.sheet.rights": "Only post what you made or have the right to share.",
+  "jam.public.sheet.rightsLink": "Terms",
   "jam.public.sheet.showOrigin": "Show where it came from",
   "jam.public.sheet.showOriginHint": "Shows the name and icon of {name}.",
   "jam.public.sheet.undo": "The song stays in the server, and you can take it down whenever you like.",

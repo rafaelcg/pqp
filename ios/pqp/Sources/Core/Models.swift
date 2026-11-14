@@ -738,6 +738,7 @@ enum ReportReason: String, CaseIterable, Identifiable, Sendable {
     case sexualContent = "sexual_content"
     case selfHarm = "self_harm"
     case illegalContent = "illegal_content"
+    case copyright
     /// A minor in sexual content. The one reason that decides routing: it
     /// always goes to the instance queue, never to a server's own staff.
     case minorSexual = "minor_sexual"
@@ -754,6 +755,7 @@ enum ReportReason: String, CaseIterable, Identifiable, Sendable {
         case .sexualContent: "Sexual content"
         case .selfHarm: "Self-harm"
         case .illegalContent: "Illegal content"
+        case .copyright: "Copyright"
         case .minorSexual: "A minor in sexual content"
         case .other: "Something else"
         }

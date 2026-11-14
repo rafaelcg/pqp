@@ -42,6 +42,11 @@ export const ArrowLeftIcon = make([
   ["path", {"d":"M19 12H5"}],
 ]);
 
+export const CopyrightIcon = make([
+  ["circle", {"cx":"12","cy":"12","r":"10"}],
+  ["path", {"d":"M14.83 14.83a4 4 0 1 1 0-5.66"}],
+]);
+
 export const DrumIcon = make([
   ["path", {"d":"m2 2 8 8"}],
   ["path", {"d":"m22 2-8 8"}],

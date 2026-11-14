@@ -9,6 +9,7 @@ import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { answerConsent } from "@/lib/jam-public-store";
 import { JamConsentChoices, useConsentAnswer } from "./jam-public-parts";
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 /**
  * Making a song public, and looking after it afterwards. One sheet, two states.
@@ -114,6 +115,12 @@ export function JamPublicSheet({ open, onClose, songId, viewerId, songTitle, ori
                     />
                   </div>
                 )}
+                <p className="text-text" data-jam-public-rights="">
+                  {t("jam.public.sheet.rights")}{" "}
+                  <Link to="/terms" target="_blank" rel="noreferrer" className="font-semibold underline underline-offset-2">
+                    {t("jam.public.sheet.rightsLink")}
+                  </Link>
+                </p>
                 <p>{t("jam.public.sheet.undo")}</p>
               </>
             )}

@@ -33,8 +33,8 @@ object JamInstrumentColors {
     /** `oklch(0.87 0.11 195)` */
     const val KEYS = 0xFF70EBEBL
 
-    /** `oklch(0.71 0.04 295)` */
-    const val OTHER = 0xFFA39DB8L
+    /** `oklch(0.71 0.16 310)` */
+    const val OTHER = 0xFFC082EBL
 
     /** `--color-on-inst`, `oklch(0.16 0.012 250)`: the ink on every instrument fill. */
     const val INK = 0xFF090E12L

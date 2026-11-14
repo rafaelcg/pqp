@@ -27,6 +27,7 @@ import {
   publicJamSongSchema,
   publicJamTrackSchema,
   adminJamPublicQueueSchema,
+  reportPublicJamSchema,
   adminJamPublicSongSchema,
   Permission,
   type JamSongSummary,
@@ -1047,6 +1048,31 @@ describeDb("public jams", () => {
       expect((await report()).status).toBe(201);
       const queued = await getPool().query(`SELECT reported_user_id FROM reports`);
       expect(queued.rows).toEqual([{ reported_user_id: carol.id }]);
+    });
+
+    it("a copyright report is accepted, kept as its own reason, and counted for the operator", async () => {
+      process.env.JAM_PUBLIC_REPORTS_TO_HIDE = "5";
+      const song = await channelSong(alice);
+      const carolTrack = await trackId(carol, song, "bass");
+      expect((await publish(alice, song)).status).toBe(200);
+      expect((await consent(carol, song, "yes")).status).toBe(200);
+      // The shared contract knows the reason, and an unknown one is still a 400.
+      expect(reportPublicJamSchema.safeParse({ songId: song, reason: "copyright" }).success).toBe(true);
+      expect((await call(eve, "POST", "/api/jam-public/reports", { songId: song, reason: "pirated" })).status).toBe(400);
+      expect(
+        (await call(eve, "POST", "/api/jam-public/reports", { songId: song, trackId: carolTrack, reason: "copyright", details: "my song" }))
+          .status,
+      ).toBe(201);
+      expect((await call(frank, "POST", "/api/jam-public/reports", { songId: song, reason: "spam" })).status).toBe(201);
+      const stored = await getPool().query(`SELECT reason FROM jam_public_reports ORDER BY created_at`);
+      expect(stored.rows.map((row) => row.reason)).toEqual(["copyright", "spam"]);
+      const queued = await getPool().query(`SELECT reason, server_id, reported_user_id FROM reports ORDER BY id`);
+      expect(queued.rows).toEqual([
+        { reason: "copyright", server_id: null, reported_user_id: carol.id },
+        { reason: "spam", server_id: null, reported_user_id: alice.id },
+      ]);
+      const list = await operator<{ songs: unknown[] }>("GET", "/api/admin/jam-public/songs?status=live");
+      expect(adminJamPublicSongSchema.parse(list.body.songs[0])).toMatchObject({ songId: song, reports: 2, copyrightReports: 1 });
     });
 
     it("reports per day", async () => {

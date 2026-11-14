@@ -554,6 +554,7 @@
     <string name="report_reason_sexual_content">Sexual content</string>
     <string name="report_reason_self_harm">Self-harm</string>
     <string name="report_reason_illegal_content">Illegal content</string>
+    <string name="report_reason_copyright">Copyright</string>
     <string name="report_reason_minor_sexual">A minor in sexual content</string>
     <string name="report_reason_other">Something else</string>
     <string name="report_details_label">Anything else? (optional)</string>

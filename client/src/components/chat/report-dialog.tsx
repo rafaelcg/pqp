@@ -50,7 +50,14 @@ export type ReportTarget =
    * A public jam, or one part of it (`trackId`). Goes to the instance queue,
    * never to a server owner (`docs/JAM_PUBLIC.md`, "Reports").
    */
-  | { kind: "jam_public"; songId: string; trackId: string | null; subjectName: string | null };
+  | {
+      kind: "jam_public";
+      songId: string;
+      trackId: string | null;
+      subjectName: string | null;
+      /** The reason the dialog opens on, when the link that brought the person said so (the site's "copyright" item). */
+      reason?: ReportReason | null;
+    };
 
 interface ReportDialogProps {
   target: ReportTarget | null;
@@ -82,13 +89,16 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
                 ? `jam_public:${target.songId}:${target.trackId ?? ""}`
                 : `user:${target.userId}`;
 
+  // A link can ask the dialog to open on a reason (the jam site's copyright item).
+  const initialReason = target?.kind === "jam_public" ? (target.reason ?? null) : null;
+
   useEffect(() => {
-    setReason(null);
+    setReason(initialReason);
     setDetails("");
     setError(null);
     setDone(false);
     setSubmitting(false);
-  }, [targetKey]);
+  }, [targetKey, initialReason]);
 
   if (!target) {
     return null;
