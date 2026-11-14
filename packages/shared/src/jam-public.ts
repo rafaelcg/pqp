@@ -766,6 +766,12 @@ export const adminJamPublicSongSchema = z.object({
   likes: z.number().int().nonnegative(),
   /** Distinct reporters inside the auto-hide window (since the last approval). */
   reports: z.number().int().nonnegative(),
+  /**
+   * Of those, the distinct reporters whose reason was `copyright`. A song with
+   * more than 0 here is one an operator should open first (the takedown steps
+   * are in `docs/JAM_PUBLIC.md`, "Copyright reports").
+   */
+  copyrightReports: z.number().int().nonnegative().default(0),
   publicParts: z.number().int().nonnegative(),
   hiddenAt: z.string().nullable(),
   removedReason: z.string().nullable(),

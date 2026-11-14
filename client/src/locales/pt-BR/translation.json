@@ -7832,6 +7832,8 @@
   "jam.public.sheet.video": "O vídeo das gravações, quando a pessoa deixa",
   "jam.public.sheet.names": "O nome, o @ e a foto de quem tocou",
   "jam.public.sheet.consent": "Quem gravou escolhe: pode ir, só o áudio ou não. Sem resposta, a parte fica de fora.",
+  "jam.public.sheet.rights": "Só posta o que tu fez ou tem direito de usar.",
+  "jam.public.sheet.rightsLink": "Termos",
   "jam.public.sheet.showOrigin": "Mostrar de onde veio",
   "jam.public.sheet.showOriginHint": "Aparece o nome e o ícone de {name}.",
   "jam.public.sheet.undo": "A música continua no servidor e tu pode tirar do ar quando quiser.",

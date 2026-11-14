@@ -136,6 +136,7 @@ continues to `/app` with an intent (`src/lib/jam-intent.ts`):
 | song | `/app?jam=<songId>` | take me to this jam |
 | like | `/app?jam=<songId>&act=like` | like this jam once I am in |
 | report | `/app?jam=<songId>&act=report[&track=<trackId>]` | report this jam, or the one part `track` names |
+| copyright | `/app?jam=<songId>&act=report[&track=<trackId>]&reason=copyright` | the same report, and the dialog opens on "Copyright" (the site's "Problema de direitos autorais" item, on the song and in each part's menu) |
 | new | `/app?jam=new` | let me start a jam |
 
 The URL is the carrier because the hosted pages live on `jam.pqp.gg` and the app
@@ -159,6 +160,56 @@ acted on at once. `jamReturnPath` and the site's `?from=app` notice are no
 longer used by the app and are kept for an older build still in a tab.
 `docs/JAM_PUBLIC.md` section "In the app" says what the view is made of.
 
+
+## Where visitors came from (attribution)
+
+**Decision D7: no third-party analytics on the site.** It has no tag, pixel or
+beacon, and none is to be added. What it has is Cloudflare's own zone analytics
+for `pqp.gg`, which reads the edge's logs and needs no code in the page, plus
+`ref=jam` on every hand-over, which is how a signup is tied back to the site.
+
+**What Cloudflare zone analytics can answer** (dashboard, zone `pqp.gg`,
+filtered to the host `jam.pqp.gg`): requests and unique visitors over time,
+countries, top paths (so which `/m/<songId>` pages are visited), top referrers,
+and status codes. Counts of visits, and where they came from at the country and
+referrer level.
+
+**What it cannot answer**: signups (an account is made on `pqp.gg`, a different
+host and a different page, after Clerk's redirect), who anybody is, whether a
+visit became a recording, a like or a report, or which visits belong to the same
+person. Unique visitors there is an approximation from the edge, not a person.
+
+**How `ref=jam` closes the gap.** The site is one link away from the app, and the
+account is where the question can be answered, so the link carries the answer:
+
+- Every sign-up button on the site (the sheet in `auth-sheet.tsx`) and the plain
+  links to the main site (sign in, the pqp wordmark in the footer, "Visit" on a
+  song's origin) append `ref=<x>` and any `utm_source`, `utm_medium`,
+  `utm_campaign` the site was opened with. When the site was opened with no `ref`
+  the value is `ref=jam`. Nothing else in the address is forwarded (no `gclid`,
+  no `fbclid`). Values are trimmed and cut at 100 characters.
+- The site was probably opened on a page and the button is pages away, and it
+  moves with `pushState`, so `entry.tsx` writes the arrival's `ref` / `utm_*`
+  down at boot (`pqp:jam-attribution` on the site's own origin, first touch, 30
+  days, `lib/jam-intent.ts`). A button reads that, else the current address,
+  else `jam`.
+- The app already has an acquisition mechanism, and this is a door into it, not
+  a second one. At boot `main.tsx` stashes the campaign parameters on whatever
+  URL it loaded with (`lib/acquisition.ts`), sends them once after the account
+  exists, and the server keeps them as first touch on the new account
+  (`services/acquisition.ts`, `users.acquisition_ref`, `acquisition_source`,
+  `acquisition_medium`, `acquisition_campaign`). So `/app?jam=...&ref=jam` lands as
+  `ref = jam`, and a clip's own link `jam.pqp.gg/m/<id>?ref=clip-ana` lands as
+  `ref = clip-ana`. No new table, no new endpoint.
+- Read it as signups by source from `GET /api/admin/acquisition` (the dashboard's
+  acquisition card, grouped by `ref` and by `source / medium / campaign`), and
+  retention by channel in the same service (`retentionBySource`). The landing
+  recorded is `/app`, because that is the page the account first loaded; the
+  `ref` is the signal.
+
+Zone analytics says how many people looked, the acquisition report says how many
+of them signed up. Put a `?ref=` on every link you hand out for the site (a clip's
+caption, a post) and each one shows up as its own row.
 
 ## Sharing and SEO
 

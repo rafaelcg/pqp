@@ -148,6 +148,52 @@ pública · <title>"), never in a server owner's queue. A song reported by
 `JAM_PUBLIC_REPORT_WINDOW_HOURS` (default 24) is hidden until an operator looks;
 reports filed before an operator's decision do not hide it again.
 
+### Copyright reports
+
+`copyright` is one of the shared report reasons (`REPORT_REASONS`, so the app's
+report dialog, the site's "Problema de direitos autorais" items and the phones all
+offer it). Filed on a public jam it behaves exactly like any other reason on a
+public song: it goes to the instance queue (`reports`, reason `copyright`), counts
+toward the auto-hide like any report, and is also counted on its own:
+`copyrightReports` on each song of `GET /api/admin/jam-public/songs` and of the
+queue (distinct reporters, same window). A song with a number there is the one to
+open first. Server-side nothing is routed differently for it.
+
+Where somebody publishes or records, one plain line says "only post what you made
+or have the right to share", with a link to the Terms (`/terms`, whose "Direitos
+autorais e outras notificações legais" clause is the notice address,
+`contato@pqp.gg`): in the app's "Tornar pública" sheet and in the site's
+record and start sheets. The Terms page has no section anchors, so the link opens
+the page and not the clause.
+
+**There is no DMCA agent and none is claimed.** pqp is not registered with the US
+Copyright Office; the Terms clause is what it is. A rights holder writes to
+`contato@pqp.gg` or uses a report, and a person reads it.
+
+**Takedown, step by step, when a copyright report arrives** (instance queue,
+`GET /api/reports/instance`, or `copyrightReports` above):
+
+1. Open the report. It names the song (details: "Jam pública <songId>", and the
+   part when it is one) and the reported account. Listen to the part.
+2. **One part is the claim** (a recording of somebody's song, a sample): take that
+   part out with `PUT /api/admin/jam-public/remove-part { trackId, reason }`. The
+   track stays in its song and channel, the rest of the jam stays up, and its
+   author is told with the reason. Write the reason in plain words ("direitos
+   autorais, a pedido do titular").
+3. **The whole song is the claim** (a cover of a whole recording, the starter's
+   own track): `PUT /api/admin/jam-public/unpublish { songId, reason }`. It leaves
+   every public read at once and the starter is told; they cannot republish it.
+4. Close the report in the instance queue as `actioned` (or `dismissed` when the
+   claim does not hold) with a note, and answer the person who wrote in.
+5. A repeat offender: `PUT /api/admin/jam-public/block { userId, blocked: true,
+   reason }`. Every song and part of theirs leaves the public reads.
+6. If the claim comes with a court order or a formal legal notice, that is the
+   Terms' "other legal notices" path, not this one: keep the evidence, do not
+   delete anything, and ask Rafael.
+
+Every one of these writes a `jam_public_audit` row, which is the record of what
+was taken down and when.
+
 ### New accounts
 
 An account younger than `JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS` (default 72) may

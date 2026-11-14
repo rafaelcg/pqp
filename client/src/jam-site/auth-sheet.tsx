@@ -6,6 +6,7 @@ import {
   type JamInstrumentName,
   type JamIntent,
 } from "@/lib/jam-intent";
+import { jamAttribution } from "./attribution";
 import { mainOrigin } from "./router";
 import { button, Sheet } from "./ui";
 
@@ -16,9 +17,17 @@ import { button, Sheet } from "./ui";
  * through sign-up (`lib/jam-intent.ts`): the URL is the carrier across origins
  * (jam.pqp.gg to pqp.gg), and the same intent is stashed here too for the
  * same-origin mounts. Listening and watching never get here.
+ *
+ * Two more things ride on that one link. The `ref` / `utm_*` the site was
+ * opened with (`ref=jam` when there were none), so the account is attributed
+ * (`attribution.ts`); and, on the two sheets that lead to publishing, one plain
+ * line of copyright norm with a link to the Terms.
  */
 
-export type AskKind = "record" | "like" | "report" | "reportPart" | "start";
+export type AskKind = "record" | "like" | "report" | "reportPart" | "copyright" | "copyrightPart" | "start";
+
+/** The sheets that lead to putting something of yours on a public page. */
+const RIGHTS_NOTE: readonly AskKind[] = ["record", "start"];
 
 export interface Ask {
   kind: AskKind;
@@ -45,8 +54,17 @@ function intentFor(request: Ask): JamIntent {
     songId: request.songId,
     record: request.kind === "record",
     instrument: request.kind === "record" ? (request.instrument ?? null) : null,
-    act: request.kind === "like" ? "like" : request.kind === "report" || request.kind === "reportPart" ? "report" : null,
-    trackId: request.kind === "reportPart" ? (request.trackId ?? null) : null,
+    act:
+      request.kind === "like"
+        ? "like"
+        : request.kind === "report" ||
+            request.kind === "reportPart" ||
+            request.kind === "copyright" ||
+            request.kind === "copyrightPart"
+          ? "report"
+          : null,
+    trackId: request.kind === "reportPart" || request.kind === "copyrightPart" ? (request.trackId ?? null) : null,
+    reason: request.kind === "copyright" || request.kind === "copyrightPart" ? "copyright" : null,
   };
 }
 
@@ -68,7 +86,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
     } catch {
       // The URL carries it anyway.
     }
-    window.location.assign(jamIntentHref(intent, mainOrigin()));
+    window.location.assign(jamIntentHref(intent, mainOrigin(), jamAttribution()));
   };
 
   return (
@@ -83,6 +101,19 @@ export function AskProvider({ children }: { children: ReactNode }) {
             <p className="mt-2 text-[15px] leading-6 text-text-secondary">
               {jt(`ask.${request.kind}.body` as Parameters<typeof jt>[0])}
             </p>
+            {RIGHTS_NOTE.includes(request.kind) && (
+              <p className="mt-3 text-sm leading-5 text-text" data-jam-rights="">
+                {jt("ask.rights")}{" "}
+                <a
+                  href={`${mainOrigin()}/terms`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-semibold underline underline-offset-2 hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                >
+                  {jt("ask.rights.link")}
+                </a>
+              </p>
+            )}
             <div className="mt-6 flex flex-col gap-2 sm:flex-row-reverse">
               <button type="button" onClick={go} data-jam-ask-go="" className={button("primary", "lg", "w-full sm:w-auto")}>
                 {jt(`ask.${request.kind}.cta` as Parameters<typeof jt>[0])}

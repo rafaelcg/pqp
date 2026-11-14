@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { acquisitionFromLocation, peekAcquisition, rememberAcquisitionFromLocation } from "./acquisition";
 import {
+  JAM_ATTRIBUTION_TTL_MS,
   JAM_INTENT_TTL_MS,
+  currentJamAttribution,
+  jamAttributionFromSearch,
+  jamAttributionQuery,
   jamIntentFromSearch,
+  jamMainHref,
+  rememberJamAttribution,
   jamIntentHref,
   jamReturnPath,
   peekJamIntent,
@@ -76,9 +83,10 @@ describe("the URL", () => {
   it("writes the app URL a sign-up button points at, and it reads back", () => {
     const intent = { kind: "song", songId: ID, record: true, instrument: "keys", act: null, trackId: null } as const;
     const href = jamIntentHref(intent, "https://pqp.gg");
-    expect(href).toBe(`https://pqp.gg/app?jam=${ID}&record=1&instrument=keys`);
+    // No `ref` on the site's own address: the hand-over says `ref=jam`.
+    expect(href).toBe(`https://pqp.gg/app?jam=${ID}&record=1&instrument=keys&ref=jam`);
     expect(jamIntentFromSearch(new URL(href).search)).toEqual(intent);
-    expect(jamIntentHref({ kind: "new" })).toBe("/app?jam=new");
+    expect(jamIntentHref({ kind: "new" })).toBe("/app?jam=new&ref=jam");
   });
 
   it("names where the app sends somebody back to", () => {
@@ -138,5 +146,123 @@ describe("the stash", () => {
     const other = memory();
     rememberJamIntentFromLocation(other, { search: "?claim=rafa" });
     expect(peekJamIntent(other)).toBeNull();
+  });
+});
+
+describe("a copyright report asked for by a link", () => {
+  const track = "5c4b3a29-1807-4f6e-9d5c-3b2a19087f6e";
+
+  it("carries the reason on a song and on a part, through the URL and the stash", () => {
+    for (const trackId of [null, track]) {
+      const intent = { kind: "song", songId: ID, record: false, instrument: null, act: "report", trackId, reason: "copyright" } as const;
+      const href = jamIntentHref(intent, "https://pqp.gg");
+      expect(href).toContain("reason=copyright");
+      expect(jamIntentFromSearch(new URL(href).search)).toEqual(intent);
+      const storage = memory();
+      stashJamIntent(storage, intent);
+      expect(takeJamIntent(storage)).toEqual(intent);
+    }
+  });
+
+  it("means nothing without a report, and nothing but copyright is accepted", () => {
+    expect(jamIntentFromSearch(`?jam=${ID}&act=like&reason=copyright`)).not.toHaveProperty("reason");
+    expect(jamIntentFromSearch(`?jam=${ID}&act=report&reason=spam`)).not.toHaveProperty("reason");
+    expect(jamIntentFromSearch(`?jam=${ID}&record=1&reason=copyright`)).not.toHaveProperty("reason");
+  });
+});
+
+describe("attribution through the hand-over", () => {
+  const intent = { kind: "song", songId: ID, record: true, instrument: null, act: null, trackId: null } as const;
+
+  it("says ref=jam when the site was opened with no ref", () => {
+    expect(jamAttributionQuery(null)).toBe("ref=jam");
+    expect(jamAttributionQuery({ utm_source: "newsletter" })).toBe("ref=jam&utm_source=newsletter");
+    expect(jamIntentHref(intent, "https://pqp.gg", null)).toContain("&ref=jam");
+  });
+
+  it("forwards ref and utm_*, and nothing else from the address", () => {
+    const found = jamAttributionFromSearch(
+      "?ref=clip-ana&utm_source=tiktok&utm_medium=social&utm_campaign=jam-nov&gclid=abc&fbclid=x&jam=new&extra=1",
+    );
+    expect(found).toEqual({ ref: "clip-ana", utm_source: "tiktok", utm_medium: "social", utm_campaign: "jam-nov" });
+    const href = jamIntentHref(intent, "https://pqp.gg", found);
+    const search = new URL(href).searchParams;
+    expect(search.get("ref")).toBe("clip-ana");
+    expect(search.get("utm_source")).toBe("tiktok");
+    expect(search.get("utm_medium")).toBe("social");
+    expect(search.get("utm_campaign")).toBe("jam-nov");
+    expect(search.has("gclid")).toBe(false);
+    expect(search.has("fbclid")).toBe(false);
+    expect(search.has("extra")).toBe(false);
+    // the intent is untouched by the extra parameters
+    expect(jamIntentFromSearch(new URL(href).search)).toEqual(intent);
+  });
+
+  it("bounds and cleans what it forwards", () => {
+    expect(jamAttributionFromSearch("?ref=")).toBeNull();
+    expect(jamAttributionFromSearch("?nothing=here")).toBeNull();
+    expect(jamAttributionFromSearch(`?ref=${"x".repeat(300)}`)?.ref).toHaveLength(100);
+    expect(jamAttributionFromSearch("?ref=a%0Ab%09c")?.ref).toBe("a b c");
+  });
+
+  it("lands in the app's acquisition stash from the very URL the hand-over writes", () => {
+    const href = jamIntentHref(intent, "https://pqp.gg", { ref: "clip-ana", utm_source: "tiktok" });
+    const url = new URL(href);
+    expect(acquisitionFromLocation(url.search, url.pathname)).toMatchObject({
+      ref: "clip-ana",
+      source: "tiktok",
+      landing: "/app",
+    });
+    // and the default: no ref on the site, ref=jam in the report
+    const plain = new URL(jamIntentHref(intent, "https://pqp.gg"));
+    const storage = memory();
+    rememberAcquisitionFromLocation(storage, plain);
+    expect(peekAcquisition(storage)).toMatchObject({ ref: "jam" });
+  });
+
+  it("keeps the arrival's parameters for the sign-up button, first touch, for 30 days", () => {
+    const storage = memory();
+    const t0 = 1_000_000;
+    rememberJamAttribution(storage, "?ref=clip-ana&utm_source=tiktok", t0);
+    // the site moved on with pushState: the address no longer says it, the stash does
+    expect(currentJamAttribution(storage, "", t0 + 1000)).toEqual({ ref: "clip-ana", utm_source: "tiktok" });
+    // a second explicit arrival changes nothing
+    rememberJamAttribution(storage, "?ref=clip-bo", t0 + 2000);
+    expect(currentJamAttribution(storage, "", t0 + 3000)?.ref).toBe("clip-ana");
+    // an arrival with no parameters writes nothing (the default is applied when the link is built)
+    const empty = memory();
+    rememberJamAttribution(empty, "?jam=new", t0);
+    expect(currentJamAttribution(empty, "", t0)).toBeNull();
+    // the current address is the fallback when nothing is stashed
+    expect(currentJamAttribution(empty, "?ref=late", t0)).toEqual({ ref: "late" });
+    // expired
+    expect(currentJamAttribution(storage, "", t0 + JAM_ATTRIBUTION_TTL_MS + 1)).toBeNull();
+    // hand-edited junk is no attribution
+    const junk = memory();
+    junk.setItem("pqp:jam-attribution", "{nope");
+    expect(currentJamAttribution(junk, "", t0)).toBeNull();
+  });
+
+  it("does nothing, and does not throw, when storage is denied", () => {
+    const denied = {
+      getItem: () => {
+        throw new Error("denied");
+      },
+      setItem: () => {
+        throw new Error("denied");
+      },
+      removeItem: () => {
+        throw new Error("denied");
+      },
+    };
+    expect(() => rememberJamAttribution(denied, "?ref=x")).not.toThrow();
+    expect(currentJamAttribution(denied, "?ref=x")).toEqual({ ref: "x" });
+    expect(currentJamAttribution(null, "")).toBeNull();
+  });
+
+  it("keeps the attribution on a plain link to the main site", () => {
+    expect(jamMainHref("/app", "https://pqp.gg", null)).toBe("https://pqp.gg/app?ref=jam");
+    expect(jamMainHref("/c/ensaio", "https://pqp.gg", { ref: "clip-ana" })).toBe("https://pqp.gg/c/ensaio?ref=clip-ana");
+    expect(jamMainHref("/", "", null)).toBe("/?ref=jam");
   });
 });
