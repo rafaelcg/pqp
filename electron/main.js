@@ -2813,6 +2813,16 @@ if (probingShareAudio) {
   ipcGuard.handle("pqp:update-install", async () => updater?.install() ?? false, {
     rejected: false,
   });
+  // The page went back to the old look, which draws no update button: the
+  // updater downloads and asks by itself again.
+  ipcGuard.handle(
+    "pqp:update-release",
+    async () => {
+      updater?.release?.();
+      return true;
+    },
+    { rejected: false },
+  );
 
   ipcGuard.on("pqp:voice-state", (_event, payload) => {
     const next = normalizeVoiceState(payload);

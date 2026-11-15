@@ -711,6 +711,9 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     install() {
       return ipcRenderer.invoke("pqp:update-install");
     },
+    release() {
+      return ipcRenderer.invoke("pqp:update-release");
+    },
     onState(callback) {
       if (typeof callback !== "function") {
         return () => {};

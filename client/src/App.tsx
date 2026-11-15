@@ -150,6 +150,7 @@ import type { ChannelSettingsSectionId } from "@/components/layout/channel-setti
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { DmToasts } from "@/components/dm/dm-toasts";
+import { WhatsNewPrompt } from "@/components/layout/whats-new-prompt";
 import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
@@ -234,8 +235,11 @@ import {
   shouldOfferVoiceCleanNudge,
   voiceCleanNudgeDismissedPatch,
 } from "@/lib/voice-clean";
-import { rememberWhatsNew } from "@/lib/whats-new";
-import { rememberWhatsNewFeed } from "@/lib/whats-new-feed";
+import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
+import {
+  hasUnseenWhatsNew,
+  rememberWhatsNewFeed,
+} from "@/lib/whats-new-feed";
 import { BotIntroHint } from "@/components/bots/bot-intro-hint";
 import { useBotInvite } from "@/lib/use-bot-invite";
 import { DiscordImportHost } from "@/components/layout/discord-import-host";
@@ -1593,6 +1597,9 @@ function MainAppContent({
    */
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [whatsNewUnread, setWhatsNewUnread] = useState(() =>
+    hasUnseenWhatsNew(),
+  );
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<DmSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
@@ -1838,6 +1845,9 @@ function MainAppContent({
    */
   const [wantsMobileBeta, setWantsMobileBeta] = useState(() =>
     shouldShowMobileBetaHint(),
+  );
+  const [wantsWhatsNew, setWantsWhatsNew] = useState(
+    () => !isAutomatedBrowser() && !isWhatsNewSeen(),
   );
   const [wantsComposerFormatHint] = useState(() =>
     featureHintEligible("composerFormat"),
@@ -7630,7 +7640,9 @@ function MainAppContent({
     setDirectoryOpen(false);
     setWhatsNewOpen(true);
     rememberWhatsNewFeed();
+    setWhatsNewUnread(false);
     rememberWhatsNew();
+    setWantsWhatsNew(false);
     setMobileNavOpen(false);
   }
 
@@ -11964,9 +11976,7 @@ function MainAppContent({
       seasonalLook:
         seasonalLookOffer !== null && qgHintReady && !campaignsYield,
       mobileBeta: wantsMobileBeta && !campaignsYield,
-      // The sparkle on the rail is gone (Baú carries the news), so the card
-      // that pointed at it has nothing to point at.
-      whatsNew: false,
+      whatsNew: wantsWhatsNew && !campaignsYield,
       // News about a button in the composer: only where the platform is on for
       // the server being looked at, in a channel that has the button.
       appsNews:
@@ -14037,6 +14047,8 @@ function MainAppContent({
               }
             : undefined
         }
+        whatsNewSelected={whatsNewOpen}
+        whatsNewUnread={whatsNewUnread}
         onOpenWhatsNew={handleOpenWhatsNew}
         pinnedConversations={pinnedConversations}
         pinnedUnread={unread}
@@ -14113,6 +14125,7 @@ function MainAppContent({
             tag: user?.tag ?? null,
             handle: user?.handle ?? null,
           }}
+          whatsNewUnread={whatsNewUnread}
           onOpenProfile={() => {
             setSettingsSection("profile");
             setSettingsOpen(true);
@@ -15565,6 +15578,11 @@ function MainAppContent({
         enabled={effectiveCornerHint === "shortcuts"}
         shortcutLabel={formatBinding(shortcutBindings.toggleOverlay)}
         onDismiss={() => setWantsShortcutsHint(false)}
+      />
+      <WhatsNewPrompt
+        enabled={effectiveCornerHint === "whatsNew"}
+        onOpen={handleOpenWhatsNew}
+        onDismiss={() => setWantsWhatsNew(false)}
       />
       <MobileBetaHint
         enabled={effectiveCornerHint === "mobileBeta"}

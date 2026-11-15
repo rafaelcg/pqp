@@ -153,6 +153,31 @@ describe("the shell updater, for a page that never asks", () => {
   });
 });
 
+describe("the shell updater, handed back by the page", () => {
+  it("downloads what it found while the page drove it", () => {
+    const { controller } = start();
+    controller.attach();
+    fakeUpdater.emit("update-available", { version: "0.9.0" });
+    assert.deepEqual(fakeUpdater.calls, []);
+    controller.release();
+    assert.deepEqual(fakeUpdater.calls, ["download"]);
+  });
+
+  it("asks with the native box for a staged update, and alone after that", async () => {
+    const { controller } = start();
+    controller.attach();
+    fakeUpdater.emit("update-downloaded", { version: "0.9.0" });
+    await tick();
+    assert.equal(boxes.length, 0);
+    controller.release();
+    await tick();
+    assert.equal(boxes.length, 1);
+    controller.release();
+    await tick();
+    assert.equal(boxes.length, 1);
+  });
+});
+
 describe("a disabled updater", () => {
   it("answers disabled and does nothing", () => {
     process.env.PQP_DISABLE_AUTO_UPDATE = "1";

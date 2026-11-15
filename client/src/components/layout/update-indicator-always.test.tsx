@@ -214,3 +214,59 @@ describe("the always-on rail button", () => {
     expect(button().querySelector("span[aria-hidden=true]")).not.toBeNull();
   });
 });
+
+describe("the release notes from the always-on button", () => {
+  it("opens a status popover on the check, with the notes one click away", async () => {
+    const onOpenWhatsNew = vi.fn();
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <TooltipProvider>
+          <UpdateIndicator
+            variant="rail"
+            always
+            shellBridge={null}
+            onOpenWhatsNew={onOpenWhatsNew}
+            apply={async () => {}}
+          />
+        </TooltipProvider>,
+      );
+    });
+    await act(async () => button().click());
+    const popover = document.querySelector<HTMLElement>("[data-update-status]");
+    expect(popover).not.toBeNull();
+    const more = [...popover!.querySelectorAll("button")].find((b) =>
+      b.textContent?.length,
+    );
+    expect(more).toBeDefined();
+    await act(async () => more!.click());
+    expect(onOpenWhatsNew).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("[data-update-status]")).toBeNull();
+  });
+});
+
+describe("the old look's indicator", () => {
+  it("never asks the shell, and hands the updater back", async () => {
+    const { bridge } = fakeBridge({ status: "available", version: "9.9.9" });
+    const release = vi.fn(async () => true);
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <TooltipProvider>
+          <UpdateIndicator
+            variant="rail"
+            shellBridge={{ ...bridge, release }}
+            apply={async () => {}}
+          />
+        </TooltipProvider>,
+      );
+    });
+    expect(bridge.getState).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalled();
+    expect(document.querySelector("[data-update-indicator]")).toBeNull();
+  });
+});
