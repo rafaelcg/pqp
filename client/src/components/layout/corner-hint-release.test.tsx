@@ -2,27 +2,22 @@
 // @vitest-environment-options { "url": "https://pqp.gg/app" }
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@/hooks/use-notifications", () => ({
-  useNotificationSettings: () => ({ enable: vi.fn(async () => {}) }),
-}));
-vi.mock("@/lib/notifications", () => ({ dismissNotifyOffer: vi.fn() }));
-vi.mock("@/lib/api", () => ({
-  updateCommunitySettings: vi.fn(async () => ({ ok: true, community: {} })),
-}));
-
-import { ListingNudgeHint } from "../communities/listing-nudge-hint";
-import { NotifyOfferHint } from "./notify-offer-hint";
+import { CargosHint } from "./cargos-hint";
+import { MobileBetaHint } from "./mobile-beta-hint";
+import { ShortcutsHint } from "./shortcuts-hint";
+import { WhatsNewPrompt } from "./whats-new-prompt";
 
 /**
  * DISMISSING A CORNER CARD HAS TO GIVE THE CORNER BACK.
  *
  * `lib/corner-hints.ts` hands the corner to the first card that wants it,
  * and `App` yields the one attached-hint slot for as long as anybody holds
- * it (`liveAttachedHint`). A card that closed itself with local state and told
- * `App` nothing left `App` offering the corner to a card nobody could see,
- * and buried every attached tip behind it for the rest of the page load.
+ * it (`liveAttachedHint`). Each of these cards closed itself with local
+ * state and told `App` nothing, so `App` went on offering the corner to a
+ * card nobody could see and buried every attached tip behind it — the call
+ * dock card and both music cards — for the rest of the page load.
  *
  * Localhost used to replay every card on every reload. It now keeps them
  * off unless `pqp:hints-persist` is set. The URL above is not localhost
@@ -68,51 +63,74 @@ async function dismiss(name: string) {
 }
 
 describe("a dismissed corner card releases the corner", () => {
-  it("the notification offer", async () => {
+  it("cargos", async () => {
     const onDismiss = vi.fn();
-    await mount(<NotifyOfferHint enabled onDismiss={onDismiss} />);
+    await mount(
+      <CargosHint enabled onOpenRoles={() => {}} onDismiss={onDismiss} />,
+    );
 
-    expect(card("notify-offer")).not.toBeNull();
-    await dismiss("notify-offer");
+    expect(card("cargos")).not.toBeNull();
+    await dismiss("cargos");
 
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it("the directory listing nudge", async () => {
+  it("the phone beta invite", async () => {
     const onDismiss = vi.fn();
     await mount(
-      <ListingNudgeHint
-        enabled
-        nudge={{ serverId: "6f1c1d1e-0000-4000-8000-000000000001", name: "Clube", iconUrl: null }}
-        onSeen={() => {}}
-        onDismiss={onDismiss}
-        onListed={() => {}}
-        onFailed={() => {}}
-      />,
+      <MemoryRouter>
+        <MobileBetaHint enabled onDismiss={onDismiss} />
+      </MemoryRouter>,
     );
 
-    expect(card("listing-nudge")).not.toBeNull();
-    await dismiss("listing-nudge");
+    expect(card("mobile-beta")).not.toBeNull();
+    await dismiss("mobile-beta");
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("Novidades", async () => {
+    const onDismiss = vi.fn();
+    await mount(
+      <WhatsNewPrompt enabled onOpen={() => {}} onDismiss={onDismiss} />,
+    );
+
+    expect(card("whats-new")).not.toBeNull();
+    await dismiss("whats-new");
+
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("the shortcut map", async () => {
+    const onDismiss = vi.fn();
+    await mount(
+      <ShortcutsHint enabled shortcutLabel="Cmd + /" onDismiss={onDismiss} />,
+    );
+
+    expect(card("shortcuts")).not.toBeNull();
+    await dismiss("shortcuts");
 
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("taking the card's own action also releases it", () => {
-  it("the notification offer's later button gives the corner back", async () => {
+  it("cargos opens the roles editor and gives the corner back", async () => {
     const onDismiss = vi.fn();
-    await mount(<NotifyOfferHint enabled onDismiss={onDismiss} />);
+    const onOpenRoles = vi.fn();
+    await mount(
+      <CargosHint enabled onOpenRoles={onOpenRoles} onDismiss={onDismiss} />,
+    );
 
-    // The footer holds the CTA, then "later"; the X carries an aria-label.
-    const footer = [...document.querySelectorAll("button")].filter(
+    const cta = [...document.querySelectorAll("button")].find(
       (one) => one.getAttribute("aria-label") === null,
     );
-    const later = footer[1];
-    expect(later).toBeDefined();
+    expect(cta).toBeDefined();
     await act(async () => {
-      later!.click();
+      cta!.click();
     });
 
+    expect(onOpenRoles).toHaveBeenCalledTimes(1);
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

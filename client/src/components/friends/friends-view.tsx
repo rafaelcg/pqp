@@ -1,4 +1,4 @@
-import { Breu } from "@/components/breu/breu";
+import { NewLookBreu } from "@/components/breu/breu";
 import {
   PANE_HEADER_NAV_REDESIGN,
   PANE_HEADER_RULE_REDESIGN,
@@ -21,10 +21,16 @@ import type {
   Friend,
   FriendRequestEntry,
   PublicUser,
+  User,
 } from "@pqp/shared";
 import { Check, Menu, UserPlus, Users, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { PendingDepoimentos } from "@/components/depoimentos/pending-depoimentos";
+import { FirstRunCard } from "@/components/onboarding/first-run-card";
+import {
+  shouldShowFirstRun,
+  shouldStampFirstRunComplete,
+} from "@/lib/first-run";
 import { Button } from "@/components/ui/button";
 import { ContextMenu } from "@/components/ui/context-menu";
 import { Tabs } from "@/components/ui/tabs";
@@ -72,6 +78,29 @@ const FRIEND_SECTION_REDESIGN = cn(SECTION_LABEL_REDESIGN, "redesign:px-2");
  * not even send a status for them.
  */
 
+/**
+ * Everything the first-run checklist needs that this view does not already own.
+ *
+ * It lives here rather than in `App` because two of the three things it offers
+ * are already this component's business — the friend count it ticks off is the
+ * list this view is holding, and "add a friend" is this view's own search panel.
+ * `App` would have to duplicate the fetch to know the first and lift state to
+ * reach the second.
+ */
+export interface FriendsFirstRun {
+  user: User;
+  serverCount: number;
+  onCreateServer: () => void;
+  onJoinServer: () => void;
+  onImportDiscord?: () => void;
+  onPickAvatar: () => void;
+  /**
+   * The checklist is answered — put away by hand, or finished. One preference
+   * write, and it never comes back on any device.
+   */
+  onSettled: () => void;
+}
+
 interface FriendsViewProps {
   /** Kept out of add-friend results — you cannot befriend yourself. */
   currentUserId: string | null;
@@ -82,9 +111,10 @@ interface FriendsViewProps {
   /** Extra content for the quiet state — the SSO server suggestions ride here. */
   extras?: ReactNode;
   /**
-   * Conversas (`conversations_home`): drawn at the top of the panel while the
-   * account has no conversation at all. Handed the view's own "add a friend"
-   * so its button opens the same field the header's does.
+   * Conversas (`conversations_home`): drawn at the top of the panel, under the
+   * first-run card, while the account has no conversation at all. Handed the
+   * view's own "add a friend" so its button opens the same field the header's
+   * does.
    */
   hero?: (actions: { openAdd: () => void }) => ReactNode;
   /**
@@ -97,6 +127,8 @@ interface FriendsViewProps {
   onTogglePin?: (channelId: string) => void;
   /** "Bloquear" in a friend row's menu. Absent, the entry is not drawn. */
   onBlockUser?: (user: PublicUser) => void;
+  /** Absent for an account past its first run, which is nearly all of them. */
+  firstRun?: FriendsFirstRun;
 }
 
 export function FriendsView({
@@ -109,6 +141,7 @@ export function FriendsView({
   pinnedChannelIds,
   onTogglePin,
   onBlockUser,
+  firstRun,
 }: FriendsViewProps) {
   const { t } = useTranslation();
   const redesign = useRedesign();
@@ -177,6 +210,38 @@ export function FriendsView({
 
   const online = onlineFriends(data.friends);
   const pending = pendingActionCount(data, pendingDepoimentos);
+
+  /**
+   * The checklist's inputs, and the two questions asked of them.
+   *
+   * Gated on `!loading` because the friend list starts empty: asking before the
+   * first snapshot lands would draw "find your people" un-ticked at somebody who
+   * has friends, and then tick it a moment later under their eyes.
+   */
+  const firstRunInputs = firstRun
+    ? {
+        user: firstRun.user,
+        serverCount: firstRun.serverCount,
+        friendCount: data.friends.length,
+      }
+    : null;
+  const showFirstRun =
+    firstRunInputs !== null && !loading && shouldShowFirstRun(firstRunInputs);
+  const stampFirstRun =
+    firstRunInputs !== null &&
+    !loading &&
+    shouldStampFirstRunComplete(firstRunInputs);
+
+  // Close the derived-state loop: once all three read as done, record it so that
+  // undoing one of them a year from now cannot bring the card back. The effect
+  // rather than the render because it writes, and `onSettled` is idempotent on
+  // the App side — `shouldStampFirstRunComplete` goes false as soon as the
+  // preference lands, so this cannot loop.
+  useEffect(() => {
+    if (stampFirstRun) {
+      firstRun?.onSettled();
+    }
+  }, [stampFirstRun, firstRun]);
 
   async function run(userId: string, action: () => Promise<void>) {
     setBusyId(userId);
@@ -322,6 +387,7 @@ export function FriendsView({
           panelId={panelId}
           className="order-last -mx-1 w-full overflow-x-auto px-1 py-0.5 [scrollbar-width:thin] @2xl:order-none @2xl:mx-0 @2xl:ml-2 @2xl:w-auto @2xl:overflow-visible @2xl:p-0"
           tabClassName="@2xl:py-1"
+          legacy="plain"
         />
 
         <Button
@@ -384,6 +450,23 @@ export function FriendsView({
         role="tabpanel"
         className="flex-1 overflow-y-auto p-4 redesign:px-2"
       >
+        {/* Above the tab content, because it is the reason this screen is not
+            empty. It stays put while they switch tabs — the three errands do not
+            belong to Online or to Pending. */}
+        {showFirstRun && firstRun && (
+          <FirstRunCard
+            user={firstRun.user}
+            serverCount={firstRun.serverCount}
+            friendCount={data.friends.length}
+            onCreateServer={firstRun.onCreateServer}
+            onJoinServer={firstRun.onJoinServer}
+            onImportDiscord={firstRun.onImportDiscord}
+            onAddFriend={() => setAdding(true)}
+            onPickAvatar={firstRun.onPickAvatar}
+            onDismiss={firstRun.onSettled}
+          />
+        )}
+
         {hero?.({ openAdd: () => setAdding(true) })}
 
         {loading ? (
@@ -450,15 +533,19 @@ export function FriendsView({
   );
 
   function NoFriendsYet({ onAdd }: { onAdd: () => void }) {
-    // The Conversas hero above already offers Adicionar amigo. Two buttons a
-    // screen apart is not twice the encouragement, it is a layout that looks
-    // unfinished.
-    if (hero) {
+    // The checklist above is already asking for exactly this, with its own
+    // button. Two "Add friend" buttons a screen apart is not twice the
+    // encouragement, it is a layout that looks unfinished. And the one line
+    // that was left said the card's own sentence again in different words ("@"
+    // there, "identificador" here), so while the card is up this says nothing.
+    // The Conversas hero above already offers Adicionar amigo, for the same
+    // reason.
+    if (showFirstRun || hero) {
       return null;
     }
     return (
       <div className="max-w-sm redesign:px-2">
-        <Breu mood="hello" size="sm" className="mb-3" />
+        <NewLookBreu mood="hello" size="sm" className="mb-3" />
         <p className="font-display text-xl font-bold redesign:text-text">
           {t("friends.empty.all.title")}
         </p>
@@ -544,6 +631,7 @@ function FriendRow({
   onBlock?: (user: PublicUser) => void;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const openProfile = useProfilePopover();
   const rowRef = useRef<HTMLLIElement>(null);
   const conversation = directConversationWith(conversations, friend.id);
@@ -567,6 +655,37 @@ function FriendRow({
     onBlock,
     onRemove,
   });
+
+  // Toggle off keeps main's row: no profile button, no right-click menu.
+  if (!redesign) {
+    return (
+      <li className="group mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3">
+        <FriendFace person={friend} status={friend.status} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold">{friend.displayName}</p>
+          {friend.tag && (
+            <p className="truncate font-mono text-[11px] text-paper-muted">{friend.tag}</p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button size="sm" variant="secondary" disabled={busy} onClick={() => onMessage(friend.id)}>
+            {t("friends.message")}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            aria-label={`${t("friends.remove")} — ${friend.displayName}`}
+            title={t("friends.remove")}
+            data-remove-friend={friend.id}
+            onClick={() => onRemove(friend)}
+          >
+            <X aria-hidden="true" className="h-4 w-4" />
+          </Button>
+        </div>
+      </li>
+    );
+  }
 
   return (
     <ContextMenu items={items}>

@@ -1,39 +1,104 @@
 import { describe, expect, it } from "vitest";
-import { CORNER_HINT_ORDER, winningCornerHint } from "./corner-hints";
+import { winningCornerHint } from "./corner-hints";
 
 describe("winningCornerHint", () => {
   it("returns null when nobody wants the corner", () => {
     expect(winningCornerHint({})).toBeNull();
-    expect(
-      winningCornerHint({ notifyOffer: false, listingNudge: false }),
-    ).toBeNull();
+    expect(winningCornerHint({ qg: false, cargos: false })).toBeNull();
   });
 
-  it("keeps only the Baú post, the notification offer and the listing nudge", () => {
-    expect([...CORNER_HINT_ORDER]).toEqual([
-      "communityHomePost",
+  it("lets the QG go first, then the phone beta, then dice, then cargos", () => {
+    expect(
+      winningCornerHint({
+        qg: true,
+        mobileBeta: true,
+        whatsNew: true,
+        cargos: true,
+      }),
+    ).toBe("qg");
+    expect(
+      winningCornerHint({
+        mobileBeta: true,
+        whatsNew: true,
+        cargos: true,
+      }),
+    ).toBe("mobileBeta");
+    expect(winningCornerHint({ whatsNew: true, cargos: true })).toBe(
+      "whatsNew",
+    );
+    expect(winningCornerHint({ cargos: true })).toBe("cargos");
+    expect(winningCornerHint({ shortcuts: true })).toBe("shortcuts");
+    expect(winningCornerHint({ cargos: true, shortcuts: true })).toBe(
+      "cargos",
+    );
+  });
+
+  it("puts the notification offer after a Baú post, before the QG", () => {
+    expect(winningCornerHint({ notifyOffer: true, qg: true, cargos: true })).toBe(
       "notifyOffer",
-      "listingNudge",
-    ]);
-  });
-
-  it("puts the notification offer after a Baú post, before the listing nudge", () => {
-    expect(
-      winningCornerHint({ notifyOffer: true, listingNudge: true }),
-    ).toBe("notifyOffer");
+    );
     expect(
       winningCornerHint({ communityHomePost: true, notifyOffer: true }),
     ).toBe("communityHomePost");
-    expect(winningCornerHint({ listingNudge: true })).toBe("listingNudge");
   });
 
-  it("a live Baú post beats every other card", () => {
+  it("puts the Voz limpa nudge after QG and before the phone beta", () => {
+    expect(
+      winningCornerHint({
+        qg: true,
+        voiceClean: true,
+        mobileBeta: true,
+      }),
+    ).toBe("qg");
+    expect(
+      winningCornerHint({
+        voiceClean: true,
+        mobileBeta: true,
+        whatsNew: true,
+      }),
+    ).toBe("voiceClean");
+  });
+
+  it("a live Baú post beats first-run cards", () => {
     expect(
       winningCornerHint({
         communityHomePost: true,
-        notifyOffer: true,
-        listingNudge: true,
+        qg: true,
+        cargos: true,
       }),
     ).toBe("communityHomePost");
+  });
+});
+
+describe("the apps news card", () => {
+  it("goes after Novidades and before cargos and the shortcut map", () => {
+    expect(winningCornerHint({ whatsNew: true, appsNews: true, cargos: true })).toBe("whatsNew");
+    expect(winningCornerHint({ appsNews: true, cargos: true })).toBe("appsNews");
+    expect(winningCornerHint({ appsNews: true, shortcuts: true })).toBe("appsNews");
+    expect(winningCornerHint({ qg: true, appsNews: true })).toBe("qg");
+  });
+});
+
+describe("under the redesign", () => {
+  it("skips the retired campaign cards and keeps the moments", () => {
+    const everything = {
+      qg: true,
+      forumNews: true,
+      voiceClean: true,
+      seasonalLook: true,
+      mobileBeta: true,
+      whatsNew: true,
+      appsNews: true,
+      cargos: true,
+      shortcuts: true,
+    };
+    expect(winningCornerHint(everything, { redesign: true })).toBeNull();
+    expect(winningCornerHint(everything)).toBe("qg");
+    expect(
+      winningCornerHint({ ...everything, listingNudge: true }, { redesign: true }),
+    ).toBe("listingNudge");
+    expect(
+      winningCornerHint({ ...everything, notifyOffer: true }, { redesign: true }),
+    ).toBe("notifyOffer");
   });
 });

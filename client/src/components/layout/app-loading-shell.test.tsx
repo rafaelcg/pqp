@@ -40,12 +40,32 @@ async function mountError(): Promise<HTMLElement> {
   return frame;
 }
 
+async function mountShell(node: ReactElement): Promise<HTMLElement> {
+  frame = document.createElement("div");
+  document.body.append(frame);
+  root = createRoot(frame);
+  await act(async () => {
+    root!.render(node);
+  });
+  return frame;
+}
+
 describe("AppLoadingShell", () => {
-  it("shows Breu at work, with a reduced-motion variant", () => {
-    const html = renderToStaticMarkup(<AppLoadingShell />);
+  it("shows Breu at work under the redesign, with a reduced-motion variant", async () => {
+    setRedesignFlag(true);
+    const html = (await mountShell(<AppLoadingShell label="Entrando…" />)).innerHTML;
     expect(html).toContain('data-breu-motion="working"');
     expect(html).toContain('data-face="focado"');
     expect(html).toContain("motion-reduce:animate-none");
+    // One label for every stage under the redesign.
+    expect(html).toContain('aria-label="Loading…"');
+  });
+
+  it("keeps the old look's spinning ring and the stage's own label", async () => {
+    const html = (await mountShell(<AppLoadingShell label="Entrando…" />)).innerHTML;
+    expect(html).not.toContain("data-breu-motion");
+    expect(html).toContain("animate-spin");
+    expect(html).toContain('aria-label="Entrando…"');
   });
 
   it("draws one fixed-size card with the one loading label", () => {
@@ -60,6 +80,7 @@ describe("AppLoadingShell", () => {
 
 describe("BootShellHost", () => {
   it("keeps the same shell mounted from the chunk load through the bootstrap", async () => {
+    setRedesignFlag(true);
     type Stage = "clerk" | "bootstrap" | "ready";
     let resolveChunk: (value: { default: () => ReactElement }) => void = () => {};
     let advance: (stage: Stage) => void = () => {};
@@ -130,6 +151,17 @@ describe("BootShellHost", () => {
     expect(frame.querySelector("[data-chat]")).not.toBeNull();
   });
 
+  it("with the toggle off, each stage draws its own shell in place, as before", async () => {
+    const page = await mountShell(
+      <BootShellHost>
+        <BootShellHold label="Entrando…" />
+      </BootShellHost>,
+    );
+    expect(page.querySelectorAll("[data-boot-card]")).toHaveLength(1);
+    expect(page.querySelector('[aria-label="Entrando…"]')).not.toBeNull();
+    expect(page.querySelector("[data-breu-motion]")).toBeNull();
+  });
+
   it("draws the shell itself when no host is above it", () => {
     const html = renderToStaticMarkup(<BootShellHold />);
     expect(html).toContain("data-boot-card");
@@ -173,8 +205,7 @@ describe("AppBootstrapError", () => {
     const page = await mountError();
     expect(page.querySelector("[data-bootstrap-breu]")).toBeNull();
     expect(page.querySelector("[data-breu-bubble]")).toBeNull();
-    expect(page.querySelector('[data-face="triste"]')?.getAttribute("class")).not.toContain(
-      "sm:hidden",
-    );
+    // The old page had no Breu at all.
+    expect(page.querySelector("[data-face]")).toBeNull();
   });
 });

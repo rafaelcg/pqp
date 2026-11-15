@@ -53,6 +53,7 @@ export function BotTabs({ value, onChange }: { value: BotTab; onChange: (next: B
     <Tabs
       label={t("bots.settings.tabs")}
       variant="underline"
+      legacy="arrows"
       value={value}
       onValueChange={onChange}
       items={TABS.map(([id, label]) => ({ id, label: t(label) }))}

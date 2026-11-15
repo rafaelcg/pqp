@@ -1,4 +1,5 @@
 import { BotFace } from "@/components/bots/bot-face";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
 
@@ -156,4 +157,12 @@ export function BreuSpeechBubble({
       <span className="absolute -bottom-[7px] right-4 h-3 w-3 rotate-45 border-r border-b border-[color:var(--popover-border,var(--color-border))] bg-[color:var(--popover-surface,var(--color-surface-1))]" />
     </span>
   );
+}
+
+/**
+ * Breu where the old look drew nothing in its place: under the redesign only.
+ * With the toggle off it renders nothing, so the screen is the one it was.
+ */
+export function NewLookBreu(props: Parameters<typeof Breu>[0]) {
+  return useRedesign() ? <Breu {...props} /> : null;
 }

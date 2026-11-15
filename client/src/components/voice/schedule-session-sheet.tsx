@@ -5,6 +5,7 @@ import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/lib/api";
+import { useRedesign } from "@/lib/redesign";
 import {
   browserTimezone,
   defaultSessionScheduleValue,
@@ -37,6 +38,7 @@ export function ScheduleSessionSheet({
   }) => Promise<void>;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const [title, setTitle] = useState("");
   const [startsAt, setStartsAt] = useState(defaultSessionScheduleValue());
   const [description, setDescription] = useState("");
@@ -142,14 +144,26 @@ export function ScheduleSessionSheet({
           <span className="mb-1 block">
             {t("watchPartySchedule.sheet.descriptionLabel")}
           </span>
-          <Textarea
-            rows={3}
-            maxLength={2000}
-            className="min-h-0 resize-none"
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            placeholder={t("watchPartySchedule.sheet.descriptionPlaceholder")}
-          />
+          {redesign ? (
+            <Textarea
+              rows={3}
+              maxLength={2000}
+              className="min-h-0 resize-none"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder={t("watchPartySchedule.sheet.descriptionPlaceholder")}
+            />
+          ) : (
+            // Toggle off: main's own box, which drew no focus ring of its own.
+            <textarea
+              rows={3}
+              maxLength={2000}
+              className="w-full resize-none rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 py-2 text-sm text-text placeholder:text-text-tertiary/70"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder={t("watchPartySchedule.sheet.descriptionPlaceholder")}
+            />
+          )}
         </label>
         {error && <p className="text-xs text-danger">{error}</p>}
       </DialogBody>

@@ -279,6 +279,42 @@ tab shots included, compared against the old components; only avatar noise.
 | `f-states` | Merged (Opus 8.9 r5, cap, no MUST) |
 | `f-dm-home` | Merged (Opus 8.8 r5, cap, no MUST) |
 
+## Toggle-off gate (2026-11-15)
+
+A Fable 5.2 review of draft PR #1486 scored it 6/10. It found four MUSTs: with
+the toggle off, the app was not what `main` draws. André asked to put those
+changes behind the toggle and fix the MUSTs. Branch `rd2/toggle-gate`; the
+small leaks were done by Sonnet 5.5 on `rd2/gate-small-leaks`, merged into it.
+
+What the old look gets back, and what the new look keeps:
+
+1. Error screens (`error-boundary.tsx`): Breu draws only under the redesign
+   (`NewLookBreu`). The copy is unchanged. This is the only edit to the file.
+2. The hints, corner cards and strips removed on 2026-11-01 are back with
+   the toggle off. The redesign still shows none of them:
+   `REDESIGN_RETIRED_CORNER_IDS` in `lib/corner-hints.ts`, the attached
+   queue in `App.tsx`, and each strip's own gate. See `docs/ONBOARDING.md`.
+3. What's New: the old look has the rail sparkle, its pip, the corner card
+   and the quiet update indicator. The new look keeps the Novo visual switch
+   and the always-on update button; a click with nothing to take opens a
+   status popover with "Ver todas as novidades". The phone keeps its
+   Novidades row in both looks, so the notes are reachable everywhere.
+4. Desktop shell: only the new look's button drives the updater. The old
+   look leaves it to download and ask by itself, as before, and switching
+   back to the old look hands it back (`pqp:update-release`).
+5. Breu and the 2026-11-01 icon swaps: with the toggle off `EmptyState`
+   ignores `mascot` and draws the caller's icon, and the Conversas hand disc,
+   the boot screen's "pqp" ring, the per-stage boot labels, the forced update
+   line, the Friends and public profile empties draw as before.
+6. Strips that became `Banner` draw no role with the toggle off.
+7. Tablists (`Tabs legacy`), the forum expand `aria-pressed`, the community
+   chip `aria-hidden`, search hover, the schedule textarea, the composer "+"
+   menu, the input transition and the friend row match `main` with the
+   toggle off.
+
+The one toggle-off difference left on purpose is the Novo visual switch in
+Settings > Beta: it is how a person opts in.
+
 ## Phase 0: directions
 
 The mockups live on branch `rd/directions` (not merged). Open
@@ -2223,7 +2259,9 @@ test user's random tag. No new copy.
    - Phone shell: bottom tabs (`conversations_home_phone_tabs`) or the drawer.
    - Channel list: mixed layout (`mixed_channel_list`) or legacy sections.
 3. `error-boundary.tsx` is English only, and AGENTS.md says to leave it alone.
-   Redesign its look and keep the copy as is?
+   Redesign its look and keep the copy as is? (2026-11-15: the 2026-11-01
+   Breu on its three screens is now drawn under the redesign only. Nothing
+   else in the file changed.)
 4. Sidebar header: the members button duplicates the server menu's Membros
    and the chat header's members control. Hide it on desktop too, so a long
    server name fits? It is hidden in the phone drawer already.
@@ -2257,6 +2295,15 @@ test user's random tag. No new copy.
     servidor". The council suggests "Não dá pra" to match the casual
     register. The key renders in both looks, so it changes the app with the
     toggle off. Change it?
+11. Toggle off (2026-11-15): seven more 2026-11-01 commits change the app in
+    both looks. They are fixes and small features, not the brand, so they
+    were not put behind the toggle: category deletion copy (`d6888584d`),
+    leave and notification levels in the server header menu (`3abddcbd4`),
+    the channel row tooltip (`fb05065dd`), "tap" on touch devices
+    (`bdcdde349`), Cargos names in channel permissions (`56005d83f`) and the
+    public handle on friends, participants and search results (`b71dfc9d6`,
+    `6874e37b5`: `handle` on `publicUserSchema`, so the PR restarts the API).
+    Keep them in this PR, gate them, or move them to their own PR?
 
 ## Decisions
 

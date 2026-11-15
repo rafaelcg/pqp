@@ -97,8 +97,13 @@ export const BANNER_DISMISS_REDESIGN =
 
 const BannerToneContext = React.createContext<BannerTone>("warning");
 
-export interface BannerProps extends React.HTMLAttributes<HTMLDivElement> {
+export interface BannerProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "role"> {
   tone: BannerTone;
+  /**
+   * `status` unless given. `null` draws no role at all, for a strip whose
+   * toggle-off markup never had one.
+   */
+  role?: React.AriaRole | null;
   edge?: keyof typeof EDGE;
   /**
    * Drawn only under the redesign, in the tone's ink, so every strip leads
@@ -123,7 +128,7 @@ export function Banner({
   return (
     <BannerToneContext.Provider value={tone}>
       <div
-        role={role}
+        role={role ?? undefined}
         data-banner={tone}
         className={cn(
           "flex items-start gap-3 px-4 py-2 text-sm",

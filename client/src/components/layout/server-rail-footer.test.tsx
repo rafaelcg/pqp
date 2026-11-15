@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { REDESIGN_STORAGE_KEY, isRedesignOn } from "@/lib/redesign";
 import { ServerRail } from "./server-rail";
 
 /**
- * The foot of the rail: no sparkle (Baú carries the news), the Novo visual
- * switch, and an update button that is there with nothing to take.
+ * The foot of the rail. The new look: no sparkle, the Novo visual switch, and
+ * an update button that is there with nothing to take. The old look: the
+ * What's New sparkle, and the update indicator only while a build waits.
  */
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -54,7 +55,24 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
-describe("the foot of the rail", () => {
+describe("the foot of the rail, old look", () => {
+  it("keeps the What's New sparkle and no look switch", async () => {
+    await mount();
+    expect(document.querySelector("[data-whats-new-rail]")).not.toBeNull();
+    expect(document.querySelector("[data-new-look-rail]")).toBeNull();
+  });
+
+  it("draws no update button while nothing waits", async () => {
+    await mount();
+    expect(document.querySelector("[data-update-indicator]")).toBeNull();
+  });
+});
+
+describe("the foot of the rail, new look", () => {
+  beforeEach(() => {
+    localStorage.setItem(REDESIGN_STORAGE_KEY, "on");
+  });
+
   it("has no What's New sparkle, even with the notes wired", async () => {
     await mount();
     expect(document.querySelector("[data-whats-new-rail]")).toBeNull();
@@ -88,13 +106,14 @@ describe("the foot of the rail", () => {
     }
   });
 
-  it("flips the look and remembers it", async () => {
+  it("flips back to the old look and remembers it", async () => {
     await mount();
     const toggle = document.querySelector<HTMLButtonElement>("[data-new-look-rail]")!;
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
-    await act(async () => toggle.click());
-    expect(localStorage.getItem(REDESIGN_STORAGE_KEY)).toBe("on");
     expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => toggle.click());
+    expect(localStorage.getItem(REDESIGN_STORAGE_KEY)).toBe("off");
+    expect(document.querySelector("[data-new-look-rail]")).toBeNull();
+    expect(document.querySelector("[data-whats-new-rail]")).not.toBeNull();
   });
 
   it("wins over a ?redesign= in the address", async () => {
