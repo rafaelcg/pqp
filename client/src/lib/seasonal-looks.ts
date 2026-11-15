@@ -1,11 +1,11 @@
 /**
- * Seasonal looks: when the appearance picker offers them.
+ * Seasonal looks: when the picker offers them and when the corner card invites.
  *
  * The windows are the only switch. Nothing ships dark and nothing needs a
- * deploy to turn on: Christmas appears in the picker on its first day. Outside
- * the window the look is hidden from the picker, except for somebody who still
- * has it on, who keeps it until they pick something else. (The corner card
- * that invited people to try a seasonal look was removed on 2026-11-01.)
+ * deploy to turn on: Christmas appears in the picker on its first day and the
+ * card starts inviting the same day. Outside the window the look is hidden from
+ * the picker, except for somebody who still has it on, who keeps it until they
+ * pick something else.
  *
  * Dates are the reader's local calendar, which is the one a holiday follows.
  */
@@ -39,7 +39,8 @@ export const SEASON_OVERRIDE_KEY = "pqp:season";
 
 /**
  * True lists every seasonal look in the picker all year, for testing. False
- * (shipped) shows each look only in its season.
+ * (shipped) shows each look only in its season. The corner card follows the
+ * calendar either way.
  */
 export const OFFER_SEASONAL_LOOKS_ALL_YEAR = false;
 
@@ -95,4 +96,17 @@ export function isLookOffered(
   allYear: boolean = OFFER_SEASONAL_LOOKS_ALL_YEAR,
 ): boolean {
   return allYear || !isSeasonalLook(look) || look === season || look === current;
+}
+
+/**
+ * The year a season belongs to, for the card's once-per-season key. Christmas
+ * on 3 January is still last year's Christmas.
+ */
+export function seasonYear(look: SeasonalLook, now: Date = new Date()): number {
+  const { from } = SEASON_WINDOWS[look];
+  return now.getMonth() + 1 < from[0] ? now.getFullYear() - 1 : now.getFullYear();
+}
+
+export function seasonalHintKey(look: SeasonalLook, now: Date = new Date()): string {
+  return `pqp:seasonal-look-${look}-${seasonYear(look, now)}`;
 }

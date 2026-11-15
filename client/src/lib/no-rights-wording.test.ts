@@ -34,6 +34,7 @@ const PREFIXES = [
   "streamersPage.",
   "landing.",
   "home.",
+  "cinemaHint.",
   "vem.features.watch.",
   "voice.notice.voiceTrackNeedsMic",
 ];

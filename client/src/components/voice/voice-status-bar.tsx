@@ -19,6 +19,8 @@ import {
   VideoCameraSlash,
   Microphone,
 } from "@phosphor-icons/react";
+import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
+import { FeatureHint } from "@/components/layout/feature-hint";
 import { Button } from "@/components/ui/button";
 import { Icon, IconSwap } from "@/components/ui/icon";
 import {
@@ -108,6 +110,10 @@ interface VoiceStatusBarProps {
    * on screen and already carries Leave; the full sidebar card always keeps it.
    */
   hideLeave?: boolean;
+  /** One-shot share / Watch party coachmark when the stage is not on screen. */
+  shareHintEnabled?: boolean;
+  /** One-shot bring-friends coachmark when the stage is not on screen. */
+  bringFriendsHintEnabled?: boolean;
   /**
    * The sidebar is 72px of icons. Only the two things that cannot wait survive
    * the squeeze: the call you are in, and the way out of it. Camera and share
@@ -156,6 +162,8 @@ export function VoiceStatusBar({
   onOpen,
   onLeave,
   hideLeave = false,
+  shareHintEnabled = false,
+  bringFriendsHintEnabled = false,
   compact = false,
   hideActions = false,
 }: VoiceStatusBarProps) {
@@ -271,6 +279,22 @@ export function VoiceStatusBar({
       data-voice-status-bar=""
       className={cn("border-t border-ink-4/60 bg-ink px-2 py-2", VOICE_STRIP_CARD_REDESIGN, "redesign:px-2.5 redesign:pt-2 redesign:pb-2.5")}
     >
+      {/* Above the strip, out of the flow: in it the card lifted the whole
+          bar (and the user row under it) by its own height. */}
+      {(shareHintEnabled || bringFriendsHintEnabled) && (
+        <div className="pointer-events-none relative z-30 h-0 [&>*]:pointer-events-auto">
+          <div className="absolute inset-x-0 bottom-2">
+            {shareHintEnabled && (
+              <FeatureHint
+                id="watchParty"
+                enabled
+                body={t("featureHint.watchParty.strip")}
+              />
+            )}
+            {bringFriendsHintEnabled && <BringFriendsHint enabled />}
+          </div>
+        </div>
+      )}
       <div className="flex items-center gap-1 redesign:gap-1.5 redesign:pl-0.5">
         {connected ? (
           <span

@@ -73,14 +73,16 @@ describe("wantsListingNudge", () => {
 });
 
 describe("the listing nudge in the corner queue", () => {
-  it("comes after a Baú post and the notification offer", () => {
-    expect(winningCornerHint({ notifyOffer: true, listingNudge: true })).toBe(
-      "notifyOffer",
-    );
+  it("comes after the QG and before the Voz limpa nudge and the campaigns", () => {
+    expect(winningCornerHint({ qg: true, listingNudge: true })).toBe("qg");
     expect(
-      winningCornerHint({ communityHomePost: true, listingNudge: true }),
-    ).toBe("communityHomePost");
-    expect(winningCornerHint({ listingNudge: true })).toBe("listingNudge");
+      winningCornerHint({
+        listingNudge: true,
+        voiceClean: true,
+        mobileBeta: true,
+        whatsNew: true,
+      }),
+    ).toBe("listingNudge");
   });
 });
 

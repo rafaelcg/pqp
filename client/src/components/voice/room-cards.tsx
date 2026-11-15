@@ -22,7 +22,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { UserAvatar } from "@/components/user/user-avatar";
-import { useBringFriendsServer } from "@/components/layout/bring-friends-server";
+import { useBringFriendsServer } from "@/components/layout/bring-friends-hint";
 import {
   PeerAudioMenu,
   usePeerAudioMenu,
