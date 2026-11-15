@@ -14,6 +14,7 @@ import { searchServerMessages } from "@/lib/api";
 import { messageLinkState, messageRoutePath } from "@/lib/app-route";
 import { useTranslation } from "@/lib/i18n";
 import { cn, formatDayLabel, formatFullTimestamp } from "@/lib/utils";
+import { useRedesign } from "@/lib/redesign";
 import { EmptyState } from "@/components/ui/empty-state";
 import { appendUniqueResults, clampSelection } from "./search-results";
 import { Spinner } from "@/components/ui/spinner";
@@ -376,14 +377,16 @@ function SearchEmpty({
   /** The glass for the prompt, Breu for no match, a warning for an error, none while the field spins. */
   icon?: "search" | "breu" | "error" | "none";
 }) {
+  const redesign = useRedesign();
   return (
     <EmptyState
       size="inline"
-      // Breu, in both looks: nothing found is a moment, not a list row.
+      // Breu under the redesign: nothing found is a moment, not a list row.
+      // With the toggle off the empty state ignores it and the glass draws.
       mascot={icon === "breu" ? "curious" : undefined}
       // Under the redesign only, so it leads like every other inline state.
       icon={
-        icon === "none" || icon === "breu" ? undefined : icon === "error" ? (
+        icon === "none" || (icon === "breu" && redesign) ? undefined : icon === "error" ? (
           <Icon icon={WarningCircle} size="sm" className="text-danger" />
         ) : (
           // Quiet, so the field's glass stays the one search mark.

@@ -1245,7 +1245,7 @@ function ClerkAppGate() {
   }, [desktop]);
 
   if (!isLoaded) {
-    return <BootShellHold />;
+    return <BootShellHold label={t("app.loading.signingIn")} />;
   }
 
   if (!isSignedIn) {
@@ -11160,7 +11160,7 @@ function MainAppContent({
   }
 
   if (!bootstrapReady) {
-    return <BootShellHold />;
+    return <BootShellHold label={t("app.loading.servers")} />;
   }
 
   /**
@@ -14418,7 +14418,8 @@ function MainAppContent({
           <Banner
             tone="warning"
             icon={BannerCodeIcon}
-            role="note"
+            // The old strips had no role; the new look announces them.
+            role={redesign ? "note" : null}
             className="block border-warning/30 px-3 py-1 text-center text-xs"
           >
             <BannerText grow={false}>{t("chrome.devBypass")}</BannerText>
@@ -14434,7 +14435,7 @@ function MainAppContent({
         />
 
         {appError && (
-          <Banner tone="danger" icon={BannerErrorIcon}>
+          <Banner tone="danger" icon={BannerErrorIcon} role={redesign ? "status" : null}>
             <BannerText>{appError}</BannerText>
             <BannerAction onClick={() => setAppError(null)}>
               {t("connection.dismiss")}
@@ -14443,7 +14444,7 @@ function MainAppContent({
         )}
 
         {idleWarning && (
-          <Banner tone="warning" icon={BannerIdleIcon}>
+          <Banner tone="warning" icon={BannerIdleIcon} role={redesign ? "status" : null}>
             <BannerText>
               {t("voice.idle.warning", {
                 count: Math.max(
@@ -14473,7 +14474,7 @@ function MainAppContent({
 
         {/* Same slot, same shape, opposite tone — see `appNotice`. */}
         {appNotice && (
-          <Banner tone="success" icon={BannerCheckIcon}>
+          <Banner tone="success" icon={BannerCheckIcon} role={redesign ? "status" : null}>
             <BannerText>{appNotice}</BannerText>
             {claimedHandle && (
               <ShareHandleButton handle={claimedHandle} className={BANNER_FILL_REDESIGN} />

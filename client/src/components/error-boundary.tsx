@@ -1,5 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import { Breu } from "@/components/breu/breu";
+import { NewLookBreu } from "@/components/breu/breu";
 import { Button } from "@/components/ui/button";
 import { POPOVER_SURFACE } from "@/components/ui/popover";
 import { translateMessage } from "@/lib/i18n";
@@ -8,14 +8,8 @@ import {
   type ChunkErrorAction,
 } from "@/lib/chunk-reload";
 import { isBusyNow } from "@/lib/in-call-state";
-import { useRedesign } from "@/lib/redesign";
 import { setStaleChunkBannerVisible } from "@/lib/stale-chunk-state";
 import { cn } from "@/lib/utils";
-
-/** Breu draws only under the redesign; the old look keeps its plain text. */
-function RedesignBreu(props: Parameters<typeof Breu>[0]) {
-  return useRedesign() ? <Breu {...props} /> : null;
-}
 
 interface Props {
   children: ReactNode;
@@ -85,7 +79,7 @@ export class ErrorBoundary extends Component<Props, State> {
       // componentDidCatch; this is only ever on screen for an instant.
       return (
         <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
-          <RedesignBreu mood="focused" size="sm" />
+          <NewLookBreu mood="focused" size="sm" />
           <p className="font-display text-lg font-bold">Updating pqp…</p>
         </div>
       );
@@ -97,7 +91,7 @@ export class ErrorBoundary extends Component<Props, State> {
       // particular subtree has nothing else to show in its place.
       return (
         <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-          <RedesignBreu mood="hello" size="sm" />
+          <NewLookBreu mood="hello" size="sm" />
           <p className="font-display text-xl font-bold">pqp updated</p>
           <p className="max-w-md text-sm text-paper-muted">
             You are in a call, so this waits for you. Reload when you hang up
@@ -110,7 +104,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-        <RedesignBreu mood="panic" size="lg" />
+        <NewLookBreu mood="panic" size="lg" />
         <p className="font-display text-3xl font-bold">Something broke</p>
         <p className="max-w-md text-sm text-paper-muted">
           The app hit an unexpected error and stopped rendering. Reloading

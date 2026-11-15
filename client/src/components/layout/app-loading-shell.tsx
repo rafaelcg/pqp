@@ -1,4 +1,4 @@
-import { Breu, BreuSpeechBubble } from "@/components/breu/breu";
+import { Breu, BreuSpeechBubble, NewLookBreu } from "@/components/breu/breu";
 import { PANE_HEADER_REDESIGN } from "@/components/ui/pane-header";
 import { SIDEBAR_FOOTER_CARD_REDESIGN } from "@/components/ui/sidebar-block";
 import {
@@ -42,9 +42,11 @@ import { cn } from "@/lib/utils";
  * and mounts the next in the same commit, so the shell (and Breu inside it) is
  * never unmounted between stages.
  */
-export function AppLoadingShell() {
+export function AppLoadingShell({ label }: { label?: string } = {}) {
   const { t } = useTranslation();
-  const text = t("app.loading");
+  const redesign = useRedesign();
+  // The old look names the stage ("Entrando…"); the new one keeps one label.
+  const text = (redesign ? undefined : label) ?? t("app.loading");
   return (
     <div
       className={cn("relative flex h-full overflow-hidden", FRAME_REDESIGN)}
@@ -102,8 +104,18 @@ export function AppLoadingShell() {
         >
           {/* Breu at work, hopping and leaning on a steady 2s loop (still under
               reduced motion), instead of a spinning "pqp" ring: the most-seen
-              moment Breu gets. */}
-          <Breu mood="focused" size="sm" motion="working" />
+              moment Breu gets. The old look keeps the ring. */}
+          {redesign ? (
+            <Breu mood="focused" size="sm" motion="working" />
+          ) : (
+            <div className="relative flex h-12 w-12 items-center justify-center">
+              <span className="absolute inset-0 rounded-full border-2 border-signal/20 redesign:border-[color:color-mix(in_oklab,var(--color-accent)_25%,transparent)]" />
+              <span className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-signal motion-reduce:animate-none redesign:border-t-accent" />
+              <span className="font-display text-sm font-bold text-signal redesign:font-[family-name:var(--type-title-font)] redesign:text-accent-text">
+                pqp
+              </span>
+            </div>
+          )}
           <p className="w-full text-center text-xs uppercase tracking-[0.2em] text-paper-muted redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
             <BootLabel text={text} />
           </p>
@@ -165,10 +177,11 @@ export function BootShellHost({ children }: { children: ReactNode }) {
     () => bootHolds > 0,
     () => false,
   );
+  const redesign = useRedesign();
   return (
     <BootShellHostContext.Provider value>
       {children}
-      {held ? <AppLoadingShell /> : null}
+      {held && redesign ? <AppLoadingShell /> : null}
     </BootShellHostContext.Provider>
   );
 }
@@ -182,16 +195,20 @@ export function BootShellHost({ children }: { children: ReactNode }) {
  * frame. Outside a host (a test, a page that renders a stage alone) it draws
  * the shell itself, as the stages always did.
  */
-export function BootShellHold() {
+export function BootShellHold({ label }: { label?: string } = {}) {
   const hosted = useContext(BootShellHostContext);
+  // The old look draws each stage's own shell in place, with its own label,
+  // as it always did. Only the new look hands the shell to the host.
+  const redesign = useRedesign();
+  const viaHost = hosted && redesign;
   useLayoutEffect(() => {
-    if (!hosted) {
+    if (!viaHost) {
       return;
     }
     changeBootHolds(1);
     return () => changeBootHolds(-1);
-  }, [hosted]);
-  return hosted ? null : <AppLoadingShell />;
+  }, [viaHost]);
+  return viaHost ? null : <AppLoadingShell label={label} />;
 }
 
 interface AppBootstrapErrorProps {
@@ -226,7 +243,7 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
       <div className={cn("relative z-10 max-w-lg", redesign && "my-auto")} role={redesign ? "alert" : undefined}>
         {/* Its own line: inline, it sat beside "pqp.gg" on the baseline and floated above the text.
             Under the redesign only on a narrow screen: a wide one has the big Breu. */}
-        <Breu mood="sad" size="md" className={cn("mb-2 block", redesign && "sm:hidden")} />
+        <NewLookBreu mood="sad" size="md" className={cn("mb-2 block", redesign && "sm:hidden")} />
         <Link
           to="/"
           className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal redesign:text-sm redesign:font-bold redesign:normal-case redesign:tracking-normal redesign:text-accent-text"
