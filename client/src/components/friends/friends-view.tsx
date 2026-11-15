@@ -387,6 +387,7 @@ export function FriendsView({
           panelId={panelId}
           className="order-last -mx-1 w-full overflow-x-auto px-1 py-0.5 [scrollbar-width:thin] @2xl:order-none @2xl:mx-0 @2xl:ml-2 @2xl:w-auto @2xl:overflow-visible @2xl:p-0"
           tabClassName="@2xl:py-1"
+          legacy="plain"
         />
 
         <Button
@@ -630,6 +631,7 @@ function FriendRow({
   onBlock?: (user: PublicUser) => void;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const openProfile = useProfilePopover();
   const rowRef = useRef<HTMLLIElement>(null);
   const conversation = directConversationWith(conversations, friend.id);
@@ -653,6 +655,37 @@ function FriendRow({
     onBlock,
     onRemove,
   });
+
+  // Toggle off keeps main's row: no profile button, no right-click menu.
+  if (!redesign) {
+    return (
+      <li className="group mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3">
+        <FriendFace person={friend} status={friend.status} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold">{friend.displayName}</p>
+          {friend.tag && (
+            <p className="truncate font-mono text-[11px] text-paper-muted">{friend.tag}</p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button size="sm" variant="secondary" disabled={busy} onClick={() => onMessage(friend.id)}>
+            {t("friends.message")}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            aria-label={`${t("friends.remove")} — ${friend.displayName}`}
+            title={t("friends.remove")}
+            data-remove-friend={friend.id}
+            onClick={() => onRemove(friend)}
+          >
+            <X aria-hidden="true" className="h-4 w-4" />
+          </Button>
+        </div>
+      </li>
+    );
+  }
 
   return (
     <ContextMenu items={items}>

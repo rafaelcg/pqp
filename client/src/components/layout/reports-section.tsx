@@ -10,6 +10,7 @@ import { ReportAttachments } from "@/components/layout/report-attachments";
 import { ReportContextPanel } from "@/components/layout/report-context-panel";
 import { ApiError, fetchServerReports, resolveReport } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import { reportSubjectKey } from "@/lib/report-subject";
 import { formatFullTimestamp } from "@/lib/utils";
 
@@ -39,9 +40,11 @@ export function ReportStatusTabs({
   onValueChange: (next: ReportStatus | "all") => void;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   return (
     <Tabs
-      label={t("reports.title")}
+      label={redesign ? t("reports.title") : undefined}
+      legacy="plain"
       variant="filled"
       size="sm"
       value={value}

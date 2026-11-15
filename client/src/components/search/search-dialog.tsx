@@ -13,8 +13,8 @@ import { Dialog } from "@/components/ui/dialog";
 import { searchServerMessages } from "@/lib/api";
 import { messageLinkState, messageRoutePath } from "@/lib/app-route";
 import { useTranslation } from "@/lib/i18n";
-import { cn, formatDayLabel, formatFullTimestamp } from "@/lib/utils";
 import { useRedesign } from "@/lib/redesign";
+import { cn, formatDayLabel, formatFullTimestamp } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/empty-state";
 import { appendUniqueResults, clampSelection } from "./search-results";
 import { Spinner } from "@/components/ui/spinner";
@@ -49,6 +49,7 @@ export function SearchDialog({
   initialQuery = "",
 }: SearchDialogProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<MessageSearchResult[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -230,7 +231,7 @@ export function SearchDialog({
             // A soft edge under the field once the list has scrolled.
             scrolled && "redesign:[mask-image:linear-gradient(to_bottom,transparent,black_12px)]",
           )}
-          onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)}
+          onScroll={redesign ? (event) => setScrolled(event.currentTarget.scrollTop > 0) : undefined}
         >
           {status === "error" ? (
             <SearchEmpty
@@ -274,14 +275,20 @@ export function SearchDialog({
                       role="option"
                       aria-selected={index === selected}
                       tabIndex={-1}
-                      onMouseMove={(event) => {
-                        // A synthetic move after a scroll has no movement.
-                        if (event.movementX === 0 && event.movementY === 0) return;
-                        const last = lastPointer.current;
-                        if (last && last.x === event.clientX && last.y === event.clientY) return;
-                        lastPointer.current = { x: event.clientX, y: event.clientY };
-                        if (index !== selected) setSelected(index);
-                      }}
+                      // Toggle off keeps main's enter; the redesign takes real moves only.
+                      onMouseEnter={redesign ? undefined : () => setSelected(index)}
+                      onMouseMove={
+                        redesign
+                          ? (event) => {
+                              // A synthetic move after a scroll has no movement.
+                              if (event.movementX === 0 && event.movementY === 0) return;
+                              const last = lastPointer.current;
+                              if (last && last.x === event.clientX && last.y === event.clientY) return;
+                              lastPointer.current = { x: event.clientX, y: event.clientY };
+                              if (index !== selected) setSelected(index);
+                            }
+                          : undefined
+                      }
                       onClick={() => openResult(result)}
                       className={cn(
                         "w-full rounded-md border border-transparent px-3 py-2 text-left outline-none",

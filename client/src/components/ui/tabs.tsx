@@ -1,5 +1,6 @@
 import { useCallback, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { useRedesign } from "@/lib/redesign";
 
 /**
  * Tabs: a row of buttons that switch what one panel shows.
@@ -25,6 +26,14 @@ import { cn } from "@/lib/utils";
  * the redesign every shape reads `--tabs-*` tokens, and `segmented` is the
  * same pill track and raised thumb as RadioGroup's (`--segmented-*`).
  *
+ * Keyboard, with the toggle off: the call sites' hand-rolled rows did not all
+ * share one model, so `legacy` names the one a call site had. `"plain"` is a
+ * row of buttons that are all in the tab order, with no arrow keys and no
+ * `data-tab-id`. `"arrows"` is a roving tab stop and Left/Right with wrap, and
+ * nothing else. Under the redesign `legacy` is ignored and the model above
+ * applies. A call site that had no `aria-label` on its row passes `label` only
+ * under the redesign.
+ *
  * Tabs switch a panel. One of a few values in a form is a `RadioGroup`; a
  * settings dialog's side list is `SectionRail`.
  */
@@ -41,6 +50,8 @@ export interface TabItem<T extends string> {
   data?: Record<`data-${string}`, string>;
 }
 
+export type TabsLegacyKeys = "plain" | "arrows";
+
 export interface TabsProps<T extends string> {
   items: readonly TabItem<T>[];
   value: T;
@@ -55,6 +66,8 @@ export interface TabsProps<T extends string> {
   className?: string;
   /** Classes added to every tab: layout only (`@2xl:py-1`). */
   tabClassName?: string;
+  /** The keyboard model of the markup this replaced, used with the toggle off. */
+  legacy?: TabsLegacyKeys;
 }
 
 interface Look {
@@ -137,7 +150,10 @@ export function Tabs<T extends string>({
   panelId,
   className,
   tabClassName,
+  legacy,
 }: TabsProps<T>) {
+  const redesign = useRedesign();
+  const legacyKeys = redesign ? undefined : legacy;
   const listRef = useRef<HTMLDivElement>(null);
   const look = lookFor(variant, size);
   const enabled = items.filter((item) => !item.disabled);
@@ -180,15 +196,26 @@ export function Tabs<T extends string>({
     [enabled, onValueChange],
   );
 
+  // The old bot tabs: Left and Right only, wrapping, focus follows.
+  const onLegacyArrow = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    const next = items[(index + step + items.length) % items.length]!;
+    onValueChange(next.id);
+    const buttons = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    buttons?.[items.indexOf(next)]?.focus();
+  };
+
   return (
     <div
       ref={listRef}
       role="tablist"
       aria-label={label}
-      onKeyDown={onKeyDown}
+      onKeyDown={legacyKeys ? undefined : onKeyDown}
       className={cn(look.list, className)}
     >
-      {items.map((item) => {
+      {items.map((item, index) => {
         const selected = item.id === value;
         return (
           <button
@@ -198,11 +225,12 @@ export function Tabs<T extends string>({
             aria-selected={selected}
             aria-controls={panelId}
             disabled={item.disabled}
-            tabIndex={item.id === stop ? 0 : -1}
-            data-tab-id={item.id}
+            tabIndex={legacyKeys === "plain" ? undefined : legacyKeys === "arrows" ? (selected ? 0 : -1) : item.id === stop ? 0 : -1}
+            data-tab-id={legacyKeys ? undefined : item.id}
             {...item.data}
+            onKeyDown={legacyKeys === "arrows" ? (event) => onLegacyArrow(event, index) : undefined}
             onClick={() => {
-              if (!selected) onValueChange(item.id);
+              if (legacyKeys || !selected) onValueChange(item.id);
             }}
             className={cn(
               look.tab,

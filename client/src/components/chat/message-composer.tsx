@@ -109,6 +109,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useRedesign } from "@/lib/redesign";
 import { MENU_BUTTON_ICON, MENU_ICON_BOX, MENU_ROW_BUTTON, MENU_SURFACE } from "@/components/ui/menu-items";
 import {
   AttachmentAbortError,
@@ -2229,11 +2230,18 @@ function ComposerInsertMenu({
     onSelect: () => void;
   }>;
 }) {
+  // Toggle off draws main's markup exactly: the shared menu recipe's icon
+  // column and row shape move the icon and label by a pixel or two.
+  const redesign = useRedesign();
   return (
     <div
       role="menu"
       aria-labelledby={labelledBy}
-      className={cn(MENU_SURFACE, "absolute bottom-full left-0 z-30 mb-2 min-w-48")}
+      className={
+        redesign
+          ? cn(MENU_SURFACE, "absolute bottom-full left-0 z-30 mb-2 min-w-48")
+          : "elevation-3 absolute bottom-full left-0 z-30 mb-2 min-w-48 rounded-[var(--radius-card)] p-1 animate-fade-in"
+      }
     >
       {items.map((item) => {
         const Icon = item.icon;
@@ -2250,11 +2258,19 @@ function ComposerInsertMenu({
                 event.currentTarget.focus({ preventScroll: true });
               }
             }}
-            className={MENU_ROW_BUTTON}
+            className={
+              redesign
+                ? MENU_ROW_BUTTON
+                : "flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2.5 py-1.5 text-left text-sm text-text hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none"
+            }
           >
-            <span aria-hidden className={MENU_ICON_BOX}>
-              <Icon className={MENU_BUTTON_ICON} />
-            </span>
+            {redesign ? (
+              <span aria-hidden className={MENU_ICON_BOX}>
+                <Icon className={MENU_BUTTON_ICON} />
+              </span>
+            ) : (
+              <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            )}
             {item.label}
           </button>
         );
