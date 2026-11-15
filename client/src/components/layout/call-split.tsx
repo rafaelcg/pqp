@@ -46,6 +46,7 @@ import {
   type CallStageShape,
 } from "@/lib/call-split";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import {
   PHONE_PANE_MAX_WIDTH_PX,
   phoneShortStageHeight,
@@ -1138,6 +1139,7 @@ function ChatPaneHeader({
   onShowVideo: () => void;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const restoreLabel = t(
     room ? "call.split.restoreCall" : "call.split.restoreStage",
   );
@@ -1156,7 +1158,8 @@ function ChatPaneHeader({
           <Tabs
             variant="pill"
             size="xs"
-            label={header.title}
+            label={redesign ? header.title : undefined}
+            legacy="plain"
             value={header.tabs.active}
             onValueChange={(id) => header.tabs?.onSelect(id)}
             items={header.tabs.items.map((tab) => ({

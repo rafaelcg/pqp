@@ -2,7 +2,8 @@
 import { act, useState, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import { Tabs, type TabItem, type TabsSize, type TabsVariant } from "@/components/ui/tabs";
+import { Tabs, type TabItem, type TabsLegacyKeys, type TabsSize, type TabsVariant } from "@/components/ui/tabs";
+import { setRedesignChoice } from "@/lib/redesign";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -176,5 +177,75 @@ describe("Tabs looks with the toggle off", () => {
     expect(look("segmented", "xs").on).toContain("redesign:font-medium");
     expect(look("segmented", "xs").off).toContain("redesign:font-normal");
     expect(look("filled", "sm").off).toContain("redesign:hover:bg-[color:var(--tabs-filled-hover)]");
+  });
+});
+
+describe("Tabs legacy keyboard models, toggle off", () => {
+  function LegacyHarness({ legacy, onChange }: { legacy: TabsLegacyKeys; onChange: (id: Id) => void }) {
+    const [value, setValue] = useState<Id>("a");
+    return (
+      <Tabs
+        legacy={legacy}
+        items={[
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+          { id: "c", label: "C" },
+        ]}
+        value={value}
+        onValueChange={(next) => {
+          setValue(next);
+          onChange(next);
+        }}
+      />
+    );
+  }
+
+  it('"plain" keeps every tab in the tab order, with no arrow keys and no data-tab-id', () => {
+    const onChange = vi.fn();
+    const host = draw(<LegacyHarness legacy="plain" onChange={onChange} />);
+    const all = tabs(host);
+    expect(all.map((tab) => tab.hasAttribute("tabindex"))).toEqual([false, false, false]);
+    expect(all.some((tab) => tab.hasAttribute("data-tab-id"))).toBe(false);
+    for (const key of ["ArrowRight", "ArrowLeft", "Home", "End"]) {
+      press(all[0]!, key);
+    }
+    expect(onChange).not.toHaveBeenCalled();
+    // Main's rows called back on every click, the selected one included.
+    act(() => all[0]!.click());
+    expect(onChange).toHaveBeenCalledWith("a");
+  });
+
+  it('"arrows" is a roving tab stop with Left and Right only, wrapping', () => {
+    const onChange = vi.fn();
+    const host = draw(<LegacyHarness legacy="arrows" onChange={onChange} />);
+    const [a, b, c] = tabs(host);
+    expect([a, b, c].map((tab) => tab!.tabIndex)).toEqual([0, -1, -1]);
+    expect(a!.hasAttribute("data-tab-id")).toBe(false);
+    press(a!, "ArrowLeft");
+    expect(onChange).toHaveBeenLastCalledWith("c");
+    expect(document.activeElement).toBe(c);
+    onChange.mockClear();
+    for (const key of ["ArrowDown", "ArrowUp", "Home", "End"]) {
+      press(c!, key);
+    }
+    expect(onChange).not.toHaveBeenCalled();
+    press(c!, "ArrowRight");
+    expect(onChange).toHaveBeenLastCalledWith("a");
+  });
+
+  it("is ignored under the redesign, which has the one roving model", () => {
+    setRedesignChoice(true);
+    try {
+      const onChange = vi.fn();
+      const host = draw(<LegacyHarness legacy="plain" onChange={onChange} />);
+      const [a, b] = tabs(host);
+      expect(tabs(host).map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
+      expect(a!.getAttribute("data-tab-id")).toBe("a");
+      press(a!, "End");
+      expect(onChange).toHaveBeenLastCalledWith("c");
+      expect(b).toBeDefined();
+    } finally {
+      setRedesignChoice(false);
+    }
   });
 });

@@ -1678,6 +1678,7 @@ function UserProfileCard({
                 label={t("profile.about.tabs")}
                 variant="segmented"
                 size="xs"
+                legacy="plain"
                 className="mt-3"
                 value={aboutActive}
                 onValueChange={setAboutPick}
