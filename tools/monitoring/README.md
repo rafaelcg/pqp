@@ -34,6 +34,7 @@ actually running on a box with a Prometheus textfile collector -- see
 | `grafana-alert-rules-activation.json` | One always-on rule: "activation funnel stalled at the age gate" -- fires only when signups keep arriving (> 20 in 7 days) while the first gated step after signup is near zero for an hour, i.e. a broken step rather than a slow week. Deliberately the only funnel alert: a conversion floor is a threshold guess with no day-0 baseline and would cry wolf. |
 | `grafana-dashboard-voice-notes.json` | Standing "pqp Mensagens de voz" dashboard (uid `pqp-voice-notes`): a usage row (sent by scope and recorder, senders, length, first plays, listened share, refused requests) and a health row (oldest due job, queue depth, jobs settled and success rate, time to done, transcript status, speech budget). Built on `payload.voiceNotes`. Import and leave up. |
 | `grafana-alert-rules-voice-notes.json` | Always-on group `pqp-voice-notes`: queue stuck, job failure rate high, speech budget exhausted, speech budget at 80%. |
+| `grafana-alert-rules-moderation.json` | Always-on group `pqp-moderation`: a report open more than 12 hours (warning) and more than 20 hours (critical), on `pqp_api_reports_oldest_open_age_seconds`. The 24 hour rule; see "Report queue age" below. |
 | `grafana-alert-rules-capacity.json` | Always-on group `pqp-capacity` (eight rules, thresholds are fractions of the core count where they can be): SFU CPU busy above 45% for 15m (warn) and 60% for 10m (critical), LiveKit participants above 240 for 5m, outgoing packet loss p95 above 0.5% for 1h, SFU transmit above 600 Mbit/s for 10m, API box root disk above 75% and memory above 75%, and a presence rule for the SFU trigger series. They read node exporter and LiveKit series, not the API exporter above. They hand over to `docs/SFU_RESIZE_RUNBOOK.md`. See "Capacity alerts" below. |
 | `pqp-api-metrics.service` / `.timer` | The systemd timer that runs it. |
 | `install.sh` | Idempotent installer for the box above. |
@@ -363,6 +364,46 @@ every panel reads "No data", which is harmless).
    The dashboard lands at `$GRAFANA_URL/d/pqp-voice-notes`. The series arrive
    about a minute after step 1 (the timer ticks every 20 s, Alloy scrapes the
    textfile, remote-write adds a little).
+
+## Report queue age (the 24 hour rule)
+
+`payload.moderation.reports` carries `oldestOpenAgeSeconds` (0 when nothing is
+open), `openOver12h` and `openOver24h` next to the old counts
+(`server/src/services/report-queue.ts`). It is read from Postgres, so both
+replicas agree and `moderation` stays a take-first block. An API older than the
+field emits no series at all, and the rules treat no data as silence.
+
+| Series | Reads |
+|---|---|
+| `pqp_api_reports_oldest_open_age_seconds` | `moderation.reports.oldestOpenAgeSeconds`, every queue |
+| `pqp_api_reports_open{age}` | `open` (`age="all"`), `openOver12h`, `openOver24h` |
+
+`grafana-alert-rules-moderation.json` is NOT imported anywhere yet. To import
+it, after the API carrying this field is live and the exporter on the SFU box is
+redeployed (same two steps as "Voice notes", "Deploying it": `scp` the exporter,
+`systemctl start pqp-api-metrics.service`, then check
+`grep -c "^pqp_api_reports" /var/lib/node_exporter/textfile_collector/pqp_api.prom`
+is above 0):
+
+```bash
+source ~/.config/pqp/grafana.env
+cd tools/monitoring
+jq -c '.groups[] | .name as $g | .rules[] | . + {folderUID: "ffxfigbmjr2f4e", ruleGroup: $g}' \
+    grafana-alert-rules-moderation.json \
+  | while read -r rule; do
+      printf '%s' "$rule" | curl -sS -X POST "$GRAFANA_URL/api/v1/provisioning/alert-rules" \
+        -H "Authorization: Bearer $GRAFANA_SA_TOKEN" -H 'Content-Type: application/json' \
+        -H 'X-Disable-Provenance: true' -d @-
+      echo
+    done
+```
+
+Verify through the datasource:
+`query=pqp_api_reports_oldest_open_age_seconds` on
+`$GRAFANA_URL/api/datasources/proxy/uid/grafanacloud-prom/api/v1/query`. To
+prove a rule fires without waiting 12 hours, backdate a report on a staging
+database, never production. The contact point is `rafael-email`; for the 24 hour
+promise to hold overnight, point it at something that rings.
 
 ## Capacity alerts (added 2026-10-25)
 

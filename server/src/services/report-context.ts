@@ -250,7 +250,8 @@ async function loadOtherReports(
             srv.name AS server_name
      FROM reports r
      LEFT JOIN servers srv ON srv.id = r.server_id
-     WHERE r.reported_user_id = $1 AND r.id <> $2::bigint ${scope}
+     WHERE r.reported_user_id = $1 AND r.id <> $2::bigint
+       AND r.escalated_from IS NULL ${scope}
      ORDER BY r.id DESC
      LIMIT $3`,
     params,
@@ -433,7 +434,7 @@ async function loadReporter(
             COUNT(r.id) FILTER (WHERE r.status = 'actioned')::text AS actioned,
             COUNT(r.id) FILTER (WHERE r.status = 'dismissed')::text AS dismissed
      FROM users u
-     LEFT JOIN reports r ON r.reporter_id = u.id
+     LEFT JOIN reports r ON r.reporter_id = u.id AND r.escalated_from IS NULL
      WHERE u.id = $1
      GROUP BY u.id`,
     [reporterId],

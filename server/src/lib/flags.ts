@@ -468,6 +468,32 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/share/config (linuxDesktopSystemAudio)",
   },
+  mac_desktop_system_audio: {
+    description:
+      "Som do computador no compartilhamento de tela do app desktop no Mac (macOS 14.2 ou mais novo; sem a chamada; pede a permissão Gravação de Áudio do Sistema). Ligado por padrão: desligar é o interruptor de emergência.",
+    env: "MAC_DESKTOP_SYSTEM_AUDIO",
+    // ON by default (Rafael, 2026-11-05): a Mac share carries sound like the
+    // other platforms do (Windows 11, the phones). Only Linux ships dark. The
+    // flag is the live kill switch; `false` / `0` / `off` turns it off.
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    // Global on purpose, for the same reason as `linux_desktop_system_audio`:
+    // the client reads `GET /api/share/config` without a server and keeps one
+    // answer per page, so a per-server override would be accepted by the
+    // dashboard and never read.
+    perServer: false,
+    clientVia: "GET /api/share/config (macDesktopSystemAudio)",
+  },
+  share_sound_promotion: {
+    description:
+      "Celular que só manda o som da tela pelo servidor de voz (iPhone) leva a chamada ponto a ponto (DM ou servidor pequeno) pro servidor de voz quando começa a compartilhar, e a tela vai com som (desligado: o celular apresenta só a imagem, como antes).",
+    env: "SHARE_SOUND_PROMOTION",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    // Global on purpose: the trigger fires in a DM or group call, which has
+    // no server for a per-server override to name.
+    perServer: false,
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",
@@ -559,6 +585,21 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/voice/config (audioSelfHeal)",
   },
+  voice_calm_detector: {
+    description:
+      "Detector de quem está falando no app web, num temporizador (20 vezes por segundo, 4 com a janela escondida) em vez de a cada quadro da tela, que acordava o navegador e a GPU 120 vezes por segundo numa call vazia (desligado: o laço por quadro de antes).",
+    env: "VOICE_CALM_DETECTOR",
+    parseEnv: onUnlessOff,
+    // On: a call alone in a silent room measured 10 % of a core in headless
+    // Chromium with the per-frame loop (the only thing waking the page),
+    // 21-24 % with a repeating tone. The ring, the music ducking and the
+    // transmit gate behave as before (the gate keeps its own 16 ms clock). Off
+    // is the old loop on the client's next config refresh, mid-call. Global:
+    // the detector belongs to the device, and a DM call has no server.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (calmDetector)",
+  },
   raised_hand_sticky: {
     description:
       "Mão levantada que fica: só quem levantou, quem modera ou sair da call abaixa a mão. Liberar o microfone na plateia não abaixa mais, clicar na própria mão abaixa, e quem modera ganha \"Baixar todas\" (desligado: liberar o microfone na plateia abaixa a mão, sem clique na mão e sem \"Baixar todas\").",
@@ -588,6 +629,21 @@ export const FEATURE_FLAGS = {
     codeDefault: true,
     perServer: false,
     clientVia: "GET /api/voice/config (cleanVoiceDefault)",
+  },
+  voice_gate: {
+    description:
+      "Porta de voz da Voz limpa: depois do RNNoise, um expansor adaptativo abaixa uns 20 dB o que sobra entre as falas (sem cortar seco, com antecipação pra não comer o começo das palavras). Desligado: a Voz limpa volta a ser só o RNNoise, na hora, até no meio da call.",
+    env: "VOICE_GATE",
+    parseEnv: onUnlessOff,
+    // On: the gate only ever attenuates the gaps and fails open to the plain
+    // RNNoise chain. The switch is for the thing no bench can say, how it
+    // sounds on a real voice in a real room: off bypasses every running gate
+    // on the next config refresh (a message to the worklet, no rebuild, no
+    // rejoin) and builds no new one. Global: the microphone belongs to the
+    // device and a DM call has no server. Client-only.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (voiceGate)",
   },
   watch_now_banner: {
     description:
@@ -800,6 +856,19 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/forum/config?serverId= (announce)",
   },
+  jam_channels: {
+    description:
+      "Canais jam: músicas em que cada pessoa grava uma faixa (violão, baixo, voz...) e tudo toca junto (desligado: ninguém cria canal jam, música nem faixa nova; o que já existe continua aberto pra ouvir e dá pra apagar).",
+    env: "JAM_CHANNELS",
+    parseEnv: exactTrue,
+    // Off: one server first (its override), then everybody. See docs/JAM.md.
+    codeDefault: false,
+    // Every reader knows the server: the create-channel route starts from a
+    // server, the jam routes from a channel or a song (which names its
+    // server), and the client asks `GET /api/jam/config?serverId=`.
+    perServer: true,
+    clientVia: "GET /api/jam/config?serverId= (enabled)",
+  },
   report_attachment_preview: {
     description:
       "Moderação: no cartão de uma denúncia, o botão Mostrar que abre, borrado e só com um clique, a imagem ou o gif da mensagem denunciada. Desligado: a lista de anexos (tipo, veredito do scanner) continua aparecendo, só o botão e a rota somem.",
@@ -956,6 +1025,21 @@ export const FEATURE_FLAGS = {
     // off is a real kill switch whatever a stale client thinks.
     perServer: false,
     clientVia: "GET /api/forwards/config",
+  },
+  default_text_filter: {
+    description:
+      "Filtro de texto embutido do pqp (ofensa discriminatória, ameaça e conteúdo sexual com crianças, em inglês, português e espanhol) em mensagem de servidor, post, comentário e nome. Desligado por padrão: nada é filtrado até alguém ligar. Ligado aqui (global ou por servidor), vale para o servidor a não ser que o dono tenha escolhido o contrário nas configurações do AutoMod. Mensagem direta e de grupo nunca é lida.",
+    env: "DEFAULT_TEXT_FILTER",
+    parseEnv: exactTrue,
+    // OFF by default (Rafael, 2026-11-05: no filtering unless somebody asks).
+    // Per server so the operator can turn it on for one hall (the App Review
+    // demo community) or for everybody; a server's owner has their own switch
+    // on top (`server_text_filter_settings`, either direction), which wins
+    // for that server. A profile name has no server, so it follows only the
+    // global answer. DMs are not read by it at all.
+    codeDefault: false,
+    perServer: true,
+    clientVia: "GET /api/servers/:id/automod/baseline",
   },
   discord_bring_crew: {
     description:
@@ -1120,6 +1204,20 @@ export const FEATURE_FLAGS = {
     codeDefault: false,
     perServer: false,
     clientVia: "GET /api/public/apps/config (cloudSaves)",
+  },
+  jam_public: {
+    description:
+      "Jams públicas: músicas que qualquer pessoa ouve e assiste sem conta (jam.pqp.gg). Qualquer conta começa uma, e quem começou uma música de canal pode deixar ela pública (cada pessoa com parte gravada responde se a parte dela vai). Capa e vídeo passam pelo scanner; áudio não. Ligar muda a categoria jurídica (conteúdo público, como o COMMUNITIES_ENABLED): leia docs/JAM_PUBLIC.md antes. Desligado, as rotas públicas nem existem, ninguém publica e nada aparece; o que já é dos canais não muda.",
+    env: "JAM_PUBLIC",
+    parseEnv: exactTrue,
+    // Off: public content changes the instance's legal category, the way
+    // `COMMUNITIES_ENABLED` does (docs/JAM_PUBLIC.md, docs/CONTENT_SAFETY.md).
+    // It goes on when Rafael says so. Only `true`.
+    codeDefault: false,
+    // GLOBAL: a standalone public jam has no server, and the public site's
+    // visitor has none either.
+    perServer: false,
+    clientVia: "GET /api/public/jams/config (enabled), GET /api/jam-public/config (enabled)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 

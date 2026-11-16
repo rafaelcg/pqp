@@ -1,5 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
-import { createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { Readable } from "node:stream";
 
 /**
  * S3-compatible object storage: presigned URLs for the browser, plus the two
@@ -484,6 +486,44 @@ export async function putObject(
       error instanceof Error ? error.message : "Storage unreachable",
     );
   }
+  if (!response.ok) {
+    throw new StorageError(`Storage returned HTTP ${response.status} for PUT`);
+  }
+}
+
+/**
+ * `putObject` for a file on disk, streamed: the bytes never sit in memory, which
+ * is the point for a media job's output (a Jam camera video is up to 100 MiB).
+ * Same signing, same headers (`Content-Length` is the file's size, signed into
+ * the URL), but a longer deadline than a small PUT, since 100 MiB is not 10 s.
+ */
+export async function putObjectFromFile(
+  key: string,
+  path: string,
+  contentType: string,
+  timeoutMs = 5 * 60_000,
+): Promise<void> {
+  const { size } = await stat(path);
+  const url = presignPut(key, contentType, size, INTERNAL_URL_TTL_SECONDS);
+  const stream = createReadStream(path);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": contentType, "Content-Length": String(size) },
+      body: Readable.toWeb(stream) as unknown as ReadableStream,
+      // A streamed request body must say so (Node's fetch rejects it otherwise).
+      duplex: "half",
+      signal: AbortSignal.timeout(timeoutMs),
+    } as RequestInit & { duplex: "half" });
+  } catch (error) {
+    stream.destroy();
+    throw new StorageError(error instanceof Error ? error.message : "Storage unreachable");
+  }
+  // A response body nobody reads holds its connection (undici wants it consumed
+  // or cancelled), and a refused upload may have left the file stream open.
+  await response.body?.cancel().catch(() => undefined);
+  stream.destroy();
   if (!response.ok) {
     throw new StorageError(`Storage returned HTTP ${response.status} for PUT`);
   }

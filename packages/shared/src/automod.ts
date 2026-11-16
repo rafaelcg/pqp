@@ -161,6 +161,12 @@ export interface AutomodVerdict {
   /** The word, link or count that tripped the rule, for the audit row. */
   matched: string;
   customMessage?: string;
+  /**
+   * The verdict came from pqp's built-in baseline filter, not from a rule the
+   * owner wrote: no `ruleId`, `matched` is the class (`slur`, `abuse`,
+   * `threat`) and never the word, and `customMessage` is the fixed copy.
+   */
+  baseline?: boolean;
 }
 
 /**

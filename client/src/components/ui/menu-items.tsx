@@ -75,7 +75,10 @@ export function MenuItemRows({
             aria-describedby={item.detail ? `${idPrefix}-${item.id}-detail` : undefined}
             data-menu-item={item.id}
             className={cn(
-              "flex w-full cursor-default select-none items-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-surface-2",
+              // A row with a second line keeps its icon and its trailing mark on
+              // the FIRST line, the label's, instead of floating between the two.
+              "flex w-full cursor-default select-none gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-2.5 py-1.5 text-left text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-surface-2",
+              item.detail ? "items-start" : "items-center",
               item.danger
                 ? "text-danger data-[highlighted]:bg-danger/15"
                 : "text-text",
@@ -84,7 +87,7 @@ export function MenuItemRows({
             {reserveIcon && (
               <span
                 aria-hidden="true"
-                className="flex h-4 w-4 shrink-0 items-center justify-center"
+                className={cn("flex w-4 shrink-0 items-center justify-center", item.detail ? "h-5" : "h-4")}
               >
                 {item.icon ? <item.icon className="h-3.5 w-3.5" /> : null}
               </span>
@@ -110,7 +113,7 @@ export function MenuItemRows({
               <span className="min-w-0 flex-1 whitespace-normal">{item.label}</span>
             )}
             {item.trailing ? (
-              <span className="ml-3 flex shrink-0 items-center">
+              <span className={cn("ml-3 flex shrink-0 items-center", item.detail && "h-5")}>
                 {item.trailing}
               </span>
             ) : null}

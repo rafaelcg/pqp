@@ -1,5 +1,7 @@
 /** Shared helpers for WebRTC ICE / speaking detection. */
 
+import { ANALYSER_SMOOTHING, analyserSmoothingFor } from "@/lib/speaking-clock";
+
 export const SPEAKING_THRESHOLD = 0.045;
 export const SPEAKING_HANGOVER_MS = 280;
 
@@ -53,6 +55,23 @@ export function readAnalyserLevel(analyser: AnalyserNode): number {
   return sum / data.length / 255;
 }
 
+/**
+ * Match an analyser's smoothing to how often it is read. `intervalMs` is the
+ * time between reads, or null for the per-frame loop it was tuned for. Only for
+ * analysers this module made: the local microphone's belongs to the mic chain
+ * and the settings meter, which read it at their own rate.
+ */
+export function tuneAnalyserForPoll(
+  analyser: AnalyserNode,
+  intervalMs: number | null,
+): void {
+  const wanted =
+    intervalMs === null ? ANALYSER_SMOOTHING : analyserSmoothingFor(intervalMs);
+  if (analyser.smoothingTimeConstant !== wanted) {
+    analyser.smoothingTimeConstant = wanted;
+  }
+}
+
 export function createSpeakingTracker(options?: {
   threshold?: number;
   hangoverMs?: number;
@@ -103,7 +122,7 @@ export function createStreamAnalyser(stream: MediaStream): {
   const source = context.createMediaStreamSource(stream);
   const analyser = context.createAnalyser();
   analyser.fftSize = 256;
-  analyser.smoothingTimeConstant = 0.65;
+  analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;
   source.connect(analyser);
 
   let disposed = false;

@@ -1,4 +1,5 @@
 import {
+  BASELINE_REJECTION_MESSAGE,
   FORUM_MAX_TAGS_PER_POST,
   FORUM_TITLE_MAX,
   type ForumPostSummary,
@@ -625,16 +626,19 @@ export function ForumComposerDialog({
       case "automod":
         return {
           icon: <ShieldAlert className="h-4 w-4 shrink-0" aria-hidden />,
-          text: [
-            publishError.field === "title"
-              ? t("forum.composer.automodTitle")
-              : publishError.field === "body"
-                ? t("forum.composer.automodBody")
-                : t("forum.composer.automodPost"),
-            publishError.message,
-          ]
-            .filter(Boolean)
-            .join(" "),
+          text:
+            publishError.message === BASELINE_REJECTION_MESSAGE
+              ? t("chat.reject.baseline")
+              : [
+                  publishError.field === "title"
+                    ? t("forum.composer.automodTitle")
+                    : publishError.field === "body"
+                      ? t("forum.composer.automodBody")
+                      : t("forum.composer.automodPost"),
+                  publishError.message,
+                ]
+                  .filter(Boolean)
+                  .join(" "),
           tone: "danger" as const,
         };
       case "tag-required":

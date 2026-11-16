@@ -33,6 +33,43 @@ function windowsBuildAllowsOwnAudioExclude(release) {
 }
 
 /**
+ * macOS system audio: the CoreAudio Tap Chromium uses for `audio: "loopback"`
+ * exists from macOS 14.2 (Sonoma). Below that `CreateCatapAudioInputStream`
+ * answers null, and a loopback request whose stream cannot open fails the
+ * WHOLE capture, picture included. So "is this Mac new enough" is the gate in
+ * front of every macOS loopback, and anything unparsable is "no".
+ *
+ * `version` is `process.getSystemVersion()`: the macOS version ("14.2.1",
+ * "15.0", "26.0"), NOT `os.release()`, which is the Darwin kernel number.
+ */
+const MAC_SYSTEM_AUDIO_MIN = { major: 14, minor: 2 };
+
+function parseMacVersion(version) {
+  if (typeof version !== "string") {
+    return null;
+  }
+  const parts = version.split(".");
+  const major = Number.parseInt(parts[0] ?? "", 10);
+  const minor = Number.parseInt(parts[1] ?? "0", 10);
+  if (!Number.isFinite(major)) {
+    return null;
+  }
+  return { major, minor: Number.isFinite(minor) ? minor : 0 };
+}
+
+function macVersionAllowsSystemAudio(version) {
+  const parsed = parseMacVersion(version);
+  if (!parsed) {
+    return false;
+  }
+  return (
+    parsed.major > MAC_SYSTEM_AUDIO_MIN.major ||
+    (parsed.major === MAC_SYSTEM_AUDIO_MIN.major &&
+      parsed.minor >= MAC_SYSTEM_AUDIO_MIN.minor)
+  );
+}
+
+/**
  * What the picker's audio row should show, before any surface is picked.
  *
  * THE BUG THIS EXISTS FOR (27 Sep 2026, `cap1tao`, Windows desktop app):
@@ -56,8 +93,34 @@ function windowsBuildAllowsOwnAudioExclude(release) {
  *   11), and offering it anyway is how the call ends up back in its own
  *   share. The picker shows one line saying so, and the one place that
  *   Windows 10 sound is real: a Chrome tab.
+ *
+ * macOS used to be `"hidden"` for the same reason the old Windows 10 row was,
+ * and it was the same mistake: a Mac user saw a share dialog that never
+ * mentioned sound and shared blind (reported 5 Nov 2026, "I cannot share
+ * screen with sound on macOS"). It has three states of its own, from `mac`
+ * (`{ version, armed }`; `version` is `process.getSystemVersion()`, `armed`
+ * is the page's proof that it asked for sound with the runtime flag on):
+ *
+ * - `"checkbox"`: macOS 14.2+ and the page armed. The switch is real.
+ * - `"explain-mac"`: macOS 14.2+ and nobody armed (the flag is off, or the
+ *   page is older than this shell). The row says plainly that the desktop app
+ *   does not carry sound on a Mac yet, and that a Chrome tab does.
+ * - `"explain-mac-old"`: macOS before 14.2, which has no API for it at all.
+ *   Says so and names the same Chrome tab way out.
+ *
+ * A version that cannot be parsed stays `"hidden"`: saying "needs macOS 14.2"
+ * to a machine we could not read is an assertion nobody made.
  */
-function pickerAudioState(platform, windowsRelease) {
+function pickerAudioState(platform, windowsRelease, mac = {}) {
+  if (platform === "darwin") {
+    if (parseMacVersion(mac?.version) === null) {
+      return "hidden";
+    }
+    if (!macVersionAllowsSystemAudio(mac.version)) {
+      return "explain-mac-old";
+    }
+    return mac.armed === true ? "checkbox" : "explain-mac";
+  }
   if (platform !== "win32") {
     return "hidden";
   }
@@ -76,6 +139,13 @@ const THUMBNAIL_SIZE = { width: 320, height: 200 };
  */
 const MAC_SCREEN_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+
+/**
+ * macOS "System Audio Recording" pane, where the CoreAudio Tap's grant lives
+ * (a separate TCC service from Screen Recording, `kTCCServiceAudioCapture`).
+ */
+const MAC_AUDIO_SETTINGS_URL =
+  "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture";
 
 /**
  * `desktopCapturer` ids are `screen:0:0` / `window:12345:0`. The prefix is the
@@ -281,15 +351,30 @@ function screenPermission(platform, status) {
  *
  * Do not "helpfully" default this to loopback. A true `audioRequested` is a
  * statement that a human ticked something, and it is the only such statement
- * this function will ever get. Keep macOS and Linux video-only. On macOS
- * loopback fails the whole request. On Linux it does NOT fail (measured on
+ * this function will ever get. macOS carries loopback only from 14.2 (the
+ * CoreAudio Tap, see `macVersionAllowsSystemAudio`); below that loopback
+ * fails the whole request, so it stays video-only. Linux stays video-only: it does NOT fail (measured on
  * Electron 44, 2026-09-27): Chromium records the default output's monitor,
  * which carries the call, and `restrictOwnAudio` is not honoured there. So
  * the Linux sound comes from `lib/linux-share-audio.js`, never from here.
  */
-function captureResponse(source, platform, audioRequested, windowsRelease) {
+function captureResponse(source, platform, audioRequested, windowsRelease, macVersion) {
   if (!source) {
     return null;
+  }
+  // macOS: Chromium's loopback is the CoreAudio Tap from 14.2 on, and Electron
+  // remaps `"loopback"` to `loopbackWithoutChrome` when the page asked
+  // `restrictOwnAudio` (electron_browser_context.cc, `IS_MAC`), which taps
+  // everything but Chromium's audio service process, the one that plays the
+  // call. Only for a request the caller has already established is wanted
+  // (page armed, picker ticked); `macVersion` undefined (an older caller that
+  // never passes one) stays video-only, which is every existing call site.
+  if (
+    platform === "darwin" &&
+    audioRequested &&
+    macVersionAllowsSystemAudio(macVersion)
+  ) {
+    return { video: source, audio: "loopback" };
   }
   if (
     platform === "win32" &&
@@ -304,6 +389,10 @@ function captureResponse(source, platform, audioRequested, windowsRelease) {
 module.exports = {
   THUMBNAIL_SIZE,
   MAC_SCREEN_SETTINGS_URL,
+  MAC_AUDIO_SETTINGS_URL,
+  MAC_SYSTEM_AUDIO_MIN,
+  parseMacVersion,
+  macVersionAllowsSystemAudio,
   WINDOWS_11_NT_BUILD,
   windowsNtBuild,
   windowsBuildAllowsOwnAudioExclude,

@@ -115,6 +115,74 @@ final class MessageRejectionTests: XCTestCase {
         XCTAssertEqual(model.error, ChatModel.rejectionCopy(for: "some-future-token"))
     }
 
+    // MARK: The refusal banner does not outlive its message
+
+    private func refused(_ model: ChatModel) throws {
+        model.stage(channelId: "c", messages: [
+            try pendingRow("rude text", nonce: "bad"),
+            try pendingRow("polite text", nonce: "good"),
+        ])
+        model.apply(.messageRejected(MessageRejection(
+            channelId: "c", nonce: "bad", reason: "automod", retryAfterMs: nil,
+            automodMessage: "This message was not sent: it breaks pqp's rules on abusive language."
+        )))
+        XCTAssertNotNil(model.error)
+    }
+
+    /// The reported bug: the next message went through and the red line about
+    /// the previous one stayed on screen above it.
+    func testTheBannerClearsWhenTheNextSendLands() throws {
+        let model = ChatModel()
+        try refused(model)
+
+        model.apply(.messageCreated(try stored(id: "m9", body: "polite text"), nonce: "good"))
+
+        XCTAssertNil(model.error)
+    }
+
+    /// The refusal puts the refused text back in the composer, and that
+    /// restore reports as a change too. It must not read as the person typing.
+    func testRestoringTheRefusedTextDoesNotClearTheBanner() throws {
+        let model = ChatModel()
+        try refused(model)
+
+        model.noteDraftEdited()
+
+        XCTAssertNotNil(model.error)
+    }
+
+    func testTheBannerClearsWhenANewDraftIsTyped() throws {
+        let model = ChatModel()
+        try refused(model)
+
+        model.draft += "!"
+        model.noteDraftEdited()
+
+        XCTAssertNil(model.error)
+    }
+
+    func testTheBannerClearsOnItsOwnAfterAShortWhile() async throws {
+        let model = ChatModel()
+        model.refusalBannerSeconds = 0.2
+        try refused(model)
+
+        try await Task.sleep(for: .seconds(0.8))
+
+        XCTAssertNil(model.error)
+    }
+
+    /// Only a refusal is cleared this way: some other error that happens to be
+    /// showing is not about the message that just went through.
+    func testAnUnrelatedErrorSurvivesASuccessfulSend() throws {
+        let model = ChatModel()
+        model.stage(channelId: "c", messages: [try pendingRow("hi", nonce: "n1")])
+        model.error = "The connection dropped and some messages were not sent."
+
+        model.apply(.messageCreated(try stored(id: "m1", body: "hi"), nonce: "n1"))
+
+        XCTAssertNotNil(model.error)
+    }
+
     /// `slowmodeSeconds` is on the channel shape and the API sends it. A
     /// synthesized `Codable` silently ignored the key, which is how a channel
     /// could be in slow mode and this app learn it only from a refusal. Absent

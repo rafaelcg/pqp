@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeTransport, baseApp, users } from "@/lib/apps/bridge-host.fixture";
 import { AppFrame, type AppFrameHandle, type AppFrameStatus } from "./app-frame";
 
+// the entry is served: a unit test never asks the network (a dev box may have the apps origin up on 5175)
+vi.mock("@/lib/apps/entry-probe", () => ({ probeAppEntry: async () => ({ kind: "ok" }) }));
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let root: Root | null = null;

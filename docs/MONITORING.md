@@ -1269,6 +1269,18 @@ always-on view; PostHog would be the ad-hoc exploration layer on top, fed from
 the same seam. Keep new steps flowing through `recordActivationStep` and that
 stays true.
 
+## Report queue age (the 24 hour rule)
+
+`moderation.reports.oldestOpenAgeSeconds` on `GET /api/admin/metrics` is how
+long the oldest still-open report, in any queue, has waited (0 when none is
+open). It exists so the Terms' 24 hour promise can be checked by a machine and
+not remembered. The exporter writes `pqp_api_reports_oldest_open_age_seconds`
+and `pqp_api_reports_open{age=all|over_12h|over_24h}`; the always-on group
+`pqp-moderation` warns at 12 hours and goes critical at 20. Who reads a report
+and the steps to close one are in `docs/CONTENT_SAFETY.md` "Reports: the 24
+hour rule". Contact point is `rafael-email` only: it is as fast as email is.
+Import steps: `tools/monitoring/README.md`, "Report queue age".
+
 ## Voice notes (mensagens de voz)
 
 `GET /api/admin/metrics` carries a `voiceNotes` block that answers two
@@ -1679,6 +1691,7 @@ the SFU box is a separate manual deploy and is NOT in the API image.
 | `tools/monitoring/grafana-alert-rules-capacity.json` | Always-on group `pqp-capacity`: the SFU resize triggers (CPU busy fraction, participants, packet loss, transmit) and API box disk and memory early warnings; hands over to `docs/SFU_RESIZE_RUNBOOK.md` |
 | `tools/monitoring/grafana-dashboard-voice-notes.json` | "pqp Mensagens de voz" dashboard: voice-note usage and pipeline health |
 | `tools/monitoring/grafana-alert-rules-voice-notes.json` | Voice-note alerts: queue stuck, job failure rate, speech budget exhausted and at 80% |
+| `tools/monitoring/grafana-alert-rules-moderation.json` | Group `pqp-moderation`: a report open more than 12 hours (warning) and more than 20 hours (critical), the clock on the 24 hour rule in `docs/CONTENT_SAFETY.md` "Reports: the 24 hour rule". Defined, not imported until somebody runs the README steps |
 | `tools/monitoring/grafana-dashboard-activation.json` | "pqp Activation" dashboard: the new-user funnel and its conversions |
 | `tools/monitoring/grafana-alert-rules-activation.json` | The one funnel alert: "activation funnel stalled at the age gate" |
 | `server/src/services/activation.ts` | `recordActivationStep` (the funnel seam) and `activationFunnel` (the cohort report on `/api/admin/metrics`) |
@@ -1704,7 +1717,7 @@ the SFU box is a separate manual deploy and is NOT in the API image.
 
 Added after the 09-26 party report, where 210 of 213 viewers had no acquisition row and phone share, background time and sign-up time were unmeasured. No new Grafana metric, so none of the three manual pipeline steps apply. Everything is on the operator endpoints:
 
-- `GET /api/admin/acquisition?days=N`: a bare `/c/<slug>` link now lands in `landings` (and the referring site, host only, in `rows` as `source` with `medium: referral`; an Android Custom Tab shows as `android-app:<package>`). New `signup: { measured, p50Seconds, p90Seconds }` is modal open to account ready as the browser clocked it (accounts that signed up across two visits carry none).
+- `GET /api/admin/acquisition?days=N` (also `&hours=H`, 1 to 168, for a surge window; reachable with the operator machine token since 2026-11-04, and every accepted first touch logs `[pqp] user.acquired userId=... source=... medium=... campaign=... ref=... landing=<path only> gclid=<true|false>` so a surge can be traced in Loki without the database): a bare `/c/<slug>` link now lands in `landings` (and the referring site, host only, in `rows` as `source` with `medium: referral`; an Android Custom Tab shows as `android-app:<package>`). New `signup: { measured, p50Seconds, p90Seconds }` is modal open to account ready as the browser clocked it (accounts that signed up across two visits carry none).
 - `GET /api/admin/metrics`, `liveHls.viewers.audience`: per broadcast that still has viewer rows (a day), `byDevice` and `newAccountsByDevice` (phone / tablet / desktop / unknown = client older than the report), `visibleSeconds`, `hiddenSeconds`, `hiddenShare`. Rows are pruned 24 h after the last sighting, so read it the day of the party.
 - SQL, same day: `SELECT device_class, count(*), sum(hidden_ms)/1000 AS hidden_s, sum(visible_ms)/1000 AS visible_s FROM hls_session_viewers WHERE channel_id = :channel AND started_at_ms = :started_ms GROUP BY 1;` and join `users.acquisition_signup_s`, `acquisition_source`, `acquisition_landing` for retention by sign-up time or by door.
 

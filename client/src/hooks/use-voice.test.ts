@@ -17,6 +17,8 @@ import { resetNativeShareAudioForTests } from "@/lib/native-share-audio";
 import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
 import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 import { retryShareWithoutSound } from "@/lib/share-silent-fallback";
+import { reportFaroEvent } from "@/lib/faro";
+import { translateMessage } from "@/lib/i18n";
 import { showsDockedShareError } from "@/components/voice/docked-share-error";
 
 /**
@@ -63,6 +65,12 @@ interface ManagerStub {
  * not something a test can wait on.
  */
 const statsListeners = vi.hoisted(() => new Set<(snapshot: unknown) => void>());
+// A spy on the one telemetry call a refused desktop share makes; Faro itself
+// is off in tests either way.
+vi.mock("@/lib/faro", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/faro")>()),
+  reportFaroEvent: vi.fn(),
+}));
 vi.mock("@/lib/voice-stats-probe", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/voice-stats-probe")>();
   return {
@@ -132,6 +140,15 @@ vi.mock("@/lib/noise-suppression", async (importOriginal) => {
     createRnnoiseNode: createRnnoiseNodeMock,
   };
 });
+
+// The voice gate after RNNoise (`lib/voice-gate/`). Its real factory loads a
+// worklet module into the stubbed context; what this suite pins is whether the
+// pipeline asks for one, wires it in and tears it down.
+const createVoiceGateMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/voice-gate/voice-gate-node", () => ({
+  createVoiceGate: (...args: unknown[]) => createVoiceGateMock(...args),
+  VOICE_GATE_PROCESSOR: "pqp-voice-gate",
+}));
 
 vi.mock("@/lib/peer-connection-manager", () => ({
   getDefaultIceServers: () => [],
@@ -890,6 +907,150 @@ describe("screen share audio", () => {
 
       expect(shell.nativeShareAudioArm).not.toHaveBeenCalled();
       expect(shell.nativeShareAudioClaim).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * "Invalid capture constraints", 16 Nov 2026, a Windows 11 desktop user.
+   * Electron 44.9.1 rejects `getDisplayMedia` with exactly this (a
+   * DOMException named AbortError, Chromium's English sentence) for every
+   * `callback(null)` from the shell's display-media handler: a Cancel, a
+   * picker that never loaded, a second request while the picker is open. The
+   * page used to print that sentence. These tests throw the shape Electron
+   * throws, from the request the product really builds on Windows 11.
+   */
+  describe("a desktop share the shell answered with nothing", () => {
+    function windowsShell(overrides: Record<string, unknown> = {}) {
+      return {
+        isElectron: true,
+        platform: "win32",
+        sharePickerOffersAudio: true,
+        capabilities: {
+          displayMedia: true,
+          systemAudio: "loopback",
+          restrictOwnAudio: true,
+          pickerOffersAudio: true,
+          silentRetry: true,
+          shareRefusalReason: true,
+          version: "0.2.10",
+        },
+        shareSilentRetryArm: vi.fn(async () => false),
+        shareRefusalReason: vi.fn(async () => "cancelled"),
+        ...overrides,
+      };
+    }
+
+    /** What 0.2.9, the shell installed today, publishes: no reason to ask for. */
+    function shellWithoutReason() {
+      const shell = windowsShell({
+        capabilities: {
+          displayMedia: true,
+          systemAudio: "loopback",
+          restrictOwnAudio: true,
+          pickerOffersAudio: true,
+          silentRetry: true,
+          version: "0.2.9",
+        },
+      });
+      delete (shell as { shareRefusalReason?: unknown }).shareRefusalReason;
+      return shell;
+    }
+
+    function installShell(shell: unknown) {
+      (globalThis as { window?: unknown }).window = {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        pqpDesktop: shell,
+      };
+    }
+
+    /** Electron's rejection for `callback(null)`, as measured on 44.9.1. */
+    function shellSaysNo() {
+      displayMedia = async () => {
+        throw new DOMException("Invalid capture constraints", "AbortError");
+      };
+    }
+
+    beforeEach(() => {
+      setOsCanExcludeCallAudioForTests(true);
+      vi.mocked(reportFaroEvent).mockClear();
+    });
+
+    afterEach(() => {
+      delete (globalThis as { window?: unknown }).window;
+    });
+
+    it("never shows Chromium's sentence from a shell that cannot say why", async () => {
+      installShell(shellWithoutReason());
+      shellSaysNo();
+      const { voice } = await connectedMesh();
+      // The picker's sound box was ticked: the request carries loopback.
+      await voice.startScreenShare(true);
+
+      // The request that failed is the one the product sends on Windows 11.
+      expect(displayMediaCalls).toHaveLength(1);
+      const asked = displayMediaCalls[0] as { audio?: unknown; video?: { frameRate?: unknown } };
+      expect(asked.audio).not.toBe(false);
+      expect(asked.video?.frameRate).toEqual({ ideal: 30, max: 30 });
+
+      const state = voice.getState();
+      expect(state.isSharingScreen).toBe(false);
+      expect(state.error).toBe(translateMessage("voice.error.shareShellRefused"));
+      expect(state.error).not.toMatch(/invalid capture constraints/i);
+      expect(state.screenShareError).toBe(state.error);
+      // The shell refused before any sound was opened: offering "share
+      // without sound" would be refused the same way.
+      expect(state.screenShareAudioFailed).toBe(false);
+      expect(reportFaroEvent).toHaveBeenCalledWith(
+        "share_shell_refused",
+        expect.objectContaining({ refusal: "unknown", shellVersion: "0.2.9", platform: "win32" }),
+      );
+    });
+
+    it("treats a closed picker as the person's answer, not an error, and still logs it", async () => {
+      const shell = windowsShell();
+      installShell(shell);
+      shellSaysNo();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(true);
+
+      expect(shell.shareRefusalReason).toHaveBeenCalledTimes(1);
+      expect(displayMediaCalls).toHaveLength(1);
+      expect(voice.getState().error).toBeNull();
+      expect(voice.getState().screenShareError).toBeNull();
+      expect(voice.getState().screenShareAudioFailed).toBe(false);
+      expect(reportFaroEvent).toHaveBeenCalledWith(
+        "share_shell_refused",
+        expect.objectContaining({ refusal: "cancelled", shellVersion: "0.2.10" }),
+      );
+    });
+
+    it.each([
+      ["busy", "voice.error.sharePickerBusy"],
+      ["picker-failed", "voice.error.sharePickerFailed"],
+      ["source-gone", "voice.error.shareSourceGone"],
+      ["error", "voice.error.shareFailed"],
+      ["from-a-newer-shell", "voice.error.shareFailed"],
+    ] as const)("says what the shell's %s refusal means", async (reason, key) => {
+      installShell(windowsShell({ shareRefusalReason: vi.fn(async () => reason) }));
+      shellSaysNo();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(displayMediaCalls).toHaveLength(1);
+      expect(voice.getState().error).toBe(translateMessage(key));
+      expect(voice.getState().screenShareAudioFailed).toBe(false);
+    });
+
+    it("never asks a browser's shell for a reason, and words a browser's AbortError plainly", async () => {
+      displayMedia = async () => {
+        throw Object.assign(new Error("Error starting screen capture"), { name: "AbortError" });
+      };
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(voice.getState().error).toBe(translateMessage("voice.error.shareFailed"));
+      expect(reportFaroEvent).not.toHaveBeenCalledWith("share_shell_refused", expect.anything());
     });
   });
 
@@ -1938,6 +2099,8 @@ describe("lobby presence sounds", () => {
     advancedNoiseSuppressionSupportedMock.mockReturnValue(false);
     loadRnnoiseBinaryMock.mockReset();
     createRnnoiseNodeMock.mockReset();
+    createVoiceGateMock.mockReset();
+    createVoiceGateMock.mockResolvedValue(null);
   });
 
   it("plays join as soon as you ask, not after welcome", async () => {
@@ -2156,6 +2319,86 @@ describe("lobby presence sounds", () => {
     // The worklet is a mode-"advanced" thing only: falling back means it is
     // never reached at all.
     expect(createRnnoiseNodeMock).not.toHaveBeenCalled();
+  });
+
+  describe("the voice gate after RNNoise", () => {
+    function advancedJoinSetup() {
+      advancedNoiseSuppressionSupportedMock.mockReturnValue(true);
+      loadRnnoiseBinaryMock.mockResolvedValue(new ArrayBuffer(8));
+      const rnnoise = {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        destroy: vi.fn(),
+      };
+      createRnnoiseNodeMock.mockResolvedValue(rnnoise);
+      const getUserMedia = vi.fn(async () => fakeStream("mic"));
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+      return { rnnoise };
+    }
+
+    it("wires RNNoise into the gate's first input, tears both down on leave", async () => {
+      const { rnnoise } = advancedJoinSetup();
+      const gateNode = { connect: vi.fn(), disconnect: vi.fn() };
+      const gate = { node: gateNode, setBypass: vi.fn(), destroy: vi.fn() };
+      createVoiceGateMock.mockResolvedValue(gate);
+
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL, {
+        processing: { ...defaultMicProcessing, noiseSuppression: "advanced" },
+      });
+
+      expect(createVoiceGateMock).toHaveBeenCalledTimes(1);
+      // RNNoise feeds the gate's audio input (0), not the gain node directly.
+      expect(rnnoise.connect).toHaveBeenCalledWith(gateNode, 0, 0);
+      expect(gateNode.connect).toHaveBeenCalledTimes(1);
+
+      voice.leave();
+      await settle();
+      expect(gate.destroy).toHaveBeenCalled();
+      expect(rnnoise.destroy).toHaveBeenCalled();
+    });
+
+    it("falls back to the chain it was before the gate when there is none", async () => {
+      const { rnnoise } = advancedJoinSetup();
+      createVoiceGateMock.mockResolvedValue(null);
+
+      const { transport, sent } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL, {
+        processing: { ...defaultMicProcessing, noiseSuppression: "advanced" },
+      });
+
+      // The join is an ordinary join, RNNoise wired straight to the gain.
+      expect(voice.getState().error).toBeFalsy();
+      expect(sent.some((m) => m.type === "join-voice-room")).toBe(true);
+      expect(rnnoise.connect).toHaveBeenCalledTimes(1);
+      expect(rnnoise.connect.mock.calls[0]).toHaveLength(1);
+    });
+
+    it("asks for no gate at all on the browser's own suppressor", async () => {
+      advancedNoiseSuppressionSupportedMock.mockReturnValue(true);
+      const getUserMedia = vi.fn(async () => fakeStream("mic"));
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL, {
+        processing: { ...defaultMicProcessing, noiseSuppression: "browser" },
+      });
+      expect(createVoiceGateMock).not.toHaveBeenCalled();
+    });
   });
 
   it("falls back to the default mic when the saved device is gone, and stops asking for it", async () => {
@@ -2872,7 +3115,7 @@ describe("lobby presence sounds", () => {
     expect(voice.getState().notice).toMatch(/microphone/i);
   });
 
-  it("joins listen-only when the machine has no microphone at all, and cannot unmute", async () => {
+  it("joins listen-only when the machine has no microphone at all, and the unmute asks again", async () => {
     // 2026-09-05: a streamer's watch party lost people on phones that had not
     // granted the mic and laptops without one. Nobody there needed to talk.
     const missing = Object.assign(new Error("Requested device not found"), {
@@ -2903,9 +3146,16 @@ describe("lobby presence sounds", () => {
     expect(voice.getState().isTransmitting).toBe(false);
     expect(voice.getState().notice).toMatch(/microphone/i);
 
-    // No pipeline, so unmuting is a no-op rather than a crash.
+    // Still no microphone on the machine: an unmute asks again (see
+    // use-voice-listen-only-unmute.test.ts), the join says why it still
+    // cannot, and the seat lands listen-only again rather than crashing.
     voice.toggleMute();
+    await settle();
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
     expect(voice.getState().isMuted).toBe(true);
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().notice).toMatch(/microphone/i);
   });
 
   it("audio self-repair: a listen-only call offers to fix the mic, and the tap tries the microphone again", async () => {

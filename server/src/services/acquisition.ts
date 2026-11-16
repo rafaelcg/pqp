@@ -1,5 +1,7 @@
 import type { AcquisitionInput } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { clampLimit } from "../lib/http.js";
+import { logEvent } from "../lib/log.js";
 
 /**
  * First-touch acquisition: which link brought an account here.
@@ -16,6 +18,56 @@ import { getPool } from "../db.js";
 function orNull(value: string | undefined): string | null {
   const trimmed = value?.trim() ?? "";
   return trimmed === "" ? null : trimmed;
+}
+
+/** Longest value any acquisition log field may carry. The API schema already bounds every field to 200; this keeps the log line bounded on its own. */
+const LOG_FIELD_MAX = 100;
+
+/**
+ * A value that is safe as one `key=value` token on a `[pqp]` log line: bounded,
+ * and with whitespace, quotes and control characters folded to `_` so a value
+ * can never split the line or smuggle in a second field. `logEvent` writes a
+ * string as it is, with no quoting, so the folding has to happen here.
+ */
+function logToken(value: string | null | undefined): string | null {
+  const text = orNull(value ?? undefined);
+  if (text === null) {
+    return null;
+  }
+  return text.replace(/[\s"'=\p{Cc}]+/gu, "_").slice(0, LOG_FIELD_MAX);
+}
+
+/** The path of a landing page, never its query string or fragment. */
+function landingPath(landing: string | undefined): string | null {
+  const text = orNull(landing);
+  if (text === null) {
+    return null;
+  }
+  // A landing is stored as a path, but it is client-written: if it is a full
+  // URL, keep the path only, and either way cut at the first ? or #.
+  const withoutOrigin = text.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, "");
+  return logToken(withoutOrigin.split(/[?#]/, 1)[0]);
+}
+
+/**
+ * The one log line per signup that says which link brought the person.
+ * `user.created` cannot carry this (the account exists before the client says
+ * where it came from), and without it a signup surge can only be traced from
+ * the production database. Only the first accepted touch logs, because only it
+ * is returned from the guarded UPDATE. Fields are the labels the report groups
+ * by, plus whether a gclid was present; never the gclid itself, and nothing
+ * about the person's address, device or email.
+ */
+function logAcquired(userId: string, input: AcquisitionInput): void {
+  logEvent("user.acquired", {
+    userId,
+    source: logToken(input.source),
+    medium: logToken(input.medium),
+    campaign: logToken(input.campaign),
+    ref: logToken(input.ref),
+    landing: landingPath(input.landing),
+    gclid: orNull(input.gclid) !== null,
+  });
 }
 
 /**
@@ -70,6 +122,7 @@ export async function recordAcquisition(
     [userId, ...values, signupSeconds],
   );
   if ((result.rowCount ?? 0) > 0) {
+    logAcquired(userId, input);
     return true;
   }
   // Two tabs boot together and only one of them holds the sign-up timing (the
@@ -86,6 +139,23 @@ export async function recordAcquisition(
     );
   }
   return false;
+}
+
+export const ADMIN_ACQUISITION_PATH = "/api/admin/acquisition";
+
+/**
+ * The report's one query string, for the moderator's route and the machine
+ * token's alike so they cannot drift: `?days=` (default 30, at most 90) and an
+ * optional `?hours=` (1 to 168) that narrows the window for a surge.
+ */
+export function acquisitionQuery(query: URLSearchParams): {
+  days: number;
+  hours?: number;
+} {
+  const days = clampLimit(query.get("days"), 30, 90);
+  return query.has("hours")
+    ? { days, hours: clampLimit(query.get("hours"), 24, 168) }
+    : { days };
 }
 
 export interface AcquisitionReportRow {
@@ -106,6 +176,8 @@ export interface AcquisitionReport {
   /** Inclusive lower bound of the window, ISO. */
   since: string;
   days: number;
+  /** Present only when the report was asked for a window in hours. */
+  hours?: number;
   /** Every account created in the window, attributed or not. */
   total: number;
   /** Attributed accounts, grouped; an all-null row is "no campaign parameters". */
@@ -136,19 +208,26 @@ export interface AcquisitionLandingRow {
  * would make every row a count of one); it is there for the day a campaign
  * needs to be reconciled against the ad platform by hand.
  */
-export async function acquisitionReport(days: number): Promise<AcquisitionReport> {
+export async function acquisitionReport(
+  days: number,
+  hours?: number,
+): Promise<AcquisitionReport> {
   const pool = getPool();
+  // `hours` narrows the window ("the last 3 hours of a surge"); without it the
+  // window is `days` days and the output is exactly what it always was. The
+  // queries count in hours either way, so there is one shape of statement.
+  const windowHours = hours ?? days * 24;
   const [signup, grouped, total, landings] = await Promise.all([
     pool.query<{ measured: string; p50: number | null; p90: number | null }>(
       `SELECT COUNT(acquisition_signup_s)::text AS measured,
               percentile_cont(0.5) WITHIN GROUP (ORDER BY acquisition_signup_s) AS p50,
               percentile_cont(0.9) WITHIN GROUP (ORDER BY acquisition_signup_s) AS p90
          FROM users
-        WHERE created_at >= now() - ($1::int * interval '1 day')
+        WHERE created_at >= now() - ($1::int * interval '1 hour')
           AND NOT is_webhook
           AND NOT is_character
           AND acquisition_signup_s IS NOT NULL`,
-      [days],
+      [windowHours],
     ),
     pool.query<{
       source: string | null;
@@ -163,38 +242,39 @@ export async function acquisitionReport(days: number): Promise<AcquisitionReport
               acquisition_ref AS ref,
               COUNT(*)::text AS signups
          FROM users
-        WHERE created_at >= now() - ($1::int * interval '1 day')
+        WHERE created_at >= now() - ($1::int * interval '1 hour')
           AND NOT is_webhook
           AND NOT is_character
         GROUP BY 1, 2, 3, 4
         ORDER BY COUNT(*) DESC, 1 NULLS LAST, 2 NULLS LAST, 3 NULLS LAST, 4 NULLS LAST`,
-      [days],
+      [windowHours],
     ),
     pool.query<{ total: string }>(
       `SELECT COUNT(*)::text AS total
          FROM users
-        WHERE created_at >= now() - ($1::int * interval '1 day')
+        WHERE created_at >= now() - ($1::int * interval '1 hour')
           AND NOT is_webhook
           AND NOT is_character`,
-      [days],
+      [windowHours],
     ),
     pool.query<{ landing: string | null; signups: string }>(
       `SELECT acquisition_landing AS landing,
               COUNT(*)::text AS signups
          FROM users
-        WHERE created_at >= now() - ($1::int * interval '1 day')
+        WHERE created_at >= now() - ($1::int * interval '1 hour')
           AND NOT is_webhook
           AND NOT is_character
           AND acquisition_landing IS NOT NULL
         GROUP BY 1
         ORDER BY COUNT(*) DESC, 1`,
-      [days],
+      [windowHours],
     ),
   ]);
-  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const since = new Date(Date.now() - windowHours * 60 * 60 * 1000);
   return {
     since: since.toISOString(),
     days,
+    ...(hours === undefined ? {} : { hours }),
     total: Number(total.rows[0]?.total ?? 0),
     rows: grouped.rows.map((row) => ({
       source: row.source,

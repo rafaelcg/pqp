@@ -155,6 +155,12 @@ struct StoryViewer: View {
         .sheet(item: $profileSubject) { subject in
             UserProfileSheet(subject: subject, onOpenConversation: { _, _ in }, server: nil)
         }
+        // Blocked from the profile sheet over the viewer: that person's stories
+        // leave the queue at once, the way a staff removal does.
+        .onChange(of: session.blocked.ids) {
+            let hidden = Set(stories.values.filter { session.blocked.contains($0.author.id) }.map(\.id))
+            if !hidden.isEmpty { dropRemoved(hidden) }
+        }
         .task(id: current?.id) { await prepareReveal() }
         // The call card is a live roster: it follows the room while the story
         // is open, held or not.

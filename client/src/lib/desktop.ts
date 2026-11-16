@@ -43,6 +43,13 @@ export interface PqpDesktop {
    */
   shareSilentRetryArm?(): Promise<boolean>;
   /**
+   * The share just requested was answered with nothing, which the page sees
+   * as `AbortError: Invalid capture constraints` whatever the cause. Which
+   * refusal it was, once, or null. See `capabilities.shareRefusalReason` and
+   * `lib/share-shell-refusal.ts`.
+   */
+  shareRefusalReason?(): Promise<string | null>;
+  /**
    * After `getDisplayMedia`: did the share start a capture? If so its PCM
    * port has been posted to this window as a `message` event first.
    */
@@ -78,6 +85,18 @@ export interface PqpDesktop {
    * page reads as "cannot tell" and then never shows the card.
    */
   fullscreenAppState?(): Promise<DesktopFullscreenAppState>;
+  /**
+   * macOS share audio: is this Mac new enough (14.2+) for Chromium's CoreAudio
+   * Tap? `supported: false` off macOS. Absent in shells before it.
+   */
+  macShareAudioStatus?(): Promise<{ supported: boolean; version: string | null }>;
+  /**
+   * Right before the `getDisplayMedia` of a share that asks for sound with the
+   * runtime flag on: the shell answers loopback to the next request only.
+   */
+  macShareAudioArm?(): Promise<boolean>;
+  /** Opens System Settings at Privacy & Security > System Audio Recording. */
+  macShareAudioOpenSettings?(): Promise<boolean>;
   /**
    * Linux share audio: can this machine build the "everything but pqp" bus?
    * `available: false` off Linux and where `pactl` is missing.
@@ -272,6 +291,15 @@ export interface DesktopShareCapabilities {
    */
   linuxShareAudio?: boolean;
   /**
+   * macOS: this shell can carry the computer's sound on the display stream
+   * through Chromium's CoreAudio Tap with its own audio excluded
+   * (`electron/lib/mac-share-audio.js`), on macOS 14.2+. A SEPARATE field from
+   * `systemAudio`, which stays `"none"` on a Mac so an older page never asks
+   * for audio the shell would reject. Absent in every shell before it. Used
+   * unless the runtime flag (default on) is switched off.
+   */
+  macShareAudio?: boolean;
+  /**
    * The shell is the Flatpak build (`flatpak/gg.pqp.pqp.yml`). It never
    * offers `linuxShareAudio`; the page uses this for copy only. Absent before.
    */
@@ -284,6 +312,12 @@ export interface DesktopShareCapabilities {
    * sound on the same surface, with no second picker. Absent before it.
    */
   silentRetry?: boolean;
+  /**
+   * The shell answers `shareRefusalReason()`: why it answered a share
+   * request with nothing (a Cancel, a picker that never loaded, a second
+   * request while the picker is open). Absent before it.
+   */
+  shareRefusalReason?: boolean;
   /** The shell's version, for diagnostics. Null when it could not be read. */
   version: string | null;
 }

@@ -14,7 +14,12 @@ import type {
   ReactionBroadcast,
   ThreadSummary,
 } from "@pqp/shared";
-import { buildReplyExcerpt, clampChatNewlines, MESSAGE_PAGE_SIZE } from "@pqp/shared";
+import {
+  BASELINE_REJECTION_MESSAGE,
+  buildReplyExcerpt,
+  clampChatNewlines,
+  MESSAGE_PAGE_SIZE,
+} from "@pqp/shared";
 import {
   notifyOpenChannelMessage,
   notifyOpenChannelWhileAway,
@@ -67,6 +72,7 @@ export function failedSendKey(
   | "chat.reject.undeliverable"
   | "chat.reject.slowMode"
   | "chat.reject.automod"
+  | "chat.reject.baseline"
   | "chat.reject.databaseUnavailable"
   | "chat.reject.locked"
   | "chat.failedSend" {
@@ -150,6 +156,11 @@ export function failedSendCopy(
   text?: string;
 } {
   if (message.rejectReason === "automod" && message.automodMessage) {
+    // pqp's own filter sends a fixed English sentence; the web draws it in the
+    // reader's language instead. An owner's own words are shown as they wrote them.
+    if (message.automodMessage === BASELINE_REJECTION_MESSAGE) {
+      return { key: "chat.reject.baseline" };
+    }
     return { key: "chat.reject.automod", text: message.automodMessage };
   }
   if (message.rejectReason === "slow-mode") {

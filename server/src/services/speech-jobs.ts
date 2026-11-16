@@ -28,7 +28,12 @@ export type SpeechJobKind =
   | "voice_transcode"
   | "party_question"
   /** Automatic subtitles of an uploaded Baú video; keyed by `post_id`, not an attachment. */
-  | "community_home_captions";
+  | "community_home_captions"
+  /**
+   * The MP4 copy of a Jam track's camera video, for iOS and Safari; keyed by
+   * `track_id`. See `jam-video-transcode.ts`.
+   */
+  | "jam_video_transcode";
 
 /** Postgres LISTEN channel the enqueue NOTIFYs and the poller listens on. */
 export const SPEECH_JOBS_CHANNEL = "pqp_speech_job_due";
@@ -48,6 +53,13 @@ export const SPEECH_JOB_LEASE_SECONDS = 180;
  * runs out under a worker that died.
  */
 export const CAPTIONS_JOB_LEASE_SECONDS = 1_800;
+/**
+ * A Jam camera video is up to 100 MiB: a download (at most 5 minutes), one
+ * x264 pass (`JAM_TRANSCODE_TIMEOUT_MS`, 10 minutes) and an upload. Each step
+ * bounds itself, so the sum is the ceiling and this lease sits above it: it
+ * only ever runs out under a worker that died.
+ */
+export const JAM_TRANSCODE_JOB_LEASE_SECONDS = 1_800;
 /** Claims per job before it is given up on. */
 export const SPEECH_JOB_MAX_ATTEMPTS = 3;
 const RETRY_BASE_SECONDS = 30;
@@ -58,6 +70,8 @@ export interface SpeechJob {
   attachment_id: string | null;
   /** Set for `community_home_captions` only. */
   post_id: string | null;
+  /** Set for `jam_video_transcode` only. */
+  track_id: string | null;
   attempts: number;
   language_hint: string | null;
   leased_by: string;
@@ -74,9 +88,10 @@ export async function enqueueSpeechJob(
   db: Queryable,
   job: {
     kind: SpeechJobKind;
-    /** Exactly one of these two: a voice note's attachment, or a Baú post. */
+    /** Exactly one of these three: a voice note's attachment, a Baú post, or a Jam track. */
     attachmentId?: string;
     postId?: string;
+    trackId?: string;
     languageHint?: string | null;
     /**
      * Also put a SETTLED job back in the queue, if it settled at least this
@@ -87,11 +102,13 @@ export async function enqueueSpeechJob(
     requeueSettledAfterSeconds?: number;
   },
 ): Promise<boolean> {
-  const byPost = job.postId !== undefined;
-  if (byPost === (job.attachmentId !== undefined)) {
-    throw new Error("enqueueSpeechJob needs exactly one of attachmentId and postId");
+  const keys = [job.attachmentId, job.postId, job.trackId].filter((one) => one !== undefined);
+  if (keys.length !== 1) {
+    throw new Error("enqueueSpeechJob needs exactly one of attachmentId, postId and trackId");
   }
-  const column = byPost ? "post_id" : "attachment_id";
+  const keyValue = keys[0]!;
+  const column =
+    job.postId !== undefined ? "post_id" : job.trackId !== undefined ? "track_id" : "attachment_id";
   const requeue = job.requeueSettledAfterSeconds;
   const inserted = await db.query(
     `INSERT INTO speech_jobs (kind, ${column}, language_hint)
@@ -109,8 +126,8 @@ export async function enqueueSpeechJob(
      }
      RETURNING id`,
     requeue === undefined
-      ? [job.kind, byPost ? job.postId : job.attachmentId, job.languageHint ?? null]
-      : [job.kind, byPost ? job.postId : job.attachmentId, job.languageHint ?? null, requeue],
+      ? [job.kind, keyValue, job.languageHint ?? null]
+      : [job.kind, keyValue, job.languageHint ?? null, requeue],
   );
   if ((inserted.rowCount ?? 0) === 0) {
     return false;
@@ -168,13 +185,21 @@ export async function claimSpeechJobs(
             leased_by = $3,
             lease_expires_at = NOW() + make_interval(secs => CASE
               WHEN j.kind = 'community_home_captions' THEN $5::double precision
+              WHEN j.kind = 'jam_video_transcode' THEN $6::double precision
               ELSE $4::double precision END),
             attempts = j.attempts + 1
        FROM due
       WHERE j.id = due.id
-      RETURNING j.id::text AS id, j.kind, j.attachment_id, j.post_id, j.attempts,
-                j.language_hint, j.leased_by`,
-    [kinds, limit, owner, SPEECH_JOB_LEASE_SECONDS, CAPTIONS_JOB_LEASE_SECONDS],
+      RETURNING j.id::text AS id, j.kind, j.attachment_id, j.post_id, j.track_id::text AS track_id,
+                j.attempts, j.language_hint, j.leased_by`,
+    [
+      kinds,
+      limit,
+      owner,
+      SPEECH_JOB_LEASE_SECONDS,
+      CAPTIONS_JOB_LEASE_SECONDS,
+      JAM_TRANSCODE_JOB_LEASE_SECONDS,
+    ],
   );
   return claimed.rows;
 }

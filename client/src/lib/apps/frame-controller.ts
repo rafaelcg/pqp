@@ -1,6 +1,7 @@
 import { APP_PLATFORM_API, bridgeAppHelloSchema, type AppEndReason } from "@pqp/shared";
 import { isOnAppsOrigin } from "./apps-origin";
 import { BridgeHost, type BridgeHostOptions } from "./bridge-host";
+import { probeAppEntry, type EntryProbe } from "./entry-probe";
 import { ensureAppFramePolicy } from "./frame-policy";
 import type { ShareAudioRelay } from "./share-audio";
 import {
@@ -16,6 +17,8 @@ export type AppFrameErrorReason =
   | "bad-entry"
   /** The seat was refused (full, not allowed, ended): see `code`. */
   | "join-failed"
+  /** The apps origin answered the entry URL with an HTTP error (a version it no longer serves). */
+  | "entry-unavailable"
   /** The frame never said hello. */
   | "timeout"
   /** The frame loaded a second document: it navigated itself. It was removed. */
@@ -50,6 +53,8 @@ export interface AppFrameControllerOptions {
   extraFrameOrigins?: readonly string[];
   /** How long the frame has to say hello. Default 20 s. */
   helloTimeoutMs?: number;
+  /** Asks whether the entry is served (`probeAppEntry`, a CORS GET from the page). Tests stand in for it. */
+  probeEntry?: EntryProbe;
   onStatus?: (status: AppFrameStatus) => void;
   /** Called with the height an app asked for through `ui.resize`. */
   onResize?: (height: number) => void;
@@ -97,6 +102,11 @@ const DEFAULT_HEIGHT = 360;
  * 4. A SECOND `load` event of the frame means it left the document it was given
  *    (it navigated itself, or something reloaded it): the frame is removed and
  *    the failure is reported. A legitimate app never reloads itself.
+ * 5. The page asks the apps origin for the entry itself, beside the frame
+ *    (`entry-probe.ts`). An HTTP error there (the pinned version is not on the
+ *    apps site) removes the frame at once as `entry-unavailable`, instead of
+ *    leaving the origin's 404 page on screen until the hello timeout. A probe
+ *    that gets no answer changes nothing: the timeout stays the backstop.
  *
  * KEYBOARD CONTRACT. The frame is one tab stop and the page never traps focus:
  * no key handler on the page calls `preventDefault` or `stopPropagation` on
@@ -116,6 +126,7 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
   let loads = 0;
   let iframe: HTMLIFrameElement | null = null;
   const timers: { hello?: ReturnType<typeof setTimeout> } = {};
+  const probe = new AbortController();
 
   const setStatus = (next: AppFrameStatus) => {
     if (destroyed) return;
@@ -158,6 +169,7 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
   /** Take the frame out of the page and stop talking to it. */
   function remove(reason: AppFrameErrorReason, code?: AppErrorCode) {
     clearTimeout(timers.hello);
+    probe.abort();
     window.removeEventListener("message", onMessage);
     iframe?.remove();
     iframe = null;
@@ -186,6 +198,8 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
       // an opaque origin cannot be named as a target, so '*' (the receiver
       // checks `event.source`, and only the frame's window is listening)
       frame.contentWindow.postMessage({ pqp: "app-port", platformApi: APP_PLATFORM_API }, "*", [channel.port2]);
+      // the frame is working: whatever the probe would still say changes nothing
+      probe.abort();
       setStatus({ kind: "ready" });
     });
   }
@@ -224,6 +238,12 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
   // document. The listeners, the policy and every attribute are in place already.
   element.setAttribute("src", app.entry.url);
   container.append(element);
+  void (options.probeEntry ?? probeAppEntry)(app.entry.url, probe.signal).then((result) => {
+    // only while nothing else has settled the frame: a frame that said hello is working, whatever the probe saw
+    if (result.kind !== "missing" || destroyed || iframe !== element || status.kind !== "loading") return;
+    console.error(`[apps] ${app.id}@${app.version}: the apps origin answered ${result.status} for its entry`);
+    remove("entry-unavailable");
+  });
   // the seat is taken while the frame loads. If the frame is removed before the join lands, `host.start`
   // sees the host detached and releases the seat it just got (bridge-host.ts), so `remove` and `destroy`
   // need no separate cancellation.
@@ -244,6 +264,7 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
       destroy() {
         if (destroyed) return;
         clearTimeout(timers.hello);
+        probe.abort();
         window.removeEventListener("message", onMessage);
         iframe?.remove();
         iframe = null;

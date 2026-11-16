@@ -80,4 +80,48 @@ describe("MessageBody", () => {
     expect(html).toContain("<pre>");
     expect(html).toContain("code\n\nstill");
   });
+
+  // The renderer is a user-content surface: these pin what a sender cannot get
+  // onto a reader's page, whatever version of react-markdown draws it.
+  describe("untrusted content", () => {
+    it("never renders a markdown image, so no remote pixel", () => {
+      const html = render("![pixel](https://evil.example/p.png) after");
+      expect(html).not.toContain("<img");
+      expect(html).not.toContain("evil.example");
+    });
+
+    it("shows raw HTML as text, never as elements", () => {
+      const html = render(
+        '<script>alert(1)</script> <img src=x onerror=alert(1)> <div style="position:fixed">x</div>',
+      );
+      expect(html).not.toContain("<script");
+      expect(html).not.toContain("<img");
+      expect(html).not.toContain("<div");
+      expect(html).toContain("&lt;script&gt;");
+    });
+
+    it("drops the target of a javascript: or data: link", () => {
+      const html = render(
+        "[js](javascript:alert(1)) [data](data:text/html;base64,PHNjcmlwdD4=)",
+      );
+      expect(html).not.toContain("javascript:");
+      expect(html).not.toContain("data:text/html");
+    });
+
+    it("opens every link in a new tab without an opener or a referrer", () => {
+      const html = render("[a](https://example.com) and https://example.org/x");
+      const anchors = html.match(/<a [^>]*>/g) ?? [];
+      expect(anchors).toHaveLength(2);
+      for (const a of anchors) {
+        expect(a).toContain('target="_blank"');
+        expect(a).toContain('rel="noopener noreferrer nofollow ugc"');
+      }
+    });
+
+    it("does not turn headings or tables into elements chat does not allow", () => {
+      const html = render("# title\n\n| a | b |\n|---|---|\n| 1 | 2 |");
+      expect(html).not.toContain("<h1");
+      expect(html).not.toContain("<table");
+    });
+  });
 });

@@ -130,6 +130,7 @@ import type {
   RoleSystemKey,
   OutgoingWebhook,
   AutomodRule,
+  BaselineStatus,
   CreateAutomodRuleInput,
   UpdateAutomodRuleInput,
   PublicInvitePreview,
@@ -1115,6 +1116,11 @@ export interface ShareConfig {
    */
   linuxDesktopSystemAudio?: boolean;
   /**
+   * The macOS desktop app may carry the computer's sound, minus the call
+   * (`lib/mac-shell-share-audio.ts`). Absent on an older API: off.
+   */
+  macDesktopSystemAudio?: boolean;
+  /**
    * The Windows desktop app watches the presenter's share for a dead picture
    * and explains exclusive fullscreen (`lib/share-game-capture-hint.ts`).
    * Absent on an older API: off.
@@ -1166,6 +1172,13 @@ export interface VoiceConfig {
    */
   audioSelfHeal?: boolean;
   /**
+   * `voice_calm_detector`: the call's speaking ring is read on a 20 Hz timer
+   * (4 Hz while the window is hidden) instead of on every frame
+   * (`lib/speaking-clock.ts`). Global; absent is off, which is the per-frame
+   * loop this client always had.
+   */
+  calmDetector?: boolean;
+  /**
    * `soundboard`: this server's calls offer the soundboard and its settings
    * tab. Per server, default off. The play gate on the server reads it too.
    */
@@ -1176,6 +1189,12 @@ export interface VoiceConfig {
    * default; absent (an older API) reads as off, which is the old default.
    */
   cleanVoiceDefault?: boolean;
+  /**
+   * `voice_gate`: Voz limpa's adaptive gate after RNNoise
+   * (`lib/voice-gate/`). Global, on by default; absent (an older API) reads as
+   * ON, the code default, and only an explicit `false` is the kill switch.
+   */
+  voiceGate?: boolean;
   /**
    * `raised_hand_sticky`: a raised hand stays up until the person, a
    * moderator or leaving takes it down; the call offers to lower your own
@@ -2319,6 +2338,12 @@ export const updateAutomodRule = (
     `/api/servers/${serverId}/automod/rules/${ruleId}`,
     body,
   );
+
+export const fetchAutomodBaseline = (serverId: string) =>
+  apiFetch<BaselineStatus>(`/api/servers/${serverId}/automod/baseline`);
+
+export const setAutomodBaseline = (serverId: string, enabled: boolean) =>
+  put<BaselineStatus>(`/api/servers/${serverId}/automod/baseline`, { enabled });
 
 export const deleteAutomodRule = (serverId: string, ruleId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/automod/rules/${ruleId}`);

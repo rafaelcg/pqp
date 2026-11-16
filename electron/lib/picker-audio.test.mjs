@@ -15,6 +15,10 @@ const strings = {
   shareAudioOffNote: "Sem som: quem assiste só vê a tela.",
   shareAudioWin10: "Som do computador não disponível no Windows 10",
   shareAudioWin10Hint: "Pra mandar som: abra a pqp no Chrome.",
+  shareAudioMac: "O som do computador ainda não está disponível no app pra Mac.",
+  shareAudioMacHint: "Pra mandar som: abra a pqp no Chrome.",
+  shareAudioMacOld: "O som do computador precisa do macOS 14.2 ou mais novo.",
+  shareAudioMacOldHint: "Pra mandar som: abra a pqp no Chrome.",
 };
 
 describe("the picker's sound row", () => {
@@ -60,7 +64,22 @@ describe("the picker's sound row", () => {
     assert.equal(view.hint, strings.shareAudioWin10Hint);
   });
 
-  it("draws nothing where there is no sound to offer (macOS, Linux)", () => {
+  it("explains on a Mac without the shell's sound: words, no switch, never ticked", () => {
+    for (const state of ["explain-mac", "explain-mac-old"]) {
+      assert.equal(defaultAudioChecked(state), false);
+      const view = audioRowView(state, defaultAudioChecked(state), strings);
+      assert.deepEqual(
+        { visible: view.visible, hasSwitch: view.hasSwitch, checked: view.checked, note: view.note },
+        { visible: true, hasSwitch: false, checked: false, note: "" },
+      );
+    }
+    assert.equal(audioRowView("explain-mac", false, strings).label, strings.shareAudioMac);
+    assert.equal(audioRowView("explain-mac", false, strings).hint, strings.shareAudioMacHint);
+    assert.equal(audioRowView("explain-mac-old", false, strings).label, strings.shareAudioMacOld);
+    assert.equal(audioRowView("explain-mac-old", false, strings).hint, strings.shareAudioMacOldHint);
+  });
+
+  it("draws nothing where there is no sound to offer (Linux)", () => {
     assert.equal(defaultAudioChecked("hidden"), false);
     const view = audioRowView("hidden", false, strings);
     assert.equal(view.visible, false);
@@ -124,6 +143,51 @@ describe("the picker's page", () => {
     const row = css.slice(css.indexOf(".audio-row {"), css.indexOf(".actions {"));
     assert.doesNotMatch(row, /#[0-9a-fA-F]{3,8}\b/);
     assert.doesNotMatch(row, /\brgba?\(/);
+  });
+});
+
+describe("the Mac rows' copy and wiring", () => {
+  const picker = read("../picker/picker.js");
+  const main = read("../main.js");
+  const keys = [
+    "share.audioHintMac",
+    "share.audioMacUnavailable",
+    "share.audioMacUnavailableHint",
+    "share.audioMacOld",
+    "share.audioMacOldHint",
+  ];
+
+  for (const name of ["en", "pt-BR", "es"]) {
+    it(`exists in ${name}, in full sentences and with no em dash`, () => {
+      const strings = locale(name);
+      for (const key of keys) {
+        assert.equal(typeof strings[key], "string", `${key} in ${name}`);
+        assert.ok(strings[key].length > 10);
+        assert.ok(!strings[key].includes("—"), `${key} in ${name} has an em dash`);
+      }
+    });
+  }
+
+  it("is honest in each language that a Mac needs macOS 14.2 for it", () => {
+    for (const name of ["en", "pt-BR", "es"]) {
+      assert.match(locale(name)["share.audioMacOld"], /14\.2/);
+    }
+  });
+
+  it("names the Chrome tab way out on every Mac row that says no", () => {
+    for (const name of ["en", "pt-BR", "es"]) {
+      assert.match(locale(name)["share.audioMacUnavailableHint"], /Chrome/);
+      assert.match(locale(name)["share.audioMacOldHint"], /Chrome/);
+    }
+  });
+
+  it("lets the picker window take the Mac states, and main hands them over", () => {
+    assert.match(picker, /"explain-mac"/);
+    assert.match(picker, /"explain-mac-old"/);
+    assert.match(main, /shareAudioMac: t\("share\.audioMacUnavailable"\)/);
+    assert.match(main, /shareAudioMacOld: t\("share\.audioMacOld"\)/);
+    // The checkbox hint on a Mac also says the permission prompt is coming.
+    assert.match(main, /t\("share\.audioHintMac"\)/);
   });
 });
 
