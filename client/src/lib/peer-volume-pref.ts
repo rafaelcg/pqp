@@ -3,7 +3,7 @@
  *
  * `use-voice` keeps two maps, userId → 0..1: a person's voice and a person's
  * screen audio. They used to live only in memory, so every app restart and
- * every applied site update put everybody back at 100% (issue #1592).
+ * every applied site update put everybody back at 100% (issue 1592).
  *
  * Keyed on userId, never peer id: the server mints a fresh peer id on every
  * join, the user id is the person. Only levels that differ from 1 are kept,

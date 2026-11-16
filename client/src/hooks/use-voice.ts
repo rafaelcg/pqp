@@ -582,7 +582,7 @@ export interface VoiceState {
   occupancy: Record<string, VoiceParticipant[]>;
   /**
    * userId → 0..1 playback multiplier. Remembered in this browser across
-   * reloads (`peer-volume-pref.ts`); before #1592 it lasted only until the
+   * reloads (`peer-volume-pref.ts`); before issue 1592 it lasted only until the
    * page reloaded.
    */
   peerVolumes: Record<string, number>;
@@ -2073,7 +2073,7 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
   /** Webcam id for the next capture. Empty means the browser default. */
   let cameraDeviceId = "";
-  // What this browser remembered from an earlier session (#1592).
+  // What this browser remembered from an earlier session (issue 1592).
   const storedVolumes = loadPeerVolumes();
   let state: VoiceState = {
     status: "idle",
