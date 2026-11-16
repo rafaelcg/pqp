@@ -841,7 +841,7 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     );
     // The bus is its own capture: a silent retry of the display request does
     // not stop it from being attached.
-    expect(pick).toContain("if (linuxSound && options.audio !== false) {");
+    expect(pick).toContain("const triedLinuxBus = linuxSound && options.audio !== false;");
     expect(pick).not.toContain("options.audio !== false && !lostSound");
     // A share stopped during the attach is dropped, not previewed.
     expect(pick).toContain('picked.getVideoTracks()[0]?.readyState === "ended"');
