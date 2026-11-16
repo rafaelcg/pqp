@@ -213,15 +213,26 @@ export class ApiError extends Error {
   }
 }
 
+/** Every message `apiUnreachableMessage` has produced, so a screen can tell them apart. */
+const unreachableMessages = new Set<string>();
+
 function apiUnreachableMessage(cause?: string): string {
   const base = getApiBaseUrl();
-  if (!base) {
-    return (
-      cause ??
+  const message = !base
+    ? cause ??
       "No API backend at this origin. Host the API (e.g. Railway) and set VITE_API_URL / VITE_WS_URL, then rebuild."
-    );
-  }
-  return cause ?? `Cannot reach API at ${base}`;
+    : cause ?? `Cannot reach API at ${base}`;
+  unreachableMessages.add(message);
+  return message;
+}
+
+/**
+ * True when `message` is one of the English "cannot reach the API" lines this
+ * module builds. The boot failure screen shows the reader's own sentence in
+ * its place under the redesign and keeps the line for self-hosters.
+ */
+export function isApiUnreachableMessage(message: string): boolean {
+  return unreachableMessages.has(message);
 }
 
 async function request(

@@ -208,6 +208,7 @@ export function CallPickerSheet({
                     {entry.occupants.slice(0, 3).map((person, index) => (
                       <span key={person.id} className={cn("rounded-full", index > 0 && "-ml-2")} style={{ boxShadow: "0 0 0 2px var(--story-tray)" }}>
                         <UserAvatar
+                          ownPalette
                           name={person.displayName}
                           avatarUrl={null}
                           rounded="full"
@@ -291,6 +292,7 @@ export function MentionSheet({
               className="flex w-full items-center gap-3 rounded-[12px] px-2.5 py-2 text-left transition-colors hover:bg-[var(--story-field-fill)]"
             >
               <UserAvatar
+                ownPalette
                 name={person.displayName}
                 avatarUrl={person.avatarUrl}
                 rounded="full"

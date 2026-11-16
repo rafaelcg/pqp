@@ -3,22 +3,8 @@ import {
   VOICE_CLEAN_SETTINGS_SEEN_KEY,
   isVoiceCleanSettingsSeen,
   markVoiceCleanSettingsSeen,
-  shouldOfferVoiceCleanNudge,
   shouldShowVoiceCleanSettingsBadge,
-  voiceCleanNudgeDismissedPatch,
 } from "./voice-clean";
-
-function baseInput() {
-  return {
-    dismissed: false,
-    automated: false,
-    inCall: true,
-    micOn: true,
-    presentingWatchParty: false,
-    isDesktopViewport: true,
-    alreadyOn: false,
-  };
-}
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const map = new Map(Object.entries(initial));
@@ -29,80 +15,6 @@ function memoryStorage(initial: Record<string, string> = {}) {
     },
   };
 }
-
-describe("shouldOfferVoiceCleanNudge", () => {
-  it("offers the card when every condition is met", () => {
-    expect(shouldOfferVoiceCleanNudge(baseInput())).toBe(true);
-  });
-
-  it("never offers Voz limpa to a microphone already on it, by default or by choice", () => {
-    expect(
-      shouldOfferVoiceCleanNudge({ ...baseInput(), alreadyOn: true }),
-    ).toBe(false);
-  });
-
-  it("stays quiet once dismissed", () => {
-    expect(
-      shouldOfferVoiceCleanNudge({ ...baseInput(), dismissed: true }),
-    ).toBe(false);
-  });
-
-  it("never shows to an automated browser", () => {
-    expect(
-      shouldOfferVoiceCleanNudge({ ...baseInput(), automated: true }),
-    ).toBe(false);
-  });
-
-  it("requires being in a call", () => {
-    expect(
-      shouldOfferVoiceCleanNudge({ ...baseInput(), inCall: false }),
-    ).toBe(false);
-  });
-
-  it("requires the mic to be on", () => {
-    expect(shouldOfferVoiceCleanNudge({ ...baseInput(), micOn: false })).toBe(
-      false,
-    );
-  });
-
-  it("stays off the call bar while presenting a watch party", () => {
-    expect(
-      shouldOfferVoiceCleanNudge({
-        ...baseInput(),
-        presentingWatchParty: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not show on a narrow (phone) viewport", () => {
-    expect(
-      shouldOfferVoiceCleanNudge({ ...baseInput(), isDesktopViewport: false }),
-    ).toBe(false);
-  });
-
-  it("combines every rule rather than short-circuiting on the first true one", () => {
-    expect(
-      shouldOfferVoiceCleanNudge({
-        dismissed: true,
-        automated: true,
-        inCall: false,
-        micOn: false,
-        presentingWatchParty: true,
-        isDesktopViewport: false,
-        alreadyOn: true,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("voiceCleanNudgeDismissedPatch", () => {
-  it("stamps the instant it is called with", () => {
-    const now = new Date("2026-09-13T12:00:00.000Z");
-    expect(voiceCleanNudgeDismissedPatch(now)).toEqual({
-      voiceCleanNudgeDismissedAt: "2026-09-13T12:00:00.000Z",
-    });
-  });
-});
 
 describe("voice clean settings NOVO dot", () => {
   it("is unseen the first time, and remembers once marked", () => {
@@ -122,7 +34,7 @@ describe("voice clean settings NOVO dot", () => {
     ).toBe(false);
   });
 
-  it("clears the badge once the nudge was acted on", () => {
+  it("clears the badge for an account that answered the old nudge", () => {
     expect(
       shouldShowVoiceCleanSettingsBadge({
         settingsSeen: false,

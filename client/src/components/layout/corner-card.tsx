@@ -2,6 +2,8 @@ import { X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
 import { cn } from "@/lib/utils";
+import { X as XBold } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 
 /**
  * The one shell every corner card wears.
@@ -121,9 +123,15 @@ export function CornerCard({
         hero
           ? "absolute right-2 top-2 z-10 bg-ink/70 text-paper backdrop-blur-sm hover:bg-ink hover:text-paper"
           : "-mr-1 -mt-1 text-paper-muted hover:bg-ink-3 hover:text-paper",
+        // Round under the redesign: glass on a hero, a ghost on the card.
+        "redesign:rounded-full redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
+        hero
+          ? // Glass on a hero: dark in dark, light with a hairline in light.
+            "redesign:right-2.5 redesign:top-2.5 redesign:h-8 redesign:w-8 redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-[color:var(--glass-border)] redesign:[:root[data-theme=light]_&]:ring-1"
+          : "redesign:-mr-1.5 redesign:-mt-1.5 redesign:h-8 redesign:w-8 redesign:text-text-tertiary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text",
       )}
     >
-      <X className="h-3.5 w-3.5" aria-hidden />
+      <IconSwap off={X} on={XBold} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
     </button>
   );
 
@@ -142,24 +150,24 @@ export function CornerCard({
         leaving ? "animate-pop-out" : "animate-pop-in",
       )}
     >
-      <div className="relative overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)]">
+      <div className="relative overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] redesign:rounded-[var(--popover-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:shadow-[var(--popover-shadow)]">
         {hero && (
           <div
             aria-hidden
             // On a phone the card is the whole width of the screen, so a
             // 10rem hero is most of what the person sees; cap it there.
-            className="relative max-h-28 overflow-hidden bg-ink-1 sm:max-h-none"
+            className="relative max-h-28 overflow-hidden bg-ink-1 sm:max-h-none redesign:bg-[color:var(--popover-surface)]"
           >
             {hero}
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-2 to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-2 to-transparent redesign:from-[color:var(--popover-surface)]" />
           </div>
         )}
         {hero && closeButton}
-        <div className="p-4">
+        <div className="p-4 redesign:p-5">
           {(title || !hero) && (
             <div className="flex items-start gap-2">
               {title && (
-                <h2 className="min-w-0 flex-1 font-display text-sm font-bold tracking-tight text-paper">
+                <h2 className="min-w-0 flex-1 font-display text-sm font-bold tracking-tight text-paper redesign:text-[0.9375rem] redesign:text-text">
                   {title}
                 </h2>
               )}
@@ -167,12 +175,14 @@ export function CornerCard({
             </div>
           )}
           {body && (
-            <p className="mt-1.5 text-pretty text-sm leading-relaxed text-paper-muted">
+            <p className="mt-1.5 text-pretty text-sm leading-relaxed text-paper-muted redesign:text-text-secondary">
               {body}
             </p>
           )}
           {children}
-          {footer && <div className="mt-3">{footer}</div>}
+          {/* The shell owns the CTA's width: a footer's primary action carries
+              `data-cta`, and every one is the same size. */}
+          {footer && <div className="mt-3 redesign:[&_[data-cta]]:min-w-[7.5rem]">{footer}</div>}
         </div>
       </div>
     </aside>

@@ -18,7 +18,8 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 // Second-screen surfaces: each is its own chunk, fetched when first drawn.
 import {
   BotWizard,
@@ -127,7 +128,7 @@ import {
 import type { ReportTarget } from "@/components/chat/report-dialog";
 import {
   AppBootstrapError,
-  AppLoadingShell,
+  BootShellHold,
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
@@ -149,7 +150,6 @@ import type { ChannelSettingsSectionId } from "@/components/layout/channel-setti
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { DmToasts } from "@/components/dm/dm-toasts";
-import { WhatsNewPrompt } from "@/components/layout/whats-new-prompt";
 import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
@@ -167,32 +167,19 @@ import {
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
 import { ServerRail } from "@/components/layout/server-rail";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
-import { CargosHint } from "@/components/layout/cargos-hint";
-import {
-  SeasonalLookHint,
-  seasonalLookToOffer,
-} from "@/components/layout/seasonal-look-hint";
 import { NotifyOfferHint } from "@/components/layout/notify-offer-hint";
-import { BringFriendsServerProvider } from "@/components/layout/bring-friends-hint";
+import { BringFriendsServerProvider } from "@/components/layout/bring-friends-server";
 import { FeatureHintProvider } from "@/components/layout/feature-hint";
-import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
-import { QgHint } from "@/components/layout/qg-hint";
 import { ListingNudgeHint } from "@/components/communities/listing-nudge-hint";
 import {
   listingNudgeSeenPatch,
   shouldFetchListingNudge,
   wantsListingNudge,
 } from "@/lib/community-listing-nudge";
-import { ShortcutsHint } from "@/components/layout/shortcuts-hint";
-import {
-  VoiceCleanActivatedToast,
-  VoiceCleanHint,
-} from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { startHintConfig, useHintConfigSettled } from "@/lib/hint-config";
 import { useHintDiet } from "@/lib/hint-diet";
 import { hintsAreQuiet, useHintQuietSources } from "@/lib/hint-quiet";
-import { isDesktopApp } from "@/lib/desktop";
 import { createHistoryLoadTracker } from "@/lib/history-load-tracker";
 import {
   uniformJitterMs,
@@ -203,12 +190,7 @@ import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
   winningFeatureHint,
-  shouldOfferBringFriendsHint,
-  shouldOfferMusicFieldHint,
-  shouldOfferMusicHint,
-  shouldOfferCallDockHint,
   shouldOfferWatchPartyViewerHint,
-  shouldOfferWatchNowHint,
   useFeatureHintsSpent,
 } from "@/lib/feature-hints";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
@@ -217,28 +199,13 @@ import {
   moveMembersBit,
   moveOccupantSeat,
 } from "@/lib/voice-occupant-dnd";
-import { isAutomatedBrowser, isCargosHintSeen } from "@/lib/cargos-hint";
+import { isAutomatedBrowser } from "@/lib/hints";
 import { setSoundboardCatalogServer } from "@/lib/soundboard";
 import { isNotifyOfferSeen } from "@/lib/notify-offer-hint";
 import { startNotifyDefaultsConfig } from "@/lib/notify-defaults-config";
-import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
-import {
-  dismissPartyNewcomerStrip,
-  isNewcomerAccount,
-  isPartyNewcomerStripDismissed,
-  partyNewcomerStripVisible,
-  partyPhoneLayoutOn,
-  suppressAppInviteForNewcomer,
-} from "@/lib/party-newcomer";
-import {
-  shouldOfferVoiceCleanNudge,
-  voiceCleanNudgeDismissedPatch,
-} from "@/lib/voice-clean";
-import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
-import {
-  hasUnseenWhatsNew,
-  rememberWhatsNewFeed,
-} from "@/lib/whats-new-feed";
+import { partyPhoneLayoutOn } from "@/lib/party-newcomer";
+import { rememberWhatsNew } from "@/lib/whats-new";
+import { rememberWhatsNewFeed } from "@/lib/whats-new-feed";
 import { BotIntroHint } from "@/components/bots/bot-intro-hint";
 import { useBotInvite } from "@/lib/use-bot-invite";
 import { DiscordImportHost } from "@/components/layout/discord-import-host";
@@ -270,15 +237,6 @@ import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { useForumConfig } from "@/hooks/use-forum-config";
 import { useAppsSessionsSync } from "@/hooks/use-apps-sessions-sync";
 import { AppLauncher } from "@/components/apps/app-launcher";
-import { AppsHint } from "@/components/layout/apps-hint";
-import { isAppsHintSeen } from "@/lib/apps/apps-hint";
-import { ForumAnnouncementHint } from "@/components/layout/forum-announcement-hint";
-import {
-  forumAnnouncementTarget,
-  isForumAnnouncementSeen,
-  rememberForumAnnouncement,
-} from "@/lib/forum-announcement";
-import { useAppsConfig } from "@/hooks/use-apps-config";
 import { AppJoinHost } from "@/components/apps/app-join-host";
 import { toggleAppChat } from "@/components/apps/app-column";
 import {
@@ -314,6 +272,7 @@ import {
 } from "@/lib/watch-party-history-access";
 import { useWatchPartyHistoryAvailability } from "@/lib/use-watch-party-history-availability";
 import { useWatchParties } from "@/hooks/use-watch-parties";
+import { FRAME_REDESIGN, PANE_MAIN_REDESIGN, PANE_ROW_REDESIGN } from "@/components/ui/pane";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
   createServerWatchParty as apiCreateServerWatchParty,
@@ -369,8 +328,6 @@ import {
   type ChannelSidebarPreference,
 } from "@/lib/channel-sidebar-preference";
 import { useMdUp } from "@/hooks/use-md-up";
-import { useSmUp } from "@/hooks/use-sm-up";
-import { supportsScreenShare } from "@/components/voice/capabilities";
 import {
   formatBinding,
   supportsKeyBinding,
@@ -380,7 +337,11 @@ import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import { MusicComposer } from "@/components/voice/music-composer";
-import { setMusicOpen, useMusicDock } from "@/lib/music-store";
+import {
+  composerDrawsMusic,
+  useStageMusicPanel,
+} from "@/components/voice/music-stage-panel-store";
+import { setMusicOpen } from "@/lib/music-store";
 import {
   isCameraAtCap,
   isScreenShareAtCap,
@@ -391,8 +352,35 @@ import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import { useCallRating } from "@/hooks/use-call-rating";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
+import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
+import {
+  CalendarPlus as HeaderCalendarIcon,
+  CaretLeft as HeaderBackIcon,
+  ClockCounterClockwise as HeaderHistoryIcon,
+  DotsThree as HeaderMoreIcon,
+  GearSix as HeaderSettingsIcon,
+  List as HeaderMenuIcon,
+  Lock as HeaderLockIcon,
+  Phone as HeaderPhoneIcon,
+  PushPin as HeaderPinIcon,
+  Users as HeaderMembersIcon,
+  VideoCamera as HeaderVideoIcon,
+  CheckCircle as BannerCheckIcon,
+  Code as BannerCodeIcon,
+  HourglassMedium as BannerIdleIcon,
+  WarningCircle as BannerErrorIcon,
+} from "@phosphor-icons/react";
 import { BetaTag } from "@/components/ui/beta-tag";
+import { Icon } from "@/components/ui/icon";
+import {
+  PANE_HEADER_ACTION_ON_REDESIGN,
+  PANE_HEADER_ACTION_REDESIGN,
+  PANE_HEADER_DETAIL_REDESIGN,
+  PANE_HEADER_REDESIGN,
+  PANE_HEADER_TITLE_REDESIGN,
+} from "@/components/ui/pane-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { deleteDialogCopy } from "@/lib/channel-delete-copy";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { Seo } from "@/components/marketing/seo";
@@ -542,7 +530,6 @@ import {
 import { bringCrewStrip } from "@/lib/bring-crew";
 import { useBringCrew } from "@/lib/use-bring-crew";
 import { track, trackFirstAction } from "@/lib/track";
-import { firstRunDismissedPatch } from "@/lib/first-run";
 import {
   favoritesCollapseKey,
   favoritesForServer,
@@ -576,8 +563,6 @@ import { noteSignupCta, noteSignupReturn } from "@/lib/signup-assist";
 import { reportSignupConversion } from "@/lib/google-ads";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { BringCrewStrip } from "@/components/onboarding/bring-crew-strip";
-import { PartyNewcomerStrip } from "@/components/onboarding/party-newcomer-strip";
-import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
 import { DiscordImportNotice } from "@/components/onboarding/discord-import-notice";
 import { openDiscordImport } from "@/lib/discord-import-launcher";
 import { useDiscordImportExisting } from "@/lib/use-discord-import-existing";
@@ -612,15 +597,6 @@ import { ConversationsEmpty } from "@/components/conversations/conversations-emp
 import { trackDmOpen, trackDmStart, type DmDoor } from "@/lib/conversation-events";
 import { SEARCH_MESSAGES_EVENT } from "@/components/layout/channel-list";
 import {
-  dismissNewcomerInvite,
-  isNewcomerInviteDismissed,
-  isRecentNewcomer,
-  newcomerInviteVisible,
-  ownRoomCount,
-  startNewcomerInviteConfig,
-  useNewcomerInviteMoment,
-} from "@/lib/newcomer-invite";
-import {
   discordImportNoticeVisible,
   startDiscordImportNoticeConfig,
   useDiscordImportNoticeFlag,
@@ -647,6 +623,7 @@ import {
   conversationUnreadTotals,
   sortConversations,
   touchConversation,
+  unknownRingingConversationIds,
   unreadFromConversations,
   upsertConversation,
 } from "@/lib/conversations";
@@ -780,6 +757,7 @@ import { adoptThemePreference, themeToAdopt } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
+import { useRedesign } from "@/lib/redesign";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useUpdateOffered } from "@/lib/update-prompt-state";
@@ -855,14 +833,39 @@ import { openStoryComposer } from "@/lib/stories/ui-store";
 import { useStoriesEnabledFor } from "@/lib/stories/use-story-strip";
 import { EmulatorRoom } from "@/components/emulator/emulator-room";
 import { useEmulatorEnabledFor } from "@/lib/emulator/use-emulator-enabled";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
 }) => Promise<string | null>;
 
 /** Equal-width icon tiles in the chat header (pins, channel settings, call, roster). */
-const HEADER_ACTION_TILE =
-  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
+const HEADER_ACTION_TILE = cn(
+  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper",
+  PANE_HEADER_ACTION_REDESIGN,
+);
+
+/** A header tile's glyph: the Lucide one with the toggle off, Phosphor under the redesign. */
+function HeaderGlyph({ off, on, kind = "object" }: { off: ReactNode; on: PhosphorIcon; kind?: "object" | "symbol" }) {
+  return (
+    <>
+      <span className="contents redesign:hidden">{off}</span>
+      <Icon icon={on} kind={kind} size="sm" className="hidden h-[1.125rem] w-[1.125rem] redesign:block" />
+    </>
+  );
+}
+
+/** A green "join the call" pill in a header. */
+/**
+ * On a phone the join pill is its glyph alone (the button keeps its
+ * `aria-label`): the pill's words took the width the channel name needed, and
+ * the hamburger was crushed to 18px beside it.
+ */
+const HEADER_JOIN_PHONE_REDESIGN =
+  "redesign:max-sm:w-8 redesign:max-sm:justify-center redesign:max-sm:gap-0 redesign:max-sm:px-0";
+
+const HEADER_JOIN_REDESIGN =
+  "redesign:mr-1.5 redesign:h-8 redesign:rounded-full redesign:px-3.5 redesign:py-0 redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-pane-main";
 
 /**
  * A reconnect's message refetch (`transport.onReady`, `reconnected` branch)
@@ -1185,7 +1188,7 @@ function ClerkAppGate() {
   }, [desktop]);
 
   if (!isLoaded) {
-    return <AppLoadingShell label={t("app.loading.signingIn")} />;
+    return <BootShellHold />;
   }
 
   if (!isSignedIn) {
@@ -1501,6 +1504,7 @@ function MainAppContent({
   clerkAccount = null,
 }: MainAppContentProps) {
   const { t, locale } = useTranslation();
+  const redesign = useRedesign();
   const [user, setUser] = useState<User | null>(null);
   // The voice note player remembers its speed per account.
   useEffect(() => {
@@ -1536,9 +1540,6 @@ function MainAppContent({
    */
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
-  const [whatsNewUnread, setWhatsNewUnread] = useState(() =>
-    hasUnseenWhatsNew(),
-  );
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<DmSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
@@ -1564,14 +1565,6 @@ function MainAppContent({
    * effect beside the arrival intents).
    */
   const [pendingCreate, setPendingCreate] = useState<CreateIntent | null>(null);
-  /**
-   * What the newcomer invite strip hands Criar sala: a name already in the
-   * field and the `?ref=chama` its invite link carries. Null for every other
-   * door, and cleared when the dialog closes.
-   */
-  const [createServerPrefill, setCreateServerPrefill] = useState<{
-    name: string;
-  } | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   /**
    * The good-news counterpart of `appError`, in the same slot.
@@ -1637,17 +1630,6 @@ function MainAppContent({
     window.location.reload();
   }, []);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  // `party_newcomer_experience`: the one-line strip was closed on this
-  // device. Read once; the write is `dismissPartyNewcomerStrip`.
-  const [partyNewcomerStripClosed, setPartyNewcomerStripClosed] = useState(() =>
-    isPartyNewcomerStripDismissed(),
-  );
-  // `newcomer_invite_moment`: the "chama teus amigos" strip was closed on
-  // this device. Read once; the write is `dismissNewcomerInvite`.
-  const [newcomerInviteClosed, setNewcomerInviteClosed] = useState(() =>
-    isNewcomerInviteDismissed(),
-  );
-  const newcomerInviteMomentOn = useNewcomerInviteMoment();
   // `discord_import_notice`: the "veio do Discord?" card (`lib/discord-import-notice.ts`).
   const discordImportNoticeOn = useDiscordImportNoticeFlag();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1770,81 +1752,14 @@ function MainAppContent({
   const [gateHandoff, setGateHandoff] = useState(false);
   /** The wizard finished in this tab: the invitee's confetti fires on arrival. */
   const [justOnboarded, setJustOnboarded] = useState(false);
-  const [qgHintReady, setQgHintReady] = useState(false);
-  /** Whether the QG card WANTS the corner. `cornerHint` decides who gets it. */
-  const [qgHintWanted, setQgHintWanted] = useState(false);
-  /**
-   * Captured once per mount so recording the impression cannot drop the
-   * card mid-session (and cannot leave the slot empty while the next card
-   * waits). A refresh reads storage again and the queue moves on.
-   *
-   * The card calls `onDismiss` when it is closed, which is a different
-   * thing from its impression: it no longer wants the corner, and holding
-   * it for a card nobody can see buries every tip behind it.
-   */
-  const [wantsMobileBeta, setWantsMobileBeta] = useState(() =>
-    shouldShowMobileBetaHint(),
-  );
-  const [wantsWhatsNew, setWantsWhatsNew] = useState(
-    () => !isAutomatedBrowser() && !isWhatsNewSeen(),
-  );
-  const [wantsComposerFormatHint] = useState(() =>
-    featureHintEligible("composerFormat"),
-  );
-  const [wantsWatchPartyHint] = useState(() =>
-    featureHintEligible("watchParty"),
-  );
-  const [wantsWatchNowHint] = useState(() => featureHintEligible("watchNow"));
-  const [wantsBringFriendsHint] = useState(() =>
-    featureHintEligible("bringFriends"),
-  );
-  const [wantsMusicHint] = useState(() => featureHintEligible("music"));
-  const [wantsMusicFieldHint] = useState(() =>
-    featureHintEligible("musicField"),
-  );
-  // Open + whether a track is on, which is what the music hint's live half
-  // reads. The snapshot deliberately ignores position samples, so this does
-  // not put the playhead on App's render path.
-  const musicDock = useMusicDock();
-  const [wantsCallDockHint] = useState(() => featureHintEligible("callDock"));
-  // The cargos card decides for itself whether it was seen; the corner queue
-  // has to know too, or the corner stays "taken" by a card that never draws
-  // and every attached tip behind it (share, music) waits for good. Same for
-  // a card that HAS drawn and was then dismissed, which is what the
-  // `onDismiss` below is: on localhost `lib/hints.ts` remembers no dismissal
-  // on purpose, so this card wanted the corner on every load and the in-call
-  // tips could not be drawn once.
-  // The apps card: only where the `apps` flag is on for the open server, once.
-  const [wantsAppsHint, setWantsAppsHint] = useState(
-    () => !isAutomatedBrowser() && !isAppsHintSeen(),
-  );
-  const [wantsCargosHint, setWantsCargosHint] = useState(
-    () => !isAutomatedBrowser() && !isCargosHintSeen(),
-  );
-  // "O fórum abriu" (`lib/forum-announcement.ts`): whether the card is on
-  // screen (typing holds only its entrance), and a tick that re-reads the
-  // per-server stamp after one is written.
-  const [forumNewsShowing, setForumNewsShowing] = useState(false);
-  const [, setForumNewsStamps] = useState(0);
-  // The seasonal look invite (Halloween, Christmas): which look it is for, or
-  // null out of season, once seen this season, or once dismissed this load.
-  const [seasonalLookOffer, setSeasonalLookOffer] = useState(seasonalLookToOffer);
-  const dismissSeasonalLook = useCallback(() => setSeasonalLookOffer(null), []);
-  // The one-time "Ativar notificações" card. Like the cargos card it decides
-  // for itself whether it was seen, and the queue has to know too: a card that
-  // wants the corner and never draws would hold every tip behind it.
+  // The one-time "Ativar notificações" card. It decides for itself whether it
+  // was seen, and the queue has to know too: a card that wants the corner and
+  // never draws would hold every tip behind it.
   const [wantsNotifyOfferCard, setWantsNotifyOfferCard] = useState(
     () => !isAutomatedBrowser() && !isNotifyOfferSeen(),
   );
   const notifyOfferReady = useNotifyOfferReady();
-  const [wantsChannelPinHint] = useState(() =>
-    featureHintEligible("channelPin"),
-  );
-  const [wantsForumHint] = useState(() => featureHintEligible("forum"));
   const [wantsJamWallHint] = useState(() => featureHintEligible("jamWall"));
-  const [wantsShortcutsHint, setWantsShortcutsHint] = useState(() =>
-    featureHintEligible("shortcuts") && supportsKeyBinding(),
-  );
   // Dismissing an attached hint writes to a set in `lib/feature-hints.ts`
   // that `winningFeatureHint` reads while this renders. Subscribing here is
   // what makes the next tip arrive on that click rather than on whatever
@@ -1856,11 +1771,6 @@ function MainAppContent({
   useHintDiet();
   const hintQuietSources = useHintQuietSources();
   const hintConfigSettled = useHintConfigSettled();
-  const [shortcutsQuietReady, setShortcutsQuietReady] = useState(false);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setShortcutsQuietReady(true), 1600);
-    return () => window.clearTimeout(timer);
-  }, []);
   const [membersOpen, setMembersOpen] = useState(false);
   const [serverSettingsSection, setServerSettingsSection] = useState<
     "roles" | "bots" | undefined
@@ -1996,10 +1906,14 @@ function MainAppContent({
       // The seated surface and the audience surface share that one answer
       // (see `isWatchPartySplit`): a person who flips it while watching
       // should not have it flip back the moment they take a seat.
+      // A server voice call under the redesign keeps its own answer too: its
+      // default is the chat beside the cards, a DM call's is stacked.
       const next: CallSplitPreference =
         kind === "watch" || kind === "watch-audience"
           ? { ...previous, watchOrientation: flipped }
-          : { ...previous, orientation: flipped };
+          : kind === "room"
+            ? { ...previous, roomOrientation: flipped }
+            : { ...previous, orientation: flipped };
       saveCallSplit(next);
       return next;
     });
@@ -2008,11 +1922,6 @@ function MainAppContent({
   // The channel list as a strip of icons. `auto` follows the share until
   // somebody touches the toggle; after that it is theirs.
   const columnLayout = useMdUp();
-  // Voz limpa nudge: the card only shows `sm` and up (docs/ONBOARDING.md —
-  // below it the NOVO dot in Settings is the discoverability instead).
-  const voiceCleanDesktopViewport = useSmUp();
-  const [voiceCleanActivatedToast, setVoiceCleanActivatedToast] =
-    useState(false);
   const [channelSidebar, setChannelSidebar] =
     useState<ChannelSidebarPreference>("auto");
   const collapsedCategories = useCollapsedCategories();
@@ -4119,6 +4028,20 @@ function MainAppContent({
   const loadConversationsRef = useRef(loadConversations);
   loadConversationsRef.current = loadConversations;
 
+  // A first call from somebody this account has never talked to rings before
+  // the conversation is in this device's list: the server created it for the
+  // caller, and nothing told us. Fetch it as the ring arrives, so Atender lands
+  // on a thread that exists and the sidebar already lists it.
+  const ringingUnknownConversations = unknownRingingConversationIds(
+    voiceState.incomingCalls,
+    conversations,
+  ).join(",");
+  useEffect(() => {
+    if (ringingUnknownConversations) {
+      void loadConversationsRef.current();
+    }
+  }, [ringingUnknownConversations]);
+
   /**
    * The people the open channel can name. A conversation is closed: everyone
    * who could be mentioned in one is already in it, so there is nobody to fetch
@@ -4294,6 +4217,7 @@ function MainAppContent({
       }
       map.set(person.id, {
         username: person.username,
+        handle: person.handle ?? null,
         customStatus: person.customStatus ?? null,
       });
     }
@@ -7560,9 +7484,7 @@ function MainAppContent({
     setDirectoryOpen(false);
     setWhatsNewOpen(true);
     rememberWhatsNewFeed();
-    setWhatsNewUnread(false);
     rememberWhatsNew();
-    setWantsWhatsNew(false);
     setMobileNavOpen(false);
   }
 
@@ -8725,27 +8647,10 @@ function MainAppContent({
   setJamViewer(user?.id ?? null);
   const jamSidebar = useJamSidebar(channels);
   const jamHintContext = useJamHintContext();
-  // Opening a forum by any route (the list, a link, the card) is the "O fórum
-  // abriu" card done for that server: nobody needs to be told about a forum
-  // they are reading. Only while the card is live: with the flag off nothing
-  // is stored at all.
-  const openForumServerId =
-    selection.kind === "server" &&
-    forumConfig.announce &&
-    channels.find((c) => c.id === selectedChannelId)?.type === "forum"
-      ? selection.serverId
-      : null;
-  useEffect(() => {
-    if (openForumServerId && !isForumAnnouncementSeen(openForumServerId)) {
-      rememberForumAnnouncement(openForumServerId);
-      setForumNewsStamps((n) => n + 1);
-    }
-  }, [openForumServerId]);
   // Apps: who this tab is, the live sessions of the open server, and how a
   // join leaves the page (`app-join` over the socket until the join sheet and
   // the pane take it over).
   useAppsSessionsSync(selectedServerId, channels);
-  const appsHere = useAppsConfig(selectedServerId);
   useEffect(() => {
     setAppsViewer(user?.id ?? null);
   }, [user?.id]);
@@ -8993,6 +8898,12 @@ function MainAppContent({
   ) {
     voiceServerIdRef.current = null;
     pendingVideoCallRef.current = withVideo ? channelId : null;
+    // Answering a first call from a stranger: the conversation may not be in the
+    // list yet (the ring can beat the fetch above). The thread opens only once
+    // the list has it; selecting an unknown id lands on Amigos instead.
+    if (!conversationsRef.current.some((one) => one.channelId === channelId)) {
+      await loadConversations();
+    }
     void selectConversation(channelId);
     refreshIceServers();
     const options = {
@@ -9356,29 +9267,6 @@ function MainAppContent({
     [loadConversations, selectConversation, sentSince],
   );
 
-  /**
-   * The first-run checklist is answered — hidden by hand, or finished.
-   *
-   * Optimistic and unawaited, for the same reason `finish()` in the wizard is:
-   * the card must go on the click, and a failed write costs one repeat of a
-   * dismissible card rather than a dialog that looks frozen. The local `user` is
-   * patched first so `shouldShowFirstRun` goes false immediately — that is also
-   * what makes this safe to call from the stamp-on-complete effect, which stops
-   * asking as soon as the preference is present.
-   */
-  const settleFirstRun = useCallback(() => {
-    const patch = firstRunDismissedPatch();
-    setUser((previous) =>
-      previous
-        ? { ...previous, preferences: { ...previous.preferences, ...patch } }
-        : previous,
-    );
-    void updatePreferences(patch).catch(() => {
-      // Nothing to recover. The next bootstrap re-reads the truth, and the worst
-      // case is the card offered once more.
-    });
-  }, []);
-
   // Two switches gate the live Baú feed: the instance flag and this
   // server's own opt-in. A community still opens Overview without them
   // (identity header, empty feed). A private hall still needs both.
@@ -9672,8 +9560,8 @@ function MainAppContent({
   ]);
 
   /**
-   * The Baú intro card is put away. Same optimistic shape as `settleFirstRun`:
-   * the local `user` is patched first so the card goes on the click.
+   * The Baú intro card is put away. Optimistic and unawaited: the local `user`
+   * is patched first so the card goes on the click.
    */
   const settleCommunityHomeIntro = useCallback(() => {
     const patch = { communityHomeIntroDismissedAt: new Date().toISOString() };
@@ -9686,75 +9574,6 @@ function MainAppContent({
       // Worst case the card is offered once more on the next bootstrap.
     });
   }, []);
-
-  /**
-   * The Voz limpa nudge is put away — same shape as `settleCommunityHomeIntro`,
-   * and it is what both "Ativar" and "Depois" call: either one is an answer,
-   * so neither should leave the card able to come back.
-   */
-  const settleVoiceCleanNudge = useCallback(() => {
-    const patch = voiceCleanNudgeDismissedPatch();
-    setUser((previous) =>
-      previous
-        ? { ...previous, preferences: { ...previous.preferences, ...patch } }
-        : previous,
-    );
-    void updatePreferences(patch).catch(() => {
-      // Worst case the card is offered once more on the next qualifying call.
-    });
-  }, []);
-
-  /**
-   * "Ativar" on the Voz limpa nudge: the same live-apply path Settings uses
-   * for the noise-suppression select, so a call already in progress hears
-   * the switch the same way it would from the modal. A plain function, not a
-   * `useCallback` — it calls `handleAudioSettingsLive`, itself redefined every
-   * render, and closes over `localSettings` directly rather than chasing that
-   * identity through a dependency array.
-   */
-  async function activateVoiceClean() {
-    // Dismissing the card is "the nudge was answered" and happens either
-    // way, immediately — same as "Depois". The toast is a different claim
-    // ("it is ON"), so it waits for confirmation below, and is not shown at
-    // all when the confirmation says the request fell back.
-    settleVoiceCleanNudge();
-    const next: LocalSettings = {
-      ...localSettings,
-      micProcessing: {
-        ...localSettings.micProcessing,
-        noiseSuppression: "advanced",
-      },
-      // "Ativar" is a choice, so it is stored and outlives the flag.
-      noiseSuppressionChosen: true,
-    };
-    setLocalSettings(next);
-    saveLocalSettings(next);
-    // NOT `handleAudioSettingsLive`: it fires `voice.setMicProcessing`
-    // without awaiting it, and `setMicProcessing` no-ops on a processing
-    // value that already matches `audioOptions.processing` — so calling it a
-    // second time ourselves, to await it, would see its own first call's
-    // synchronous update and return immediately without ever waiting for the
-    // real pipeline swap. One call, awaited here, is what lets this function
-    // tell a real switch from a fallback: `createMicPipeline`'s "browser
-    // cannot run RNNoise" path (used whether or not a call is live — it is a
-    // no-op pipeline swap when idle, same as every other processing change)
-    // stamps this exact notice, so seeing it right after the call settles
-    // means the request did not actually turn Voz limpa on, and the toast
-    // must not say it did — the notice banner on the call stage already says
-    // why.
-    await voice.setMicProcessing(next.micProcessing);
-    if (voice.getState().notice !== t("voice.notice.noiseSuppressionUnsupported")) {
-      setVoiceCleanActivatedToast(true);
-    }
-  }
-
-  useEffect(() => {
-    if (!voiceCleanActivatedToast) {
-      return;
-    }
-    const timer = setTimeout(() => setVoiceCleanActivatedToast(false), 3000);
-    return () => clearTimeout(timer);
-  }, [voiceCleanActivatedToast]);
 
   /**
    * Walk in, rather than asking whether they meant to.
@@ -10579,24 +10398,20 @@ function MainAppContent({
     () => (notifyDefaultsUserId ? startNotifyDefaultsConfig() : undefined),
     [notifyDefaultsUserId],
   );
-  // `newcomer_invite_moment`, same refresh pass. Asked only once the age
-  // gate has passed: before that every `/api` route answers 403, and the
-  // account this strip is for is exactly the one that just passed it, in this
-  // very session, with no focus change to trigger a refresh afterwards.
-  const newcomerInviteUserId = ageGate ? null : (user?.id ?? null);
+  // `discord_import_notice`, same refresh pass. Asked only once the age gate
+  // has passed: before that every `/api` route answers 403, and the account
+  // this is for is exactly the one that just passed it, in this very session,
+  // with no focus change to trigger a refresh afterwards.
+  const onboardingConfigUserId = ageGate ? null : (user?.id ?? null);
   useEffect(
-    () => (newcomerInviteUserId ? startNewcomerInviteConfig() : undefined),
-    [newcomerInviteUserId],
-  );
-  // `discord_import_notice`, the same config route and the same gate.
-  useEffect(
-    () => (newcomerInviteUserId ? startDiscordImportNoticeConfig() : undefined),
-    [newcomerInviteUserId],
+    () =>
+      onboardingConfigUserId ? startDiscordImportNoticeConfig() : undefined,
+    [onboardingConfigUserId],
   );
   // `hint_diet` and `hint_budget`, the same config route and the same gate.
   useEffect(
-    () => (newcomerInviteUserId ? startHintConfig() : undefined),
-    [newcomerInviteUserId],
+    () => (onboardingConfigUserId ? startHintConfig() : undefined),
+    [onboardingConfigUserId],
   );
   // "Aparecer no diretório" (`community_listing_nudge`, `lib/community-
   // listing-nudge.ts`): asked once per page for an owner whose room has a
@@ -10809,11 +10624,6 @@ function MainAppContent({
     return () => setWatchingParty(false);
   }, [watchingAParty]);
 
-  const handleQgHintWantedChange = useCallback((wanted: boolean) => {
-    setQgHintReady(true);
-    setQgHintWanted(wanted);
-  }, []);
-
   useEffect(() => {
     const conversation =
       selection.kind === "dm" && selectedChannelId
@@ -11000,6 +10810,9 @@ function MainAppContent({
       }
     : null;
 
+  // Read before the early returns below, for `musicBarInComposer`.
+  const stageDrawsMusic = useStageMusicPanel(voiceState.voiceChannelId);
+
   if (bootstrapError) {
     return (
       <AppBootstrapError
@@ -11071,7 +10884,7 @@ function MainAppContent({
   }
 
   if (!bootstrapReady) {
-    return <AppLoadingShell label={t("app.loading.servers")} />;
+    return <BootShellHold />;
   }
 
   /**
@@ -11272,35 +11085,6 @@ function MainAppContent({
   }
 
   /**
-   * `newcomer_invite_moment` (`lib/newcomer-invite.ts`): somebody new, with
-   * no friends and no room of their own, standing in a public community (the
-   * QG they were placed in). Off, this is false and nothing differs.
-   */
-  const newcomerInvite = newcomerInviteVisible({
-    flagOn: newcomerInviteMomentOn,
-    // `justOnboarded` for the session that just finished the wizard, whose
-    // local `user` does not carry `onboardedAt` yet (see `partyNewcomerFacts`).
-    newcomer:
-      justOnboarded || isRecentNewcomer(user?.preferences?.onboardedAt),
-    friendsLoaded: !friends.loading && friends.error === null,
-    friendCount: friends.data.friends.length + friends.data.outgoing.length,
-    ownRooms: ownRoomCount(servers, user?.id ?? null),
-    inCommunity: selectedServer?.isCommunity === true,
-    partyLive: Boolean(selectedPartyLive),
-    dismissed: newcomerInviteClosed,
-  });
-  function openNewcomerInviteCreate() {
-    const first = (user?.displayName ?? "").trim().split(/\s+/)[0] ?? "";
-    setCreateServerPrefill({
-      name: first
-        ? t("newcomerInvite.roomName", { name: first }).slice(0, 100)
-        : "",
-    });
-    setCreateServerStart({ mode: "name", source: null });
-    setShowCreateServer(true);
-  }
-
-  /**
    * `discord_import_notice` (`lib/discord-import-notice.ts`): the invitation
    * to import a Discord server, in the main text channel of a small, new
    * server somebody manages. It takes the arrival strip's slot and yields to
@@ -11401,19 +11185,6 @@ function MainAppContent({
         />
       );
     }
-    // A newcomer alone in a public community: the one thing that changes that
-    // is bringing somebody, so this strip takes the arrival strip's place.
-    if (surface !== "party" && newcomerInvite) {
-      return (
-        <NewcomerInviteStrip
-          onInvite={openNewcomerInviteCreate}
-          onDismiss={() => {
-            dismissNewcomerInvite();
-            setNewcomerInviteClosed(true);
-          }}
-        />
-      );
-    }
     const discordNotice =
       surface === "text" ? renderDiscordImportNotice(channelName) : null;
     if (
@@ -11474,7 +11245,12 @@ function MainAppContent({
       ? inSelectedWatchPartyCall
         ? "watch"
         : "watch-audience"
-      : "call";
+      : redesign &&
+          selectedChannel?.kind === "server" &&
+          voiceState.voiceChannelId === selectedChannel.id &&
+          voiceState.status !== "idle"
+        ? "room"
+        : "call";
   /** Either watch-party pane kind — the one distinction most of the chrome
    * around the split actually cares about is "is this a watch party room at
    * all", not which of its two surfaces is currently up. */
@@ -11490,13 +11266,6 @@ function MainAppContent({
     flagOn: liveHlsConfig?.newcomerExperience,
     partyLive: Boolean(selectedPartyLive),
     audience: splitKind === "watch-audience",
-    // `justOnboarded` because the wizard does not patch the local `user`
-    // (`finish()` in `onboarding-flow.tsx`): in the very session a sign-up
-    // finishes, `onboardedAt` is on the server and not yet in this state, and
-    // that session is exactly the one this is for. A reload reads it back.
-    newcomer:
-      justOnboarded || isNewcomerAccount(user?.preferences?.onboardedAt),
-    dismissed: partyNewcomerStripClosed,
   };
   const partyPhoneLayout = partyPhoneLayoutOn(partyNewcomerFacts);
   const phoneShell = phoneShellAllowed && !partyPhoneLayout;
@@ -11516,9 +11285,6 @@ function MainAppContent({
       (phoneTab === "servidores" && (phoneServersOpen || mobileNavOpen)) ||
       (phoneTab === "conversas" && mobileNavOpen));
 
-  const partyNewcomerStrip = partyNewcomerStripVisible(partyNewcomerFacts);
-  const hideDownloadHintForNewcomer =
-    suppressAppInviteForNewcomer(partyNewcomerFacts);
   /**
    * THE PARTY BAR IS THE CHANNEL HEADER WHILE A PARTY IS LIVE (2026-09-18,
    * `docs/plans/WATCH_PARTY_UI.md` pass 1). Eight regions were counted on
@@ -11613,6 +11379,12 @@ function MainAppContent({
   );
   const musicInComposer =
     voiceState.status === "connected" && viewingThisCall;
+  // The room stage draws the player itself under the redesign (call-stage's
+  // `musicPanel`), and then the composer leaves its bar out.
+  const musicBarInComposer = composerDrawsMusic(
+    musicInComposer,
+    stageDrawsMusic,
+  );
   // The two things the apps launcher offers as shortcuts rather than apps: the
   // music queue (it lives in the call this person is in) and the server's
   // watch party channel (open the one there is, or create it where allowed).
@@ -11648,80 +11420,14 @@ function MainAppContent({
     voiceState.voiceChannelId &&
       conversations.some((one) => one.channelId === voiceState.voiceChannelId),
   );
-  const voiceRoomSize = voiceState.voiceChannelId
-    ? (voiceState.occupancy[voiceState.voiceChannelId] ?? []).length
-    : 0;
   const voiceServerId = voiceIsDmCall ? null : voiceServerIdRef.current;
   const canCreateInviteForVoice =
     voiceServerId !== null &&
     voiceServerId === selectedServerId &&
     perms.can(Permission.CREATE_INVITE);
-  /**
-   * Whose first minutes these are, for the one-time hint under the watch-now
-   * strip: they arrived in this very server in this session (an invite, a
-   * community link), or their account finished first-run in the last day.
-   * Somebody who has seen a hundred of these strips does not need it
-   * explained.
-   */
-  const watchNowNewcomer =
-    (arrivalServerId !== null && arrivalServerId === selectedServerId) ||
-    justOnboarded ||
-    isNewcomerAccount(user?.preferences?.onboardedAt);
+  // The watch party host and viewer coach marks are drawn by their own panes;
+  // the Jam wall's is the one App-level entry.
   const attachedFeatureHint = winningFeatureHint({
-    // Under the watch-now strip, once ever, for somebody who just arrived.
-    watchNow: shouldOfferWatchNowHint({
-      seen: !wantsWatchNowHint,
-      automated: false,
-      bannerVisible: watchNowStreams.length > 0,
-      newcomer: watchNowNewcomer,
-    }),
-    // Rendered by `CallControls` in the dock's hint slot; dismissed by
-    // Entendi or by pressing any control in the dock.
-    callDock: shouldOfferCallDockHint({
-      seen: !wantsCallDockHint,
-      automated: false,
-      dockVisible: callDockOnScreen,
-      connected: voiceState.status === "connected",
-    }),
-    watchParty:
-      wantsWatchPartyHint &&
-      voiceState.status === "connected" &&
-      voiceState.canStream &&
-      supportsScreenShare(),
-    bringFriends: shouldOfferBringFriendsHint({
-      seen: !wantsBringFriendsHint,
-      automated: false,
-      presenting: voiceState.status === "connected" && voiceState.isSharingScreen,
-      inServer: voiceServerId !== null,
-      canInvite: canCreateInviteForVoice,
-      roomSize: voiceRoomSize,
-    }),
-    // Before `music` in the order: they have the panel open and are looking
-    // at the field, which beats a card pointing at the tile they just used.
-    musicField: shouldOfferMusicFieldHint({
-      seen: !wantsMusicFieldHint,
-      automated: false,
-      filaOpen: musicDock.open,
-      canAdd: voiceState.canSpeak,
-    }),
-    music: shouldOfferMusicHint({
-      seen: !wantsMusicHint,
-      automated: false,
-      connected: voiceState.status === "connected",
-      canSpeak: voiceState.canSpeak,
-      playing: musicDock.on,
-      filaOpen: musicDock.open,
-    }),
-    composerFormat:
-      wantsComposerFormatHint &&
-      selectedChannel?.type === "text" &&
-      !communityHomeOpen,
-    channelPin:
-      wantsChannelPinHint &&
-      selection.kind === "server" &&
-      Boolean(selectedServerId),
-    // The pane gates it further (posts on screen, may post, not paused).
-    forum: wantsForumHint && selectedChannel?.type === "forum",
     // The wall and the studio say when they are on screen (`lib/jam-hint-context.ts`).
     jamWall: wantsJamWallHint && jamHintContext.wall && !jamHintContext.studio,
   });
@@ -11734,25 +11440,6 @@ function MainAppContent({
   shareFeedsHlsRef.current = voiceState.voiceChannelId
     ? voiceChannel?.type === "watch_party"
     : selectedChannel?.type === "watch_party";
-  // Hoisted above `sidebarIconsOnly`'s original spot (near the channel-list
-  // toggle further down) so the Voz limpa eligibility below can read it: the
-  // nudge is rendered only in the wide sidebar footer (`!compact` in
-  // `sidebarFooter`), so a compact rail must not be able to hold the corner
-  // queue's `voiceClean` slot for a card nothing mounts.
-  //
-  // `sidebarIconsOnly` is provably `!compact`'s complement for every render
-  // that can reach `VoiceCleanHint`: `sidebarFooter` has exactly three call
-  // sites, and `sidebarFooter(sidebarIconsOnly)` on `ChannelList` is the
-  // only one that can ever pass `compact={true}` — the other two
-  // (`DmList`, `WhatsNewView`) call `sidebarFooter()` with no argument, so
-  // their `compact` is always `false` regardless of `sidebarIconsOnly`.
-  // Those three call sites are also why the footer carries no music embed:
-  // two of them can be mounted at once (the sidebar stays mounted under
-  // Novidades), and two embeds is two iframes playing the same track.
-  // Gating `wantsVoiceCleanHint` on `!sidebarIconsOnly` is therefore never
-  // looser than the render guard for any of the three: it can only be
-  // *stricter* than necessary on the two branches where compact never
-  // applies, never looser than the one branch where it does.
   const watchingAShare =
     voiceState.status === "connected" &&
     voiceState.screenSharePeerIds.some(
@@ -11764,19 +11451,6 @@ function MainAppContent({
     watchingAShare,
     columnLayout,
   });
-  const wantsVoiceCleanHint =
-    !sidebarIconsOnly &&
-    shouldOfferVoiceCleanNudge({
-      dismissed: Boolean(user?.preferences?.voiceCleanNudgeDismissedAt),
-      automated: isAutomatedBrowser(),
-      inCall: voiceState.status === "connected",
-      micOn: !voiceState.isMuted,
-      presentingWatchParty:
-        voiceChannel?.type === "watch_party" && voiceState.isSharingScreen,
-      isDesktopViewport: voiceCleanDesktopViewport,
-      // Already on it, by default or by choice: nothing to offer.
-      alreadyOn: localSettings.micProcessing.noiseSuppression === "advanced",
-    });
   /** A live party, or the watch-now strip: no campaign card takes the corner. */
   const campaignsYield =
     Boolean(selectedPartyLive) || watchNowStreams.length > 0;
@@ -11801,95 +11475,22 @@ function MainAppContent({
       dialogOpen: hintQuietSources.dialogOpen,
     },
   });
-  /**
-   * "O fórum abriu" (`lib/forum-announcement.ts`): the forum channel to offer
-   * a member of the open server, or null. Its own gate holds it in a call, a
-   * share, an app and over a party whatever `hint_budget` says; the queue
-   * below still decides whether it gets the corner.
-   */
-  const forumNewsServerId =
-    selection.kind === "server" && forumConfig.announce ? selection.serverId : null;
-  const forumNewsChannelId = forumNewsServerId
-    ? forumAnnouncementTarget({
-        announce: forumConfig.announce,
-        member: servers.some((s) => s.id === forumNewsServerId),
-        forumChannelId: channels.find((c) => c.type === "forum")?.id ?? null,
-        viewingForum: selectedChannel?.type === "forum",
-        seen: isForumAnnouncementSeen(forumNewsServerId),
-        automated: isAutomatedBrowser(),
-        inCall: voiceState.status !== "idle",
-        sharing: voiceState.isSharingScreen || watchingAShare,
-        appRunning: hintQuietSources.appRunning,
-        campaignsYield,
-        arriving: arrivalServerId === forumNewsServerId,
-        typing: hintQuietSources.composerBusy,
-        showing: forumNewsShowing,
-      })
-    : null;
-  const closeForumNews = (open: boolean) => {
-    if (!forumNewsServerId) {
-      return;
-    }
-    rememberForumAnnouncement(forumNewsServerId);
-    setForumNewsStamps((n) => n + 1);
-    if (open && forumNewsChannelId) {
-      void selectChannel(forumNewsChannelId);
-    }
-  };
   const cornerHint = winningCornerHint(
     {
       communityHomePost: Boolean(
         communityHomePostToast &&
           communityHomePostToast.serverId === selectedServerId,
       ),
-      // NO CAMPAIGN CARDS OVER A LIVE PARTY. QG, the phone app, What's new,
-      // cargos and shortcuts all wait until the person is not watching a film.
-      // The phone-app card is the sharp one, being a way out of the page: 8 of
-      // the 51 phone sessions MoonKase's link created mid-show on 2026-09-26
-      // went to /android instead of the party. Holding only that one would hand
-      // the corner to the next card in line, so the whole tail yields. The
-      // update notice, a Baú post and the voice nudge are not campaigns.
-      //
-      // THE WATCH-NOW STRIP IS THE SAME CASE. While it is on screen a stream is
-      // live in this server and the strip is the one thing the newcomer is
-      // being asked to do; a corner card beside it is a second request, and the
-      // first thing a stranger is told must not be "join the QG" (2026-10-04,
-      // Filminho). It also keeps its own one-time hint, an attached card, from
-      // yielding to a campaign for the whole film.
-      // A moment, not a campaign, but still a nudge: not over a live film.
+      // NO NUDGE OVER A LIVE PARTY OR THE WATCH-NOW STRIP. While a film or a
+      // stream is on screen it is the one thing the person is being asked to
+      // do; a corner card beside it is a second request (2026-10-04,
+      // Filminho). A Baú post is news, not a nudge, so it is not held.
       notifyOffer: wantsNotifyOfferCard && notifyOfferReady && !campaignsYield,
-      qg: qgHintWanted && !campaignsYield,
       listingNudge: wantsListingNudge({
         hasCandidate: listingNudge !== null,
         closed: listingNudgeClosed,
         campaignsYield,
       }),
-      forumNews: forumNewsChannelId !== null && qgHintReady,
-      voiceClean: wantsVoiceCleanHint,
-      seasonalLook:
-        seasonalLookOffer !== null && qgHintReady && !campaignsYield,
-      mobileBeta: wantsMobileBeta && !campaignsYield,
-      whatsNew: wantsWhatsNew && !campaignsYield,
-      // News about a button in the composer: only where the platform is on for
-      // the server being looked at, in a channel that has the button.
-      appsNews:
-        wantsAppsHint &&
-        appsHere.enabled &&
-        appsHere.apps.length > 0 &&
-        selectedChannel?.kind === "server" &&
-        (selectedChannel.type === "text" || selectedChannel.type === "voice") &&
-        qgHintReady &&
-        !campaignsYield,
-      cargos:
-        wantsCargosHint &&
-        qgHintReady &&
-        !campaignsYield &&
-        Boolean(canManageRoles && selectedServerId),
-      shortcuts:
-        wantsShortcutsHint &&
-        shortcutsQuietReady &&
-        !campaignsYield &&
-        attachedFeatureHint === null,
     },
     { quiet: hintsQuiet },
   );
@@ -11903,10 +11504,7 @@ function MainAppContent({
   // words inline).
   const effectiveCornerHint = dmToastActive || jamHintContext.studio ? null : cornerHint;
   const liveAttachedHint =
-    !hintsQuiet &&
-    (effectiveCornerHint === null || effectiveCornerHint === "shortcuts")
-      ? attachedFeatureHint
-      : null;
+    !hintsQuiet && effectiveCornerHint === null ? attachedFeatureHint : null;
   /** The conversation the active call lives in, when it is a DM call. */
   const voiceConversation = voiceState.voiceChannelId
     ? (conversations.find(
@@ -12082,18 +11680,6 @@ function MainAppContent({
             requestScreenShare();
           }}
           onOpen={() => void openVoiceChannel()}
-          shareHintEnabled={
-            liveAttachedHint === "watchParty" &&
-            !(
-              viewingThisCall &&
-              voiceState.canSpeak &&
-              !isDesktopApp() &&
-              supportsScreenShare()
-            )
-          }
-          bringFriendsHintEnabled={
-            liveAttachedHint === "bringFriends" && !viewingThisCall
-          }
           onLeave={() => voice.leave()}
           // The call's own hang-up is on screen in the dock, or in the
           // column beside an app (which has no dock), so the rail's goes.
@@ -12103,23 +11689,9 @@ function MainAppContent({
           compact={compact}
         />
       )}
-      {/* Anchored above the user bar, never inside the icons-only rail:
-          `layout="inline"` clamps to the parent width, and 72px has no room
-          for either the card or the toast. */}
-      {!compact && (
-        <>
-          <VoiceCleanHint
-            enabled={cornerHint === "voiceClean"}
-            onActivate={activateVoiceClean}
-            onDismiss={settleVoiceCleanNudge}
-          />
-          <VoiceCleanActivatedToast show={voiceCleanActivatedToast} />
-        </>
-      )}
       {userPanel && (
       <UserPanel
         compact={compact}
-        hideDownloadHint={hideDownloadHintForNewcomer}
         displayName={user?.displayName ?? "User"}
         tag={user?.tag ?? null}
         handle={user?.handle ?? null}
@@ -12234,7 +11806,7 @@ function MainAppContent({
                 aria-label={t("watchPartySchedule.header.schedule")}
                 onClick={() => setScheduleSheetOpen(true)}
               >
-                <CalendarClock className="h-4 w-4" />
+                <HeaderGlyph off={<CalendarClock className="h-4 w-4" />} on={HeaderCalendarIcon} />
               </button>
             </Tooltip>
           )}
@@ -12244,7 +11816,7 @@ function MainAppContent({
               className={HEADER_ACTION_TILE}
               onClick={() => setPinsOpen(true)}
             >
-              <Pin className="h-4 w-4" />
+              <HeaderGlyph off={<Pin className="h-4 w-4" />} on={HeaderPinIcon} />
             </button>
           </Tooltip>
           {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
@@ -12258,7 +11830,7 @@ function MainAppContent({
                   setWatchPartyHistoryChannelId(selectedChannel.id)
                 }
               >
-                <History className="h-4 w-4" />
+                <HeaderGlyph off={<History className="h-4 w-4" />} on={HeaderHistoryIcon} />
               </button>
             </Tooltip>
           )}
@@ -12278,7 +11850,7 @@ function MainAppContent({
                   })
                 }
               >
-                <Settings className="h-4 w-4" />
+                <HeaderGlyph off={<Settings className="h-4 w-4" />} on={HeaderSettingsIcon} />
               </button>
             </Tooltip>
           )}
@@ -12296,6 +11868,7 @@ function MainAppContent({
                 className={cn(
                   HEADER_ACTION_TILE,
                   memberSidebar.open && !openThread && "text-paper",
+                  memberSidebar.open && !openThread && PANE_HEADER_ACTION_ON_REDESIGN,
                 )}
                 onClick={() => {
                   // A thread occupies the same right column as the roster. The
@@ -12311,7 +11884,7 @@ function MainAppContent({
                   memberSidebar.toggle();
                 }}
               >
-                <Users className="h-4 w-4" />
+                <HeaderGlyph off={<Users className="h-4 w-4" />} on={HeaderMembersIcon} />
               </button>
             </Tooltip>
           )}
@@ -12355,15 +11928,19 @@ function MainAppContent({
         </Suspense>
       )}
       {!partyOwnsHeader && !voiceStageOwnsHeader && !retroWindow && (
-      <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
+      <header data-chat-header="" className={cn("flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4", PANE_HEADER_REDESIGN, "redesign:max-sm:px-2")}>
         <button
           type="button"
-          className="relative mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
+          className={cn("relative mr-2 shrink-0 rounded-md p-1.5 hover:bg-ink-3 md:hidden", PANE_HEADER_ACTION_REDESIGN, "redesign:mr-0 redesign:flex redesign:items-center redesign:justify-center redesign:p-0 redesign:md:hidden")}
           aria-label={phoneShell ? t("phoneTabs.back") : t("chrome.openNav")}
           data-phone-back={phoneShell ? "" : undefined}
           onClick={() => setMobileNavOpen(true)}
         >
-          {phoneShell ? <ChevronLeft className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          {phoneShell ? (
+            <HeaderGlyph off={<ChevronLeft className="h-5 w-5" />} on={HeaderBackIcon} kind="symbol" />
+          ) : (
+            <HeaderGlyph off={<Menu className="h-5 w-5" />} on={HeaderMenuIcon} kind="symbol" />
+          )}
           {/* On a narrow window without the phone tabs the rail (and the
               update indicator at its foot) is behind this button: a dot says
               there is something in there. */}
@@ -12371,39 +11948,68 @@ function MainAppContent({
             <span
               aria-hidden="true"
               data-update-menu-dot=""
-              className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+              className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink redesign:right-1 redesign:top-1 redesign:bg-accent redesign:ring-pane-main"
             />
           )}
         </button>
         {/* The channel list's own fold control lives in ITS header now,
             beside settings, members and invite (see `channelSidebarToggle`
             on `ChannelList`). */}
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 truncate font-display text-base font-bold">
+        {/* Under the redesign, from `md` up, the topic sits beside the name
+            after a rule, as in the mockup; on a phone it stays under it. */}
+        <div className="min-w-0 redesign:max-sm:min-w-[4.5rem] redesign:flex-1 redesign:md:flex redesign:md:items-center redesign:md:gap-3">
+          <p className={cn("flex items-center gap-1.5 truncate font-display text-base font-bold", PANE_HEADER_TITLE_REDESIGN, "redesign:gap-2 redesign:md:shrink-0 redesign:md:max-w-[60%]")}>
             {selectedChannel.imageUrl ? (
               <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
             ) : (
               selectedChannel.isPrivate && (
-                <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />
+                <>
+                  <Lock className="h-3.5 w-3.5 shrink-0 text-warning redesign:hidden" />
+                  <Icon icon={HeaderLockIcon} size="sm" className="hidden shrink-0 text-warning redesign:block" />
+                </>
               )
             )}
             {/* `#` names a channel inside a server. A conversation's title is a
                 person, and hashing it renames them. Skipped once the channel
                 has its own image/emoji — `ChannelIcon` above already carries
                 that identity, and stacking `#` in front of it doubles up. */}
-            {!selectedChannel.imageUrl &&
-            selectedChannel.kind === "server" &&
-            selectedChannel.type === "text" &&
-            !selectedChannel.isPrivate
-              ? "#"
-              : ""}
-            {selectedChannel.name}
+            {redesign ? (
+              <>
+                {!selectedChannel.imageUrl &&
+                selectedChannel.kind === "server" &&
+                selectedChannel.type === "text" &&
+                !selectedChannel.isPrivate ? (
+                  <span className="text-[18px] leading-none font-normal text-text-tertiary">#</span>
+                ) : !selectedChannel.imageUrl &&
+                  selectedChannel.kind === "server" &&
+                  isVoiceRoomChannelType(selectedChannel.type) &&
+                  !selectedChannel.isPrivate ? (
+                  // A voice room's chat carries the room's glyph, as `#`
+                  // marks a text channel.
+                  <span className="inline-flex text-text-tertiary">
+                    <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
+                  </span>
+                ) : null}
+                <span className="truncate">{selectedChannel.name}</span>
+              </>
+            ) : (
+              // With the toggle off, `#` and the name stay one text run.
+              <>
+                {!selectedChannel.imageUrl &&
+                selectedChannel.kind === "server" &&
+                selectedChannel.type === "text" &&
+                !selectedChannel.isPrivate
+                  ? "#"
+                  : ""}
+                {selectedChannel.name}
+              </>
+            )}
           </p>
           {/* A watch party channel with a party on it has its own count on
               the bar ("N assistindo"); a second one here, of the seated
               room, says a different number about the same show. */}
           {!(isWatchPartySplit && watchParties.byChannel[selectedChannel.id]) && (
-            <p className="truncate text-[11px] text-paper-muted">
+            <p className={cn("truncate text-[11px] text-paper-muted", PANE_HEADER_DETAIL_REDESIGN, "redesign:max-md:text-xs redesign:md:min-w-0 redesign:md:border-l redesign:md:border-[color:var(--pane-header-rule)] redesign:md:pl-3")}>
               {activeConversation
                 ? conversationSubtitle(activeConversation)
                 : selectedChannel.topic
@@ -12412,7 +12018,7 @@ function MainAppContent({
             </p>
           )}
         </div>
-        <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
+        <div className="ml-auto flex items-center gap-0.5 sm:gap-1 redesign:shrink-0 redesign:gap-0.5">
           {/* The call entry points live here, always visible — the sidebar's
               hover affordance does not exist on touch, and a call you cannot
               start from your phone is a call that does not happen. */}
@@ -12440,15 +12046,16 @@ function MainAppContent({
                 <button
                   type="button"
                   aria-label={t("voice.join")}
-                  className="flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success"
+                  className={cn("flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success", HEADER_JOIN_REDESIGN, HEADER_JOIN_PHONE_REDESIGN)}
                   onClick={() =>
                     guardVoiceJoin(selectedChannel.id, () =>
                       handleJoinVoice(selectedChannel.id),
                     )
                   }
                 >
-                  <Phone className="h-3.5 w-3.5" />
-                  {t("voice.join")}
+                  <Phone className="h-3.5 w-3.5 redesign:hidden" />
+                  <Icon icon={HeaderPhoneIcon} size="sm" className="hidden redesign:block" />
+                  <span className="redesign:max-sm:sr-only">{t("voice.join")}</span>
                 </button>
               </Tooltip>
             )}
@@ -12480,12 +12087,13 @@ function MainAppContent({
                 return (
                   <button
                     type="button"
-                    className="flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success"
+                    className={cn("flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success", HEADER_JOIN_REDESIGN)}
                     onClick={() =>
                       void handleConversationCall(callChannelId, false)
                     }
                   >
-                    <Phone className="h-3.5 w-3.5" />
+                    <Phone className="h-3.5 w-3.5 redesign:hidden" />
+                    <Icon icon={HeaderPhoneIcon} size="sm" className="hidden redesign:block" />
                     {t("call.header.joinCount", { count: liveCount })}
                   </button>
                 );
@@ -12500,7 +12108,7 @@ function MainAppContent({
                         void handleConversationCall(callChannelId, true)
                       }
                     >
-                      <Phone className="h-4 w-4" />
+                      <HeaderGlyph off={<Phone className="h-4 w-4" />} on={HeaderPhoneIcon} />
                     </button>
                   </Tooltip>
                   <Tooltip label={t("call.startVideo")}>
@@ -12511,7 +12119,7 @@ function MainAppContent({
                         void handleConversationCall(callChannelId, true, true)
                       }
                     >
-                      <Video className="h-4 w-4" />
+                      <HeaderGlyph off={<Video className="h-4 w-4" />} on={HeaderVideoIcon} />
                     </button>
                   </Tooltip>
                 </>
@@ -12553,7 +12161,6 @@ function MainAppContent({
         onDismiss={(stream) => dismissWatchNow(stream.key)}
         joiningChannelId={watchNowJoining}
         failure={watchNowFailure}
-        hintAllowed={watchNowNewcomer}
       />
       {renderArrivalBanner(
         // A live party first, whatever kind of room it is running in.
@@ -12624,9 +12231,8 @@ function MainAppContent({
               voiceState.occupancy[selectedChannel.id],
             )}
             showViewerHint={shouldOfferWatchPartyViewerHint({
-              // The newcomer strip already says what this is; two
-              // explanations at once cost the picture its height.
-              seen: partyNewcomerStrip,
+              // `FeatureHint` itself skips a stamped hint and automation.
+              seen: false,
               automated: false,
               watching:
                 watchParties.byChannel[selectedChannel.id]?.state === "live" &&
@@ -12783,7 +12389,7 @@ function MainAppContent({
                     title={t("chrome.moreActions")}
                     data-channel-header-more=""
                   >
-                    <MoreHorizontal className="h-4 w-4" aria-hidden />
+                    <HeaderGlyph off={<MoreHorizontal className="h-4 w-4" aria-hidden />} on={HeaderMoreIcon} kind="symbol" />
                   </button>
                 </ActionMenu>
               ) : undefined
@@ -12826,25 +12432,6 @@ function MainAppContent({
             className="pointer-events-none absolute inset-x-0 top-2 z-20 flex flex-col items-end gap-2 px-3 [&>*]:pointer-events-auto"
           />
         )}
-      {/* WHAT IS THIS, for an account that arrived a moment ago
-          (`party_newcomer_experience`). Under the party bar and above the
-          split, so it costs one line of height and sits where the eye is
-          already looking; nothing when the flag is off. */}
-      {partyNewcomerStrip && (
-        <PartyNewcomerStrip
-          hostName={
-            watchParties.byChannel[selectedChannel.id]?.hostDisplayName ?? ""
-          }
-          chatBeside={
-            splitState.canSideBySide &&
-            effectiveOrientation(callSplit, splitKind) === "side-by-side"
-          }
-          onDismiss={() => {
-            dismissPartyNewcomerStrip();
-            setPartyNewcomerStripClosed(true);
-          }}
-        />
-      )}
       <AppJoinHost
         serverId={selectedServerId}
         viewerId={user?.id ?? null}
@@ -13031,9 +12618,8 @@ function MainAppContent({
               voiceState.occupancy[selectedChannel.id],
             )}
             showViewerHint={shouldOfferWatchPartyViewerHint({
-              // The newcomer strip already says what this is; two
-              // explanations at once cost the picture its height.
-              seen: partyNewcomerStrip,
+              // `FeatureHint` itself skips a stamped hint and automation.
+              seen: false,
               automated: false,
               watching:
                 watchParties.byChannel[selectedChannel.id]?.state === "live" &&
@@ -13250,6 +12836,14 @@ function MainAppContent({
             onLowerHand={(userId) => void handleLowerOccupantHand(userId)}
             onLowerAllHands={() => void handleLowerAllHands(selectedChannel.id)}
             audienceHost={audienceHostFor(selectedChannel)}
+            occupantModeration={{
+              canServerMute: stableCanMuteIn(selectedChannel.id),
+              canDisconnect: stableCanMoveIn(selectedChannel.id),
+              canKick: stableCanKickUser,
+              onServerMute: stableOnServerMuteOccupant,
+              onDisconnect: stableOnDisconnectVoiceOccupant,
+              onKick: stableOnKickOccupant,
+            }}
             compactPeers={localSettings.compactPeers}
           />
         )}
@@ -13470,7 +13064,7 @@ function MainAppContent({
         // The call dock and music bar still live in this well, so they are
         // drawn here while the composer, which normally holds them, is hidden.
         <div>
-          {musicInComposer ? <MusicComposer voiceState={voiceState} /> : null}
+          {musicBarInComposer ? <MusicComposer voiceState={voiceState} /> : null}
           <CallDockOutlet channelId={selectedChannel.id} />
           <ComposerReadOnlyNotice />
         </div>
@@ -13558,7 +13152,7 @@ function MainAppContent({
         // Keyed by channel so the composer of any other channel stays plain.
         dock={canSendHere ? <CallDockOutlet channelId={selectedChannel.id} /> : undefined}
         music={
-          musicInComposer && canSendHere ? <MusicComposer voiceState={voiceState} /> : undefined
+          musicBarInComposer && canSendHere ? <MusicComposer voiceState={voiceState} /> : undefined
         }
         appsLauncher={
           selectedChannel.kind === "server" &&
@@ -13678,7 +13272,7 @@ function MainAppContent({
     {/* `app-shell`, not `overflow-hidden`: see index.css. A hidden box is
         still a scroll container that script can move, and it was moved. */}
     <div
-      className="app-shell animate-fade-in relative flex h-full"
+      className={cn("app-shell animate-fade-in relative flex h-full", FRAME_REDESIGN)}
       data-phone-tabs={phoneShell ? "" : undefined}
       data-phone-bar={phoneBarVisible ? "" : undefined}
     >
@@ -13896,8 +13490,6 @@ function MainAppContent({
               }
             : undefined
         }
-        whatsNewSelected={whatsNewOpen}
-        whatsNewUnread={whatsNewUnread}
         onOpenWhatsNew={handleOpenWhatsNew}
         pinnedConversations={pinnedConversations}
         pinnedUnread={unread}
@@ -13974,7 +13566,6 @@ function MainAppContent({
             tag: user?.tag ?? null,
             handle: user?.handle ?? null,
           }}
-          whatsNewUnread={whatsNewUnread}
           onOpenProfile={() => {
             setSettingsSection("profile");
             setSettingsOpen(true);
@@ -14016,6 +13607,7 @@ function MainAppContent({
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-1",
+          PANE_ROW_REDESIGN,
           whatsNewOpen && "hidden",
         )}
       >
@@ -14206,6 +13798,14 @@ function MainAppContent({
           onInvite={stableOnInvite}
           onOpenMembers={stableOnOpenMembers}
           onOpenServerSettings={stableOnOpenServerSettings}
+          onLeaveServer={
+            selectedServerId
+              ? () => void handleLeaveServer(selectedServerId)
+              : undefined
+          }
+          streamAlertInfo={
+            selectedServerId ? streamAlerts.byServer[selectedServerId] : undefined
+          }
           iconsOnly={sidebarIconsOnly}
           onExpand={stableOnExpand}
           footer={sidebarFooter(sidebarIconsOnly, { userPanel: !phoneShell })}
@@ -14253,11 +13853,16 @@ function MainAppContent({
         />
       )}
 
-      <main className="flex min-w-0 flex-1 flex-col bg-transparent">
+      <main className={cn("flex min-w-0 flex-1 flex-col bg-transparent", PANE_MAIN_REDESIGN)}>
         {isDevAuthBypassEnabled() && (
-          <div className="border-b border-warning/30 bg-warning/10 px-3 py-1 text-center text-xs text-warning">
-            {t("chrome.devBypass")}
-          </div>
+          <Banner
+            tone="warning"
+            icon={BannerCodeIcon}
+            role="note"
+            className="block border-warning/30 px-3 py-1 text-center text-xs"
+          >
+            <BannerText grow={false}>{t("chrome.devBypass")}</BannerText>
+          </Banner>
         )}
 
         <ConnectionBanner
@@ -14269,31 +13874,26 @@ function MainAppContent({
         />
 
         {appError && (
-          <div className="flex items-start gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
-            <span className="flex-1">{appError}</span>
-            <button
-              type="button"
-              className="shrink-0 text-xs underline underline-offset-2"
-              onClick={() => setAppError(null)}
-            >
+          <Banner tone="danger" icon={BannerErrorIcon}>
+            <BannerText>{appError}</BannerText>
+            <BannerAction onClick={() => setAppError(null)}>
               {t("connection.dismiss")}
-            </button>
-          </div>
+            </BannerAction>
+          </Banner>
         )}
 
         {idleWarning && (
-          <div className="flex items-start gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning">
-            <span className="flex-1">
+          <Banner tone="warning" icon={BannerIdleIcon}>
+            <BannerText>
               {t("voice.idle.warning", {
                 count: Math.max(
                   1,
                   Math.round((idleWarning.disconnectAt - Date.now()) / 60_000),
                 ),
               })}
-            </span>
-            <button
-              type="button"
-              className="shrink-0 text-xs underline underline-offset-2"
+            </BannerText>
+            <BannerAction
+              prominent
               onClick={() => {
                 // Send and wait: the banner clears on the server's
                 // `voice-idle-warning-cancelled` confirmation, not on this
@@ -14307,26 +13907,26 @@ function MainAppContent({
               }}
             >
               {t("voice.idle.stillHere")}
-            </button>
-          </div>
+            </BannerAction>
+          </Banner>
         )}
 
         {/* Same slot, same shape, opposite tone — see `appNotice`. */}
         {appNotice && (
-          <div className="flex items-start gap-3 border-b border-success/40 bg-success/10 px-4 py-2 text-sm text-success">
-            <span className="flex-1">{appNotice}</span>
-            {claimedHandle && <ShareHandleButton handle={claimedHandle} />}
-            <button
-              type="button"
-              className="shrink-0 text-xs underline underline-offset-2"
+          <Banner tone="success" icon={BannerCheckIcon}>
+            <BannerText>{appNotice}</BannerText>
+            {claimedHandle && (
+              <ShareHandleButton handle={claimedHandle} className={BANNER_FILL_REDESIGN} />
+            )}
+            <BannerAction
               onClick={() => {
                 setAppNotice(null);
                 setClaimedHandle(null);
               }}
             >
               {t("connection.dismiss")}
-            </button>
-          </div>
+            </BannerAction>
+          </Banner>
         )}
 
         {/* Home with nothing selected is the Friends view — who is online,
@@ -14352,37 +13952,16 @@ function MainAppContent({
                 : undefined
             }
             currentUserId={user?.id ?? null}
+            conversations={conversations}
+            pinnedChannelIds={pinnedChannelIds}
+            onTogglePin={handleTogglePinnedConversation}
+            onBlockUser={(person) => void handleBlockUser(person.id)}
             onOpenNav={() => setMobileNavOpen(true)}
             onOpenConversation={(conversation) => {
               trackDmOpen("friends");
               setConversations((prev) => upsertConversation(prev, conversation));
               void selectConversation(conversation.channelId);
             }}
-            firstRun={
-              user
-                ? {
-                    user,
-                    // With `newcomer_invite_moment` on, a public community
-                    // you were placed in (the QG) is not "a server": the row
-                    // stays open and keeps offering Criar.
-                    serverCount: newcomerInviteMomentOn
-                      ? ownRoomCount(servers, user.id)
-                      : servers.length,
-                    onCreateServer: () => setShowCreateServer(true),
-                    onJoinServer: () => setInviteMode("join"),
-                    onImportDiscord: () =>
-                      setPendingCreate({ mode: "import", source: null }),
-                    // The avatar picker's only home is the profile section of
-                    // settings, three clicks in and behind a gear nothing points
-                    // at. The card is the first thing in the product that does.
-                    onPickAvatar: () => {
-                      setSettingsSection("profile");
-                      setSettingsOpen(true);
-                    },
-                    onSettled: settleFirstRun,
-                  }
-                : undefined
-            }
             extras={
               // A freshly federated account lands here with no servers at all;
               // the SSO suggestions used to live in the old empty state and
@@ -14506,8 +14085,8 @@ function MainAppContent({
 
         {!selectedChannel && channelsLoading && !communityHomeOpen && (
           <div className="flex min-h-0 flex-1 flex-col">
-            <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4">
-              <div className="h-5 w-36 animate-pulse rounded-md bg-ink-4/50" />
+            <header className={cn("flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4", PANE_HEADER_REDESIGN)}>
+              <Skeleton className="h-5 w-36 rounded-md bg-ink-4/50" />
             </header>
             <MessageList
               messages={[]}
@@ -14634,7 +14213,7 @@ function MainAppContent({
                           })
                         }
                       >
-                        <Settings className="h-4 w-4" />
+                        <HeaderGlyph off={<Settings className="h-4 w-4" />} on={HeaderSettingsIcon} />
                       </button>
                     </Tooltip>
                   )}
@@ -14647,10 +14226,11 @@ function MainAppContent({
                         className={cn(
                           HEADER_ACTION_TILE,
                           memberSidebar.open && "text-paper",
+                          memberSidebar.open && PANE_HEADER_ACTION_ON_REDESIGN,
                         )}
                         onClick={() => memberSidebar.toggle()}
                       >
-                        <Users className="h-4 w-4" />
+                        <HeaderGlyph off={<Users className="h-4 w-4" />} on={HeaderMembersIcon} />
                       </button>
                     </Tooltip>
                   )}
@@ -14824,6 +14404,7 @@ function MainAppContent({
               : null
           }
           currentUserId={user?.id ?? null}
+          selfStatus={status.effective}
           role={selectedServer?.role ?? "member"}
           canManageNicknames={canManageNicknames}
           showManageRoster={canStaff}
@@ -14990,12 +14571,9 @@ function MainAppContent({
         open={showCreateServer}
         startMode={createServerStart.mode}
         startSource={createServerStart.source}
-        startName={createServerPrefill?.name ?? null}
-        inviteRef={createServerPrefill ? "chama" : "convite"}
         onClose={() => {
           setShowCreateServer(false);
           setCreateServerStart({ mode: "name", source: null });
-          setCreateServerPrefill(null);
         }}
         onCreated={async ({ server, channels: newChannels }) => {
           // Their own room, empty but for them: the owner banner and the
@@ -15296,9 +14874,10 @@ function MainAppContent({
       />
       <ConfirmDialog
         open={pendingDeleteChannelId !== null}
-        title={t("chrome.deleteChannel")}
-        description={t("chrome.deleteChannelConfirm")}
-        confirmLabel={t("chrome.deleteChannel")}
+        {...deleteDialogCopy(
+          channels.find((c) => c.id === pendingDeleteChannelId),
+          t,
+        )}
         onConfirm={() => void confirmDeleteChannel()}
         onClose={() => setPendingDeleteChannelId(null)}
       />
@@ -15377,69 +14956,11 @@ function MainAppContent({
         enabled={effectiveCornerHint === "notifyOffer"}
         onDismiss={() => setWantsNotifyOfferCard(false)}
       />
-      <SeasonalLookHint
-        look={seasonalLookOffer}
-        enabled={effectiveCornerHint === "seasonalLook"}
-        onDismiss={dismissSeasonalLook}
-      />
-      <ForumAnnouncementHint
-        enabled={effectiveCornerHint === "forumNews"}
-        onShowingChange={setForumNewsShowing}
-        onOpen={() => closeForumNews(true)}
-        onDismiss={() => closeForumNews(false)}
-      />
-      <AppsHint
-        enabled={effectiveCornerHint === "appsNews"}
-        onDismiss={() => setWantsAppsHint(false)}
-      />
-      <CargosHint
-        enabled={effectiveCornerHint === "cargos"}
-        onDismiss={() => setWantsCargosHint(false)}
-        onOpenRoles={() => {
-          setServerSettingsSection("roles");
-          setServerSettingsOpen(true);
-        }}
-      />
       <CommunityHomePostHint
         enabled={effectiveCornerHint === "communityHomePost"}
         serverName={communityHomePostToast?.serverName ?? ""}
         onOpen={openCommunityHomePostToast}
         onDismiss={dismissCommunityHomePostToast}
-      />
-      <ShortcutsHint
-        enabled={effectiveCornerHint === "shortcuts"}
-        shortcutLabel={formatBinding(shortcutBindings.toggleOverlay)}
-        onDismiss={() => setWantsShortcutsHint(false)}
-      />
-      <WhatsNewPrompt
-        enabled={effectiveCornerHint === "whatsNew"}
-        onOpen={handleOpenWhatsNew}
-        onDismiss={() => setWantsWhatsNew(false)}
-      />
-      <MobileBetaHint
-        enabled={effectiveCornerHint === "mobileBeta"}
-        onDismiss={() => setWantsMobileBeta(false)}
-      />
-      <QgHint
-        enabled={effectiveCornerHint === "qg"}
-        onWantedChange={handleQgHintWantedChange}
-        onJoined={(result) => {
-          if (result.joinedNow) {
-            const storage = browserStorage();
-            if (!hasArrived(storage, result.serverId)) {
-              rememberArrival(storage, result.serverId);
-              setArrivalServerId(result.serverId);
-            }
-          }
-          setAppNotice(
-            t(
-              result.joinedNow ? "handle.join.done" : "handle.join.already",
-              { name: result.serverName },
-            ),
-          );
-          void refreshAfterJoin(result.serverId);
-        }}
-        onFailed={() => setAppError(t("qgHint.failed"))}
       />
       <ListingNudgeHint
         enabled={effectiveCornerHint === "listingNudge"}

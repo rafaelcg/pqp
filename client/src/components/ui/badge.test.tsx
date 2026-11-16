@@ -10,6 +10,7 @@ const VARIANTS: BadgeVariant[] = [
   "warning",
   "danger",
   "neutral",
+  "muted",
 ];
 
 describe("Badge", () => {
@@ -36,4 +37,35 @@ describe("Badge", () => {
   it("defaults to the neutral pair", () => {
     expect(renderToStaticMarkup(<Badge>OP</Badge>)).toContain('data-badge="neutral"');
   });
+
+  it("keeps the old geometry with the toggle off, and a pill under the redesign", () => {
+    const off = (html: string) =>
+      (html.match(/class="([^"]*)"/)?.[1] ?? "")
+        .split(" ")
+        .filter((c) => c && !c.startsWith("redesign:"))
+        .sort();
+    const md = renderToStaticMarkup(<Badge variant="new">Novo</Badge>);
+    expect(off(md)).toEqual(
+      "inline-flex h-[18px] shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--radius-tick)] px-1.5 text-[10px] font-bold uppercase leading-none tracking-[0.06em] bg-accent text-on-accent"
+        .split(" ")
+        .sort(),
+    );
+    expect(md).toContain("redesign:rounded-[var(--badge-radius)]");
+    expect(md).toContain("redesign:normal-case");
+  });
+
+  it("draws a name tag at the tag's old size, its call-site colours only with the toggle off", () => {
+    const html = renderToStaticMarkup(
+      <Badge size="tag" className="rounded bg-ink-4 text-paper-muted">
+        Webhook
+      </Badge>,
+    );
+    expect(html).toContain("px-1 py-px");
+    expect(html).toContain("bg-ink-4");
+    expect(html).not.toContain(" bg-surface-3");
+    // Under the redesign the variant wins, so every tag is the same pill.
+    expect(html).toContain("redesign:bg-surface-3");
+    expect(html).toContain("redesign:h-[var(--badge-tag-h)]");
+  });
 });
+

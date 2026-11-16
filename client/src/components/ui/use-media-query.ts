@@ -28,7 +28,7 @@ export function useMediaQuery(query: string, fallback = false): boolean {
 }
 
 /** Tailwind's `sm`: the rail is a vertical column from here up. */
-export const SM_UP_QUERY = "(min-width: 640px)";
+export { SM_UP_QUERY } from "@/lib/breakpoints";
 
 /**
  * A device with a touch screen and no mouse or trackpad anywhere. A tablet

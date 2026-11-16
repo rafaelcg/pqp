@@ -9,6 +9,11 @@ import {
 } from "react";
 import { scrollSelectionIntoView } from "@/lib/scroll-selection-into-view";
 import { cn } from "@/lib/utils";
+import { MENU_HEADING_REDESIGN } from "@/components/ui/menu-items";
+
+/** The panel under the redesign: the menu's panel on the popover surface. */
+const SHELL_REDESIGN =
+  "redesign:rounded-[var(--menu-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:shadow-[var(--popover-shadow)]";
 
 export interface AutocompleteOption {
   id: string;
@@ -207,9 +212,10 @@ export function AutocompleteMenu({
           // — a clip check, a scroll-into-view — sees a box it is not in yet.
           "animate-fade-in overflow-hidden rounded-lg border border-border bg-surface-1 p-3 shadow-[var(--shadow-popover)]",
           PLACEMENT_CLASS[placement],
+          SHELL_REDESIGN,
         )}
       >
-        <p className="text-sm text-text-muted">{emptyLabel}</p>
+        <p className="text-sm text-text-muted redesign:text-text-secondary">{emptyLabel}</p>
       </div>
     );
   }
@@ -231,6 +237,8 @@ export function AutocompleteMenu({
         // same size of target on a phone and on a desk.
         isGrid && "grid w-full max-w-[20rem] grid-cols-4 gap-1",
         PLACEMENT_CLASS[placement],
+        SHELL_REDESIGN,
+        "redesign:p-[var(--menu-pad)]",
       )}
       style={{ maxHeight: `${maxHeight}px` }}
       role="listbox"
@@ -239,6 +247,8 @@ export function AutocompleteMenu({
       <p
         className={cn(
           "px-2.5 py-1.5 text-[11px] uppercase tracking-wider text-text-muted",
+          MENU_HEADING_REDESIGN,
+          "redesign:font-semibold",
           isGrid && "col-span-full",
         )}
       >
@@ -273,11 +283,15 @@ export function AutocompleteMenu({
                 selected
                   ? "bg-surface-2 text-text ring-1 ring-accent/50"
                   : "text-text-muted hover:bg-surface-2/70 hover:text-text",
+                "redesign:rounded-[var(--menu-row-radius)]",
+                selected
+                  ? "redesign:bg-[color:var(--menu-row-hover)] redesign:ring-2 redesign:ring-accent"
+                  : "redesign:text-text-secondary redesign:hover:bg-[color:var(--menu-row-hover)]",
               )}
               {...handlers}
             >
               {option.leading}
-              <span className="w-full truncate font-mono text-[11px] font-medium text-accent">
+              <span className="w-full truncate font-mono text-[11px] font-medium text-accent redesign:text-accent-text">
                 {option.primary}
               </span>
             </button>
@@ -299,15 +313,20 @@ export function AutocompleteMenu({
               selected
                 ? "bg-surface-2 text-text"
                 : "text-text-muted hover:bg-surface-2/70 hover:text-text",
+              // The menu's row under the redesign (ui/menu-items.tsx).
+              "redesign:rounded-[var(--menu-row-radius)] redesign:py-[var(--menu-row-py)]",
+              selected
+                ? "redesign:bg-[color:var(--menu-row-hover)]"
+                : "redesign:text-text-secondary redesign:hover:bg-[color:var(--menu-row-hover)]",
             )}
             {...handlers}
           >
             {option.leading}
-            <span className="shrink-0 font-medium text-accent">
+            <span className="shrink-0 font-medium text-accent redesign:font-semibold redesign:text-text">
               {option.primary}
             </span>
             {option.secondary !== undefined && (
-              <span className="min-w-0 flex-1 truncate text-text/80">
+              <span className="min-w-0 flex-1 truncate text-text/80 redesign:text-text-secondary">
                 {option.secondary}
               </span>
             )}

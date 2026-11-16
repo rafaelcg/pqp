@@ -27,9 +27,9 @@ import { onConfigRefresh } from "@/lib/config-refresh";
 export interface ForumConfigState {
   enabled: boolean;
   /**
-   * `forum_announcement`: the one-time "O fórum abriu" corner card may be
-   * offered to this server's members (`lib/forum-announcement.ts`). Only ever
-   * true where `enabled` is.
+   * `forum_announcement`, as the server answers it. The client no longer
+   * draws the "O fórum abriu" card (removed 2026-11-01); the field stays
+   * because the route still sends it. Only ever true where `enabled` is.
    */
   announce: boolean;
   /** The server has answered at least once for this server. */

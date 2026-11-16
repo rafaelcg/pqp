@@ -13,7 +13,6 @@ import {
   ATTACHED_FEATURE_HINT_ORDER,
   FEATURE_HINT_IDS,
   FEATURE_HINT_STORAGE_KEYS,
-  featureHintEligible,
   isFeatureHintSeen,
   rememberFeatureHint,
   resetFeatureHintsForTests,
@@ -74,52 +73,22 @@ const ALL_ATTACHED: Partial<Record<AttachedFeatureHintId, boolean>> =
   Object.fromEntries(ATTACHED_FEATURE_HINT_ORDER.map((id) => [id, true]));
 
 describe("the id list", () => {
-  it("is exactly the audit's approved set", () => {
-    expect([...HINT_DIET_IDS].sort()).toEqual(
-      [
-        "whatsNew",
-        "cargos",
-        "shortcuts",
-        "voiceClean",
-        "seasonalLook",
-        "callDock",
-        "watchParty",
-        "music",
-        "musicField",
-        "composerFormat",
-        "channelPin",
-        "ownerInviteButton",
-      ].sort(),
-    );
+  it("is only the owner's invite button", () => {
+    // Every corner card and coach mark the diet used to hide was removed
+    // outright on 2026-11-01. The flag and the queue checks stay.
+    expect([...HINT_DIET_IDS]).toEqual(["ownerInviteButton"]);
   });
 
-  it("never names the hints the audit said to keep", () => {
+  it("never names a hint that is still in a queue", () => {
     for (const kept of [
-      "qg",
       "listingNudge",
-      "forumNews",
-      "mobileBeta",
       "notifyOffer",
       "communityHomePost",
-      "bringFriends",
-      "watchNow",
       "watchPartyHost",
       "watchPartyViewer",
-      "forum",
       "voiceNoteTranscription",
     ]) {
       expect(HINT_DIET_IDS as readonly string[], kept).not.toContain(kept);
-    }
-  });
-
-  it("every id is something a queue or the empty state can actually ask about", () => {
-    const known = new Set<string>([
-      ...CORNER_HINT_ORDER,
-      ...FEATURE_HINT_IDS,
-      "ownerInviteButton",
-    ]);
-    for (const id of HINT_DIET_IDS) {
-      expect(known.has(id), id).toBe(true);
     }
   });
 });
@@ -197,116 +166,72 @@ describe("flag OFF changes nothing", () => {
 
   it("the corner queue still follows its own order", () => {
     expect(winningCornerHint(ALL_CORNER)).toBe("communityHomePost");
-    expect(winningCornerHint({ whatsNew: true, cargos: true })).toBe("whatsNew");
-    expect(winningCornerHint({ cargos: true, shortcuts: true })).toBe("cargos");
-    expect(winningCornerHint({ voiceClean: true, mobileBeta: true })).toBe(
-      "voiceClean",
+    expect(winningCornerHint({ notifyOffer: true, listingNudge: true })).toBe(
+      "notifyOffer",
     );
   });
 
   it("the attached queue still follows its own order", () => {
-    expect(winningFeatureHint(ALL_ATTACHED)).toBe("callDock");
-    expect(winningFeatureHint({ music: true, channelPin: true })).toBe("music");
+    expect(winningFeatureHint(ALL_ATTACHED)).toBe("watchPartyHost");
+    expect(winningFeatureHint({ watchPartyViewer: true })).toBe(
+      "watchPartyViewer",
+    );
   });
 
   it("a coach mark is eligible and remembers its impression", () => {
     const storage = spyStorage();
-    expect(isFeatureHintSeen("channelPin", storage, true)).toBe(false);
-    rememberFeatureHint("channelPin", storage, true);
-    expect(storage.writes).toEqual([FEATURE_HINT_STORAGE_KEYS.channelPin]);
-    expect(isFeatureHintSeen("channelPin", storage, true)).toBe(true);
+    expect(isFeatureHintSeen("watchPartyViewer", storage, true)).toBe(false);
+    rememberFeatureHint("watchPartyViewer", storage, true);
+    expect(storage.writes).toEqual([FEATURE_HINT_STORAGE_KEYS.watchPartyViewer]);
+    expect(isFeatureHintSeen("watchPartyViewer", storage, true)).toBe(true);
   });
 });
 
 describe("flag ON hides exactly the listed ids", () => {
-  it("every listed corner id is skipped and the next card takes the slot", () => {
+  it("hides the owner's invite button and nothing else", () => {
     setHintDiet(true);
-    for (const id of HINT_DIET_IDS) {
-      if (!(CORNER_HINT_ORDER as readonly string[]).includes(id)) {
-        continue;
-      }
-      expect(winningCornerHint({ [id]: true }), id).toBeNull();
+    expect(hintDietHides("ownerInviteButton")).toBe(true);
+    for (const id of [...CORNER_HINT_ORDER, ...FEATURE_HINT_IDS]) {
+      expect(hintDietHides(id), id).toBe(false);
     }
-    // The audit's sequence: What's new, cargos and shortcuts gone, the QG stays.
-    expect(
-      winningCornerHint({ whatsNew: true, cargos: true, shortcuts: true }),
-    ).toBeNull();
-    expect(
-      winningCornerHint({ qg: true, whatsNew: true, cargos: true }),
-    ).toBe("qg");
-    expect(
-      winningCornerHint({ whatsNew: true, mobileBeta: true, cargos: true }),
-    ).toBe("mobileBeta");
   });
 
-  it("every corner id not listed still wins exactly as before", () => {
+  it("every corner id still wins exactly as before", () => {
     setHintDiet(true);
     for (const id of CORNER_HINT_ORDER) {
-      if ((HINT_DIET_IDS as readonly string[]).includes(id)) {
-        continue;
-      }
       expect(winningCornerHint({ [id]: true }), id).toBe(id);
     }
+    expect(winningCornerHint(ALL_CORNER)).toBe("communityHomePost");
   });
 
-  it("every listed attached id is skipped, the rest still win", () => {
+  it("every attached id still wins exactly as before", () => {
     setHintDiet(true);
     for (const id of ATTACHED_FEATURE_HINT_ORDER) {
-      const hidden = (HINT_DIET_IDS as readonly string[]).includes(id);
-      expect(winningFeatureHint({ [id]: true }), id).toBe(hidden ? null : id);
+      expect(winningFeatureHint({ [id]: true }), id).toBe(id);
     }
-    // callDock first in the order is gone, so what was behind it is now first.
-    expect(winningFeatureHint(ALL_ATTACHED)).toBe("watchNow");
-    expect(winningFeatureHint({ callDock: true, music: true })).toBeNull();
+    expect(winningFeatureHint(ALL_ATTACHED)).toBe("watchPartyHost");
   });
 
-  it("a hidden coach mark is never eligible, in any host", () => {
+  it("no coach mark is hidden, and each still writes its impression", () => {
     setHintDiet(true);
     const storage = spyStorage();
     for (const id of FEATURE_HINT_IDS) {
-      const hidden = (HINT_DIET_IDS as readonly string[]).includes(id);
       expect(isFeatureHintSeen(id as FeatureHintId, storage, true), id).toBe(
-        hidden,
+        false,
       );
-      // Even where nothing persists (localhost), the diet still says seen.
-      expect(isFeatureHintSeen(id as FeatureHintId, storage, false), id).toBe(
-        hidden,
-      );
-    }
-  });
-
-  it("featureHintEligible follows the diet", () => {
-    expect(featureHintEligible("composerFormat")).toBe(true);
-    setHintDiet(true);
-    expect(featureHintEligible("composerFormat")).toBe(false);
-    expect(featureHintEligible("forum")).toBe(true);
-  });
-
-  it("a hidden hint writes NOTHING to storage, a kept one still does", () => {
-    setHintDiet(true);
-    const storage = spyStorage();
-    for (const id of FEATURE_HINT_IDS) {
       rememberFeatureHint(id as FeatureHintId, storage, true);
     }
-    const written = new Set(storage.writes);
-    for (const id of FEATURE_HINT_IDS) {
-      const hidden = (HINT_DIET_IDS as readonly string[]).includes(id);
-      expect(
-        written.has(FEATURE_HINT_STORAGE_KEYS[id as FeatureHintId]),
-        id,
-      ).toBe(!hidden);
-    }
+    expect(new Set(storage.writes)).toEqual(
+      new Set(FEATURE_HINT_IDS.map((id) => FEATURE_HINT_STORAGE_KEYS[id])),
+    );
   });
 
-  it("turning the flag OFF again restores every card, even after the control was used", () => {
+  it("turning the flag OFF again changes nothing for the kept hints", () => {
     const storage = spyStorage();
     setHintDiet(true);
-    // The person uses the format bar while the diet is on.
-    rememberFeatureHint("composerFormat", storage, true);
-    expect(storage.writes).toEqual([]);
+    rememberFeatureHint("watchPartyViewer", storage, true);
     setHintDiet(false);
-    expect(isFeatureHintSeen("composerFormat", storage, true)).toBe(false);
-    expect(winningFeatureHint({ composerFormat: true })).toBe("composerFormat");
-    expect(winningCornerHint({ whatsNew: true })).toBe("whatsNew");
+    expect(isFeatureHintSeen("watchPartyViewer", storage, true)).toBe(true);
+    expect(winningFeatureHint({ watchPartyHost: true })).toBe("watchPartyHost");
   });
 });

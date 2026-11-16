@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 
 /*
  * THE SOUNDBOARD PANEL, from the keyboard and from a screen reader. QA found
@@ -651,7 +652,7 @@ function stubViewport(width: number, height: number, sheet: boolean) {
   vi.stubGlobal("innerHeight", height);
   vi.stubGlobal("matchMedia", (query: string) => ({
     media: query,
-    matches: sheet && query.includes("max-width: 639px"),
+    matches: sheet && query.includes(BELOW_SM_QUERY),
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
   }));

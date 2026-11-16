@@ -146,8 +146,8 @@ export function WebhooksSection({
               </p>
               <Button
                 size="sm"
-                variant="ghost"
-                className="w-[6.25rem] shrink-0 text-danger"
+                variant="danger-ghost"
+                className="w-[6.25rem] shrink-0"
                 disabled={busyId === webhook.id}
                 onClick={() => void remove(webhook.id)}
               >

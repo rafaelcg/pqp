@@ -4,6 +4,7 @@ import {
   resolveVoiceRowClick,
   resolveVoiceRowDoubleClick,
   resolveVoiceRowKey,
+  voiceRowHint,
 } from "./voice-row-interaction";
 
 describe("isVoiceRowJoinable", () => {
@@ -139,5 +140,25 @@ describe("resolveVoiceRowKey", () => {
   it("ignores every other key", () => {
     expect(resolveVoiceRowKey("Tab", { joinable: true })).toBeNull();
     expect(resolveVoiceRowKey("ArrowDown", { joinable: true })).toBeNull();
+  });
+});
+
+describe("voiceRowHint", () => {
+  const base = {
+    hasJoinHandler: true,
+    connected: false,
+    watchParty: false,
+    touch: false,
+  };
+
+  it("says double click for a mouse and tap for a finger", () => {
+    expect(voiceRowHint(base)).toBe("double-click");
+    expect(voiceRowHint({ ...base, touch: true })).toBe("tap");
+  });
+
+  it("says nothing where the row cannot be joined by the gesture", () => {
+    expect(voiceRowHint({ ...base, hasJoinHandler: false })).toBeNull();
+    expect(voiceRowHint({ ...base, connected: true })).toBeNull();
+    expect(voiceRowHint({ ...base, watchParty: true, touch: true })).toBeNull();
   });
 });

@@ -10,6 +10,9 @@ import type {
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { IconSwap } from "@/components/ui/icon";
+import { CALL_CONTROL_REDESIGN } from "@/components/voice/call-control-classes";
+import { Megaphone as MegaphoneFill } from "@phosphor-icons/react";
 
 /**
  * AUDIENCE MODE ("Modo plateia") in the call, `docs/plans/AUDIENCE_MODE.md`.
@@ -50,12 +53,15 @@ export function AudienceModeToggle({
   onToggle,
   size,
   iconSize,
+  idleClassName = CALL_CONTROL_REDESIGN.idle,
 }: {
   on: boolean;
   busy: boolean;
   onToggle: () => void;
   size: string;
   iconSize: string;
+  /** The redesign's resting look: a well on the stage, a ghost in the dock. */
+  idleClassName?: string;
 }) {
   const { t } = useTranslation();
   return (
@@ -74,10 +80,12 @@ export function AudienceModeToggle({
           "relative flex items-center justify-center rounded-full disabled:cursor-wait",
           size,
           on ? "bg-accent/20 text-accent ring-1 ring-accent/60" : "bg-surface-2 text-text hover:bg-border",
+          CALL_CONTROL_REDESIGN.base,
+          on ? cn(CALL_CONTROL_REDESIGN.on, "redesign:ring-0") : idleClassName,
         )}
         onClick={onToggle}
       >
-        <Megaphone className={iconSize} />
+        <IconSwap off={Megaphone} on={MegaphoneFill} offClassName={iconSize} className={iconSize} />
       </button>
     </Tooltip>
   );

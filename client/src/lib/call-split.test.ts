@@ -21,6 +21,7 @@ const {
   CALL_SPLIT_DIVIDER_PX,
   MIN_CHAT_HEIGHT_PX,
   MIN_CHAT_WIDTH_PX,
+  MIN_ROOM_CHAT_WIDTH_PX,
   MIN_STAGE_HEIGHT_PX,
   MIN_STAGE_WIDTH_PX,
   clampSplit,
@@ -28,6 +29,8 @@ const {
   loadCallSplit,
   MIN_WATCH_CHAT_WIDTH_PX,
   nudgeSplit,
+  CALL_SPLIT_STEP_PX,
+  CALL_SPLIT_STEP_COARSE_PX,
   resolveCollapsed,
   resolveOrientation,
   saveCallSplit,
@@ -164,6 +167,71 @@ describe("nudgeSplit", () => {
   });
 });
 
+describe("nudgeSplit with the live bounds", () => {
+  // QA-015: a room's pane is too narrow for the call's 560px chat floor, so a
+  // nudge clamped against the call bounds threw the divider to the minimum.
+  const ROOM = splitBounds("side-by-side", "room");
+  const container = 820 + CALL_SPLIT_DIVIDER_PX;
+  const px = (fraction: number) => Math.round(fraction * 820);
+
+  it("steps from a mid value in both directions", () => {
+    const start = 0.45;
+    const grown = nudgeSplit({
+      fraction: start,
+      container,
+      orientation: "side-by-side",
+      deltaPx: CALL_SPLIT_STEP_PX,
+      bounds: ROOM,
+    });
+    expect(px(grown) - px(start)).toBe(CALL_SPLIT_STEP_PX);
+    const shrunk = nudgeSplit({
+      fraction: grown,
+      container,
+      orientation: "side-by-side",
+      deltaPx: -CALL_SPLIT_STEP_PX,
+      bounds: ROOM,
+    });
+    expect(px(shrunk)).toBe(px(start));
+  });
+
+  it("keeps moving on repeated presses and takes the coarse step", () => {
+    let fraction = 0.4;
+    const seen: number[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      fraction = nudgeSplit({
+        fraction,
+        container,
+        orientation: "side-by-side",
+        deltaPx: CALL_SPLIT_STEP_COARSE_PX,
+        bounds: ROOM,
+      });
+      seen.push(px(fraction));
+    }
+    expect(seen[1]! - seen[0]!).toBe(CALL_SPLIT_STEP_COARSE_PX);
+    // The third press runs into the maximum and stops there.
+    expect(seen[2]).toBe(820 - ROOM.minChat);
+  });
+
+  it("sends Home and End to the live minimum and maximum", () => {
+    const home = nudgeSplit({
+      fraction: 0.5,
+      container,
+      orientation: "side-by-side",
+      deltaPx: -container,
+      bounds: ROOM,
+    });
+    const end = nudgeSplit({
+      fraction: 0.5,
+      container,
+      orientation: "side-by-side",
+      deltaPx: container,
+      bounds: ROOM,
+    });
+    expect(px(home)).toBe(ROOM.minStage);
+    expect(px(end)).toBe(820 - ROOM.minChat);
+  });
+});
+
 describe("resolveOrientation", () => {
   it("keeps a stored side-by-side only while the pane is wide enough", () => {
     expect(resolveOrientation("side-by-side", 1200, "expanded")).toBe(
@@ -210,6 +278,7 @@ describe("stored preference", () => {
     saveCallSplit({
       orientation: "side-by-side",
       watchOrientation: "stacked",
+      roomOrientation: null,
       stacked: 0.4,
       side: 0.55,
       watchAudienceSide: 0.7,
@@ -218,6 +287,7 @@ describe("stored preference", () => {
     expect(loadCallSplit()).toEqual({
       orientation: "side-by-side",
       watchOrientation: "stacked",
+      roomOrientation: null,
       stacked: 0.4,
       side: 0.55,
       watchAudienceSide: 0.7,
@@ -229,6 +299,7 @@ describe("stored preference", () => {
     saveCallSplit({
       orientation: "stacked",
       watchOrientation: null,
+      roomOrientation: null,
       stacked: 0.3,
       side: 0.8,
       watchAudienceSide: null,
@@ -246,6 +317,7 @@ describe("stored preference", () => {
     saveCallSplit({
       orientation: "stacked",
       watchOrientation: "side-by-side",
+      roomOrientation: null,
       stacked: 0.3,
       side: 0.8,
       watchAudienceSide: 0.9,
@@ -268,6 +340,7 @@ describe("stored preference", () => {
     expect(loadCallSplit()).toEqual({
       orientation: "stacked",
       watchOrientation: null,
+      roomOrientation: null,
       stacked: CALL_SPLIT_DEFAULT.stacked,
       side: 1,
       watchAudienceSide: null,
@@ -288,6 +361,7 @@ describe("collapsing a pane", () => {
     saveCallSplit({
       orientation: "stacked",
       watchOrientation: null,
+      roomOrientation: null,
       stacked: 0.5,
       side: 0.6,
       watchAudienceSide: null,
@@ -395,6 +469,7 @@ describe("collapsing a pane", () => {
     saveCallSplit({
       orientation: "stacked",
       watchOrientation: null,
+      roomOrientation: null,
       stacked: 0.5,
       side: 0.6,
       watchAudienceSide: null,
@@ -616,5 +691,40 @@ describe("fitToPictureDelta", () => {
         sideBySide: false,
       }),
     ).toBe(0);
+  });
+});
+
+/**
+ * A server voice call under the redesign is a grid of cards with the
+ * channel's chat beside it. It starts side by side unless the person chose,
+ * and its choice is its own: flipping it must not rearrange a DM call.
+ */
+describe("a voice room's own layout", () => {
+  it("gives the room's chat a narrower floor than a call's", () => {
+    expect(splitBounds("side-by-side", "room").minChat).toBe(MIN_ROOM_CHAT_WIDTH_PX);
+    expect(splitBounds("side-by-side", "call").minChat).toBe(MIN_CHAT_WIDTH_PX);
+    expect(MIN_ROOM_CHAT_WIDTH_PX).toBeLessThan(MIN_CHAT_WIDTH_PX);
+  });
+
+  it("starts side by side and follows its own stored choice", () => {
+    const base = { ...CALL_SPLIT_DEFAULT, orientation: "stacked" as const };
+    expect(effectiveOrientation(base, "room")).toBe("side-by-side");
+    expect(effectiveOrientation(base, "call")).toBe("stacked");
+    expect(
+      effectiveOrientation({ ...base, roomOrientation: "stacked" }, "room"),
+    ).toBe("stacked");
+  });
+
+  it("reads a stored room choice back, and treats an old preference as none", () => {
+    localStorage.setItem(
+      "pqp:call-split",
+      JSON.stringify({ ...CALL_SPLIT_DEFAULT, roomOrientation: "stacked" }),
+    );
+    expect(loadCallSplit().roomOrientation).toBe("stacked");
+    localStorage.setItem(
+      "pqp:call-split",
+      JSON.stringify({ orientation: "side-by-side" }),
+    );
+    expect(loadCallSplit().roomOrientation).toBeNull();
   });
 });

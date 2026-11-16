@@ -1,11 +1,10 @@
-import { ChevronRight, Plus, RotateCw, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
+import { CaretRight } from "@phosphor-icons/react";
+import { ChevronRight, Plus, RotateCw, Trash2 } from "lucide-react";
+import { useEffect, useMemo, type MouseEvent } from "react";
 import type { StoryAuthor, StoryNotice, StoryStripItem } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
-import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
-import { isHintSeen, rememberHint } from "@/lib/hints";
 import { ringLabel } from "@/lib/stories/format";
 import { failedRingLabel } from "@/lib/stories/post";
 import { useSeenStories } from "@/lib/stories/seen-store";
@@ -20,6 +19,8 @@ import {
   type StoryAudienceKey,
 } from "@/lib/stories/ui-store";
 import { useStoryNotices, useStoryStrip } from "@/lib/stories/use-story-strip";
+import { Icon } from "@/components/ui/icon";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
 import { cn } from "@/lib/utils";
 import { StoryRing } from "./story-ring";
 
@@ -28,9 +29,9 @@ import { StoryRing } from "./story-ring";
  * or of the Conversas list (friends' stories).
  *
  * Draws nothing at all unless something is live, so a server without stories
- * pays no row for them (design decision 22). The two exceptions are the
- * one-off first-run row, and the card telling an author that staff removed
- * their story, which is said once and then acknowledged.
+ * pays no row for them (design decision 22). The one exception is the card
+ * telling an author that staff removed their story, which is said once and
+ * then acknowledged.
  */
 
 export interface StoryViewerSelf {
@@ -49,13 +50,6 @@ interface StoryStripProps {
   ownSlot?: boolean;
 }
 
-/** Session memory for a dismissed first-run row, where hints do not persist. */
-const dismissedThisSession = new Set<string>();
-
-function firstRunKey(meId: string, audience: StoryAudienceKey): string {
-  return `pqp:stories-first-run:${meId}:${ringAudienceKey(audience)}`;
-}
-
 export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   const { t } = useTranslation();
   const stripAudience = useMemo(
@@ -69,10 +63,6 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   const { strip, now, setPointerOnStrip } = useStoryStrip(stripAudience, me.id);
   const seen = useSeenStories();
   const ui = useStoriesUi();
-  const hintKey = firstRunKey(me.id, audience);
-  const [dismissed, setDismissed] = useState(
-    () => dismissedThisSession.has(hintKey) || isHintSeen(hintKey),
-  );
   const { notices, dismiss } = useStoryNotices(Boolean(strip?.enabled));
 
   const audienceKey = ringAudienceKey(audience);
@@ -80,7 +70,7 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
     ui.posting && ui.posting.audienceKeys.includes(audienceKey) ? ui.posting : null;
 
   const view = strip
-    ? stripView(strip, { now, seenIds: seen, firstRunDismissed: dismissed, ownSlot })
+    ? stripView(strip, { now, seenIds: seen, ownSlot })
     : ({ kind: "hidden" } as const);
 
   // Warm the first unseen story of the first three rings while the strip is up, so opening one shows
@@ -112,23 +102,6 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   const noticeCards = myNotices.map((notice) => (
     <RemovedNoticeCard key={notice.id} notice={notice} onDismiss={() => dismiss(notice.id)} />
   ));
-
-  if (view.kind === "first-run" && !posting) {
-    return (
-      <div className="mb-3 space-y-2">
-        {noticeCards}
-        <FirstRunRow
-          me={me}
-          onPost={compose}
-          onDismiss={() => {
-            dismissedThisSession.add(hintKey);
-            rememberHint(hintKey);
-            setDismissed(true);
-          }}
-        />
-      </div>
-    );
-  }
 
   if (view.kind === "hidden" && !posting) {
     return noticeCards.length > 0 ? <div className="mb-3 space-y-2">{noticeCards}</div> : null;
@@ -205,14 +178,23 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
     <section
       aria-label={t("stories.strip.label")}
       data-story-strip={audienceKey}
-      className="mb-2 border-b border-border pb-2.5"
+      // Under the redesign the space below separates it from the channels,
+      // not a rule.
+      className="mb-2 border-b border-border pb-2.5 redesign:mb-3 redesign:border-b-0 redesign:pb-1"
       style={{ contentVisibility: "auto", containIntrinsicSize: "auto 96px" }}
       onPointerEnter={() => setPointerOnStrip(true)}
       onPointerLeave={() => setPointerOnStrip(false)}
     >
       {noticeCards.length > 0 && <div className="mb-2 space-y-2">{noticeCards}</div>}
       <div className="flex items-center justify-between px-0.5 pb-2 pt-0.5">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-text-tertiary">
+        <span
+          className={cn(
+            "text-[11px] font-bold uppercase tracking-wider text-text-tertiary",
+            // The section label's face; the row sets the spacing.
+            SECTION_LABEL_REDESIGN,
+            "redesign:mb-0",
+          )}
+        >
           {t("stories.strip.label")}
         </span>
         {items.length > 0 && (
@@ -220,16 +202,18 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
             type="button"
             data-story-see-all=""
             onClick={(event) => openItems(0, null, event.detail === 0)}
-            className="flex items-center gap-0.5 rounded-[var(--radius-control)] px-1 text-xs font-semibold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="flex items-center gap-0.5 rounded-[var(--radius-control)] px-1 text-xs font-semibold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:rounded-full redesign:px-2 redesign:py-0.5 redesign:hover:bg-row-hover redesign:focus-visible:ring-accent"
           >
             {t("stories.strip.seeAll")}
-            <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+            <ChevronRight className="h-3.5 w-3.5 redesign:hidden" aria-hidden />
+            <Icon icon={CaretRight} kind="symbol" size="sm" className="hidden h-3 w-3 redesign:block" />
           </button>
         )}
       </div>
       <div
-        className="-mx-1 -mt-1 flex gap-[9px] overflow-x-auto px-1 pb-0.5 pt-1 [scrollbar-width:none]"
-        style={{ "--story-ring-bg": "var(--color-surface-1)" } as CSSProperties}
+        // The ring's cutout is the pane behind it: the side pane under the
+        // redesign.
+        className="-mx-1 -mt-1 flex gap-[9px] overflow-x-auto px-1 pb-0.5 pt-1 [scrollbar-width:none] [--story-ring-bg:var(--color-surface-1)] redesign:[--story-ring-bg:var(--color-pane-side)]"
       >
         {showOwn && (
           <StoryRing
@@ -315,54 +299,6 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   );
 }
 
-function FirstRunRow({
-  me,
-  onPost,
-  onDismiss,
-}: {
-  me: StoryViewerSelf;
-  onPost: () => void;
-  onDismiss: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div
-      data-story-first-run=""
-      className="relative flex items-start gap-3 rounded-[var(--radius-card)] border border-dashed border-border-strong p-3"
-    >
-      <div className="relative h-10 w-10 shrink-0">
-        <UserAvatar
-          name={me.displayName}
-          avatarUrl={me.avatarUrl}
-          rounded="full"
-          className="h-10 w-10"
-          fallbackClassName="bg-surface-3 text-text text-sm"
-        />
-        <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[11px] font-bold leading-none text-on-accent shadow-[0_0_0_2px_var(--color-surface-1)]">
-          +
-        </span>
-      </div>
-      <div className="min-w-0 flex-1 pr-4">
-        <p className="text-sm font-semibold text-text">{t("stories.empty.title")}</p>
-        <p className="mt-0.5 text-xs leading-snug text-text-secondary">
-          {t("stories.empty.body")}
-        </p>
-        <Button size="sm" className="mt-2 h-7 rounded-full px-3" onClick={onPost}>
-          {t("stories.empty.cta")}
-        </Button>
-      </div>
-      <button
-        type="button"
-        aria-label={t("stories.empty.dismiss")}
-        onClick={onDismiss}
-        className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-      >
-        <X className="h-3.5 w-3.5" aria-hidden />
-      </button>
-    </div>
-  );
-}
-
 function RemovedNoticeCard({
   notice,
   onDismiss,
@@ -376,7 +312,10 @@ function RemovedNoticeCard({
     <div
       role="status"
       data-story-notice=""
-      className={cn("elevation-1 rounded-[var(--radius-card)] p-3")}
+      className={cn(
+        "elevation-1 rounded-[var(--radius-card)] p-3",
+        "redesign:rounded-[var(--sidebar-card-radius)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:shadow-none",
+      )}
     >
       <p className="text-sm font-semibold text-text">
         {t("stories.removed.title", { server })}

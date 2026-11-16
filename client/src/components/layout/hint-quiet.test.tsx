@@ -9,9 +9,10 @@ import {
   resetFeatureHintsForTests,
   useFeatureHintEnabled,
 } from "@/components/layout/feature-hint";
-import { WhatsNewPrompt } from "@/components/layout/whats-new-prompt";
+import { NotifyOfferHint } from "@/components/layout/notify-offer-hint";
 import type { AppSessionsSnapshot } from "@/lib/apps/app-sessions-store";
 import { winningCornerHint } from "@/lib/corner-hints";
+import { NOTIFY_OFFER_HINT_STORAGE_KEY } from "@/lib/notify-offer-hint";
 import {
   FEATURE_HINT_STORAGE_KEYS,
   isFeatureHintSpentForLoad,
@@ -32,6 +33,11 @@ import {
   viewerSeatedInAnApp,
   type HintQuietFacts,
 } from "@/lib/hint-quiet";
+
+vi.mock("@/hooks/use-notifications", () => ({
+  useNotificationSettings: () => ({ enable: vi.fn(async () => {}) }),
+}));
+vi.mock("@/lib/notifications", () => ({ dismissNotifyOffer: vi.fn() }));
 
 /*
  * QUIET CONTEXTS (`hint_budget`).
@@ -149,14 +155,7 @@ describe("the corner queue under a quiet context", () => {
     const everything = {
       communityHomePost: true,
       notifyOffer: true,
-      qg: true,
       listingNudge: true,
-      voiceClean: true,
-      seasonalLook: true,
-      mobileBeta: true,
-      whatsNew: true,
-      cargos: true,
-      shortcuts: true,
     };
     expect(winningCornerHint(everything, { quiet: true })).toBe("communityHomePost");
     expect(winningCornerHint({ ...everything, communityHomePost: false }, { quiet: true })).toBe(
@@ -164,43 +163,43 @@ describe("the corner queue under a quiet context", () => {
     );
     const campaigns = { ...everything, communityHomePost: false, notifyOffer: false };
     expect(winningCornerHint(campaigns, { quiet: true })).toBeNull();
-    // The same wanting, the context over: the QG is first again.
-    expect(winningCornerHint(campaigns, { quiet: false })).toBe("qg");
-    expect(winningCornerHint(campaigns)).toBe("qg");
+    // The same wanting, the context over: the listing nudge is first again.
+    expect(winningCornerHint(campaigns, { quiet: false })).toBe("listingNudge");
+    expect(winningCornerHint(campaigns)).toBe("listingNudge");
   });
 });
 
 describe("a held corner card shows when the context ends", () => {
   it("stamps nothing while held, then paints and stamps once", async () => {
-    await mount(<WhatsNewPrompt enabled={false} onOpen={() => {}} />);
-    expect(card("whats-new")).toBeNull();
+    await mount(<NotifyOfferHint enabled={false} />);
+    expect(card("notify-offer")).toBeNull();
     expect(localStorage.length).toBe(0);
 
-    await rerender(<WhatsNewPrompt enabled onOpen={() => {}} />);
-    expect(card("whats-new")).not.toBeNull();
-    expect(localStorage.getItem("pqp:whats-new")).not.toBeNull();
+    await rerender(<NotifyOfferHint enabled />);
+    expect(card("notify-offer")).not.toBeNull();
+    expect(localStorage.getItem(NOTIFY_OFFER_HINT_STORAGE_KEY)).not.toBeNull();
   });
 
   it("a card already up goes away for a quiet moment and comes back", async () => {
-    await mount(<WhatsNewPrompt enabled onOpen={() => {}} />);
-    expect(card("whats-new")).not.toBeNull();
-    await rerender(<WhatsNewPrompt enabled={false} onOpen={() => {}} />);
+    await mount(<NotifyOfferHint enabled />);
+    expect(card("notify-offer")).not.toBeNull();
+    await rerender(<NotifyOfferHint enabled={false} />);
     await afterExit();
-    expect(card("whats-new")).toBeNull();
-    await rerender(<WhatsNewPrompt enabled onOpen={() => {}} />);
-    expect(card("whats-new")).not.toBeNull();
+    expect(card("notify-offer")).toBeNull();
+    await rerender(<NotifyOfferHint enabled />);
+    expect(card("notify-offer")).not.toBeNull();
   });
 });
 
 /** App's attached-hint wiring in miniature: the winner, the quiet flag, `yielding`. */
 function AttachedQueue({ quiet }: { quiet: boolean }) {
   useFeatureHintsSpent();
-  const attached = winningFeatureHint({ watchNow: true, forum: true });
+  const attached = winningFeatureHint({ watchPartyHost: true, watchPartyViewer: true });
   const live = quiet ? null : attached;
   return (
     <FeatureHintProvider winner={attached} yielding={live === null && attached !== null}>
-      <Card id="watchNow" />
-      <Card id="forum" />
+      <Card id="watchPartyHost" />
+      <Card id="watchPartyViewer" />
     </FeatureHintProvider>
   );
 }
@@ -213,28 +212,28 @@ function Card({ id }: { id: AttachedFeatureHintId }) {
 describe("a held attached coach mark", () => {
   it("is not spent and not stamped while held, and shows when the context ends", async () => {
     await mount(<AttachedQueue quiet />);
-    expect(card("watchNow")).toBeNull();
-    expect(isFeatureHintSpentForLoad("watchNow")).toBe(false);
-    expect(localStorage.getItem(FEATURE_HINT_STORAGE_KEYS.watchNow)).toBeNull();
+    expect(card("watchPartyHost")).toBeNull();
+    expect(isFeatureHintSpentForLoad("watchPartyHost")).toBe(false);
+    expect(localStorage.getItem(FEATURE_HINT_STORAGE_KEYS.watchPartyHost)).toBeNull();
 
     await rerender(<AttachedQueue quiet={false} />);
-    expect(card("watchNow")).not.toBeNull();
-    expect(localStorage.getItem(FEATURE_HINT_STORAGE_KEYS.watchNow)).toBe("1");
+    expect(card("watchPartyHost")).not.toBeNull();
+    expect(localStorage.getItem(FEATURE_HINT_STORAGE_KEYS.watchPartyHost)).toBe("1");
   });
 
   it("one that is up when a context starts is held, not spent, and returns", async () => {
     await mount(<AttachedQueue quiet={false} />);
-    expect(card("watchNow")).not.toBeNull();
+    expect(card("watchPartyHost")).not.toBeNull();
 
     await rerender(<AttachedQueue quiet />);
     await afterExit();
-    expect(card("watchNow")).toBeNull();
-    expect(isFeatureHintSpentForLoad("watchNow")).toBe(false);
+    expect(card("watchPartyHost")).toBeNull();
+    expect(isFeatureHintSpentForLoad("watchPartyHost")).toBe(false);
 
     await rerender(<AttachedQueue quiet={false} />);
-    expect(card("watchNow")).not.toBeNull();
+    expect(card("watchPartyHost")).not.toBeNull();
     // And the next card in line was never promoted past it.
-    expect(card("forum")).toBeNull();
+    expect(card("watchPartyViewer")).toBeNull();
   });
 });
 

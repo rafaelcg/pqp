@@ -297,6 +297,8 @@ interface FriendshipRow {
   username: string | null;
   discriminator: string | null;
   avatar_url: string | null;
+  custom_status: string | null;
+  handle: string | null;
 }
 
 /**
@@ -314,7 +316,7 @@ export async function listFriendships(userId: string): Promise<Friendships> {
   const result = await getPool().query<FriendshipRow>(
     `SELECT f.status, f.requested_by, f.created_at, f.accepted_at,
             u.id, u.display_name, u.username, u.discriminator, u.avatar_url,
-            u.custom_status
+            u.custom_status, u.handle
      FROM friendships f
      JOIN users u ON u.id = CASE WHEN f.low_user_id = $1
                                  THEN f.high_user_id

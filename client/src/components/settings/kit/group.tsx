@@ -1,5 +1,7 @@
 import { useId, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { SectionLabel } from "@/components/ui/section-header";
+import { SETTINGS_GROUP_REDESIGN } from "@/components/settings/kit/classes";
 
 interface SettingsGroupProps {
   /**
@@ -51,9 +53,14 @@ export function SettingsGroup({
         <div className="flex items-end justify-between gap-4">
           <div className="min-w-0">
             {title ? (
-              <h4 id={titleId} className="text-sm font-semibold text-text">
+              <SectionLabel
+                as="h4"
+                id={titleId}
+                variant="group"
+                className="text-sm font-semibold text-text"
+              >
                 {title}
-              </h4>
+              </SectionLabel>
             ) : null}
             {description ? (
               <p className="mt-1 text-xs text-pretty text-text-tertiary">
@@ -68,7 +75,12 @@ export function SettingsGroup({
         className={cn(
           (title || action) && "mt-2",
           surface === "card"
-            ? "elevation-1 divide-y divide-border overflow-hidden rounded-[var(--radius-card)] bg-surface-card"
+            ? cn(
+                "elevation-1 divide-y divide-border overflow-hidden rounded-[var(--radius-card)] bg-surface-card",
+                // Under the redesign the box is a card (ui/card.tsx): a tint
+                // of the text with its edge, the same edge between rows.
+                SETTINGS_GROUP_REDESIGN,
+              )
             : "space-y-3",
         )}
       >

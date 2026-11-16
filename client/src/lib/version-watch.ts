@@ -226,6 +226,15 @@ export function requestVersionCheck(): void {
   void activeWatch?.check();
 }
 
+/**
+ * The person asked ("check again" on the rail's update button): ask now, past
+ * the gap, and resolve when the answer is published. Resolves at once when
+ * there is no watch (a dev build, a test).
+ */
+export function checkVersionNow(): Promise<void> {
+  return activeWatch?.check({ force: true }) ?? Promise.resolve();
+}
+
 export function startVersionWatch(options: {
   running: BuildIdentity;
   fetchForceConfig: () => Promise<ForceConfig | null>;

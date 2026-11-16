@@ -1,3 +1,4 @@
+import { UserMinus } from "@phosphor-icons/react";
 import {
   useEffect,
   useId,
@@ -6,7 +7,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { Check, CircleCheck, Loader2, UserX } from "lucide-react";
+import { Check, CircleCheck, UserX } from "lucide-react";
 import {
   parseUserTag,
   type BlockedUser,
@@ -39,6 +40,7 @@ import {
   unblockUser as unblockUserRequest,
   updateMe,
 } from "@/lib/api";
+import { Spinner } from "@/components/ui/spinner";
 
 /* ----------------------------------------------------------------- privacy */
 
@@ -104,7 +106,7 @@ function TitleStatus({ state }: { state: InlineSaveState }) {
       {state.kind === "saving" ? (
         <span className="flex items-center gap-1 text-text-tertiary">
           <span aria-hidden>·</span>
-          <Loader2 aria-hidden className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
+          <Spinner className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
           {state.label ?? t("settings.saving")}
         </span>
       ) : null}
@@ -492,6 +494,7 @@ export function PrivacySection({
         {listed.length === 0 && !adding ? (
           <SettingsEmpty
             icon={UserX}
+            glyph={UserMinus}
             title={t("settings.privacy.blockedEmpty")}
             description={t("settings.privacy.blockedEmptyHint")}
           />

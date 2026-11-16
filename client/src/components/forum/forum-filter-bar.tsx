@@ -21,6 +21,8 @@ import {
 } from "@/lib/forum-tag-icons";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { Cards, Rows, SquaresFour } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 
 /**
  * What narrows the list, on one line read left to right: status, My posts,
@@ -61,6 +63,9 @@ export function filterControlClass(on: boolean, className?: string): string {
     on
       ? "bg-text font-semibold text-surface-0"
       : "bg-surface-1 text-text-secondary hover:bg-surface-2 hover:text-text",
+    // Pills under the redesign; at rest on the segmented track's tint.
+    "redesign:rounded-full redesign:px-3",
+    !on && "redesign:bg-[color:var(--segmented-bg)] redesign:hover:bg-[color:var(--segmented-thumb)]",
     className,
   );
 }
@@ -151,10 +156,10 @@ export function ForumLayoutSwitch({
   onChange: (layout: ForumLayout) => void;
 }) {
   const { t } = useTranslation();
-  const options: { value: ForumLayout; label: string; icon: typeof Rows3 }[] = [
-    { value: "card", label: t("forum.layout.card"), icon: StretchHorizontal },
-    { value: "compact", label: t("forum.layout.compact"), icon: Rows3 },
-    { value: "gallery", label: t("forum.layout.gallery"), icon: LayoutGrid },
+  const options: { value: ForumLayout; label: string; icon: typeof Rows3; glyph: typeof Rows }[] = [
+    { value: "card", label: t("forum.layout.card"), icon: StretchHorizontal, glyph: Cards },
+    { value: "compact", label: t("forum.layout.compact"), icon: Rows3, glyph: Rows },
+    { value: "gallery", label: t("forum.layout.gallery"), icon: LayoutGrid, glyph: SquaresFour },
   ];
   // One tab stop for the group, arrows to move and pick, like every radio group.
   const { onKeyDown, tabIndexFor } = useRovingRadio(
@@ -167,10 +172,10 @@ export function ForumLayoutSwitch({
       role="radiogroup"
       aria-label={t("forum.layout.label")}
       onKeyDown={onKeyDown}
-      className="inline-flex h-10 shrink-0 items-center gap-0.5 rounded-[var(--radius-card)] bg-surface-1 p-1"
+      className="inline-flex h-10 shrink-0 items-center gap-0.5 rounded-[var(--radius-card)] bg-surface-1 p-1 redesign:h-[var(--control-md)] redesign:rounded-[var(--segmented-radius)] redesign:bg-[color:var(--segmented-bg)] redesign:p-[var(--segmented-pad)]"
       data-forum-layout-switch=""
     >
-      {options.map(({ value, label, icon: Icon }) => (
+      {options.map(({ value, label, icon: Icon, glyph }) => (
         <Tooltip key={value} label={label}>
           <button
             type="button"
@@ -184,9 +189,13 @@ export function ForumLayoutSwitch({
               layout === value
                 ? "bg-surface-3 text-text"
                 : "text-text-secondary hover:text-text",
+              "redesign:h-[var(--segmented-h)] redesign:w-[calc(var(--segmented-h)+0.5rem)] redesign:rounded-[var(--segmented-radius)]",
+              layout === value
+                ? "redesign:bg-[color:var(--segmented-thumb)] redesign:shadow-[var(--segmented-thumb-shadow)]"
+                : "redesign:text-[color:var(--segmented-text)]",
             )}
           >
-            <Icon className="h-4 w-4" aria-hidden />
+            <IconSwap off={Icon} on={glyph} offClassName="h-4 w-4" />
           </button>
         </Tooltip>
       ))}
@@ -305,7 +314,8 @@ export function ForumFilterBar({
       </div>
       {mineChip}
       {tags.length > 0 && (
-        <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" />
+        // Under the redesign the rule only stands before tag pills, never alone at a line's end.
+        <span aria-hidden className={cn("mx-1 h-5 w-px shrink-0 bg-border", inline.length === 0 && "redesign:hidden")} />
       )}
       {inline.map((tag) => (
         <FilterChip

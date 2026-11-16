@@ -17,6 +17,7 @@ import {
   type ServerBotTool,
   type ServerBotToolGroup,
 } from "@pqp/shared";
+import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   AlarmClock,
@@ -34,9 +35,11 @@ import {
   Volume2,
   type LucideIcon,
 } from "lucide-react";
+import { ArrowLeft as ArrowLeftGlyph, ArrowRight as ArrowRightGlyph, Shuffle as ShuffleGlyph } from "@phosphor-icons/react";
 import { BotFace } from "@/components/bots/bot-face";
+import { IconSwap } from "@/components/ui/icon";
 import { BotActionCard } from "@/components/chat/bot-action-card";
-import { ServerBotTags } from "@/components/bots/server-bot-tags";
+import { BOT_BETA_TAG_REDESIGN, ServerBotTags } from "@/components/bots/server-bot-tags";
 import { RadioChoices } from "@/components/bots/radio-choices";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Confetti } from "@/components/onboarding/confetti";
@@ -51,6 +54,14 @@ import { ApiError, createServerBot, fetchBotsConfig, fetchChannels, postBotIntro
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+import {
+  BOT_CARD_CHOSEN_REDESIGN,
+  BOT_CARD_REDESIGN,
+  BOT_CHOICE_FOCUS_REDESIGN,
+  BOT_SWATCH_CHOSEN_REDESIGN,
+  BOT_SWATCH_REDESIGN,
+  ChosenCheck,
+} from "@/components/bots/bot-choice";
 
 /**
  * Creating a server bot, one question at a time, with the bot on stage the
@@ -269,7 +280,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
       title={
         <span className="flex items-center gap-2">
           {step === "born" ? shownName : t("bots.wizard.title")}
-          <BetaTag />
+          <BetaTag className={BOT_BETA_TAG_REDESIGN} />
         </span>
       }
       description={t("bots.wizard.subtitle", { server: serverName })}
@@ -299,7 +310,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
             )}
             {index > 0 ? (
               <Button type="button" variant="ghost" onClick={back}>
-                <ArrowLeft className="mr-1.5 h-4 w-4" aria-hidden />
+                <IconSwap off={ArrowLeft} on={ArrowLeftGlyph} kind="symbol" offClassName="mr-1.5 h-4 w-4" className="mr-1.5" />
                 {t("bots.wizard.back")}
               </Button>
             ) : null}
@@ -313,7 +324,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
               className="max-sm:ml-auto"
             >
               {step === lastStep ? t("bots.wizard.create", { name: shownName }) : t("bots.wizard.next")}
-              {step !== lastStep && <ArrowRight className="ml-1.5 h-4 w-4" aria-hidden />}
+              {step !== lastStep && <IconSwap off={ArrowRight} on={ArrowRightGlyph} kind="symbol" offClassName="ml-1.5 h-4 w-4" className="ml-1.5" />}
             </Button>
           </div>
         )
@@ -400,9 +411,18 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                       cn(
                         "grid h-11 w-11 place-items-center rounded-full border-2 bg-surface-2 transition-transform duration-[var(--duration-fast)] active:scale-95",
                         selected ? "border-text" : "border-transparent",
+                        // Under the redesign the chosen swatch takes an outer accent ring and a check.
+                        BOT_SWATCH_REDESIGN,
+                        selected && BOT_SWATCH_CHOSEN_REDESIGN,
+                        BOT_CHOICE_FOCUS_REDESIGN,
                       )
                     }
-                    renderItem={(color) => <BotFace color={color} face="oi" live={false} className="h-8 w-8" />}
+                    renderItem={(color, selected) => (
+                      <>
+                        <BotFace color={color} face="oi" live={false} className="h-8 w-8" />
+                        {selected && <ChosenCheck corner="bottom" />}
+                      </>
+                    )}
                   />
                 </fieldset>
 
@@ -420,26 +440,31 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                           selected
                             ? "border-accent bg-accent-soft text-on-accent-soft"
                             : "border-border bg-surface-2 text-text-secondary hover:text-text",
+                          // Under the redesign: the kit's chosen card, with its check.
+                          selected ? BOT_CARD_CHOSEN_REDESIGN : BOT_CARD_REDESIGN,
+                          BOT_CHOICE_FOCUS_REDESIGN,
                         )
                       }
-                      renderItem={(face) => (
+                      renderItem={(face, selected) => (
                         <>
                           <BotFace color={draft.color} face={face} live={false} className="h-9 w-9" />
                           {t(`bots.face.${face}`)}
+                          {selected && <ChosenCheck />}
                         </>
                       )}
                     />
                     <Button
                       type="button"
                       variant="secondary"
-                      className="h-auto self-stretch"
+                      // Under the redesign it stays a pill at button height, so it never reads as a sixth face.
+                      className="h-auto self-stretch redesign:h-[var(--control-md)] redesign:self-center"
                       onClick={() => {
                         const color = BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)]!;
                         const face = BOT_BASE_FACES[Math.floor(Math.random() * BOT_BASE_FACES.length)]!;
                         update({ color, face }, true);
                       }}
                     >
-                      <Shuffle className="mr-1.5 h-4 w-4" aria-hidden />
+                      <IconSwap off={Shuffle} on={ShuffleGlyph} kind="symbol" offClassName="mr-1.5 h-4 w-4" className="mr-1.5" />
                       {t("bots.wizard.face.surprise")}
                     </Button>
                   </div>
@@ -483,12 +508,17 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                           active
                             ? "border-accent bg-accent-soft text-on-accent-soft"
                             : "border-border bg-surface-2 hover:border-border-strong",
+                          // Under the redesign: the same chosen card as the faces.
+                          active ? BOT_CARD_CHOSEN_REDESIGN : BOT_CARD_REDESIGN,
+                          BOT_CHOICE_FOCUS_REDESIGN,
+                          "redesign:pr-8",
                         )}
                       >
+                        {active && <ChosenCheck />}
                         <span className="block text-sm font-semibold">
                           {t(`serverSettings.bots.preset.${preset}.name`)}
                         </span>
-                        <span className={cn("mt-0.5 line-clamp-2 text-xs", !active && "text-text-tertiary")}>
+                        <span className={cn("mt-0.5 line-clamp-2 text-xs", !active && "text-text-tertiary", "redesign:text-text-secondary")}>
                           {text}
                         </span>
                       </button>
@@ -505,6 +535,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                     maxLength={SERVER_BOT_PERSONA_MAX}
                     placeholder={t("serverSettings.bots.personaPlaceholder")}
                     onChange={(e) => update({ persona: e.target.value })}
+                    className="redesign:resize-none"
                   />
                   <Counter value={draft.persona.length} max={SERVER_BOT_PERSONA_MAX} />
                 </div>
@@ -521,7 +552,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                 <Textarea
                   id={ids.knowledge}
                   aria-label={t("serverSettings.bots.knowledge")}
-                  className="min-h-48"
+                  className="min-h-48 redesign:resize-none"
                   value={draft.knowledge}
                   maxLength={SERVER_BOT_KNOWLEDGE_MAX}
                   placeholder={t("serverSettings.bots.knowledgePlaceholder")}
@@ -541,7 +572,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                   title={t("bots.wizard.lives.title", { name: shownName })}
                   description={t("bots.wizard.lives.description")}
                 />
-                <div className="max-h-72 overflow-y-auto rounded-[var(--radius-card)] border border-border bg-surface-card p-1">
+                <div className={cn(CARD_SURFACE, "max-h-72 overflow-y-auto p-1")}>
                   {channels.map((channel) => (
                     <CheckRow
                       key={channel.id}
@@ -559,7 +590,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                   ))}
                 </div>
                 {draft.channelIds.length === 0 && (
-                  <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft">
+                  <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft redesign:rounded-[var(--banner-radius)]">
                     {t("bots.wizard.lives.none", { name: shownName })}
                   </p>
                 )}
@@ -599,7 +630,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
 
             {step === "born" && created && (
               <div className="space-y-4">
-                <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary">
+                <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[length:var(--section-label-size)] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
                   {t("bots.wizard.born.eyebrow")}
                 </p>
                 <h2 className="font-display text-3xl font-extrabold text-text">
@@ -618,7 +649,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                   channels={channels.filter((channel) => created.channelIds.includes(channel.id))}
                 />
                 {missing !== 0n && (
-                  <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft">
+                  <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft redesign:rounded-[var(--banner-radius)]">
                     {t("bots.wizard.born.missing", { name: created.name })}
                   </p>
                 )}
@@ -628,7 +659,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
           </div>
         </div>
 
-        <aside className="relative hidden w-[24rem] shrink-0 flex-col items-center justify-center gap-5 overflow-y-auto overflow-x-hidden border-l border-border bg-surface-0 px-6 py-8 md:flex">
+        <aside className="relative hidden w-[24rem] shrink-0 flex-col items-center justify-center gap-5 overflow-y-auto overflow-x-hidden border-l border-border bg-surface-0 px-6 py-8 md:flex redesign:m-[var(--settings-pane-inset)] redesign:ml-0 redesign:rounded-[var(--radius-pane)] redesign:border-l-0 redesign:bg-[color:var(--settings-pane-bg)] redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--settings-rule)]">
           {step === "born" && <Confetti />}
           {step === "lives" ? (
             <StageChannels draft={draft} channels={channels} name={shownName} serverName={serverName} />
@@ -813,8 +844,8 @@ function IntroPreview({
     }
   }
   return (
-    <div className="rounded-[var(--radius-card)] border border-border bg-surface-card p-3">
-      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary">
+    <div className={cn(CARD_SURFACE, "p-3")}>
+      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[length:var(--section-label-size)] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
         {t("bots.intro.preview", { channel: `#${home.name}` })}
       </p>
       <div className="flex gap-3">
@@ -917,10 +948,10 @@ function TestChat({
   }
 
   return (
-    <div className="flex flex-col rounded-[var(--radius-card)] border border-border bg-surface-card">
+    <div className={cn(CARD_SURFACE, "flex flex-col")}>
       <div className="max-h-72 min-h-40 space-y-3 overflow-y-auto p-3" aria-live="polite">
         {messages.length === 0 && (
-          <p className="text-sm text-text-tertiary">{t("bots.wizard.test.empty", { name })}</p>
+          <p className="text-sm text-text-tertiary redesign:text-text-secondary">{t("bots.wizard.test.empty", { name })}</p>
         )}
         {messages.map((message, index) =>
           message.from === "bot" ? (
@@ -983,7 +1014,7 @@ function TestChat({
 function StepTitle({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
   return (
     <div className="space-y-1">
-      <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary">{eyebrow}</p>
+      <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[length:var(--section-label-size)] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{eyebrow}</p>
       <h2 className="font-display text-2xl font-extrabold text-text">{title}</h2>
       <p className="text-sm text-text-secondary">{description}</p>
     </div>
@@ -992,7 +1023,7 @@ function StepTitle({ eyebrow, title, description }: { eyebrow: string; title: st
 
 function HowTo({ title, body }: { title: string; body: string }) {
   return (
-    <li className="rounded-[var(--radius-card)] border border-border bg-surface-card p-3">
+    <li className={cn(CARD_SURFACE, "p-3")}>
       <p className="text-sm font-semibold text-text">{title}</p>
       <p className="text-sm text-text-secondary">{body}</p>
     </li>
@@ -1015,8 +1046,8 @@ function IdCard({ draft, name }: { draft: BotDraft; name: string }) {
     [t("bots.card.powers"), t("bots.card.powersValue", { count: draft.tools.length })],
   ];
   return (
-    <div className="w-full rounded-[var(--radius-card)] border border-border bg-surface-card p-4">
-      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary">{t("bots.card.title")}</p>
+    <div className={cn(CARD_SURFACE, "w-full p-4")}>
+      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[length:var(--section-label-size)] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{t("bots.card.title")}</p>
       <dl className="space-y-1.5 text-sm">
         {rows.map(([label, value]) => (
           <div key={label} className="flex gap-3">
@@ -1091,7 +1122,7 @@ export function ToolPicker({
         <ModeChip mode="now" />
         <ModeChip mode="confirms" />
       </div>
-      <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-card">
+      <div className={cn(CARD_SURFACE, CARD_LIST)}>
         {TOOL_GROUPS.map(([group, groupTools]) => {
           const on = groupTools.filter((tool) => tools.includes(tool));
           const Icon = GROUP_ICON[group];
@@ -1099,7 +1130,7 @@ export function ToolPicker({
           return (
             <div key={group}>
               <div className="flex items-center gap-3 px-3 py-2.5">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text-secondary">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text-secondary redesign:rounded-full redesign:bg-[color:var(--card-row-hover)]">
                   <Icon className="h-4 w-4" aria-hidden />
                 </span>
                 <button
@@ -1118,7 +1149,7 @@ export function ToolPicker({
                       aria-hidden
                     />
                   </span>
-                  <span className="block truncate text-xs text-text-tertiary">
+                  <span className="block truncate text-xs text-text-tertiary redesign:text-text-secondary">
                     {t("bots.tools.count", { on: on.length, total: groupTools.length })} ·{" "}
                     {t(`bots.tools.groupHint.${group}`)}
                   </span>

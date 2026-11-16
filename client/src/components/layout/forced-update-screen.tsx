@@ -1,3 +1,4 @@
+import { Breu } from "@/components/breu/breu";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -69,16 +70,17 @@ export function ForcedUpdateScreen({
         </Button>
       }
     >
-      <p className="px-5 py-4 text-sm text-text-secondary">
-        {t("update.forced.detail")}
-      </p>
+      <div className="flex items-center gap-3 px-5 py-4">
+        <Breu mood="focused" size="sm" />
+        <p className="text-sm text-text-secondary">{t("update.forced.detail")}</p>
+      </div>
       {/* The button is the person's again after a failure, and this says why.
           A blocking screen that fails silently is a lock-out. */}
       {state.status === "error" && (
         <p
           role="alert"
           data-testid="forced-update-error"
-          className="border-t border-border px-5 py-3 text-sm text-danger"
+          className="border-t border-border px-5 py-3 text-sm text-danger redesign:border-[color:var(--dialog-footer-rule)]"
         >
           {state.reason === "offline"
             ? t("update.error.offline")

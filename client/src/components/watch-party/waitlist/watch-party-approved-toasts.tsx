@@ -1,6 +1,8 @@
 import { PartyPopper, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
+import { TOAST_CLOSE_REDESIGN, TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
+import { cn } from "@/lib/utils";
 
 export interface WatchPartyApprovedCard {
   serverId: string;
@@ -43,7 +45,10 @@ export function WatchPartyApprovedToasts({
           key={card.serverId}
           role="status"
           data-watch-party-approved-toast={card.serverId}
-          className="pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border border-border bg-surface-2 p-3 shadow-[var(--shadow-popover)] animate-toast-in"
+          className={cn(
+            "pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border border-border bg-surface-2 p-3 shadow-[var(--shadow-popover)] animate-toast-in",
+            TOAST_SURFACE_REDESIGN,
+          )}
         >
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-on-accent-soft">
             <PartyPopper className="h-5 w-5" aria-hidden />
@@ -67,10 +72,14 @@ export function WatchPartyApprovedToasts({
           <button
             type="button"
             aria-label={t("a11y.closeDialog")}
-            className="shrink-0 rounded-[var(--radius-control)] p-1 text-text-tertiary transition-colors hover:bg-surface-3 hover:text-text"
+            className={cn(
+              "shrink-0 rounded-[var(--radius-control)] p-1 text-text-tertiary transition-colors hover:bg-surface-3 hover:text-text",
+              "redesign:flex redesign:h-7 redesign:w-7 redesign:items-center redesign:justify-center redesign:p-0",
+              TOAST_CLOSE_REDESIGN,
+            )}
             onClick={() => onDismiss(card.serverId)}
           >
-            <X className="h-3.5 w-3.5" />
+            <X className="h-3.5 w-3.5 redesign:h-4 redesign:w-4" aria-hidden />
           </button>
         </div>
       ))}

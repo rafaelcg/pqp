@@ -87,7 +87,7 @@ describe("dialog bodies", () => {
       const usesHelper = body.includes("<DialogBody");
       // Otherwise the outermost element must carry its own horizontal padding.
       const firstClass = body.slice(0, 500).match(/className="([^"]*)"/);
-      const padded = /\b(px-\d|p-\d)/.test(firstClass?.[1] ?? "");
+      const padded = /\b(px-\d|p-\d|px-\[|p-\[)/.test(firstClass?.[1] ?? "");
       if (!usesHelper && !padded) {
         offenders.push(rel);
       }

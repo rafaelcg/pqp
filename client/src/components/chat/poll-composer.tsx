@@ -9,7 +9,10 @@ import {
   pollRequestSchema,
   type PollRequest,
 } from "@pqp/shared";
+import { ChartBar, X as XGlyph } from "@phosphor-icons/react";
 import { BarChart3, Plus, X } from "lucide-react";
+import { CONTENT_CARD_REDESIGN } from "@/components/ui/content-card";
+import { Icon } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -21,7 +24,14 @@ interface PollComposerProps {
 
 /** Filled field, no hard border: recessed ink well with a signal focus ring. */
 const FIELD_CLASS =
-  "h-10 w-full rounded-lg bg-ink-2 px-3 text-sm text-paper placeholder:text-paper-muted/70 shadow-[var(--shadow-inset-field)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50";
+  "h-10 w-full rounded-lg bg-ink-2 px-3 text-sm text-paper placeholder:text-paper-muted/70 shadow-[var(--shadow-inset-field)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 redesign:rounded-[var(--input-radius)] redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:text-text redesign:shadow-none redesign:placeholder:text-[color:var(--input-placeholder)] redesign:hover:border-[color:var(--input-hover-border)] redesign:focus-visible:ring-accent";
+
+/** A duration chip under the redesign: a pill; the chosen one ringed in the accent. */
+const CHIP_REDESIGN = "redesign:h-8 redesign:px-3.5 redesign:text-[0.8125rem] redesign:focus-visible:ring-accent";
+const CHIP_ON_REDESIGN =
+  "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:shadow-[inset_0_0_0_1.5px_var(--color-accent)]";
+const CHIP_OFF_REDESIGN =
+  "redesign:bg-[color:var(--content-glyph-bg)] redesign:text-text-secondary redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text";
 
 const DURATION_KEYS: Record<number, MessageKey> = {
   3600: "poll.composer.duration.3600",
@@ -49,10 +59,11 @@ export function PollComposer({ onSubmit, onClose }: PollComposerProps) {
   });
 
   return (
-    <div className="mb-2 rounded-2xl bg-[linear-gradient(165deg,color-mix(in_oklab,var(--color-signal)_6%,var(--color-surface-2)),var(--color-surface-2)_72%)] p-4 shadow-[var(--shadow-chance-highlight),var(--shadow-popover)]">
+    <div className={cn("mb-2 rounded-2xl bg-[linear-gradient(165deg,color-mix(in_oklab,var(--color-signal)_6%,var(--color-surface-2)),var(--color-surface-2)_72%)] p-4 shadow-[var(--shadow-chance-highlight),var(--shadow-popover)]", CONTENT_CARD_REDESIGN)}>
       <div className="flex items-center gap-2.5">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-signal/15 text-signal">
-          <BarChart3 className="h-4 w-4" aria-hidden />
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-signal/15 text-signal redesign:bg-accent-soft redesign:text-on-accent-soft">
+          <BarChart3 className="h-4 w-4 redesign:hidden" aria-hidden />
+          <Icon icon={ChartBar} size="sm" className="hidden redesign:block" />
         </span>
         <p className="min-w-0 flex-1 truncate font-display text-base font-semibold text-paper">
           {t("poll.composer.title")}
@@ -61,14 +72,15 @@ export function PollComposer({ onSubmit, onClose }: PollComposerProps) {
           type="button"
           onClick={onClose}
           aria-label={t("poll.composer.cancel")}
-          className="shrink-0 rounded p-1 text-paper-muted hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          className="shrink-0 rounded p-1 text-paper-muted hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:flex redesign:h-8 redesign:w-8 redesign:items-center redesign:justify-center redesign:rounded-full redesign:p-0 redesign:text-text-secondary redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent"
         >
-          <X className="h-4 w-4" />
+          <X className="h-4 w-4 redesign:hidden" />
+          <Icon icon={XGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
         </button>
       </div>
 
       <label className="mt-3 block">
-        <span className="text-xs font-medium text-paper-muted">
+        <span className="text-xs font-medium text-paper-muted redesign:text-[0.8125rem] redesign:text-text-secondary">
           {t("poll.composer.question")}
         </span>
         <input
@@ -81,7 +93,7 @@ export function PollComposer({ onSubmit, onClose }: PollComposerProps) {
       </label>
 
       <fieldset className="mt-3">
-        <legend className="text-xs font-medium text-paper-muted">
+        <legend className="text-xs font-medium text-paper-muted redesign:text-[0.8125rem] redesign:text-text-secondary">
           {t("poll.composer.options")}
         </legend>
         <div className="mt-1 space-y-1.5">
@@ -111,7 +123,7 @@ export function PollComposer({ onSubmit, onClose }: PollComposerProps) {
           <button
             type="button"
             onClick={() => setOptions([...options, ""])}
-            className="ml-7 mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-signal hover:underline"
+            className="ml-7 mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-signal hover:underline redesign:text-[0.8125rem] redesign:font-semibold redesign:text-accent-text"
           >
             <Plus className="h-3.5 w-3.5" aria-hidden />
             {t("poll.composer.addOption")}
@@ -120,7 +132,7 @@ export function PollComposer({ onSubmit, onClose }: PollComposerProps) {
       </fieldset>
 
       <div className="mt-3">
-        <p id="poll-composer-duration" className="text-xs font-medium text-paper-muted">
+        <p id="poll-composer-duration" className="text-xs font-medium text-paper-muted redesign:text-[0.8125rem] redesign:text-text-secondary">
           {t("poll.composer.duration")}
         </p>
         <div
@@ -142,6 +154,8 @@ export function PollComposer({ onSubmit, onClose }: PollComposerProps) {
                   active
                     ? "bg-[color-mix(in_oklab,var(--color-signal)_26%,var(--color-surface-1))] font-semibold text-paper"
                     : "bg-[color-mix(in_oklab,var(--color-paper)_5%,var(--color-surface-1))] font-medium text-paper-muted hover:text-paper",
+                  CHIP_REDESIGN,
+                  active ? CHIP_ON_REDESIGN : CHIP_OFF_REDESIGN,
                 )}
               >
                 {t(DURATION_KEYS[seconds] ?? "poll.composer.duration.604800")}

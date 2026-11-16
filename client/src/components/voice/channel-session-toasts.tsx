@@ -6,6 +6,7 @@ import {
   type ChannelSessionReminderToast,
 } from "@/lib/channel-session-schedule";
 import { cn } from "@/lib/utils";
+import { TOAST_OPEN_REDESIGN, TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
 
 const TOAST_MS = 8000;
 
@@ -87,25 +88,26 @@ export function ChannelSessionToasts({
           data-channel-session-toast={card.sessionId}
           className={cn(
             "pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 p-3 shadow-[var(--shadow-popover)]",
+            TOAST_SURFACE_REDESIGN,
             card.leaving ? "animate-toast-out" : "animate-toast-in",
           )}
         >
           <button
             type="button"
-            className="flex min-w-0 flex-1 items-center gap-3 text-left"
+            className={cn("flex min-w-0 flex-1 items-center gap-3 text-left", TOAST_OPEN_REDESIGN)}
             onClick={() => {
               dismiss(card.sessionId);
               onOpen(card.channelId);
             }}
           >
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-paper-muted">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-paper-muted redesign:bg-surface-3 redesign:text-text-secondary">
               <CalendarClock className="h-5 w-5" aria-hidden />
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-semibold text-paper">
                 {card.title}
               </span>
-              <span className="block truncate text-xs text-paper-muted">
+              <span className="block truncate text-xs text-paper-muted redesign:text-text-secondary">
                 {card.kind === "live"
                   ? t("watchPartySchedule.toast.live")
                   : t("watchPartySchedule.toast.startingSoon")}

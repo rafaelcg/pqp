@@ -3,54 +3,28 @@ import { hintDietHides } from "./hint-diet";
 /**
  * One card at a time.
  *
- * QG, the Android/iOS beta invite, Novidades, and cargos
- * all pin to `right-4 bottom-4`. Showing two is a stack, not a queue: the
- * one underneath still records its impression, so the person never sees it.
- * First match in this list is the only one allowed to mount. Not every id
- * here draws in that corner — `voiceClean` renders inline above the user
- * bar (`components/voice/voice-clean-hint.tsx`) — but it shares this list
- * because "never two cards on screen at once" is a product rule, not a
- * layout one.
+ * The Baú post card, the notification offer and the listing nudge all pin to
+ * `right-4 bottom-4`. Showing two is a stack, not a queue: the one underneath
+ * still records its impression, so the person never sees it. First match in
+ * this list is the only one allowed to mount. "Never two cards on screen at
+ * once" is a product rule, not a layout one.
  *
- * Order is product, not recency:
- *  (A waiting build used to be 1 here, a card that beat every campaign. It is
- *  the quiet update indicator now and takes no corner at all.)
- *  2. communityHomePost — a live Baú publish in the open server; not a
- *     campaign, so it beats the first-run cards
- *  3. notifyOffer — a DM or mention reached a hidden tab and banners are off;
+ * Order is product, not recency. The QG invite, the phone beta invite,
+ * Novidades, cargos, the shortcut map, the apps news, the forum news, the
+ * Voz limpa nudge and the seasonal look cards were removed on 2026-11-01.
+ * (A waiting build used to be the first card here. It is the quiet update
+ * indicator now and takes no corner at all.)
+ *  1. communityHomePost: a live Baú publish in the open server; not a
+ *     campaign
+ *  2. notifyOffer: a DM or mention reached a hidden tab and banners are off;
  *     a moment rather than a campaign (`lib/notifications.ts`, `NotifyOfferHint`)
- *  4. qg — the house, first-run
- *  4b. listingNudge: once, to the owner of a room with a public address
+ *  3. listingNudge: once, to the owner of a room with a public address
  *     that is not in the directory (`lib/community-listing-nudge.ts`)
- *  4c. forumNews: "O fórum abriu", once per server, to the members of a
- *     server where `forum_announcement` is on (`lib/forum-announcement.ts`).
- *     News about the server on screen, so it beats the year-round campaigns;
- *     it never wants the corner in a call, so it never meets voiceClean
- *  5. voiceClean — the one-time Voz limpa nudge, above the user bar; after
- *     the first-run cards, before the app-invite campaigns (`lib/voice-clean.ts`)
- *  6. seasonalLook: "the Halloween look is here", once per season; a short
- *     window, so it goes before the year-round campaigns (`lib/seasonal-looks.ts`)
- *  7. mobileBeta — phone browsers only; the campaign for the native apps
- *  8. whatsNew — Novidades now lives on the rail
- *  8b. appsNews — "Novo: apps no canal", once, only where the `apps` flag is on
- *     for the open server (`lib/apps/apps-hint.ts`)
- *  9. cargos — staff who can manage roles
- * 10. shortcuts — Cmd+/ map; last, and skipped while an attached feature
- *     hint is up (see `lib/feature-hints.ts`)
  */
 export const CORNER_HINT_ORDER = [
   "communityHomePost",
   "notifyOffer",
-  "qg",
   "listingNudge",
-  "forumNews",
-  "voiceClean",
-  "seasonalLook",
-  "mobileBeta",
-  "whatsNew",
-  "appsNews",
-  "cargos",
-  "shortcuts",
 ] as const;
 export type CornerHintId = (typeof CORNER_HINT_ORDER)[number];
 

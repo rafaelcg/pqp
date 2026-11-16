@@ -8,7 +8,14 @@ import {
   type ReactNode,
 } from "react";
 import { Button } from "@/components/ui/button";
-import { RadioGroup, useRovingRadio } from "@/components/ui/radio-group";
+import {
+  RadioGroup,
+  SEGMENTED_CELL,
+  SEGMENTED_CELL_OFF,
+  SEGMENTED_CELL_ON,
+  SEGMENTED_TRACK,
+  useRovingRadio,
+} from "@/components/ui/radio-group";
 import { Slider } from "@/components/ui/slider";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useAccentHue } from "@/hooks/use-accent-hue";
@@ -256,7 +263,7 @@ function LockableSegmented<T extends string>({
       onKeyDown={onKeyDown}
       // Each cell is as wide as its label plus the lock, never cut: the equal
       // cells of `RadioGroup` would shorten "Automático" once it wears a lock.
-      className="inline-flex max-w-full flex-wrap gap-0.5 rounded-[var(--radius-control)] border border-border bg-surface-0 p-0.5"
+      className={cn("inline-flex max-w-full flex-wrap", SEGMENTED_TRACK)}
     >
       {options.map((option, index) => {
         const checked = option.value === value;
@@ -278,12 +285,12 @@ function LockableSegmented<T extends string>({
                 }
               }}
               className={cn(
-                "inline-flex h-11 items-center justify-center gap-1.5 rounded-[var(--radius-control)] px-3 text-sm whitespace-nowrap sm:h-8",
+                SEGMENTED_CELL,
+                "h-11 gap-1.5 px-3 text-sm sm:h-[var(--segmented-h,2rem)]",
                 SETTINGS_TRANSITION,
-                SETTINGS_FOCUS,
-                checked ? "bg-surface-2 font-medium text-text" : "text-text-tertiary",
+                checked ? SEGMENTED_CELL_ON : SEGMENTED_CELL_OFF,
                 !checked && !option.locked && "hover:text-text",
-                option.locked && "cursor-not-allowed opacity-45",
+                option.locked && "cursor-not-allowed opacity-[var(--radio-disabled-opacity,0.45)]",
               )}
             >
               {option.locked ? (
@@ -296,7 +303,8 @@ function LockableSegmented<T extends string>({
                 id={tipId}
                 role="tooltip"
                 className={cn(
-                  "elevation-3 pointer-events-none absolute top-full z-10 mt-2 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs whitespace-nowrap text-text",
+                  // The tooltip's tokens, as in `ui/tooltip.tsx`.
+                  "pointer-events-none absolute top-full z-10 mt-2 rounded-[var(--tooltip-radius,var(--radius-control))] border border-[color:var(--tooltip-border,var(--elevation-3-border))] bg-[color:var(--tooltip-bg,var(--elevation-3-surface))] px-[var(--tooltip-px,0.625rem)] py-[var(--tooltip-py,0.375rem)] text-xs leading-[var(--tooltip-leading,1rem)] whitespace-nowrap text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-shadow,var(--elevation-3-shadow))] [font-weight:var(--tooltip-weight,400)]",
                   index === 0 ? "left-0" : "right-0",
                   tipFor === option.value
                     ? "block"

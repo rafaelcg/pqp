@@ -15,9 +15,8 @@
  * WHAT TELLS US IT IS NEW. Clerk stamps `user.createdAt` when the account is
  * made, and it is the only fact in reach that says "created" rather than
  * "present". The app's own signals are all near misses: `shouldRunOnboarding`
- * is true for anyone who abandoned the wizard weeks ago, `shouldShowFirstRun`
- * stays true until three tasks are done, and `takeAcquisition` only exists when
- * the visit carried campaign parameters. So the test is a window: an account
+ * is true for anyone who abandoned the wizard weeks ago, and
+ * `takeAcquisition` only exists when the visit carried campaign parameters. So the test is a window: an account
  * created within `NEW_ACCOUNT_WINDOW_MS` of now is one that was just created.
  *
  * THE TWO GUARDS, AND WHY BOTH. The window alone would fire on every reload

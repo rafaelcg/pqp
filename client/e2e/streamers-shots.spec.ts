@@ -315,7 +315,6 @@ async function as(page: Page, suffix: string): Promise<void> {
   await page.addInitScript((value) => {
     localStorage.setItem("pqp:dev-user-suffix", value);
     localStorage.setItem("pqp:member-sidebar", "false");
-    localStorage.setItem("pqp:download-hint-dismissed", "1");
     const media = navigator.mediaDevices;
     if (media) {
       media.getDisplayMedia = () =>

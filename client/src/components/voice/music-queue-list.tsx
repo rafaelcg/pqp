@@ -1,4 +1,13 @@
+import { DotsSixVertical, DotsThree } from "@phosphor-icons/react";
 import { GripVertical, MoreHorizontal } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
+import {
+  MUSIC_COVER_REDESIGN,
+  MUSIC_ICON_REDESIGN,
+  MUSIC_MUTED_REDESIGN,
+  MUSIC_ROW_REDESIGN,
+  MUSIC_TEXT_REDESIGN,
+} from "@/components/voice/music-classes";
 import { useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
 import type { MusicTrack } from "@pqp/shared";
 import { ContextMenu } from "@/components/ui/context-menu";
@@ -7,6 +16,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import { moveInQueue, moveTrackTo, removeFromQueue } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
 import { queueRowMenuItems } from "@/components/voice/music-extras";
@@ -140,6 +150,7 @@ function QueueRow({
   const openLabel = trackSourceIsSpotify(track) ? t("music.openSource") : t("music.openYoutube");
   const canRemove = canManage || mine;
   const composer = tone === "composer";
+  const redesign = useRedesign();
   const menuItems = useMemo(
     () =>
       queueRowMenuItems({
@@ -148,10 +159,14 @@ function QueueRow({
         canRemove,
         href,
         openLabel,
-        onPlayNext: () => moveTrackTo(track.id, 0),
+        // Under the redesign no item repeats another: the first song already
+        // plays next, and for the second "Subir" would be "Tocar a seguir".
+        onPlayNext: !redesign || index > 0 ? () => moveTrackTo(track.id, 0) : undefined,
         onRemove: () => removeFromQueue(track.id),
+        onMoveUp: redesign && index > 1 ? () => moveInQueue(track.id, -1) : undefined,
+        onMoveDown: redesign && !last ? () => moveInQueue(track.id, 1) : undefined,
       }),
-    [t, canManage, canRemove, href, openLabel, track.id],
+    [t, canManage, canRemove, href, openLabel, track.id, redesign, index, last],
   );
 
   const onKeyDown = (event: KeyboardEvent<HTMLLIElement>) => {
@@ -186,6 +201,8 @@ function QueueRow({
         className={cn(
           "group/row relative flex items-center gap-2 rounded-md px-1 py-1",
           composer ? "hover:bg-surface-3" : "hover:bg-ink-3",
+          MUSIC_ROW_REDESIGN,
+          "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-focus-ring",
           dragging && "opacity-40",
           dropBefore &&
             "before:absolute before:inset-x-1 before:-top-[2px] before:h-[2px] before:rounded-full before:bg-accent",
@@ -197,6 +214,7 @@ function QueueRow({
           className={cn(
             "relative h-8 w-8 shrink-0 overflow-hidden rounded-md",
             composer ? "bg-surface-3" : "bg-ink-3",
+            MUSIC_COVER_REDESIGN,
           )}
         >
           {track.thumbnailUrl ? (
@@ -205,17 +223,18 @@ function QueueRow({
           {canManage ? (
             <span
               className={cn(
-                "absolute inset-0 flex cursor-grab items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 active:cursor-grabbing",
+                "absolute inset-0 flex cursor-grab items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 active:cursor-grabbing redesign:[@media(hover:none)]:hidden",
                 composer ? "bg-surface/70 text-text" : "bg-ink/70 text-paper",
+                "redesign:bg-black/45 redesign:text-white",
               )}
               aria-hidden="true"
             >
-              <GripVertical className="h-3.5 w-3.5" />
+              <IconSwap off={GripVertical} on={DotsSixVertical} kind="symbol" size="sm" offClassName="h-3.5 w-3.5" />
             </span>
           ) : null}
         </span>
         <span
-          className={cn("min-w-0 flex-1 truncate text-sm", composer ? "text-text" : "text-paper")}
+          className={cn("min-w-0 flex-1 truncate text-sm", composer ? "text-text" : "text-paper", MUSIC_TEXT_REDESIGN)}
           title={track.title}
         >
           {track.title}
@@ -228,8 +247,8 @@ function QueueRow({
               className="h-4 w-4"
               fallbackClassName={
                 composer
-                  ? "bg-surface-3 text-[8px] text-text"
-                  : "bg-ink-3 text-[8px] text-paper"
+                  ? "bg-surface-3 text-[8px] text-text redesign:text-[9px] redesign:bg-[color:var(--card-bg)] redesign:ring-1 redesign:ring-[color:var(--card-border)]"
+                  : "bg-ink-3 text-[8px] text-paper redesign:text-[9px] redesign:bg-[color:var(--card-bg)] redesign:text-text redesign:ring-1 redesign:ring-[color:var(--card-border)]"
               }
               rounded="full"
             />
@@ -240,12 +259,13 @@ function QueueRow({
             className={cn(
               "shrink-0 text-[11px] tabular-nums",
               composer ? "text-text-secondary" : "text-paper-muted",
+              MUSIC_MUTED_REDESIGN,
             )}
           >
             {formatMusicClock(track.durationMs)}
           </span>
         ) : null}
-        <span className="flex w-8 shrink-0 items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+        <span className="flex w-8 shrink-0 items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 redesign:[@media(hover:none)]:opacity-100">
           <Menu items={menuItems} align="end" side="bottom">
             <button
               type="button"
@@ -255,10 +275,11 @@ function QueueRow({
                 composer
                   ? "text-text-tertiary hover:bg-surface-2 hover:text-text"
                   : "text-paper-muted hover:bg-ink-2 hover:text-paper",
+                MUSIC_ICON_REDESIGN,
               )}
               aria-label={t("music.overflow")}
             >
-              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+              <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" size="sm" offClassName="h-4 w-4" />
             </button>
           </Menu>
         </span>

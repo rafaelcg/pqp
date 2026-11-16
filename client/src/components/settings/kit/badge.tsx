@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 /**
@@ -7,7 +8,10 @@ import { cn } from "@/lib/utils";
  * noise suppression and Baú's toggle say "new" the same way.
  *
  * `accent` (default) is for news; `neutral` is a quiet qualifier ("Beta").
- * The text is uppercased by CSS, so the copy stays "Novo" in the locale file.
+ *
+ * It is `ui/Badge`: `new` and `neutral` under the redesign (a sentence-case
+ * pill). With the toggle off it keeps the chip Settings always drew (soft
+ * accent, 10px uppercase, no fixed height), passed as classes `cn` lets win.
  */
 export function SettingsBadge({
   children,
@@ -19,9 +23,10 @@ export function SettingsBadge({
   className?: string;
 }) {
   return (
-    <span
+    <Badge
+      variant={tone === "accent" ? "new" : "neutral"}
       className={cn(
-        "inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] leading-none font-semibold tracking-wide uppercase",
+        "h-auto gap-0 rounded-full px-1.5 py-0.5 font-semibold tracking-wide",
         tone === "accent"
           ? "bg-accent-soft text-on-accent-soft"
           : "bg-surface-2 text-text-secondary",
@@ -29,6 +34,6 @@ export function SettingsBadge({
       )}
     >
       {children}
-    </span>
+    </Badge>
   );
 }

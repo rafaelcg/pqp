@@ -14,6 +14,7 @@ import { formatBirthDateInWords } from "@/lib/age-readback";
 import { ApiError, submitAgeCheck } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { track, trackOnboardingStart } from "@/lib/track";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 import { cn } from "@/lib/utils";
 
 /**
@@ -136,7 +137,7 @@ export function AgeGateDialog({
     }
     trackOnboardingStart({
       path,
-      device: window.matchMedia?.("(max-width: 639px)").matches
+      device: window.matchMedia?.(BELOW_SM_QUERY).matches
         ? "phone"
         : "desktop",
       locale,

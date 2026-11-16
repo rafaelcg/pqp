@@ -2,6 +2,7 @@ import type { Gif } from "@pqp/shared";
 import { lazy, Suspense } from "react";
 import { ContainedChunkBoundary } from "@/components/error-boundary";
 import { cn } from "@/lib/utils";
+import { POPOVER_SURFACE } from "@/components/ui/popover";
 
 /**
  * Lazy for the same reason the emoji picker is: most sessions never open it,
@@ -29,7 +30,8 @@ export function GifPickerPanel(props: GifPickerPanelProps) {
         fallback={
           <div
             className={cn(
-              "elevation-3 z-50 h-[22rem] w-[21rem] animate-pulse rounded-[var(--radius-card)]",
+              POPOVER_SURFACE,
+              "z-50 h-[22rem] w-[21rem] animate-pulse",
               props.className,
             )}
           />

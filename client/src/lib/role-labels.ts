@@ -72,3 +72,28 @@ export function displayRoleName(
   });
   return collides ? role.name : label;
 }
+
+/**
+ * The order a person sees roles in, high to low: Dono pinned first, then by
+ * position, `@everyone` last. Cargos and a channel's permissions share it, so
+ * the same role is never in two places.
+ */
+export function rankRoles<
+  T extends { systemKey?: RoleSystemKey | null; isEveryone?: boolean; position: number },
+>(roles: readonly T[]): T[] {
+  return [...roles].sort((a, b) => {
+    if (a.systemKey === "owner") {
+      return -1;
+    }
+    if (b.systemKey === "owner") {
+      return 1;
+    }
+    if (a.isEveryone) {
+      return 1;
+    }
+    if (b.isEveryone) {
+      return -1;
+    }
+    return b.position - a.position;
+  });
+}

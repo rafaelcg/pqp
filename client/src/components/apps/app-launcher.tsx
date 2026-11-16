@@ -51,6 +51,7 @@ import {
 } from "@/lib/apps/launcher-model";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { SHEET_SURFACE } from "@/components/ui/sheet";
 
 /**
  * The apps button in the composer and the panel it opens (mock 01).
@@ -619,7 +620,11 @@ function LauncherPanel(props: PanelProps) {
         className={cn(
           "app-launcher-panel z-50 flex flex-col overflow-hidden border border-border-strong bg-surface-1 shadow-[var(--shadow-2)] focus:outline-none",
           modal
-            ? "app-launcher-sheet fixed inset-x-0 bottom-0 max-h-[88dvh] rounded-t-[var(--radius-panel)] pb-[env(safe-area-inset-bottom)]"
+            ? cn(
+                // The old radius is the toggle-off look; SHEET_SURFACE's wins under the redesign.
+                "app-launcher-sheet fixed inset-x-0 bottom-0 max-h-[88dvh] rounded-t-[var(--radius-panel)] pb-[env(safe-area-inset-bottom)]",
+                SHEET_SURFACE,
+              )
             : "absolute max-h-[min(70dvh,560px)] rounded-[12px]",
         )}
         style={

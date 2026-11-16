@@ -1,3 +1,4 @@
+import { Breu } from "@/components/breu/breu";
 import { SignUpButton, SignedIn, SignedOut } from "@clerk/clerk-react";
 import { noteSignupCta } from "@/lib/signup-assist";
 import { intlLocale } from "@/lib/locale";
@@ -604,6 +605,7 @@ function FreeHandle({
   return (
     <ProfileShell narrow>
       <div className="animate-rise rounded-3xl border border-ink-4 bg-ink-2/80 px-6 py-10 text-center backdrop-blur-sm sm:px-8">
+        <Breu mood="curious" size="md" className="mb-4" />
         <p className="font-mono text-4xl font-bold text-signal">@{handle}</p>
         <h1 className="mt-5 font-display text-2xl font-bold tracking-tight">
           {t("publicProfile.free.title", { handle })}

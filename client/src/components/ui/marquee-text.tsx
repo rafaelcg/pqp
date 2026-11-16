@@ -50,6 +50,8 @@ export function MarqueeText({
       ref={clipRef}
       className={cn("block overflow-hidden whitespace-nowrap", className)}
       title={text}
+      // Lets a caller style the clipped case, such as a fade at the edge.
+      data-overflows={overflows ? "" : undefined}
     >
       <span
         ref={textRef}

@@ -1,4 +1,4 @@
-import { Loader2, MessageCircle } from "lucide-react";
+import { MessageCircle } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
@@ -10,6 +10,7 @@ import {
   depoimentoRemaining,
 } from "./depoimentos-model";
 import { writeDepoimento } from "./depoimentos-api";
+import { Spinner } from "@/components/ui/spinner";
 
 /**
  * The compose sheet — and the single most opinionated screen in this feature.
@@ -133,7 +134,7 @@ export function DepoimentoComposer({
           data-depoimento-send=""
           onClick={() => void submit()}
         >
-          {busy && <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />}
+          {busy && <Spinner className="h-3.5 w-3.5 animate-spin" />}
           {t("depoimentos.compose.send")}
         </Button>
 

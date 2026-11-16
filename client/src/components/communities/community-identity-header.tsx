@@ -274,7 +274,8 @@ export function CommunityIdentityHeader({
           </div>
           {showTurnOn && (
             <Button
-              className="cta-lift h-11 w-full shrink-0 rounded-full sm:w-auto"
+              size="lg"
+              className="cta-lift w-full shrink-0 rounded-full sm:w-auto"
               onClick={onOpenServerSettings}
               data-identity-turn-on
             >

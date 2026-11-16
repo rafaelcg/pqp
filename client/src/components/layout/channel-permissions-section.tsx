@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { displayRoleName, rankRoles } from "@/lib/role-labels";
 import {
   ApiError,
   addChannelMember,
@@ -238,7 +239,9 @@ export function ChannelPermissionsSection({
     (role) =>
       recipe.roleIds.includes(role.id) && !roleIgnoresChannelOverwrites(role),
   );
-  const recipeNames = pickedRoles.map((role) => role.name);
+  const recipeNames = rankRoles(pickedRoles).map((role) =>
+    displayRoleName(role, t, roles),
+  );
   const isVoice = isVoiceRoomChannelType(channelType);
   const [advancedOpen, setAdvancedOpen] = useState(
     forceAdvancedOpen || recipe.kind === "custom",
@@ -280,7 +283,7 @@ export function ChannelPermissionsSection({
         key: `role:${role.id}`,
         targetType: "role",
         targetId: role.id,
-        label: role.isEveryone ? "@everyone" : role.name,
+        label: displayRoleName(role, t, roles),
         allow: existing ? parsePermissions(existing.allow) : 0n,
         deny: existing ? parsePermissions(existing.deny) : 0n,
         administrator:
@@ -293,9 +296,7 @@ export function ChannelPermissionsSection({
     if (everyone) {
       ordered.push(roleTarget(everyone));
     }
-    for (const role of [...roles]
-      .filter((role) => !role.isEveryone)
-      .sort((a, b) => b.position - a.position)) {
+    for (const role of rankRoles(roles.filter((role) => !role.isEveryone))) {
       ordered.push(roleTarget(role));
     }
     const memberRows = overwrites
@@ -316,7 +317,7 @@ export function ChannelPermissionsSection({
         a.label.localeCompare(b.label, undefined, { sensitivity: "base" }),
       );
     return [...ordered, ...memberRows];
-  }, [everyone, overwrites, roles, serverMembers]);
+  }, [everyone, overwrites, roles, serverMembers, t]);
 
   useEffect(() => {
     if (targets.length === 0) {
@@ -329,7 +330,7 @@ export function ChannelPermissionsSection({
   }, [targets, selectedKey]);
 
   const selected = targets.find((row) => row.key === selectedKey) ?? null;
-  const addableRoles = roles.filter(
+  const addableRoles = rankRoles(roles).filter(
     (role) =>
       !role.isEveryone &&
       !targets.some((row) => row.targetType === "role" && row.targetId === role.id),
@@ -386,7 +387,7 @@ export function ChannelPermissionsSection({
   function recipeTargetLabel(targetId: string): string {
     const role = roles.find((row) => row.id === targetId);
     if (role) {
-      return role.isEveryone ? "@everyone" : role.name;
+      return displayRoleName(role, t, roles);
     }
     return (
       serverMembers.find((member) => member.id === targetId)?.displayName ??
@@ -789,7 +790,7 @@ export function ChannelPermissionsSection({
             >
               {[
                 ...roles.filter((role) => role.isEveryone),
-                ...roles.filter((role) => !role.isEveryone),
+                ...rankRoles(roles.filter((role) => !role.isEveryone)),
               ].map((role) => {
                 const isEveryone = Boolean(role.isEveryone);
                 const locked = roleIgnoresChannelOverwrites(role);
@@ -807,7 +808,7 @@ export function ChannelPermissionsSection({
                     disabled={
                       recipeBusy || locked || everyoneMode || isEveryone
                     }
-                    label={isEveryone ? "@everyone" : role.name}
+                    label={displayRoleName(role, t, roles)}
                     title={
                       isEveryone && !everyoneMode
                         ? t("channelSettings.recipe.everyoneExcluded")
@@ -991,7 +992,7 @@ export function ChannelPermissionsSection({
                                 aria-hidden
                               />
                             ) : null}
-                            <span className="truncate">{role.name}</span>
+                            <span className="truncate">{displayRoleName(role, t, roles)}</span>
                           </button>
                         </li>
                       ))}

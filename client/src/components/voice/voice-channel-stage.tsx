@@ -5,6 +5,7 @@ import type { CallStageShape } from "@/lib/call-split";
 import type { VideoQuality } from "@/lib/video-quality";
 import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
 import { CallStage } from "@/components/voice/call-stage";
+import type { StageOccupantModeration } from "@/components/voice/room-card-menu";
 
 /**
  * Server voice channel mount of the shared call stage.
@@ -54,6 +55,7 @@ export function VoiceChannelStage({
   onLowerHand,
   onLowerAllHands,
   audienceHost = null,
+  occupantModeration,
   compactPeers = false,
   fill = false,
   onShapeChange,
@@ -115,6 +117,8 @@ export function VoiceChannelStage({
   onLowerAllHands?: () => void;
   /** Audience mode, for somebody who runs the stage (`audience-mode.tsx`). */
   audienceHost?: AudienceModeHostControls | null;
+  /** What a room card's right-click menu may do to somebody. See `CallStage`. */
+  occupantModeration?: StageOccupantModeration;
   compactPeers?: boolean;
   /** See `CallStage.watchPartyChrome`. */
   watchPartyChrome?: boolean;
@@ -175,6 +179,7 @@ export function VoiceChannelStage({
       onLowerHand={onLowerHand}
       onLowerAllHands={onLowerAllHands}
       audienceHost={audienceHost}
+      occupantModeration={occupantModeration}
       compactPeers={compactPeers}
       watchPartyChrome={watchPartyChrome}
       isWatchPartyChannel={isWatchPartyChannel}

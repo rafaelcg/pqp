@@ -1,10 +1,9 @@
 import { ChevronDown, ChevronUp, MonitorPlay } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import {
-  FeatureHint,
-  useFeatureHintEnabled,
-} from "@/components/layout/feature-hint";
+import { CaretDown, CaretUp, MonitorPlay as MonitorPlayFill } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { BANNER_DISC_REDESIGN, BANNER_QUIET_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
+import { Icon } from "@/components/ui/icon";
 import { useTranslation } from "@/lib/i18n";
 import {
   watchNowAge,
@@ -40,8 +39,6 @@ export interface WatchNowBannerProps {
   joiningChannelId?: string | null;
   /** Why the last join failed, already in the person's language. */
   failure?: string | null;
-  /** The one-time newcomer hint is allowed to draw under the strip. */
-  hintAllowed?: boolean;
   /** Test seam: the clock the age is read from. */
   now?: number;
 }
@@ -75,7 +72,6 @@ export function WatchNowBanner({
   onDismiss,
   joiningChannelId = null,
   failure = null,
-  hintAllowed = false,
   now: nowOverride,
 }: WatchNowBannerProps) {
   const { t } = useTranslation();
@@ -150,8 +146,6 @@ export function WatchNowBanner({
     }
   }, [rest.length]);
 
-  const hintEnabled = useFeatureHintEnabled("watchNow");
-
   if (!headline) {
     return null;
   }
@@ -166,7 +160,9 @@ export function WatchNowBanner({
         leaving ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100",
       )}
     >
-      <div className="relative min-h-0 overflow-hidden">
+      {/* Under the redesign the strip, its failure and its list are one
+          banner card in the accent tone; the rows inside drop their fills. */}
+      <div className={cn("relative min-h-0 overflow-hidden", bannerSurfaceRedesign("accent", "top", { layout: false }), "redesign:py-2.5")}>
         <p role="status" className="sr-only" data-watch-now-status="">
           {announcement}
         </p>
@@ -181,26 +177,32 @@ export function WatchNowBanner({
         {failure && (
           <p
             data-watch-now-failure=""
-            className="border-b border-border bg-accent-soft px-4 pb-3 text-sm text-danger"
+            className="border-b border-border bg-accent-soft px-4 pb-3 text-sm text-danger redesign:mt-2 redesign:border-0 redesign:bg-transparent redesign:px-0 redesign:pb-0 redesign:pl-11"
           >
             {t("watchNow.failed")} {failure}
           </p>
         )}
         {rest.length > 0 && (
-          <div className="border-b border-border bg-accent-soft px-4 pb-2">
+          <div className="border-b border-border bg-accent-soft px-4 pb-2 redesign:mt-1.5 redesign:border-0 redesign:bg-transparent redesign:px-0 redesign:pb-0 redesign:pl-9">
             <button
               type="button"
               data-watch-now-more=""
               aria-expanded={open}
               aria-controls="watch-now-list"
               onClick={() => setOpen((value) => !value)}
-              className="relative inline-flex min-h-8 items-center gap-1 rounded-[var(--radius-control)] px-1 text-xs font-medium text-on-accent-soft/80 hover:text-on-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              className="relative inline-flex min-h-8 items-center gap-1 rounded-[var(--radius-control)] px-1 text-xs font-medium text-on-accent-soft/80 hover:text-on-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:min-h-7 redesign:rounded-full redesign:px-2 redesign:text-[13px] redesign:font-semibold redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)] redesign:hover:text-[color:var(--banner-ink)]"
             >
               {t("watchNow.more", { count: rest.length })}
               {open ? (
-                <ChevronUp aria-hidden="true" className="h-3.5 w-3.5" />
+                <>
+                  <ChevronUp aria-hidden="true" className="h-3.5 w-3.5 redesign:hidden" />
+                  <Icon icon={CaretUp} kind="symbol" size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
+                </>
               ) : (
-                <ChevronDown aria-hidden="true" className="h-3.5 w-3.5" />
+                <>
+                  <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 redesign:hidden" />
+                  <Icon icon={CaretDown} kind="symbol" size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
+                </>
               )}
             </button>
             {open && (
@@ -226,12 +228,6 @@ export function WatchNowBanner({
           </div>
         )}
       </div>
-      {/* Outside the clipped row: the card hangs below the strip. */}
-      {hintAllowed && hintEnabled && (
-        <div className="pointer-events-none absolute left-3 top-full z-30 mt-1 [&>*]:pointer-events-auto">
-          <FeatureHint id="watchNow" enabled body={t("watchNow.hint")} />
-        </div>
-      )}
     </section>
   );
 }
@@ -292,6 +288,11 @@ function Row({
         primary
           ? "border-b border-border bg-accent-soft px-4 py-3"
           : "rounded-[var(--radius-control)] bg-surface-1/60 px-2 py-1.5",
+        // Inside the card: the headline row has no fill of its own; a listed
+        // stream is a row on a tint of the tone's ink.
+        primary
+          ? "redesign:border-0 redesign:bg-transparent redesign:p-0"
+          : "redesign:rounded-[calc(var(--banner-radius)-0.25rem)] redesign:bg-[color:color-mix(in_oklab,var(--banner-ink)_10%,transparent)]",
       )}
     >
       <span
@@ -299,14 +300,16 @@ function Row({
         className={cn(
           "flex shrink-0 items-center justify-center rounded-full bg-accent text-on-accent",
           compact ? "h-6 w-6" : "h-8 w-8",
+          BANNER_DISC_REDESIGN,
         )}
       >
-        <MonitorPlay className={compact ? "h-3.5 w-3.5" : "h-4 w-4"} />
+        <MonitorPlay className={cn(compact ? "h-3.5 w-3.5" : "h-4 w-4", "redesign:hidden")} />
+        <Icon icon={MonitorPlayFill} size="sm" className={cn("hidden redesign:block", compact && "h-3.5 w-3.5")} />
       </span>
       <div className="min-w-0 flex-1 basis-48">
         <p
           className={cn(
-            "text-pretty font-semibold text-on-accent-soft",
+            "text-pretty font-semibold text-on-accent-soft redesign:text-text",
             compact ? "text-xs" : "text-sm",
           )}
         >
@@ -315,7 +318,7 @@ function Row({
         {meta.length > 0 && (
           <p
             aria-hidden="true"
-            className="mt-0.5 text-xs text-on-accent-soft/80"
+            className="mt-0.5 text-xs text-on-accent-soft/80 redesign:text-[13px] redesign:text-text-secondary"
           >
             {meta.join(" · ")}
           </p>
@@ -343,7 +346,7 @@ function Row({
             size="sm"
             variant="ghost"
             data-watch-now-dismiss=""
-            className="min-h-11 sm:min-h-0"
+            className={cn("min-h-11 sm:min-h-0", BANNER_QUIET_REDESIGN)}
             onClick={() => onDismiss(stream)}
           >
             {t("watchNow.dismiss")}

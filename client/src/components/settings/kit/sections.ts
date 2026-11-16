@@ -15,6 +15,7 @@ export type SettingsSectionId =
   | "subscriptions"
   | "voice"
   | "keyboard"
+  | "beta"
   | "notifications"
   | "appearance"
   | "privacy"

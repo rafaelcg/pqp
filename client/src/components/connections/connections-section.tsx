@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { useRedesign } from "@/lib/redesign";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   CONNECTION_PROVIDERS,
@@ -19,7 +19,6 @@ import {
   SettingsInlineStatus,
   SettingsNotice,
   SettingsRow,
-  SettingsSelect,
   SettingsSkeletonRows,
   inlineErrorMessage,
   useInlineSave,
@@ -35,7 +34,9 @@ import {
 } from "@/lib/api";
 import { takeConnectionErrorFromWindow } from "@/lib/connection-callback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { Spinner as SpinnerGlyph } from "@/components/ui/spinner";
 
 const PROVIDER_NAME: Record<ConnectionGlyphProvider, MessageKey> = {
   steam: "connections.provider.steam",
@@ -345,7 +346,11 @@ export function ConnectionsSection() {
               >
                 <ConnectionGlyph
                   provider={provider}
-                  className="h-5 w-5 opacity-60"
+                  className={cn(
+                    "h-5 w-5 opacity-60 redesign:opacity-100 redesign:saturate-[.4] redesign:[&>svg]:opacity-60",
+                    // In light one rule for all four: grey and faded, the brand shape kept.
+                    "redesign:[:root[data-theme=light]_&]:opacity-50 redesign:[:root[data-theme=light]_&]:grayscale",
+                  )}
                 />
                 {t(PROVIDER_NAME[provider])}
               </li>
@@ -375,6 +380,7 @@ function ProviderRow({
   const selectId = useId();
   const nameId = useId();
   const hintId = useId();
+  const redesign = useRedesign();
   const visibility = useInlineSave();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -513,13 +519,19 @@ function ProviderRow({
       <Button
         type="button"
         ref={actionRef}
-        variant="ghost"
+        // Under the redesign the primitive's danger ghost, at the size and
+        // hover the Conectar beside it uses.
+        variant={redesign ? "danger-ghost" : "ghost"}
         size="sm"
         aria-describedby={nameId}
         aria-busy={busy || undefined}
         {...blockedProps}
         className={cn(
-          "shrink-0 border border-border-strong text-sm text-danger hover:text-danger",
+          "shrink-0",
+          // Under the redesign the primitive alone, like every other danger
+          // ghost; its text ends on the Conectar pills' edge.
+          redesign && "-mr-3",
+          !redesign && "border border-border-strong text-sm text-danger hover:text-danger",
           TOUCH_TARGET,
           blockedProps.className,
         )}
@@ -558,7 +570,7 @@ function ProviderRow({
       <label htmlFor={selectId} className="text-xs text-text-tertiary">
         {t("settings.connections.visibility.label")}
       </label>
-      <SettingsSelect
+      <Select
         id={selectId}
         aria-describedby={
           showHandleHint ? `${nameId} ${hintId}` : nameId
@@ -574,7 +586,7 @@ function ProviderRow({
             {t(VISIBILITY_LABEL[value])}
           </option>
         ))}
-      </SettingsSelect>
+      </Select>
       {showHandleHint ? (
         <p id={hintId} className="text-xs text-pretty text-text-tertiary">
           {t("settings.connections.visibility.publicHint", {
@@ -673,7 +685,8 @@ function ProviderRow({
 }
 
 /**
- * "Conectado como {name}", with the account's own name set in mono. One line:
+ * "Conectado como {name}", the account's own name in mono with the toggle off
+ * and in sans medium under the redesign. One line:
  * a long name is cut with an ellipsis and shown whole in the tooltip.
  */
 function LinkedAs({ name }: { name: string }) {
@@ -684,12 +697,12 @@ function LinkedAs({ name }: { name: string }) {
   return (
     <span className="block truncate" title={name}>
       {before}
-      <span className="font-mono text-text-secondary">{name}</span>
+      <span className="font-mono text-text-secondary redesign:font-sans redesign:font-medium redesign:text-text">{name}</span>
       {after}
     </span>
   );
 }
 
 function Spinner() {
-  return <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin" />;
+  return <SpinnerGlyph className="h-3.5 w-3.5 motion-safe:animate-spin" />;
 }

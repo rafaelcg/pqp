@@ -19,7 +19,9 @@ export {
   SETTINGS_DESCRIPTION,
   SETTINGS_FOCUS,
   SETTINGS_INSET_FOCUS,
+  SETTINGS_GROUP_REDESIGN,
   SETTINGS_LABEL,
+  SETTINGS_ROW_HOVER,
   SETTINGS_TRANSITION,
 } from "@/components/settings/kit/classes";
 export {
@@ -64,7 +66,6 @@ export {
   useSettingsSection,
   type SettingsSectionId,
 } from "@/components/settings/kit/sections";
-export { SettingsSelect } from "@/components/settings/kit/select";
 export {
   SettingsSkeletonRow,
   SettingsSkeletonRows,

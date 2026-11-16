@@ -126,6 +126,7 @@ describeDb("blocking", () => {
       // honoured.
       "customStatus",
       "displayName",
+      "handle",
       "id",
       "tag",
       "username",

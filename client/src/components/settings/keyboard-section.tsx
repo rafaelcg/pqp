@@ -1,3 +1,4 @@
+import { Keyboard as KeyboardGlyph } from "@phosphor-icons/react";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Info, Keyboard, Map as MapIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -198,7 +199,7 @@ export function KeyboardSection({
   if (!canBindKey) {
     return (
       <div className="space-y-6">
-        <SettingsNotice tone="info" icon={Keyboard} role="note">
+        <SettingsNotice tone="info" icon={Keyboard} glyph={KeyboardGlyph} role="note">
           {t("settings.keyboard.noKeyboard")}
         </SettingsNotice>
       </div>

@@ -10,8 +10,8 @@ import {
  * link, or reuse one this tab minted a moment ago, and put the short paste
  * ("Vem pra pqp: <link> #vemprapqp") on the clipboard.
  *
- * Three surfaces share it: the lone-presenter nudge (`bring-friends-hint`),
- * the owner's arrival banner and the owner's empty channel. The reuse exists
+ * Surfaces share it: the owner's arrival banner, the owner's empty channel
+ * and the voice room's invite card. The reuse exists
  * so an owner pressing copy on the wizard's "Sala pronta", then the banner,
  * then the empty channel does not leave three live links behind; concurrent
  * presses share one request.

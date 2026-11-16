@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Breu } from "@/components/breu/breu";
 import { Button } from "@/components/ui/button";
+import { POPOVER_SURFACE } from "@/components/ui/popover";
 import { translateMessage } from "@/lib/i18n";
 import {
   recoverFromChunkLoadError,
@@ -7,6 +9,7 @@ import {
 } from "@/lib/chunk-reload";
 import { isBusyNow } from "@/lib/in-call-state";
 import { setStaleChunkBannerVisible } from "@/lib/stale-chunk-state";
+import { cn } from "@/lib/utils";
 
 interface Props {
   children: ReactNode;
@@ -76,6 +79,7 @@ export class ErrorBoundary extends Component<Props, State> {
       // componentDidCatch; this is only ever on screen for an instant.
       return (
         <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+          <Breu mood="focused" size="sm" />
           <p className="font-display text-lg font-bold">Updating pqp…</p>
         </div>
       );
@@ -87,6 +91,7 @@ export class ErrorBoundary extends Component<Props, State> {
       // particular subtree has nothing else to show in its place.
       return (
         <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+          <Breu mood="hello" size="sm" />
           <p className="font-display text-xl font-bold">pqp updated</p>
           <p className="max-w-md text-sm text-paper-muted">
             You are in a call, so this waits for you. Reload when you hang up
@@ -99,6 +104,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+        <Breu mood="panic" size="lg" />
         <p className="font-display text-3xl font-bold">Something broke</p>
         <p className="max-w-md text-sm text-paper-muted">
           The app hit an unexpected error and stopped rendering. Reloading
@@ -134,14 +140,30 @@ export class ErrorBoundary extends Component<Props, State> {
  * now, the stage and the call stay exactly where they are, and the update waits
  * for the hangup as it always promised.
  */
-export function ContainedChunkBoundary({ children }: { children: ReactNode }) {
+export function ContainedChunkBoundary({
+  children,
+  nested = false,
+}: {
+  children: ReactNode;
+  /**
+   * The fallback sits inside a panel that already draws the popover surface
+   * (the emoji picker's shell): under the redesign it drops its own card, so
+   * there is one edge and one corner.
+   */
+  nested?: boolean;
+}) {
   return (
     <ErrorBoundary
       fallback={() => (
         <div
           role="status"
           data-contained-chunk-error=""
-          className="elevation-3 z-50 w-[21rem] max-w-[calc(100vw-1rem)] rounded-[var(--radius-card)] p-4 text-sm text-text-secondary"
+          className={cn(
+            POPOVER_SURFACE,
+            "z-50 w-[21rem] max-w-[calc(100vw-1rem)] p-4 text-sm text-text-secondary",
+            nested &&
+              "redesign:w-full redesign:rounded-none redesign:[--elevation-3-surface:transparent] redesign:[--elevation-3-border:transparent] redesign:[--elevation-3-shadow:none]",
+          )}
         >
           {translateMessage("staleChunk.contained")}
         </div>

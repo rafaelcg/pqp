@@ -1,5 +1,19 @@
 import { parseMusicInput, type MusicResolved } from "@pqp/shared";
+import {
+  MagnifyingGlass,
+  Plus as PlusGlyph,
+  Queue,
+} from "@phosphor-icons/react";
 import { ListStart, Plus, Search } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
+import {
+  MUSIC_COVER_REDESIGN,
+  MUSIC_ICON_REDESIGN,
+  MUSIC_MUTED_REDESIGN,
+  MUSIC_ROW_HIGHLIGHT_REDESIGN,
+  MUSIC_ROW_REDESIGN,
+  MUSIC_TEXT_REDESIGN,
+} from "@/components/voice/music-classes";
 import {
   useCallback,
   useEffect,
@@ -394,9 +408,13 @@ export function MusicSearchPicker({
       <div className={cn("flex items-center gap-1.5", rail && "relative")}>
         {rail ? (
           <>
-            <Search
-              aria-hidden="true"
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
+            <IconSwap
+              off={Search}
+              on={MagnifyingGlass}
+              kind="symbol"
+              size="sm"
+              offClassName="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary"
             />
             <input
               {...fieldProps}
@@ -408,6 +426,8 @@ export function MusicSearchPicker({
                 "h-8 w-full appearance-none rounded-xl bg-ink-2 pl-9 pr-3 text-sm text-paper placeholder:text-paper-muted",
                 "focus:outline-none focus:ring-2 focus:ring-signal/60",
                 "[&::-webkit-search-cancel-button]:hidden",
+                // Under the redesign: the input's well, in the drawer as in the sheet.
+                "redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:text-text redesign:placeholder:text-text-tertiary redesign:focus:ring-[color:var(--input-ring,var(--color-focus-ring))]",
               )}
               onChange={(event) => onQueryChange(event.target.value)}
             />
@@ -424,11 +444,11 @@ export function MusicSearchPicker({
                 type="button"
                 size="icon"
                 variant="secondary"
-                className="h-8 w-8 shrink-0"
+                className="h-8 w-8 shrink-0 redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)] redesign:disabled:border-transparent redesign:disabled:bg-transparent"
                 disabled={busy || !query.trim()}
                 onClick={() => void submit()}
               >
-                <Plus className="h-4 w-4" aria-hidden="true" />
+                <IconSwap off={Plus} on={PlusGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
               </Button>
             </Tooltip>
           </>
@@ -456,6 +476,8 @@ export function MusicSearchPicker({
                   : rail
                     ? "hover:bg-ink-3"
                     : "hover:bg-surface-2",
+                MUSIC_ROW_REDESIGN,
+                index === highlight && MUSIC_ROW_HIGHLIGHT_REDESIGN,
               )}
             >
               <button
@@ -468,6 +490,7 @@ export function MusicSearchPicker({
                   className={cn(
                     "relative h-8 w-8 shrink-0 overflow-hidden rounded-md",
                     rail ? "bg-ink-3" : "bg-surface-2",
+                    MUSIC_COVER_REDESIGN,
                   )}
                 >
                   {track.thumbnailUrl ? (
@@ -478,6 +501,7 @@ export function MusicSearchPicker({
                   className={cn(
                     "min-w-0 flex-1 truncate text-sm",
                     rail ? "text-paper" : "text-text",
+                    MUSIC_TEXT_REDESIGN,
                   )}
                 >
                   {track.title}
@@ -487,6 +511,7 @@ export function MusicSearchPicker({
                     className={cn(
                       "shrink-0 tabular-nums text-[11px]",
                       rail ? "text-paper-muted" : "text-text-tertiary",
+                      MUSIC_MUTED_REDESIGN,
                     )}
                   >
                     {formatMusicClock(track.durationMs)}
@@ -502,10 +527,11 @@ export function MusicSearchPicker({
                       rail
                         ? "text-paper-muted hover:bg-ink-2 hover:text-paper"
                         : "text-text-tertiary hover:bg-surface-3 hover:text-text",
+                      MUSIC_ICON_REDESIGN,
                     )}
                     onClick={() => addResolved(track, true)}
                   >
-                    <ListStart className="h-4 w-4" aria-hidden="true" />
+                    <IconSwap off={ListStart} on={Queue} kind="symbol" size="sm" offClassName="h-4 w-4" />
                   </button>
                 </Tooltip>
               )}
@@ -516,7 +542,7 @@ export function MusicSearchPicker({
       {notice && (
         <p
           role="status"
-          className={cn("text-[11px]", rail ? "text-paper-muted" : "text-text-secondary")}
+          className={cn("text-[11px]", rail ? "text-paper-muted" : "text-text-secondary", MUSIC_MUTED_REDESIGN)}
         >
           {notice}
         </p>

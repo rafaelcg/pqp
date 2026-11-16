@@ -105,6 +105,20 @@ describeDb("friendships", () => {
     expect((await listFriendships(bruno.id)).friends[0]!.customStatus).toBeNull();
   });
 
+  it("carries each person's claimed handle, so the profile card can open their public page", async () => {
+    await getPool().query(`UPDATE users SET handle = $2 WHERE id = $1`, [
+      bruno.id,
+      "bruninho",
+    ]);
+    await sendFriendRequest(alice.id, bruno.id);
+    expect((await listFriendships(alice.id)).outgoing[0]!.handle).toBe("bruninho");
+    await acceptFriendRequest(bruno.id, alice.id);
+    const mine = await listFriendships(alice.id);
+    expect(mine.friends[0]!.handle).toBe("bruninho");
+    // Somebody who never claimed one is null, not undefined.
+    expect((await listFriendships(bruno.id)).friends[0]!.handle).toBeNull();
+  });
+
   it("keeps one row per pair, and a resend neither duplicates nor re-freshens it", async () => {
     await sendFriendRequest(alice.id, bruno.id);
     const [before] = await rows();

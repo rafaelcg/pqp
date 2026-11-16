@@ -32,7 +32,7 @@ export function CallControlDivider({
     <span
       aria-hidden="true"
       className={cn(
-        "hidden w-px self-stretch bg-border",
+        "hidden w-px self-stretch bg-border redesign:bg-[color:var(--call-control-rule)]",
         container ? "@min-[22rem]:block" : "@min-[40rem]:block",
         className,
       )}

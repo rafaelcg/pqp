@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/lib/api";
 import {
   browserTimezone,
@@ -141,10 +142,10 @@ export function ScheduleSessionSheet({
           <span className="mb-1 block">
             {t("watchPartySchedule.sheet.descriptionLabel")}
           </span>
-          <textarea
+          <Textarea
             rows={3}
             maxLength={2000}
-            className="w-full resize-none rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 py-2 text-sm text-text placeholder:text-text-tertiary/70"
+            className="min-h-0 resize-none"
             value={description}
             onChange={(event) => setDescription(event.target.value)}
             placeholder={t("watchPartySchedule.sheet.descriptionPlaceholder")}
