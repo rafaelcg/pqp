@@ -12,6 +12,7 @@ export type SettingsSectionId =
   | "profile"
   | "connections"
   | "apps"
+  | "subscriptions"
   | "voice"
   | "keyboard"
   | "notifications"

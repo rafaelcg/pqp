@@ -1,0 +1,57 @@
+{
+  // The public jam media edge: sits at jam-media.pqp.gg (proposed), a
+  // hostname on OUR zone, and serves the audio, video and covers of public
+  // jams out of R2 through the colo cache. It exists so the bytes pass
+  // through a Cloudflare-cached hostname on our zone, which is the only place
+  // Cloudflare's CSAM Scanning Tool can see them (docs/CONTENT_SAFETY.md).
+  // Inert until the API sets JAM_PUBLIC_MEDIA_BASE_URL to this host AND this
+  // Worker holds JAM_PUBLIC_MEDIA_SECRET. See README.md.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pqp-jam-media-edge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  // Non-secret configuration. JAM_PUBLIC_MEDIA_SECRET is set with
+  // `wrangler secret put` and never lives in this file (README.md says which
+  // value it takes: the API's DERIVED key, never CLERK_SECRET_KEY itself).
+  "vars": {
+    // Exact origins that get Access-Control-Allow-Origin. Comma separated.
+    // An origin not on the list still gets the media (an <audio> or <video>
+    // tag needs no CORS) but no CORS header, so a fetch() from it fails.
+    "CORS_ALLOWED_ORIGINS": "https://jam.pqp.gg,https://pqp.gg",
+    // The kill switch. "off" answers every media request 503 with no-store,
+    // at once, without touching the API. Anything else serves.
+    "MEDIA_SERVING": "on"
+  },
+  // The bucket the API signs jam objects into (S3_BUCKET, the attachments
+  // bucket, `pqp-attachments`). The Worker only ever calls `get` and `head`,
+  // and only for a key that starts with `jam/`; R2 bindings cannot be made
+  // read-only in config, so that is enforced in code and pinned by a test.
+  "r2_buckets": [
+    { "binding": "JAM_MEDIA", "bucket_name": "pqp-attachments" }
+  ],
+  "routes": [
+    { "pattern": "jam-media.pqp.gg", "custom_domain": true }
+  ],
+  "observability": { "enabled": true },
+
+  // STAGING: `npx wrangler deploy --env staging` deploys
+  // pqp-jam-media-edge-staging on workers.dev against the staging bucket.
+  // Bindings and vars are not inherited by an environment, so each is
+  // restated. Secrets are per environment: `wrangler secret put <NAME> --env
+  // staging`, derived from STAGING's CLERK_SECRET_KEY.
+  "env": {
+    "staging": {
+      "name": "pqp-jam-media-edge-staging",
+      "workers_dev": true,
+      "routes": [],
+      "vars": {
+        "CORS_ALLOWED_ORIGINS": "https://staging.pqp-3yr.pages.dev,http://localhost:5173",
+        "MEDIA_SERVING": "on"
+      },
+      "r2_buckets": [
+        { "binding": "JAM_MEDIA", "bucket_name": "pqp-attachments-staging" }
+      ],
+      "observability": { "enabled": true }
+    }
+  }
+}

@@ -114,6 +114,7 @@ struct AgeStep: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             footer
         }
+        .inAppLegalLinks()
         .animation(.easeInOut(duration: 0.2), value: error)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: readingBack)
         .sensoryFeedback(.error, trigger: failures)
@@ -208,6 +209,11 @@ struct AgeStep: View {
                 .buttonStyle(PrimaryButtonStyle(isEnabled: complete))
                 .disabled(!complete || submitting)
                 .accessibilityIdentifier("ageGate.submit")
+
+                // The agreement stays in front of the person on the screen
+                // that actually creates the account, not only on the welcome.
+                LegalAgreementLine()
+                    .padding(.top, 4)
 
                 // The way out for a wrong account. Not a way around the
                 // question, which has no "later".

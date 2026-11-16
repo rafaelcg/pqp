@@ -1,1 +1,1 @@
-server,friends,group,call,gaming,live,twitch,free,open,source,selfhosted,streamer,dm,together,talk
+server,friends,group,call,gaming,live,stream,free,open,source,selfhosted,streamer,dm,together,talk

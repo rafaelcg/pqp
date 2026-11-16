@@ -148,7 +148,9 @@ describeDb("acquisition over the API", () => {
 
   it("hides the report from everybody but an instance moderator", async () => {
     expect((await call(ana, "GET", "/api/admin/acquisition")).status).toBe(404);
-    expect((await call(null, "GET", "/api/admin/acquisition")).status).toBe(401);
+    // Now on the machine-token table, where no credential answers 404 like
+    // every other route there.
+    expect((await call(null, "GET", "/api/admin/acquisition")).status).toBe(404);
   });
 
   it("answers the operator with signups grouped by campaign", async () => {

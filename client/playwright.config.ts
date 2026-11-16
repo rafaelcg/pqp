@@ -60,6 +60,15 @@ const DATABASE_URL =
 type E2EProject = NonNullable<PlaywrightTestConfig["projects"]>[number];
 
 /**
+ * `window.screen` for the desktop projects. Playwright makes it equal to the
+ * viewport, so every page would look fullscreen to the whole-screen
+ * self-preview guard (`lib/share-self-capture.ts`) and a presenter's own share
+ * would show its still card instead of the picture the specs look for. A real
+ * desktop is bigger than the window.
+ */
+const DESKTOP_SCREEN = { width: 3840, height: 2160 };
+
+/**
  * Phone emulation, for the one spec that is about phones. An iPhone is WebKit
  * with no element fullscreen and Safari's own user agent; a Pixel is Chromium
  * with `isMobile` and a touch screen. Both start in portrait and the spec
@@ -95,7 +104,7 @@ const iphoneProject: E2EProject[] = process.env.PW_WEBKIT
 const projects: E2EProject[] = [
   {
     name: "chromium",
-    use: { ...devices["Desktop Chrome"] },
+    use: { ...devices["Desktop Chrome"], contextOptions: { screen: DESKTOP_SCREEN } },
     // `e2e/stale-bundle/` has its own config (real builds, no API, no
     // database): `playwright.stale-bundle.config.ts`, `pnpm e2e:stale-bundle`.
     // `e2e/share-fast-start/` too (Docker LiveKit, real Chrome, the `lk`
@@ -109,11 +118,15 @@ const projects: E2EProject[] = [
       /locadora-guest[\\/]/,
       // and the share-sound one: `playwright.locadora-share-sound.config.ts`
       /locadora-share-sound[\\/]/,
+      // the jam engine rig needs a fake microphone file: `playwright.jam.config.ts`
+      /[\\/]jam[\\/]/,
+      // the public jam site, its own config and a mocked API: `playwright.jam-site.config.ts`
+      /jam-site[\\/]/,
     ],
   },
   {
     name: "chromium-media",
-    use: { ...devices["Desktop Chrome"] },
+    use: { ...devices["Desktop Chrome"], contextOptions: { screen: DESKTOP_SCREEN } },
     testMatch: MEDIA_SPEC,
   },
   ...iphoneProject,
@@ -221,6 +234,12 @@ export default defineConfig({
         // `watch-party-waitlist.spec.ts` would test nothing. The flag-off
         // answers are pinned in `server/src/api/watch-party-waitlist.test.ts`.
         WATCH_PARTY_WAITLIST: "on",
+        // Baú+ (`e2e/bau-plus-pay.spec.ts`): the dev bypass makes the built-in
+        // sandbox the payment provider; it pays only when the spec presses its
+        // button, so nothing races the assertions. The `bau_payments` flag stays
+        // off and the spec turns it on for its own server through the machine
+        // token, the way the dashboard does.
+        BAU_PAYMENTS_SANDBOX_AUTOPAY_SECONDS: "0",
         // The operator dashboard's machine token, so a spec can flip a runtime
         // feature flag (`server/src/lib/flags.ts`) the way the dashboard does
         // and watch an open tab follow it. A throwaway value for this local

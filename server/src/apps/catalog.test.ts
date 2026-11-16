@@ -146,6 +146,7 @@ describeDb("the app catalog loader", () => {
       status: "draft",
       global_enabled: false,
       community_unlocked: false,
+      default_operator_enabled: false,
       current_version: "1.0.0",
     });
     const [version] = await versions();
@@ -202,7 +203,8 @@ describeDb("the app catalog loader", () => {
   it("never touches the status, switches, review or current version of an existing app", async () => {
     await loadAppCatalog({ entries: [testCatalogEntry(testManifest())], dev: false });
     await q(
-      `UPDATE apps SET status = 'live', global_enabled = TRUE, community_unlocked = TRUE
+      `UPDATE apps SET status = 'live', global_enabled = TRUE, community_unlocked = TRUE,
+                       default_operator_enabled = TRUE
         WHERE id = 'pqp-eco'`,
     );
     await q(
@@ -224,6 +226,8 @@ describeDb("the app catalog loader", () => {
       status: "live",
       global_enabled: true,
       community_unlocked: true,
+      // The operator's app-wide release is never the loader's to move.
+      default_operator_enabled: true,
       current_version: "1.0.0",
     });
     const rows = await versions();
@@ -367,6 +371,8 @@ describeDb("the app catalog loader", () => {
         status: "live",
         global_enabled: true,
         community_unlocked: true,
+        // Released on ONE server below, not on every server: the default stays off.
+        default_operator_enabled: false,
       });
 
       const env = { DEV_AUTH_BYPASS: "true", NODE_ENV: "development" } as NodeJS.ProcessEnv;

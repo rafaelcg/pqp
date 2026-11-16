@@ -15,6 +15,7 @@ import {
   memberHasPermission,
   Permission,
 } from "./permissions.js";
+import { readBauSubjectForModeration } from "./community-home.js";
 import { canAccessChannel, channelVisibleSql } from "./users.js";
 
 /**
@@ -69,6 +70,8 @@ interface ReportRow {
   server_id: string | null;
   channel_id: string | null;
   reported_message_id: string | null;
+  reported_bau_post_id: string | null;
+  reported_bau_comment_id: string | null;
 }
 
 function iso(value: Date): string {
@@ -247,7 +250,8 @@ async function loadOtherReports(
             srv.name AS server_name
      FROM reports r
      LEFT JOIN servers srv ON srv.id = r.server_id
-     WHERE r.reported_user_id = $1 AND r.id <> $2::bigint ${scope}
+     WHERE r.reported_user_id = $1 AND r.id <> $2::bigint
+       AND r.escalated_from IS NULL ${scope}
      ORDER BY r.id DESC
      LIMIT $3`,
     params,
@@ -430,7 +434,7 @@ async function loadReporter(
             COUNT(r.id) FILTER (WHERE r.status = 'actioned')::text AS actioned,
             COUNT(r.id) FILTER (WHERE r.status = 'dismissed')::text AS dismissed
      FROM users u
-     LEFT JOIN reports r ON r.reporter_id = u.id
+     LEFT JOIN reports r ON r.reporter_id = u.id AND r.escalated_from IS NULL
      WHERE u.id = $1
      GROUP BY u.id`,
     [reporterId],
@@ -661,6 +665,35 @@ async function loadSurrounding(
   };
 }
 
+/**
+ * A reported Baú post or comment, opened past the VIP lock (see
+ * `readBauSubjectForModeration` for why that is allowed and how narrow it is).
+ * The route has already refused anybody who may not read this report; what is
+ * decided here is only that a server's staff never read a post of another
+ * server, whatever a row says. The AUDIT write is the route's job and happens
+ * before this is returned to anyone.
+ */
+async function loadBauSubject(
+  report: ReportRow,
+  viewer: ContextViewer,
+): Promise<ReportContext["bau"]> {
+  if (
+    (report.subject_type !== "bau_post" &&
+      report.subject_type !== "bau_comment") ||
+    (!report.reported_bau_post_id && !report.reported_bau_comment_id)
+  ) {
+    return null;
+  }
+  const found = await readBauSubjectForModeration({
+    postId: report.reported_bau_post_id,
+    commentId: report.reported_bau_comment_id,
+  });
+  if (!found || (!viewer.instance && found.serverId !== report.server_id)) {
+    return null;
+  }
+  return found;
+}
+
 /** What the viewer may do from the card, by the same rules the routes apply. */
 async function loadActions(
   report: ReportRow,
@@ -727,7 +760,9 @@ export async function getReportContext(
   const found = await getPool().query<ReportRow>(
     `SELECT id::text AS id, subject_type, reporter_id, reported_user_id,
             server_id, channel_id::text AS channel_id,
-            reported_message_id::text AS reported_message_id
+            reported_message_id::text AS reported_message_id,
+            reported_bau_post_id::text AS reported_bau_post_id,
+            reported_bau_comment_id::text AS reported_bau_comment_id
      FROM reports WHERE id = $1::bigint`,
     [reportId],
   );
@@ -759,6 +794,7 @@ export async function getReportContext(
       serverMessages: [],
       ownedServers: [],
       surrounding: await loadSurrounding(report, viewer),
+      bau: await loadBauSubject(report, viewer),
       actions: { canTerminate: false, server: null },
     };
   }
@@ -776,6 +812,7 @@ export async function getReportContext(
     surrounding,
     messageServer,
     reporter,
+    bau,
     actions,
   ] = await Promise.all([
     viewer.instance
@@ -793,6 +830,7 @@ export async function getReportContext(
     viewer.instance && report.reporter_id
       ? loadReporter(report.reporter_id)
       : Promise.resolve(null),
+    loadBauSubject(report, viewer),
     messageServerRead.then((found) =>
       loadActions(report, viewer, true, report.server_id ?? found?.id ?? null),
     ),
@@ -812,6 +850,7 @@ export async function getReportContext(
     serverMessages,
     ownedServers,
     surrounding,
+    bau,
     actions,
   };
 }

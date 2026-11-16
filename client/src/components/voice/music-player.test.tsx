@@ -1029,7 +1029,7 @@ describe("MusicNowPlaying", () => {
       </TooltipProvider>,
     );
     expect(html).toContain('data-music-repeat="one"');
-    expect(html).toContain("lucide-repeat1");
+    expect(html).toContain("lucide-repeat-1");
     expect(html).toContain('aria-pressed="true"');
   });
 });

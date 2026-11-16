@@ -65,6 +65,10 @@ import {
   parseNoiseSuppressionMode,
   type NoiseSuppressionMode,
 } from "../../lib/noise-suppression";
+import {
+  createVoiceGate,
+  type VoiceGateHandle,
+} from "../../lib/voice-gate/voice-gate-node";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
 import { useInCall } from "@/lib/in-call-state";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -358,6 +362,12 @@ export interface MicLoopbackDeps {
   createSuppressor: (
     context: AudioContext,
   ) => Promise<AudioNode & { destroy(): void }>;
+  /**
+   * The voice gate after it, so the test sounds like the call. Optional and
+   * allowed to answer null (flag off, module refused): a test without one is
+   * plain RNNoise, which is what the loop was before the gate.
+   */
+  createGate?: (context: AudioContext) => Promise<VoiceGateHandle | null>;
   createAudio: () => HTMLAudioElement;
   setSink: (element: HTMLMediaElement, deviceId: string) => Promise<void>;
   setTimer: (run: () => void, ms: number) => unknown;
@@ -373,6 +383,7 @@ const browserLoopbackDeps: MicLoopbackDeps = {
   advancedSupported: advancedNoiseSuppressionSupported,
   createSuppressor: async (context) =>
     createRnnoiseNode(context, await loadRnnoiseBinary()),
+  createGate: createVoiceGate,
   createAudio: () => new Audio(),
   setSink: applyAudioOutputDevice,
   setTimer: (run, ms) => window.setTimeout(run, ms),
@@ -415,6 +426,7 @@ export function startMicLoopback(
   let stream: MediaStream | null = null;
   let context: AudioContext | null = null;
   let suppressor: (AudioNode & { destroy(): void }) | null = null;
+  let gate: VoiceGateHandle | null = null;
   let audio: HTMLAudioElement | null = null;
   let analyser: AnalyserNode | null = null;
   let gainNode: GainNode | null = null;
@@ -433,6 +445,12 @@ export function startMicLoopback(
       audio.srcObject = null;
       audio = null;
     }
+    try {
+      gate?.destroy();
+    } catch {
+      // Already gone with its context.
+    }
+    gate = null;
     try {
       suppressor?.destroy();
     } catch {
@@ -502,6 +520,13 @@ export function startMicLoopback(
         suppressor = null;
         fallBackToBrowserSuppression();
       }
+      if (suppressor && deps.createGate) {
+        try {
+          gate = await deps.createGate(context);
+        } catch {
+          gate = null;
+        }
+      }
       if (stopped) {
         release();
         return;
@@ -522,7 +547,7 @@ export function startMicLoopback(
     gain.gain.value = Math.min(2, Math.max(0, inputVolume));
     gainNode = gain;
     const destination = context.createMediaStreamDestination();
-    connectMicChain({ source, suppressor, gain });
+    connectMicChain({ source, suppressor, gain, gate: gate?.node ?? null });
     gain.connect(destination);
 
     const element = deps.createAudio();

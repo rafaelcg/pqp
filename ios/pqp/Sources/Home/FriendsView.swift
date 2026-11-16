@@ -204,10 +204,12 @@ struct FriendsView: View {
                 .buttonStyle(.plain)
                 .disabled(model.busyId == friend.id)
                 .contextMenu {
-                    Button {
-                        Task { opened = await model.openConversation(with: friend.id) }
-                    } label: {
-                        Label("Message", systemImage: "bubble.left")
+                    if !model.cannotMessage.contains(friend.id) {
+                        Button {
+                            Task { opened = await model.openConversation(with: friend.id) }
+                        } label: {
+                            Label("Message", systemImage: "bubble.left")
+                        }
                     }
                     Button(role: .destructive) {
                         model.confirming = .remove(friend)
@@ -344,6 +346,11 @@ final class FriendsModel {
     /// side and no frame back to us.
     var notice: String?
     var busyId: String?
+    /// Friends the server refused to open a conversation with, when there was
+    /// none already. Their Message action is withdrawn for the rest of the
+    /// visit: a button that can only fail, in red, with the server's sentence,
+    /// is what a reviewer pressing Message on a character friend saw.
+    var cannotMessage: Set<String> = []
     var showingAdd = false
     var confirming: Confirmation?
     /// The last live nudge, so the screen can say what just happened. A row
@@ -532,7 +539,7 @@ final class FriendsModel {
             case .block:
                 // No separate unfriend call: the block's trigger deletes the
                 // friendship row itself, and issuing both would race it.
-                try await session.api.setBlocked(userId: userId, blocked: true)
+                try await session.blocked.block(userId, surface: "friends", using: session.api)
             }
             await refresh()
         } catch {
@@ -540,21 +547,39 @@ final class FriendsModel {
         }
     }
 
-    /// Open (or reuse) the DM with a friend. Friends bypass a `server_members`
-    /// DM privacy setting server-side, which is why this is offered here at all
-    /// — but it does NOT override `nobody`, so a refusal is still possible and
-    /// the server's wording is what gets shown.
+    /// Open (or reuse) the DM with a friend.
+    ///
+    /// An existing conversation is found in the DM list first (see
+    /// `openOrFindConversation`), so a friend the server will not OPEN a
+    /// conversation with, like a character, still opens the one that is already
+    /// in the hub. Friends bypass a `server_members` DM privacy setting
+    /// server-side, but not `nobody`, so a refusal is still possible when there
+    /// is no conversation yet. That one is not an error to show in red: the
+    /// action is withdrawn for this person and a plain line says so. The
+    /// server's sentence stays out on purpose, it is the same for every cause.
     func openConversation(with userId: String) async -> DmSummary? {
-        guard let session else { return nil }
+        guard let session, !cannotMessage.contains(userId) else {
+            if cannotMessage.contains(userId) { notice = Self.cannotMessageNotice }
+            return nil
+        }
         busyId = userId
         liveNotice = nil
         defer { busyId = nil }
         do {
-            return try await session.api.openConversation(userIds: [userId])
+            return try await session.api.openOrFindConversation(with: userId)
         } catch {
-            if let shown = error.userFacingMessage { self.error = shown }
+            if case .server(let status, _)? = error as? APIError, status == 403 {
+                cannotMessage.insert(userId)
+                notice = Self.cannotMessageNotice
+            } else if let shown = error.userFacingMessage {
+                self.error = shown
+            }
             return nil
         }
+    }
+
+    static var cannotMessageNotice: String {
+        String(localized: "You can't message this person right now.")
     }
 }
 

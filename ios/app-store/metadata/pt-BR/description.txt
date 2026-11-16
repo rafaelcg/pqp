@@ -1,6 +1,6 @@
-pqp é chat de voz e texto de código aberto pra galera: assiste a tela de quem compartilhou, com o som junto, entra num watch party e monta a tua comunidade com servidores, canais e mensagem direta. De graça, sem anúncio, feito por dois irmãos.
+pqp é chat de voz e texto de código aberto pra galera: assiste a tela de quem compartilhou, com o som junto, entra num watch party e monta a tua comunidade com servidores, canais e mensagem direta. De graça, sem anúncio.
 
-Já rolou watch party com mais de 100 pessoas assistindo juntas numa sala só, em setembro de 2026. O código é todo público no GitHub.
+As watch parties são feitas pra salas grandes: todo mundo vê o mesmo momento do filme ao mesmo tempo. O código é todo público no GitHub.
 
 VOZ E VÍDEO
 Entra num canal de voz e conversa com áudio limpo: conexão direta entre os participantes pra grupos pequenos, ou servidor de mídia dedicado pra salas maiores, escolhido sozinho pelo app, sem tu precisar pensar nisso. Liga a câmera, assiste a tela que alguém compartilhou, vê quem tá falando, silencia o microfone ou o áudio, e avalia a chamada ao desligar. Liga direto pra um amigo pra uma chamada só dos dois.
@@ -23,4 +23,4 @@ Denuncia uma mensagem, uma pessoa ou uma comunidade em poucos toques. Donos de s
 CÓDIGO ABERTO
 O pqp é de graça, não tem anúncio, e o código inteiro é público no GitHub (rafaelcg/pqp) sob licença AGPL. Qualquer pessoa pode ler o código, hospedar a própria instância ou contribuir.
 
-Esse app ainda é um beta. Levantar a mão numa chamada de voz e outras coisas do site ainda estão chegando no iOS, embora já funcionem no site e no app de desktop do pqp. A gente lança melhorias com frequência, iOS incluso.
+O app está disponível em inglês e português e é atualizado com frequência. O pqp também funciona no navegador e no app de desktop, com a mesma conta.

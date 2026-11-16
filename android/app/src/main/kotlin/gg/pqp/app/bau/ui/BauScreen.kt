@@ -25,7 +25,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -526,9 +525,11 @@ private fun postDate(iso: String): String = when (val day = DayLabels.labelFor(i
 /**
  * What a member without the cargo sees instead of the body.
  *
- * The button is disabled and says so. There is no checkout on any client,
- * and a button that opened nothing would be worse than one that admits it is
- * not ready.
+ * A plain card, not a control: what VIP gets you, and how to get it (support
+ * the creator, ask whoever runs the server for the cargo). No purchase link,
+ * no price and no button on purpose: whether pointing a phone at an outside
+ * payment to unlock in-app content is allowed by the stores is not checked
+ * yet, so phones stay link-free. TalkBack reads the card as one element.
  */
 @Composable
 private fun LockedBox() {
@@ -538,7 +539,8 @@ private fun LockedBox() {
             .clip(MaterialTheme.shapes.small)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(Spacing.md)
-            .testTag("bau.locked"),
+            .testTag("bau.locked")
+            .semantics(mergeDescendants = true) {},
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
@@ -559,10 +561,12 @@ private fun LockedBox() {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(Spacing.sm))
-        Button(onClick = {}, enabled = false) {
-            Text(stringResource(R.string.bau_unlock_cta))
-        }
+        Spacer(Modifier.height(Spacing.xs))
+        Text(
+            text = stringResource(R.string.bau_locked_how),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

@@ -821,6 +821,24 @@ export const setSharingScreenMessageSchema = z.object({
    * configured ladder as before.
    */
   sourceHeight: z.number().int().positive().optional(),
+  /**
+   * This share has sound that this client can only send on the voice server.
+   *
+   * The iOS app is the one client in that position: its WebRTC build has no
+   * door for app audio short of replacing the whole audio device, so on mesh a
+   * phone presents the picture only, while LiveKit mixes the broadcast's sound
+   * into the microphone track. With the runtime flag `share_sound_promotion`
+   * on, a NEW share carrying this in a mesh room (a DM, a group call, a small
+   * server) moves the room to the SFU through the ordinary promotion path, so
+   * the share goes out with its sound. Refused (budget, an operator's mesh
+   * override, a seat that could not follow, somebody else already sharing),
+   * the share carries on picture only, exactly as before.
+   *
+   * Sent only on mesh and only by a build that follows `voice-transport-changed`
+   * with its share intact. Absent is the old behaviour; web, desktop and
+   * Android never send it, because their mesh share already carries sound.
+   */
+  audioNeedsSfu: z.boolean().optional(),
 });
 
 // --- voice state ---

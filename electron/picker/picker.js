@@ -24,11 +24,13 @@ let selectedId = null;
 /** Guards against a second answer after the window starts closing. */
 let answered = false;
 /**
- * `"hidden"` (mac/Linux, no sound to talk about), `"checkbox"` (Windows: a
- * real choice, a switch that starts ON) or `"explain"` (Windows 10 without
- * the native capture, where the switch would be a lie). Set once per
- * `render()`, from `pickerAudioState` in main.
- * @type {"hidden"|"checkbox"|"explain"}
+ * `"hidden"` (Linux, no sound to talk about), `"checkbox"` (Windows, or a Mac
+ * on 14.2+ with the shell's sound on: a real choice, a switch that starts ON),
+ * `"explain"` (Windows 10 without the native capture, where the switch would
+ * be a lie) or `"explain-mac"` / `"explain-mac-old"` (a Mac whose desktop
+ * sound is off, or too old for it). Set once per `render()`, from
+ * `pickerAudioState` in main.
+ * @type {"hidden"|"checkbox"|"explain"|"explain-mac"|"explain-mac-old"}
  */
 let audioState = "hidden";
 
@@ -178,7 +180,10 @@ function render(payload) {
   const strings = payload.strings;
   sources = payload.sources;
   audioState =
-    payload.audioState === "checkbox" || payload.audioState === "explain"
+    payload.audioState === "checkbox" ||
+    payload.audioState === "explain" ||
+    payload.audioState === "explain-mac" ||
+    payload.audioState === "explain-mac-old"
       ? payload.audioState
       : "hidden";
 

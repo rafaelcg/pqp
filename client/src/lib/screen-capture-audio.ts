@@ -72,6 +72,10 @@ import {
   linuxShellShareAudioReady,
   shellCanBuildLinuxShareAudio,
 } from "./linux-shell-share-audio";
+import {
+  macShellShareAudioReady,
+  shellCanOfferMacShareAudio,
+} from "./mac-shell-share-audio";
 
 /**
  * The display-capture options the DOM lib does not know about yet.
@@ -288,6 +292,15 @@ export interface ScreenCaptureEnvironment {
    * the old behaviour.
    */
   shellLinuxShareAudio?: boolean;
+  /**
+   * The MACOS shell will carry the computer's sound on the display stream: the
+   * shell can, the runtime flag is on, and this Mac is on 14.2+
+   * (`lib/mac-shell-share-audio.ts`). The call stays out of it because
+   * Chromium's tap excludes its own audio process, reached by asking
+   * `restrictOwnAudio`. False everywhere else; optional so an environment
+   * built without it reads as the old, video-only behaviour.
+   */
+  shellMacShareAudio?: boolean;
 }
 
 /**
@@ -321,6 +334,9 @@ export function shellCarriesScreenAudio(env: ScreenCaptureEnvironment): boolean 
     return false;
   }
   if (env.shellLinuxShareAudio) {
+    return true;
+  }
+  if (env.shellMacShareAudio) {
     return true;
   }
   // The shell's own answer wins where it gave one. The platform test stays for
@@ -366,6 +382,7 @@ export function screenCaptureEnvironment(
     osCanExcludeCallAudio?: boolean;
     shellNativeShareAudio?: boolean;
     shellLinuxShareAudio?: boolean;
+    shellMacShareAudio?: boolean;
   } = {},
 ): ScreenCaptureEnvironment {
   let supportsRestrictOwnAudio = false;
@@ -389,6 +406,7 @@ export function screenCaptureEnvironment(
     shellRestrictOwnAudio: extras.shellRestrictOwnAudio ?? null,
     shellNativeShareAudio: isDesktopShell && extras.shellNativeShareAudio === true,
     shellLinuxShareAudio: isDesktopShell && extras.shellLinuxShareAudio === true,
+    shellMacShareAudio: isDesktopShell && extras.shellMacShareAudio === true,
   };
 }
 
@@ -411,15 +429,21 @@ export function liveScreenCaptureEnvironment(
 ): ScreenCaptureEnvironment {
   const capabilities = desktopShareCapabilities();
   const linux = shellCanBuildLinuxShareAudio() && linuxShellShareAudioReady();
+  const mac = shellCanOfferMacShareAudio() && macShellShareAudioReady();
   return screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null, {
     // Linux: the shell's picker never asks about sound (on Wayland it never
     // even opens), whatever the legacy `sharePickerOffersAudio` flag says, so
     // the page asks first (`needsShareAudioPrompt`).
+    //
+    // macOS: the picker draws the sound row itself (a switch, starting on, once
+    // the page has armed it), so the page does not ask first either.
     sharePickerOffersAudio: linux
       ? false
-      : capabilities?.pickerOffersAudio === true ||
+      : mac ||
+        capabilities?.pickerOffersAudio === true ||
         getDesktop()?.sharePickerOffersAudio === true,
     shellLinuxShareAudio: linux,
+    shellMacShareAudio: mac,
     shellSystemAudio: capabilities?.systemAudio ?? null,
     shellRestrictOwnAudio: capabilities?.restrictOwnAudio ?? null,
     osCanExcludeCallAudio: resolveOsCanExcludeCallAudio(undefined, capabilities),
@@ -658,6 +682,15 @@ export function canExcludeCallFromSystemAudio(
   }
   if (!env.supportsRestrictOwnAudio) {
     return false;
+  }
+  // The Mac shell keeps the call out the way the browser does: we ASK for
+  // `restrictOwnAudio` and Electron remaps loopback to `loopbackWithoutChrome`,
+  // a CoreAudio tap that excludes Chromium's own audio process. The engine has
+  // to know the constraint (checked just above) and the shell must not have
+  // said it cannot (checked below); the OS-version probe the Windows branch
+  // ends on is about WASAPI and says nothing here.
+  if (env.isDesktopShell && env.shellMacShareAudio) {
+    return env.shellRestrictOwnAudio !== false;
   }
   if (env.shellRestrictOwnAudio === false) {
     return false;

@@ -336,8 +336,10 @@ describeDb("GET /api/admin/metrics", () => {
     expect((await call(null, "/api/admin/metrics")).status).toBe(404);
     // A signed-in member who is not an instance moderator.
     expect((await call(ana, "/api/admin/metrics")).status).toBe(404);
-    // The rest of the API still says 401 to the unauthenticated.
-    expect((await call(null, "/api/admin/acquisition")).status).toBe(401);
+    // The rest of the API still says 401 to the unauthenticated. (The path-
+    // parameter form of the client read is the moderator's alone, so it is not
+    // on the machine table and keeps the ordinary answer.)
+    expect((await call(null, "/api/admin/users/00000000-0000-4000-8000-000000000001/client")).status).toBe(401);
   });
 
   it("ignores the token path entirely while ADMIN_METRICS_TOKEN is unset", async () => {
@@ -354,8 +356,9 @@ describeDb("GET /api/admin/metrics", () => {
     const result = await call<MetricsBody>(null, "/api/admin/metrics", `Bearer ${TOKEN}`);
     expect(result.status).toBe(200);
     expect(result.body.users.total).toBe(2);
-    // The token only opens this one route.
-    expect((await call(null, "/api/admin/acquisition", `Bearer ${TOKEN}`)).status).toBe(401);
+    // The token only opens the routes on the machine table, and not a
+    // moderator-only path beside them.
+    expect((await call(null, "/api/admin/users/00000000-0000-4000-8000-000000000001/client", `Bearer ${TOKEN}`)).status).toBe(401);
     expect((await call(null, "/api/me", `Bearer ${TOKEN}`)).status).toBe(401);
   });
 
@@ -414,6 +417,28 @@ describeDb("GET /api/admin/metrics", () => {
     expect(result.status).toBe(200);
     expect(result.body.age).toEqual({ passed: 2, blocked: 1, implausible: 1 });
     resetAgeGateMetricsForTests();
+  });
+
+  it("carries the creator hub block: table counts and the two placeholder counters", async () => {
+    const { recordCreatorHubEvent, resetCreatorHubStatsForTests } = await import(
+      "../services/creator-hub-metrics.js"
+    );
+    resetCreatorHubStatsForTests();
+    recordCreatorHubEvent("ctaView");
+    const result = await call<{
+      creatorHub: {
+        process: { ctaViews: number; supportClicks: number };
+        db: { servers: { bauOn: number }; vip: { holders: number } } | null;
+        payments: { process: { paid: number }; db: { plansActive: number } | null };
+      };
+    }>(operator, "/api/admin/metrics");
+    expect(result.status).toBe(200);
+    expect(result.body.creatorHub.process).toEqual({ ctaViews: 1, supportClicks: 0 });
+    expect(result.body.creatorHub.db?.servers.bauOn).toBe(0);
+    expect(result.body.creatorHub.db?.vip.holders).toBeGreaterThanOrEqual(0);
+    expect(result.body.creatorHub.payments.process.paid).toBe(0);
+    expect(result.body.creatorHub.payments.db?.plansActive).toBe(0);
+    resetCreatorHubStatsForTests();
   });
 
   it("answers an instance moderator with counts and no identities", async () => {

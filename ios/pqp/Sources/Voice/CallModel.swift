@@ -618,7 +618,12 @@ final class CallModel {
             },
             onStart: { [weak self] in
                 guard let self else { return }
-                await self.session?.realtime.setSharingScreen(true)
+                // On mesh this also asks for the voice server, so the share
+                // can take its sound (`shareAudioNeedsSfu`). A DM call is
+                // where that matters most: it is mesh by policy.
+                await self.session?.realtime.setSharingScreen(
+                    true, audioNeedsSfu: shareAudioNeedsSfu(transport: self.transport)
+                )
                 if self.transport == .livekit {
                     _ = await self.sfu.startScreenShare(
                         quality: VideoQualitySettings.shared.quality

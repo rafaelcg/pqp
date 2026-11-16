@@ -33,6 +33,7 @@ import {
   rememberInviteRefFromLocation,
 } from "./lib/handle-intent";
 import { browserStorage } from "./lib/arrival";
+import { rememberJamIntentFromLocation } from "./lib/jam-intent";
 import { withPqpPtBrCopy } from "./lib/clerk-pt-br";
 import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
@@ -185,6 +186,9 @@ const UiTokensPage = lazy(() =>
 );
 const BotsQaPage = lazy(() =>
   import("./pages/bots-qa-page").then((m) => ({ default: m.BotsQaPage })),
+);
+const QaJamPage = lazy(() =>
+  import("./pages/qa-jam-page").then((m) => ({ default: m.QaJamPage })),
 );
 
 /**
@@ -450,6 +454,8 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
         <Route path="/qa/bots" element={<BotsQaPage />} />
         {/* The apps session strip in every state; same gate as the sheet above. */}
         <Route path="/qa/apps" element={<QaAppsPage />} />
+        {/* The jam audio engine's bench (docs/JAM_ENGINE.md); same gate. */}
+        <Route path="/qa/jam" element={<QaJamPage />} />
         <Route
           path="*"
           element={<Navigate to={isDesktopApp() ? "/app" : "/"} replace />}
@@ -642,6 +648,9 @@ rememberAcquisitionFromLocation(
 rememberCreateIntentFromLocation(browserStorage(), window.location);
 rememberWaitlistIntentFromLocation(browserStorage(), window.location);
 rememberInviteRefFromLocation(browserStorage(), window.location);
+// And the public jam site's: `?jam=<id>&record=1` or `?jam=new` on `/app`
+// (lib/jam-intent.ts), written down before Clerk's redirect drops the query.
+rememberJamIntentFromLocation(browserStorage(), window.location);
 void ensureOsCanExcludeCallAudio();
 installShareAudioProbe();
 installShareHealth();

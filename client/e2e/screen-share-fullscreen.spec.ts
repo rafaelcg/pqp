@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   ensureServer,
+  keepScreenLargerThanWindow,
   leaveVoiceIfConnected,
   openApp,
   waitUntilVoiceConnected,
@@ -80,8 +81,10 @@ async function joinLobby(page: Page): Promise<void> {
 /** Rendered geometry of the share, plus whether anything is fullscreen. */
 function measure(page: Page) {
   return page.evaluate(() => {
-    const video = document.querySelector("video")!;
-    const rect = video.getBoundingClientRect();
+    // No video while a presenter's own whole-screen share is held behind its
+    // still card (feedback 130): zero, until "Show it anyway".
+    const video = document.querySelector("video");
+    const rect = video?.getBoundingClientRect() ?? { width: 0, height: 0 };
     return {
       width: rect.width,
       height: rect.height,
@@ -93,6 +96,7 @@ function measure(page: Page) {
 
 test("the presenter can put their own share fullscreen", async ({ page }) => {
   await ensureVoiceChannel();
+  await keepScreenLargerThanWindow(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await openApp(page);
   await joinLobby(page);
@@ -109,6 +113,13 @@ test("the presenter can put their own share fullscreen", async ({ page }) => {
   await expect
     .poll(async () => (await measure(page)).fullscreen, { timeout: 10_000 })
     .toBe(true);
+
+  // The fake capture is a whole screen, and our own whole-screen share filling
+  // the window would show itself inside itself (feedback 130), so the stage
+  // holds a still card until the presenter asks for the picture.
+  await expect(page.locator("[data-self-mirror-guard]")).toBeVisible();
+  await page.getByTestId("share-mirror-show").click();
+  await expect(page.locator("[data-self-mirror-guard]")).toHaveCount(0);
 
   const after = await measure(page);
   // The picture has to own the viewport, not sit in a boxed tile inside it.
@@ -129,6 +140,7 @@ test("a viewer can put someone else's share fullscreen", async ({
   browser,
 }) => {
   await ensureVoiceChannel();
+  await keepScreenLargerThanWindow(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await openApp(page);
   await joinLobby(page);

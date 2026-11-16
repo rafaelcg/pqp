@@ -1,0 +1,334 @@
+import { describe, expect, it } from "vitest";
+import { channelTypeSchema } from "./api.js";
+import {
+  CHAT_SERVER_MESSAGE_TYPES,
+  chatServerMessageSchema,
+  isChatServerMessage,
+} from "./chat.js";
+import {
+  addJamTrackSchema,
+  createJamSongSchema,
+  createJamUploadSchema,
+  JAM_AUDIO_MAX_BYTES,
+  JAM_COVER_CONTENT_TYPES,
+  JAM_COVER_MAX_BYTES,
+  JAM_FRAME_TYPES,
+  JAM_INSTRUMENTS,
+  JAM_PEAKS_MAX,
+  JAM_VIDEO_MAX_BYTES,
+  jamFrameSchema,
+  jamSongSummarySchema,
+  jamTrackEndMs,
+  jamTrackPlayedMs,
+  jamTrackSchema,
+  jamTrackStartMs,
+  listJamSongsQuerySchema,
+  setJamCoverSchema,
+  updateJamSongSchema,
+  updateJamTrackSchema,
+  type JamSongSummary,
+  type JamTrack,
+} from "./jam.js";
+
+const ID = "11111111-1111-4111-8111-111111111111";
+const ID2 = "22222222-2222-4222-8222-222222222222";
+
+const SONG: JamSongSummary = {
+  id: ID,
+  channelId: ID2,
+  serverId: ID2,
+  title: "Wonderwall",
+  artist: null,
+  joinMode: "wanted",
+  wantedInstruments: ["bass", "drums"],
+  authorId: ID2,
+  authorName: "Alice",
+  authorAvatarUrl: null,
+  createdAt: "2026-11-09T12:00:00.000Z",
+  updatedAt: "2026-11-09T12:00:00.000Z",
+  trackCount: 1,
+  instruments: ["guitar"],
+  contributorCount: 1,
+  mixDurationMs: 61_000,
+  previewPeaks: [0.2, 0.9],
+  hasVideo: true,
+  contributors: [{ id: ID2, name: "Alice", avatarUrl: null }],
+  missingInstruments: ["bass", "drums"],
+  coverUrl: null,
+};
+
+const TRACK: JamTrack = {
+  id: ID,
+  songId: ID,
+  authorId: ID2,
+  authorName: "Alice",
+  authorAvatarUrl: null,
+  instrument: "guitar",
+  label: null,
+  audioUrl: "https://bucket.example/a.webm",
+  audioContentType: "audio/webm",
+  audioBytes: 1000,
+  videoUrl: null,
+  videoContentType: null,
+  videoBytes: null,
+  mediaExpiresAt: "2026-11-10T00:00:00.000Z",
+  offsetMs: -250,
+  trimStartMs: 100,
+  trimEndMs: 50,
+  durationMs: 61_000,
+  gain: 1,
+  peaks: [0.1, 0.5],
+  inMix: true,
+  voteCount: 0,
+  createdAt: "2026-11-09T12:00:00.000Z",
+};
+
+describe("jam contract", () => {
+  it("adds jam to the channel types", () => {
+    expect(channelTypeSchema.options).toContain("jam");
+  });
+
+  it("every frame is relayable to a channel and is in the chat union", () => {
+    // Relayable is the half that is easy to forget: without it the cluster
+    // relay drops a song added on the sibling instance on the floor.
+    for (const type of JAM_FRAME_TYPES) {
+      expect(CHAT_SERVER_MESSAGE_TYPES, type).toContain(type);
+      expect(isChatServerMessage({ type }), type).toBe(true);
+    }
+    // The union every client is typed against carries them since the web
+    // client handles them (`client/src/lib/jam-frames.ts`).
+    const frame = { type: "jam-song-deleted", channelId: ID2, songId: ID };
+    expect(jamFrameSchema.safeParse(frame).success).toBe(true);
+    expect(chatServerMessageSchema.safeParse(frame).success).toBe(true);
+  });
+
+  it("parses every frame", () => {
+    const frames = [
+      { type: "jam-song-created", channelId: ID2, song: SONG },
+      { type: "jam-song-updated", channelId: ID2, song: SONG },
+      { type: "jam-song-deleted", channelId: ID2, songId: ID },
+      { type: "jam-track-added", channelId: ID2, song: SONG, track: TRACK },
+      { type: "jam-track-updated", channelId: ID2, song: SONG, track: TRACK },
+      { type: "jam-track-deleted", channelId: ID2, song: SONG, trackId: ID },
+      { type: "jam-track-votes", channelId: ID2, songId: ID, trackId: ID, voteCount: 3 },
+    ];
+    expect(frames.map((f) => f.type).sort()).toEqual([...JAM_FRAME_TYPES].sort());
+    for (const frame of frames) {
+      expect(jamFrameSchema.safeParse(frame).success, frame.type).toBe(true);
+    }
+  });
+
+  it("reads an instrument a newer server invented as `other`", () => {
+    const track = jamTrackSchema.parse({ ...TRACK, instrument: "theremin" });
+    expect(track.instrument).toBe("other");
+    const song = jamSongSummarySchema.parse({ ...SONG, instruments: ["guitar", "theremin"] });
+    expect(song.instruments).toEqual(["guitar", "other"]);
+  });
+
+  it("the song preview is additive: an older server's summary still parses, with empty previews", () => {
+    const {
+      previewPeaks: _peaks,
+      hasVideo: _video,
+      contributors: _contributors,
+      missingInstruments: _missing,
+      ...older
+    } = SONG;
+    const parsed = jamSongSummarySchema.parse(older);
+    expect(parsed).toMatchObject({
+      previewPeaks: [],
+      hasVideo: false,
+      contributors: [],
+      missingInstruments: [],
+    });
+    // And a newer one's instrument it does not know reads as `other`.
+    expect(
+      jamSongSummarySchema.parse({ ...SONG, missingInstruments: ["theremin"] }).missingInstruments,
+    ).toEqual(["other"]);
+  });
+
+  it("the cover is additive: a summary from before it parses with none, a newer one carries it, a phone's decoder can skip it", () => {
+    const { coverUrl: _cover, ...older } = SONG;
+    expect(jamSongSummarySchema.parse(older).coverUrl).toBeNull();
+    const withCover = { ...SONG, coverUrl: "https://bucket.example/jam/s/c.jpg?X-Amz-Signature=a" };
+    expect(jamSongSummarySchema.parse(withCover).coverUrl).toBe(withCover.coverUrl);
+    // The frames that carry a song carry the cover through, unchanged.
+    const frame = jamFrameSchema.parse({ type: "jam-song-updated", channelId: ID2, song: withCover });
+    expect(frame.type === "jam-song-updated" && frame.song.coverUrl).toBe(withCover.coverUrl);
+    // It is null, not absent, once the server knows about covers: a cover REMOVED is a null.
+    expect(jamSongSummarySchema.parse({ ...SONG, coverUrl: null }).coverUrl).toBeNull();
+  });
+
+  it("does the timeline arithmetic the header states", () => {
+    // offset -250 is the FILE's first sample; 100 ms of its head and 50 ms of its tail are hidden.
+    expect(jamTrackPlayedMs(TRACK)).toBe(60_850);
+    expect(jamTrackStartMs(TRACK)).toBe(-150);
+    expect(jamTrackEndMs(TRACK)).toBe(60_700);
+    expect(jamTrackEndMs(TRACK)).toBe(jamTrackStartMs(TRACK) + jamTrackPlayedMs(TRACK));
+  });
+
+  it("a trim hides audio and never moves it: the web recorder's takes are heard from the same place", () => {
+    // The worked example in the header: a count-in take, and a take trimmed in the editor.
+    const countIn = { offsetMs: -2023, trimStartMs: 2023, trimEndMs: 0, durationMs: 62_023 };
+    const trimmed = { offsetMs: -137, trimStartMs: 637, trimEndMs: 1000, durationMs: 60_137 };
+    const keys = { offsetMs: -2050, trimStartMs: 2050, trimEndMs: 0, durationMs: 62_050 };
+    expect(jamTrackStartMs(countIn)).toBe(0);
+    expect(jamTrackEndMs(countIn)).toBe(60_000);
+    expect(jamTrackStartMs(trimmed)).toBe(500);
+    expect(jamTrackEndMs(trimmed)).toBe(59_000);
+    expect(jamTrackStartMs(keys)).toBe(0);
+    expect(jamTrackEndMs(keys)).toBe(60_000);
+    // Trimming more of the head later hides more and moves nothing: the end is where it was.
+    const moreHead = { ...countIn, trimStartMs: countIn.trimStartMs + 400 };
+    expect(jamTrackStartMs(moreHead)).toBe(400);
+    expect(jamTrackEndMs(moreHead)).toBe(jamTrackEndMs(countIn));
+    expect(jamTrackPlayedMs(moreHead)).toBe(jamTrackPlayedMs(countIn) - 400);
+  });
+});
+
+describe("jam requests", () => {
+  it("a song normalises its text, and an empty artist is an original", () => {
+    const song = createJamSongSchema.parse({ title: "  Wonder   wall " });
+    expect(song).toEqual({ title: "Wonder wall" });
+    expect(createJamSongSchema.parse({ title: "x", artist: "" }).artist).toBeNull();
+    expect(createJamSongSchema.parse({ title: "x", artist: null }).artist).toBeNull();
+    expect(createJamSongSchema.safeParse({ title: "" }).success).toBe(false);
+    expect(createJamSongSchema.safeParse({ title: "a\u0000b" }).success).toBe(false);
+  });
+
+  it("`wanted` needs an instrument, and instruments are distinct", () => {
+    expect(createJamSongSchema.safeParse({ title: "x", joinMode: "wanted" }).success).toBe(false);
+    expect(
+      createJamSongSchema.safeParse({
+        title: "x",
+        joinMode: "wanted",
+        wantedInstruments: ["bass"],
+      }).success,
+    ).toBe(true);
+    expect(
+      createJamSongSchema.safeParse({
+        title: "x",
+        joinMode: "wanted",
+        wantedInstruments: ["bass", "bass"],
+      }).success,
+    ).toBe(false);
+    // There is no private state: a song is as private as its channel.
+    expect(createJamSongSchema.safeParse({ title: "x", joinMode: "private" }).success).toBe(false);
+  });
+
+  it("a song patch needs something in it; null clears the artist", () => {
+    expect(updateJamSongSchema.safeParse({}).success).toBe(false);
+    expect(updateJamSongSchema.parse({ artist: null }).artist).toBeNull();
+  });
+
+  it("limits what may be uploaded per kind", () => {
+    const ok = { kind: "audio", contentType: "audio/webm", byteSize: JAM_AUDIO_MAX_BYTES };
+    expect(createJamUploadSchema.safeParse(ok).success).toBe(true);
+    // What the web engine uploads. Refusing it means no browser can post a take.
+    expect(createJamUploadSchema.safeParse({ ...ok, contentType: "audio/flac" }).success).toBe(true);
+    expect(createJamUploadSchema.safeParse({ ...ok, contentType: "audio/wav" }).success).toBe(false);
+    expect(createJamUploadSchema.safeParse({ ...ok, contentType: "video/mp4" }).success).toBe(false);
+    expect(
+      createJamUploadSchema.safeParse({ kind: "video", contentType: "video/mp4", byteSize: 5 })
+        .success,
+    ).toBe(true);
+    expect(
+      createJamUploadSchema.safeParse({ kind: "video", contentType: "audio/webm", byteSize: 5 })
+        .success,
+    ).toBe(false);
+    // A cover is a picture: the three types every browser and phone draws, nothing else.
+    for (const contentType of JAM_COVER_CONTENT_TYPES) {
+      expect(
+        createJamUploadSchema.safeParse({ kind: "cover", contentType, byteSize: 5 }).success,
+        contentType,
+      ).toBe(true);
+    }
+    for (const contentType of ["image/gif", "image/svg+xml", "image/heic", "audio/webm", "video/mp4"]) {
+      expect(
+        createJamUploadSchema.safeParse({ kind: "cover", contentType, byteSize: 5 }).success,
+        contentType,
+      ).toBe(false);
+    }
+    expect(
+      createJamUploadSchema.safeParse({ kind: "audio", contentType: "image/png", byteSize: 5 }).success,
+    ).toBe(false);
+    expect(createJamUploadSchema.safeParse({ kind: "cover", contentType: "image/png", byteSize: 0 }).success).toBe(false);
+    // A cover is far smaller than any recording.
+    expect(JAM_COVER_MAX_BYTES).toBeLessThan(JAM_AUDIO_MAX_BYTES);
+    // The size ceilings are enforced where the object store is asked, so a
+    // deployment can set a lower one; the constants are the contract.
+    expect(JAM_VIDEO_MAX_BYTES).toBeGreaterThan(JAM_AUDIO_MAX_BYTES);
+  });
+
+  it("claiming a cover names an upload, and only that", () => {
+    expect(setJamCoverSchema.safeParse({ uploadId: ID }).success).toBe(true);
+    expect(setJamCoverSchema.safeParse({}).success).toBe(false);
+    expect(setJamCoverSchema.safeParse({ uploadId: "not-a-uuid" }).success).toBe(false);
+    // The song patch does not carry a cover: it is its own write, with its own gate.
+    expect(updateJamSongSchema.safeParse({ coverUrl: "https://x" }).success).toBe(false);
+  });
+
+  it("a track needs sane numbers, and the trims must leave something to play", () => {
+    const base = {
+      instrument: "guitar",
+      audioUploadId: ID,
+      durationMs: 10_000,
+    };
+    const parsed = addJamTrackSchema.parse(base);
+    expect(parsed).toMatchObject({ offsetMs: 0, trimStartMs: 0, trimEndMs: 0, gain: 1, peaks: [] });
+    expect(addJamTrackSchema.safeParse({ ...base, offsetMs: -1234.5 }).success).toBe(true);
+    expect(addJamTrackSchema.safeParse({ ...base, gain: 2.5 }).success).toBe(false);
+    expect(addJamTrackSchema.safeParse({ ...base, gain: -1 }).success).toBe(false);
+    expect(addJamTrackSchema.safeParse({ ...base, instrument: "kazoo" }).success).toBe(false);
+    expect(
+      addJamTrackSchema.safeParse({ ...base, trimStartMs: 6_000, trimEndMs: 4_000 }).success,
+    ).toBe(false);
+    expect(
+      addJamTrackSchema.safeParse({ ...base, trimStartMs: 6_000, trimEndMs: 3_999 }).success,
+    ).toBe(true);
+    expect(addJamTrackSchema.safeParse({ ...base, durationMs: 10 }).success).toBe(false);
+    expect(addJamTrackSchema.safeParse({ ...base, durationMs: 11 * 60_000 }).success).toBe(false);
+    expect(addJamTrackSchema.safeParse({ ...base, offsetMs: Number.NaN }).success).toBe(false);
+    // Whole milliseconds: the stored length is an integer the trims are checked against.
+    expect(addJamTrackSchema.safeParse({ ...base, durationMs: 10_000.4 }).success).toBe(false);
+  });
+
+  it("peaks are bounded and clamped to what a waveform can be", () => {
+    const base = { instrument: "bass", audioUploadId: ID, durationMs: 5_000 };
+    expect(
+      addJamTrackSchema.safeParse({
+        ...base,
+        peaks: Array.from({ length: JAM_PEAKS_MAX }, () => 0.5),
+      }).success,
+    ).toBe(true);
+    expect(
+      addJamTrackSchema.safeParse({
+        ...base,
+        peaks: Array.from({ length: JAM_PEAKS_MAX + 1 }, () => 0.5),
+      }).success,
+    ).toBe(false);
+    expect(addJamTrackSchema.safeParse({ ...base, peaks: [1.5] }).success).toBe(false);
+    expect(addJamTrackSchema.safeParse({ ...base, peaks: [-0.1] }).success).toBe(false);
+  });
+
+  it("a track patch has no instrument, and needs something in it", () => {
+    expect(updateJamTrackSchema.safeParse({}).success).toBe(false);
+    expect(updateJamTrackSchema.parse({ inMix: false })).toEqual({ inMix: false });
+    expect(updateJamTrackSchema.parse({ instrument: "bass", gain: 1 })).toEqual({ gain: 1 });
+  });
+
+  it("the list query reads strings off a URL", () => {
+    const query = listJamSongsQuerySchema.parse({
+      sort: "created",
+      mine: "true",
+      wanting: "bass",
+      limit: "10",
+    });
+    expect(query).toMatchObject({ sort: "created", mine: true, wanting: "bass", limit: 10 });
+    expect(listJamSongsQuerySchema.safeParse({ wanting: "kazoo" }).success).toBe(false);
+    expect(listJamSongsQuerySchema.safeParse({ limit: "500" }).success).toBe(false);
+  });
+
+  it("names six instruments", () => {
+    expect([...JAM_INSTRUMENTS]).toEqual(["guitar", "bass", "drums", "vocals", "keys", "other"]);
+  });
+});

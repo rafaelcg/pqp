@@ -1,0 +1,125 @@
+/*
+ * The sidebar's Jam row: the plate behind it and the icon in front of it.
+ *
+ * The plate is a plain row: a base, a hover step, the open-page step and the
+ * focus ring. No waveform, no sheen, no edge marker (removed 2026-11-11).
+ * The only animation is the icon's equaliser while a song is playing; it
+ * animates transform only, pauses off screen and in a hidden tab, and stands
+ * still under reduced motion.
+ */
+
+.jam-row-art {
+  --jam-base: var(--color-surface-2);
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--jam-base);
+  pointer-events: none;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+/* The edge only ever carries the focus ring: plain rows have no border. */
+.jam-row-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 0 transparent;
+  transition: box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+[data-jam-card]:hover .jam-row-art,
+[data-jam-card]:focus-within .jam-row-art {
+  --jam-base: color-mix(in oklab, var(--color-text) 5%, var(--color-surface-2));
+}
+
+[data-jam-card]:has(:focus-visible) .jam-row-art::after {
+  box-shadow: inset 0 0 0 2px var(--color-focus-ring);
+}
+
+/* The Jam is the open page: one step brighter than hover, no colour. */
+.jam-row-art[data-selected="true"],
+[data-jam-card]:hover .jam-row-art[data-selected="true"],
+[data-jam-card]:focus-within .jam-row-art[data-selected="true"] {
+  --jam-base: color-mix(in oklab, var(--color-text) 9%, var(--color-surface-2));
+}
+
+/* ---- the icon ------------------------------------------------------------ */
+
+.jam-row-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--color-inst-guitar);
+  color: var(--color-on-inst);
+}
+
+.jam-row-icon > * {
+  grid-area: 1 / 1;
+}
+
+.jam-icon-eq {
+  display: none;
+  align-items: flex-end;
+  gap: 1.5px;
+  height: 10px;
+}
+
+.jam-icon-eq > span {
+  width: 2px;
+  height: 100%;
+  border-radius: 1px;
+  background: currentColor;
+  transform-origin: bottom;
+  /* Stepped like the wash: a few poses a second, not a frame per refresh. */
+  animation: jam-row-eq-icon 0.9s steps(4) infinite;
+}
+.jam-icon-eq > span:nth-child(2) {
+  animation-delay: -0.3s;
+}
+.jam-icon-eq > span:nth-child(3) {
+  animation-delay: -0.6s;
+}
+
+/* An off-screen or hidden row pauses its icon too (the art next to it knows). */
+[data-jam-card]:has([data-alive="false"]) .jam-icon-eq > span {
+  animation-play-state: paused;
+}
+
+.jam-row-icon[data-mood="playing"] .jam-icon-note {
+  display: none;
+}
+.jam-row-icon[data-mood="playing"] .jam-icon-eq {
+  display: flex;
+}
+
+@keyframes jam-row-eq-icon {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jam-icon-eq > span {
+    animation: none !important;
+  }
+  .jam-icon-eq > span:nth-child(1) {
+    transform: scaleY(0.55);
+  }
+  .jam-icon-eq > span:nth-child(3) {
+    transform: scaleY(0.75);
+  }
+  .jam-row-art,
+  .jam-row-art::after {
+    transition: none;
+  }
+}

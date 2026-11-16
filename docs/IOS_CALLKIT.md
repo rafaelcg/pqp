@@ -72,13 +72,17 @@ while the app is hidden" row.
   `includesCallsInRecents = true`, and a ringtone slot that picks up
   `ringtone.caf`/`.wav`/`.aiff` from the bundle the day one ships. There is
   none today, so CallKit falls back to its own.
-- **Background modes.** `audio` and `voip` were already in
-  `ios/pqp/Info.plist`'s `UIBackgroundModes` before this work (`docs/IOS.md`),
-  and neither needed to change: `audio` is what lets the mesh's audio engine
-  keep running with the screen off or the app backgrounded, `voip` is what a
-  cold-start VoIP push (below) will need once the server leg exists. No new
-  entitlement was required: CallKit itself does not gate on one, unlike Sign
-  in with Apple or associated domains.
+- **Background modes.** `audio` is what lets the mesh's audio engine keep
+  running with the screen off or the app backgrounded. `voip` used to sit
+  beside it for the cold-start VoIP push below, but nothing registers for one
+  yet, and Guideline 2.5.4 asks that the mode only be declared by an app that
+  uses it, so it was removed in November 2026. Nothing in the CallKit path
+  depends on it: the incoming call is reported to CallKit from the live
+  socket, and a killed app gets an ordinary notification, not the system call
+  screen. Add `voip` back to `ios/pqp/Info.plist` in the same change that adds
+  `PKPushRegistry`; `AppReviewMetadataTests` fails until you do and update it.
+  No new entitlement was required: CallKit itself does not gate on one, unlike
+  Sign in with Apple or associated domains.
 
 ## What is gated on the server: cold-start incoming calls (PushKit)
 

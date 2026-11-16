@@ -850,6 +850,36 @@ export type CommunityHomeCaptionsResponse = z.infer<
   typeof communityHomeCaptionsResponseSchema
 >;
 
+/** Words a reader gets through in a minute, for `lockedHint.readMinutes`. */
+export const COMMUNITY_HOME_WORDS_PER_MINUTE = 200;
+
+/**
+ * About a locked post, never from it: the media kind (null for text only) and
+ * the text's length in whole minutes of reading, rounded up (0 when the post
+ * has no text). Neither carries a word of the post.
+ */
+export const communityHomeLockedHintSchema = z.object({
+  mediaKind: communityHomeMediaKindSchema.nullable(),
+  readMinutes: z.number().int().nonnegative(),
+});
+
+export type CommunityHomeLockedHint = z.infer<
+  typeof communityHomeLockedHintSchema
+>;
+
+/** `lockedHint.readMinutes` for a body: 0 for none, else at least 1. */
+export function communityHomeReadMinutes(body: string | null): number {
+  // One pass, no word array: this runs for every locked post on every read.
+  let words = 0;
+  let inWord = false;
+  for (let i = 0; i < (body?.length ?? 0); i += 1) {
+    const space = /\s/.test(body![i]!);
+    if (!space && !inWord) words += 1;
+    inWord = !space;
+  }
+  return words === 0 ? 0 : Math.ceil(words / COMMUNITY_HOME_WORDS_PER_MINUTE);
+}
+
 export const communityHomePostSchema = z.object({
   id: z.string().uuid(),
   serverId: z.string().uuid(),
@@ -880,6 +910,13 @@ export const communityHomePostSchema = z.object({
   posterUrl: z.string().nullable().default(null),
   /** True when body/media were stripped for this viewer. */
   locked: z.boolean(),
+  /**
+   * What a locked card may say about what it hides, so the lock can be drawn
+   * in the shape of the real thing (a video, a picture, a long read) without
+   * any of it: the kind of media and about how long the text is. Present only
+   * when `locked`; null otherwise, absent from an older API.
+   */
+  lockedHint: communityHomeLockedHintSchema.nullable().optional(),
   likeCount: z.number().int().nonnegative(),
   likedByMe: z.boolean(),
   commentCount: z.number().int().nonnegative(),

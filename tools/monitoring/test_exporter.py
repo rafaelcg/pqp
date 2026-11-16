@@ -1265,5 +1265,55 @@ class SfuAdmissionTests(unittest.TestCase):
         self.assertEqual([box["box"] for box in merged["sfuAdmission"]["boxes"]], ["sao", "mia", "lhr"])
 
 
+class RenderReportQueueTests(unittest.TestCase):
+    """The 24 hour rule's series (moderation.reports, services/report-queue.ts)."""
+
+    def _reports(self, **overrides) -> dict:
+        reports = {
+            "open": 3,
+            "actioned": 10,
+            "dismissed": 4,
+            "last24h": 5,
+            "oldestOpenAgeSeconds": 43200,
+            "openOver12h": 1,
+            "openOver24h": 0,
+        }
+        reports.update(overrides)
+        return {"reports": reports, "feedback": {}, "bans": 0, "activeTimeouts": 0}
+
+    def test_age_and_open_series(self):
+        body = exporter.render(_base_payload(moderation=self._reports()))
+        self.assertIn("pqp_api_reports_oldest_open_age_seconds 43200", body)
+        self.assertIn('pqp_api_reports_open{age="all"} 3', body)
+        self.assertIn('pqp_api_reports_open{age="over_12h"} 1', body)
+        self.assertIn('pqp_api_reports_open{age="over_24h"} 0', body)
+
+    def test_an_empty_queue_is_a_zero_not_an_absence(self):
+        body = exporter.render(
+            _base_payload(
+                moderation=self._reports(open=0, oldestOpenAgeSeconds=0, openOver12h=0, openOver24h=0)
+            )
+        )
+        self.assertIn("pqp_api_reports_oldest_open_age_seconds 0", body)
+
+    def test_an_api_older_than_the_field_emits_nothing(self):
+        # Silence, not "nothing is waiting": the alert rule's noDataState is OK.
+        old = {"reports": {"open": 2, "actioned": 0, "dismissed": 0, "last24h": 2}}
+        body = exporter.render(_base_payload(moderation=old))
+        self.assertNotIn("pqp_api_reports_oldest_open_age_seconds", body)
+        self.assertNotIn("pqp_api_reports_open", body)
+
+    def test_no_moderation_block_emits_nothing(self):
+        body = exporter.render(_base_payload())
+        self.assertNotIn("pqp_api_reports_oldest_open_age_seconds", body)
+
+    def test_replicas_share_it_and_it_is_not_doubled(self):
+        a = _base_payload(moderation=self._reports())
+        b = _base_payload(moderation=self._reports())
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["moderation"]["reports"]["oldestOpenAgeSeconds"], 43200)
+        self.assertEqual(merged["moderation"]["reports"]["open"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1631,7 +1631,7 @@ struct HubView: View {
             }
             .padding(.horizontal, Metrics.hPadding)
 
-            if model.conversations.isEmpty {
+            if BlockRules.visible(model.conversations, blocked: session.blocked.ids).isEmpty {
                 Button { showingNewConversation = true } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "envelope")
@@ -1652,7 +1652,7 @@ struct HubView: View {
                     // Conversas rows on the hub too: the preview, presence and
                     // "digitando…" do not need a tab bar to be useful.
                     LazyVStack(spacing: 0) {
-                        ForEach(model.conversations) { conversation in
+                        ForEach(BlockRules.visible(model.conversations, blocked: session.blocked.ids)) { conversation in
                             NavigationLink {
                                 chat(for: conversation)
                             } label: {
@@ -1671,7 +1671,7 @@ struct HubView: View {
                     .padding(.horizontal, Metrics.hPadding)
                 } else {
                     LazyVStack(spacing: 10) {
-                        ForEach(model.conversations) { conversation in
+                        ForEach(BlockRules.visible(model.conversations, blocked: session.blocked.ids)) { conversation in
                             NavigationLink {
                                 chat(for: conversation)
                             } label: {

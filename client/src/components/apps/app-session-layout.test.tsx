@@ -20,15 +20,23 @@ vi.mock("@/lib/apps/api", () => ({ endAppSessionRequest: vi.fn(async () => true)
 const pane = vi.hoisted(() => ({
   shared: undefined as boolean | undefined,
   onShare: undefined as ((on: boolean) => Promise<boolean>) | undefined,
+  onStatus: undefined as ((status: { kind: string; reason?: string }) => void) | undefined,
 }));
 vi.mock("@/components/apps/app-pane", () => ({
   AppPane: forwardRef<
     { focus(): void; element(): HTMLElement | null },
-    { title: string; frozen?: boolean; shared?: boolean; onShare?: (on: boolean) => Promise<boolean> }
+    {
+      title: string;
+      frozen?: boolean;
+      shared?: boolean;
+      onShare?: (on: boolean) => Promise<boolean>;
+      onStatus?: (status: { kind: string; reason?: string }) => void;
+    }
   >(function FakePane(props, ref) {
     useImperativeHandle(ref, () => ({ focus: () => {}, element: () => null }), []);
     pane.shared = props.shared;
     pane.onShare = props.onShare;
+    pane.onStatus = props.onStatus;
     return (
       <div
         data-testid="pane"
@@ -221,6 +229,35 @@ describe("AppSessionLayout", () => {
     expect(column().style.width).toBe(`${APP_COLUMN_MIN_PX}px`);
     expect(column().getAttribute("data-app-column")).toBe("side");
     expect(strip()?.getAttribute("data-state")).toBe("participant");
+  });
+
+  it("a frame that failed keeps its pane (and its Tentar de novo) after the seat it gave back, until it comes up", () => {
+    // 2026-11-12: the entry was a 404; the frame was removed, released the seat, and the pane went with it
+    applyChannelApp(CHANNEL, summary(true));
+    render();
+    const paneNode = () => document.querySelector('[data-testid="pane"]');
+    expect(paneNode()).not.toBeNull();
+    act(() => pane.onStatus!({ kind: "error", reason: "entry-unavailable" }));
+    // the removal's app-leave lands: the server no longer lists the viewer
+    act(() => applyChannelApp(CHANNEL, summary(false)));
+    expect(paneNode()).not.toBeNull();
+    // Tentar de novo takes the seat again and the frame comes up: from here the seat decides, as always
+    act(() => applyChannelApp(CHANNEL, summary(true)));
+    act(() => pane.onStatus!({ kind: "ready" }));
+    act(() => applyChannelApp(CHANNEL, summary(false)));
+    expect(paneNode()).toBeNull();
+  });
+
+  it("a failed pane goes when the person leaves, or the session ends", () => {
+    applyChannelApp(CHANNEL, summary(true));
+    render();
+    act(() => pane.onStatus!({ kind: "error", reason: "timeout" }));
+    act(() => applyChannelApp(CHANNEL, summary(false)));
+    expect(document.querySelector('[data-testid="pane"]')).not.toBeNull();
+    act(() =>
+      applyAppEnded({ sessionId: SESSION, channelId: CHANNEL, reason: "host", summary: { participants: 1, durationSeconds: 30 } }),
+    );
+    expect(document.querySelector('[data-testid="pane"]')).toBeNull();
   });
 
   it("with app_pane_layout_v2 off it is the old 300 px column and no chat toggle", () => {

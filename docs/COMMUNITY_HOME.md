@@ -14,7 +14,7 @@ Staging is the proving ground. Production has the flags unset.
 | Name | Default | What it does |
 |---|---|---|
 | `COMMUNITY_HOME_ENABLED` | off | The feed exists. Off: every `/home/*` route 404s, the schedule sweep idles, the client hides the row on a private hall. A community still lands on Overview (identity poster, empty feed). |
-| `COMMUNITY_HOME_VIP_ENABLED` | off | The VIP half. Off: `visibility: members` is refused on write, existing members-only posts leave the feed (staff still see them in Drafts), and the client shows no lock, no VIP chip, no tier picker and no "view as" inspector. Needs the first flag. |
+| `COMMUNITY_HOME_VIP_ENABLED` | off | The VIP half. Off: `visibility: members` is refused on write, existing members-only posts leave the feed (staff still see them in Drafts), and the client shows no lock, no VIP chip, no tier picker and no "view as" inspector. Needs the first flag. Runtime flag `community_home_vip`, **per server**: the variable is its default, a global row beats it and a per-server override (dashboard, or `PUT /api/admin/flag-overrides`) beats both, so one server can have VIP while the rest do not. With no row it answers what the variable always did. |
 
 A third switch, `community_home_translation`, is a **runtime flag** (per
 server, default off) and is described in "Translation" below. A fourth,
@@ -56,6 +56,13 @@ feed. There is no `VITE_` flag: the client asks `GET /api/community-home/config`
 it follows the attachments and communities configs. `mediaEnabled` is the
 `S3_*` probe folded in, so a deployment without storage still gets the feed
 with YouTube / Twitch / TikTok / Instagram links and text.
+
+`vipEnabled` is per server, so the web client asks `GET
+/api/community-home/config?serverId=<id>` when a server's feed opens and uses
+that answer. A call with no `serverId` (or one that is not a uuid) answers the
+global value. The iOS and Android clients still ask once with no server, so on
+a server where VIP is on only by a per-server override they do not yet draw the
+lock chip; moving them to the per-server ask is a separate native change.
 
 **Local override, dev bypass only.** With `DEV_AUTH_BYPASS=true`,
 `?communityHome=1|0` on `/app` forces the answer for that tab and latches it
@@ -112,9 +119,35 @@ Card footers are like + comment count only. Join-call chrome stays off Baú
 cards. Comment teasers on the card are 0–2 (owner reply else oldest, 2-line
 clamp); the rest opens on detail tap. Locked cards do not expand comments.
 
-The unlock CTA is disabled and reads "VIP, coming soon". There is no
-checkout, Gift, Buy post, or price. See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md)
-for what would replace it.
+**The locked card sends the fan to the creator's own link (Option A, pqp never
+touches the money).** `VipUnlockCard` says in one line what VIP unlocks (the
+supporter-only posts; it does not mention VIP voice or watch-party rooms,
+because a person who cannot see those rooms is told nothing about them), then
+shows "Apoiar" when the server has a **support link**, then says to ask whoever
+runs the server for the VIP cargo, which staff grant by hand. No support link
+and the button is simply absent. There is no checkout, Gift, Buy post, or price on this path.
+See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md). **Baú+**, the native path
+where the fan pays inside pqp and the VIP cargo arrives on its own, is behind
+the per-server `bau_payments` flag: [`BAU_PAYMENTS.md`](./BAU_PAYMENTS.md).
+
+The support link is an official-link kind, `support`, and the one kind that is
+never derived from a host: it has its own box ("Apoiar o criador") in both
+places the official links are edited (the Baú page in place, Server settings),
+sent as `support` on `PATCH /api/servers/:id/community` and stored beside the
+others in `servers.community_links`, **one per server**, last in the list. It
+is either an https page on the allowlist `COMMUNITY_SUPPORT_HOSTS` (LivePix,
+Apoia.se, Patreon, Ko-fi, Buy Me a Coffee, Cafecito, Catarse, Kick, Twitch,
+YouTube, PayPal.me, Mercado Pago, ...; one string per host, in
+`packages/shared/src/community-support.ts`, with a test), or **Pix text**: a Pix
+key (CPF, CNPJ, e-mail, phone, random key) or a "copia e cola" whose CRC16 is
+checked. Pix text is stored in `pix`, never fetched, rendered only as text with
+a copy button, never as a link. Members read it (it is on the server row they
+already get); **the public `/c/<slug>` poster never carries it**, because a Pix
+key is somebody's CPF, phone or e-mail. Native apps do not decode
+`communityLinks` at all today, so a new kind cannot crash them; an older web
+bundle draws no label for a `support` chip until it reloads.
+`recordCreatorHubEvent` (view and click) is not wired yet: see the TODO in
+`community-home-feed.tsx`.
 
 ## What is in the pane
 
@@ -1036,6 +1069,50 @@ too, but only while the cut's length is within 1.5 s of what was transcribed
 subtitles rather than lines at the wrong moment. Transcribing the cut on its
 own would be the follow-up if authors start posting different edits.
 
+## Reporting a post or a comment
+
+A reader can report a Baú post or one comment: "Denunciar" in the card's
+corner menu and in the comment's own menu (web and iOS: the post's ellipsis and
+the one on each comment, beside "Bloquear"; `docs/IOS.md`). Hidden on your own
+words, on a locked post (iOS keeps Bloquear there), in a draft and in the composer's preview. The public post page
+(`/c/<slug>/p/<id>`) has no signed-in action menu, so there is no report
+button there; the person opens the post in the app to report it.
+
+- **Kinds.** `bau_post` (`postId`) and `bau_comment` (`commentId`) on
+  `POST /api/reports`, id only: the server, the author and the destination are
+  read from the post. Rows: `reports.reported_bau_post_id`,
+  `reported_bau_comment_id` (SET NULL, so deleting the post keeps the report)
+  and `bau_snapshot` (the title and words, or the comment, as reported; a
+  media line names an upload's kind and file name, or an embed's link).
+- **Who may report.** Only somebody who can READ it, decided by the feed's own
+  reads in `resolveBauReportTarget`: the instance flag, membership, then
+  `getCommunityHomePost`, whose `locked` is the VIP gate. A members-only post is
+  reportable by staff and the VIP cargo and by nobody else; a non-member, a
+  plain member, a draft, a post hidden by `community_home_vip` off, a comment
+  the reporter blocked or the one on a locked post, your own words and an id
+  that is no post are all the same 404. Same hourly cap and one-open-report
+  duplicate rule as every other kind.
+- **Where it goes.** A Baú in a community (`is_community`) goes to the INSTANCE
+  queue, never to the owner who runs it. Any other server's goes to its own
+  queue like a message report. `minor_sexual` goes to the instance queue either
+  way.
+- **The operator opens the post.** `GET /api/reports/:id/context` carries `bau`
+  for these kinds: the post as it stands now, read WITHOUT the VIP lock
+  (`readBauSubjectForModeration`, the one read that skips it), plus five
+  comments either side of a reported comment. It is the same gate as the rest of
+  the card (an instance moderator, or KICK/BAN/MODERATE on a server-scoped
+  report) and takes only the ids the report names. Uploaded media is metadata
+  only (kind, file name, size), never a signed URL; an embed shows its link.
+  Every open is audited before the words leave: `report.bau_view` in the
+  server's audit log for a server-scoped report, and a `[moderation] report bau
+  opened` line for both. A community's Baú report leaves only the log line, so
+  the community's own audit log never learns it was reported.
+- **Not covered.** Seeing the bytes of a reported upload (the
+  `report_attachment_preview` model is for chat attachments only), and a
+  post's media is not held after the post is deleted. Phones: the native
+  clients do not show "Denunciar" yet (iOS `CommunityHomeView.swift`, Android
+  `BauScreen.kt`, plus their report sheets); older builds simply do not offer it.
+
 ## Staging
 
 `fly secrets set COMMUNITY_HOME_ENABLED=true COMMUNITY_HOME_VIP_ENABLED=true -a pqp-api-staging`
@@ -1124,15 +1201,13 @@ the expected shape of a self-host without storage, not a bug.
   off stamps without sending, scheduled posts, the aggregate unread read.
 - `client/src/lib/community-home/rail-unread.test.ts` and
   `client/src/components/layout/server-rail-bau.test.tsx`: the rail's pip.
+- `server/src/api/bau-reports.test.ts`: reporting a post or comment (the VIP
+  rule, routing, snapshot, the operator's audited read), with Baú, VIP and
+  communities on as production sets them.
 
 ## Not here yet (see the strategy doc)
 
 **Translating comments**, and a reader-chosen language other than the UI one.
-
-**Reporting a Baú post or comment.** `createReportSchema` covers `message`,
-`user` and `server` only, so the in-product path for bad content in a Baú is
-to report the *person*. Worth closing before this is on by default for
-strangers; the queue and the moderation surfaces already exist.
 
 Checkout, plans and prices, polls as a post type, older pages of the feed,
 email on publish, a permalink route to one post (a push opens the Baú, not the
