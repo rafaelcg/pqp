@@ -1586,8 +1586,6 @@ function configureSessionSecurity(appOrigin) {
       // frame, not a value the page can spoof. Chromium serialises it WITH a
       // trailing slash, so compare origins through `URL`, never by string
       // equality (0.1.6 refused every pqp share this way).
-      // A new request: whatever the last one was refused for is over.
-      shareRefusal.clear();
       if (!displayRequestAllowed(request, allowedOrigin)) {
         shareRefusal.note("origin", requesterKey(request?.frame));
         console.warn(

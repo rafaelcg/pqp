@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 const require = createRequire(import.meta.url);
 const {
   createShareRefusal,
+  SHARE_REFUSAL_MAX_PENDING,
   SHARE_REFUSAL_REASONS,
   SHARE_REFUSAL_WINDOW_MS,
 } = require("./share-refusal.js");
@@ -33,15 +34,40 @@ describe("share refusal reason", () => {
     assert.equal(refusal.take(win), null);
   });
 
-  it("forgets a reason when a new request starts, and after the window", () => {
+  it("forgets a reason after the window", () => {
     const c = clock();
     const refusal = createShareRefusal({ now: c.now });
-    refusal.note("busy", win);
-    refusal.clear();
-    assert.equal(refusal.take(win), null);
     refusal.note("picker-failed", win);
     c.advance(SHARE_REFUSAL_WINDOW_MS + 1);
     assert.equal(refusal.take(win), null);
+  });
+
+  it("gives overlapping requests from one frame each their own reason, in order", () => {
+    // A second share while the picker is open is refused at once as busy; the
+    // first ends later as whatever the person did. Neither may read the other's.
+    const refusal = createShareRefusal();
+    refusal.note("busy", win);
+    refusal.note("cancelled", otherWin);
+    refusal.note("cancelled", win);
+    assert.equal(refusal.take(win), "busy");
+    assert.equal(refusal.take(win), "cancelled");
+    assert.equal(refusal.take(win), null);
+    assert.equal(refusal.take(otherWin), "cancelled");
+  });
+
+  it("keeps a bounded backlog for a page that never reads", () => {
+    const refusal = createShareRefusal();
+    for (let i = 0; i < SHARE_REFUSAL_MAX_PENDING + 3; i += 1) {
+      refusal.note(i === SHARE_REFUSAL_MAX_PENDING + 2 ? "busy" : "cancelled", win);
+    }
+    let read = 0;
+    let last = null;
+    for (let next = refusal.take(win); next !== null; next = refusal.take(win)) {
+      read += 1;
+      last = next;
+    }
+    assert.equal(read, SHARE_REFUSAL_MAX_PENDING);
+    assert.equal(last, "busy");
   });
 
   it("never matches a frame it could not identify, and reads an unknown reason as error", () => {
@@ -77,7 +103,6 @@ describe("share refusal reason", () => {
     }
 
     const handler = main.slice(main.indexOf("ses.setDisplayMediaRequestHandler("));
-    assert.match(handler, /shareRefusal\.clear\(\);/);
     assert.match(handler, /shareRefusal\.note\("origin"/);
     assert.match(handler, /shareRefusal\.note\("error"/);
   });

@@ -14,9 +14,9 @@
  * again on 16 Nov 2026 with nothing to say which of those it was.
  *
  * So the shell remembers the reason for the request it just refused, and the
- * page, having seen the AbortError, asks for it once. Same rules as
- * `share-silent-retry.js`: the answer belongs to the frame that made the
- * request, is cleared by every new request, is read once, and expires.
+ * page, having seen the AbortError, asks for it once. The answer belongs to
+ * the frame that made the request (`requesterKey`, as in
+ * `share-silent-retry.js`), is read once, and expires.
  */
 
 const SHARE_REFUSAL_WINDOW_MS = 15_000;
@@ -44,37 +44,59 @@ const SHARE_REFUSAL_REASONS = Object.freeze([
   "error",
 ]);
 
+/** More unread refusals than this from one frame means nobody is reading them. */
+const SHARE_REFUSAL_MAX_PENDING = 8;
+
 function createShareRefusal({ now = Date.now, windowMs = SHARE_REFUSAL_WINDOW_MS } = {}) {
-  let remembered = null;
+  // Oldest first. Two requests from one frame can overlap (a second share
+  // while the picker is open is refused at once as "busy", the first ends
+  // later as whatever the person did), and each rejection reaches the page in
+  // the order its refusal was noted, so each `take` gets the oldest one left:
+  // every failed request reads its own reason, never its neighbour's.
+  let pending = [];
+
+  function prune() {
+    const cutoff = now() - windowMs;
+    pending = pending.filter((entry) => entry.at >= cutoff);
+  }
 
   return {
-    /** Called at the top of every display-media request. */
-    clear() {
-      remembered = null;
-    },
     /** The request `requester` made was answered with nothing, for `reason`. */
     note(reason, requester = null) {
+      if (requester === null) {
+        return;
+      }
+      prune();
       const known = SHARE_REFUSAL_REASONS.includes(reason) ? reason : "error";
-      remembered = requester !== null ? { reason: known, requester, at: now() } : null;
+      pending.push({ reason: known, requester, at: now() });
+      const mine = pending.filter((entry) => entry.requester === requester);
+      if (mine.length > SHARE_REFUSAL_MAX_PENDING) {
+        const drop = mine[0];
+        pending = pending.filter((entry) => entry !== drop);
+      }
     },
     /**
-     * The page saw its request fail. The reason, once, for the frame that
-     * made the request and only within the window; null otherwise.
+     * The page saw its request fail. The oldest unread reason for that frame,
+     * once and only within the window; null otherwise.
      */
     take(requester = null) {
-      const hit =
-        remembered !== null &&
-        requester !== null &&
-        remembered.requester === requester &&
-        now() - remembered.at <= windowMs
-          ? remembered.reason
-          : null;
-      if (hit !== null) {
-        remembered = null;
+      if (requester === null) {
+        return null;
       }
-      return hit;
+      prune();
+      const index = pending.findIndex((entry) => entry.requester === requester);
+      if (index < 0) {
+        return null;
+      }
+      const [hit] = pending.splice(index, 1);
+      return hit.reason;
     },
   };
 }
 
-module.exports = { SHARE_REFUSAL_WINDOW_MS, SHARE_REFUSAL_REASONS, createShareRefusal };
+module.exports = {
+  SHARE_REFUSAL_WINDOW_MS,
+  SHARE_REFUSAL_MAX_PENDING,
+  SHARE_REFUSAL_REASONS,
+  createShareRefusal,
+};

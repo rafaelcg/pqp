@@ -57,9 +57,16 @@ export async function readShellRefusal(
   isDesktopShell: boolean,
   desktop: Pick<PqpDesktop, "capabilities" | "shareRefusalReason"> | null | undefined,
 ): Promise<ShellRefusal | null> {
-  if (!isDesktopShell || !(err instanceof Error) || err.name !== "AbortError") {
+  // By shape, not `instanceof Error`: the rejection is a DOMException, and
+  // whether that passes `instanceof Error` is the engine's business.
+  const shaped =
+    typeof err === "object" && err !== null
+      ? (err as { name?: unknown; message?: unknown })
+      : null;
+  if (!isDesktopShell || shaped?.name !== "AbortError") {
     return null;
   }
+  const message = typeof shaped.message === "string" ? shaped.message : "";
   let reason: unknown = null;
   if (
     desktop?.capabilities?.shareRefusalReason === true &&
@@ -76,7 +83,7 @@ export async function readShellRefusal(
       ? (reason as ShellRefusal)
       : "error";
   }
-  return INVALID_CAPTURE_CONSTRAINTS.test(err.message) ? "unknown" : null;
+  return INVALID_CAPTURE_CONSTRAINTS.test(message) ? "unknown" : null;
 }
 
 /**

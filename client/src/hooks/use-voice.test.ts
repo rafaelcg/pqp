@@ -967,7 +967,7 @@ describe("screen share audio", () => {
     /** Electron's rejection for `callback(null)`, as measured on 44.9.1. */
     function shellSaysNo() {
       displayMedia = async () => {
-        throw Object.assign(new Error("Invalid capture constraints"), { name: "AbortError" });
+        throw new DOMException("Invalid capture constraints", "AbortError");
       };
     }
 
