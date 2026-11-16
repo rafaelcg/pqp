@@ -870,6 +870,19 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/forum/config?serverId= (announce)",
   },
+  jam_channels: {
+    description:
+      "Canais jam: músicas em que cada pessoa grava uma faixa (violão, baixo, voz...) e tudo toca junto (desligado: ninguém cria canal jam, música nem faixa nova; o que já existe continua aberto pra ouvir e dá pra apagar).",
+    env: "JAM_CHANNELS",
+    parseEnv: exactTrue,
+    // Off: one server first (its override), then everybody. See docs/JAM.md.
+    codeDefault: false,
+    // Every reader knows the server: the create-channel route starts from a
+    // server, the jam routes from a channel or a song (which names its
+    // server), and the client asks `GET /api/jam/config?serverId=`.
+    perServer: true,
+    clientVia: "GET /api/jam/config?serverId= (enabled)",
+  },
   report_attachment_preview: {
     description:
       "Moderação: no cartão de uma denúncia, o botão Mostrar que abre, borrado e só com um clique, a imagem ou o gif da mensagem denunciada. Desligado: a lista de anexos (tipo, veredito do scanner) continua aparecendo, só o botão e a rota somem.",
@@ -1205,6 +1218,20 @@ export const FEATURE_FLAGS = {
     codeDefault: false,
     perServer: false,
     clientVia: "GET /api/public/apps/config (cloudSaves)",
+  },
+  jam_public: {
+    description:
+      "Jams públicas: músicas que qualquer pessoa ouve e assiste sem conta (jam.pqp.gg). Qualquer conta começa uma, e quem começou uma música de canal pode deixar ela pública (cada pessoa com parte gravada responde se a parte dela vai). Capa e vídeo passam pelo scanner; áudio não. Ligar muda a categoria jurídica (conteúdo público, como o COMMUNITIES_ENABLED): leia docs/JAM_PUBLIC.md antes. Desligado, as rotas públicas nem existem, ninguém publica e nada aparece; o que já é dos canais não muda.",
+    env: "JAM_PUBLIC",
+    parseEnv: exactTrue,
+    // Off: public content changes the instance's legal category, the way
+    // `COMMUNITIES_ENABLED` does (docs/JAM_PUBLIC.md, docs/CONTENT_SAFETY.md).
+    // It goes on when Rafael says so. Only `true`.
+    codeDefault: false,
+    // GLOBAL: a standalone public jam has no server, and the public site's
+    // visitor has none either.
+    perServer: false,
+    clientVia: "GET /api/public/jams/config (enabled), GET /api/jam-public/config (enabled)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 

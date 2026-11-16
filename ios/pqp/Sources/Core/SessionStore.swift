@@ -219,6 +219,10 @@ final class SessionStore {
     /// Who is in every voice room this account can see, for the channel list.
     /// Fed from the socket for the whole session; see `VoiceOccupancyStore`.
     let voiceOccupancy = VoiceOccupancyStore()
+    /// Live activities (the web's "apps") per channel, and the one this phone is
+    /// seated in. Fed from the socket for the whole session; see `AppsStore`.
+    /// Inert on a server whose `apps` flag is off.
+    let apps = AppsStore()
     /// Stories being posted in the background: the composer hands a story over
     /// and closes, so the post has to outlive the screen that started it.
     let storyPosts: StoryPostQueue
@@ -918,7 +922,9 @@ final class SessionStore {
         eventTask = nil
         eventHandlers.removeValue(forKey: Self.cacheHandlerKey)
         eventHandlers.removeValue(forKey: Self.occupancyHandlerKey)
+        eventHandlers.removeValue(forKey: Self.appsHandlerKey)
         voiceOccupancy.clear()
+        apps.clear()
         storyPosts.clear()
         blocked.clear()
         StoryPreloader.shared.reset()
@@ -1029,6 +1035,9 @@ final class SessionStore {
     /// The other one: voice rooms are listed with who is inside before anybody
     /// opens the server, so the rosters sent at `auth` have to land somewhere.
     private static let occupancyHandlerKey = "voice-occupancy"
+    /// The activity frames arrive for every channel the account can view, not
+    /// only the open one, so they land in the session's store.
+    private static let appsHandlerKey = "apps"
 
     /// The two frames about the account itself, handled here (not in a screen)
     /// because the screen they concern may not be the one on top, or on screen.
@@ -1055,10 +1064,15 @@ final class SessionStore {
         eventHandlers[Self.occupancyHandlerKey] = { [voiceOccupancy] event in
             voiceOccupancy.apply(event)
         }
+        apps.attach { [weak self] in self?.currentUser?.id }
+        eventHandlers[Self.appsHandlerKey] = { [apps] event in
+            apps.apply(event)
+        }
         let stream = await realtime.events()
         await realtime.onStatusChange { [weak self] status in
             Task { @MainActor in
                 self?.realtimeStatus = status
+                self?.apps.noteStatus(status)
                 // No token to open a socket with: the session is gone. Same
                 // door as a 401.
                 if status == .unauthorized { await self?.handleSessionExpired() }

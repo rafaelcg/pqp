@@ -107,8 +107,10 @@ export function googleAds(env: GoogleAdsEnv): Plugin {
   return {
     name: "pqp-google-ads",
     apply: "build",
-    transformIndexHtml() {
-      return googleAdsTags(env);
+    // The main page only: the public jam site (`jam-site/index.html`) carries no
+    // third-party tag at all.
+    transformIndexHtml(_html, ctx) {
+      return ctx.path === "/index.html" ? googleAdsTags(env) : [];
     },
   };
 }

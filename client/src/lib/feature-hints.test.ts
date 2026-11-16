@@ -455,3 +455,16 @@ describe("shouldOfferVoiceNoteTranscriptionNotice", () => {
     expect(isFeatureHintSeen("composerFormat", storage, true)).toBe(false);
   });
 });
+
+describe("the Jam's first-run guidance", () => {
+  it("keeps the studio's tip out of the corner queue (it is drawn inside the studio)", () => {
+    expect(ATTACHED_FEATURE_HINT_ORDER as readonly string[]).not.toContain("jamStudio");
+  });
+
+  it("puts the wall's tip before the standing tips, which would otherwise hold the slot", () => {
+    const order = ATTACHED_FEATURE_HINT_ORDER as readonly string[];
+    expect(order.indexOf("jamWall")).toBeGreaterThan(-1);
+    expect(order.indexOf("jamWall")).toBeLessThan(order.indexOf("composerFormat"));
+    expect(order.indexOf("jamWall")).toBeLessThan(order.indexOf("channelPin"));
+  });
+});

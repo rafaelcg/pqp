@@ -103,6 +103,34 @@ test.describe("a cooperative app", () => {
   });
 });
 
+test.describe("an entry the apps origin does not serve", () => {
+  // 2026-11-12: the version an app was pinned to was gone from the apps site. The frame showed the origin's
+  // 404 page and the person waited on "Abrindo..." for the hello timeout. The page's own CORS GET sees the 404.
+  test("is reported as entry-unavailable within moments, the frame removed and the seat released", async ({ page }) => {
+    await openHost(page);
+    const missing = `${servers.apps}/coop/9.9.9/index.html`;
+    const started = Date.now();
+    await page.evaluate(
+      (url) => window.__e2e.mount({ entry: url, appsOrigin: new URL(url).origin, helloTimeoutMs: 60_000 }),
+      missing,
+    );
+    await page.waitForFunction(() => window.__e2e.statuses.some((s) => s.kind === "error"), null, { timeout: 5000 });
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(await page.evaluate(() => window.__e2e.statuses.at(-1))).toEqual({ kind: "error", reason: "entry-unavailable" });
+    expect(await page.locator("iframe[data-app-frame]").count()).toBe(0);
+    expect(await page.evaluate(() => window.__e2e.transport.left)).toBe(1);
+  });
+
+  test("control: a served entry is not touched by the probe", async ({ page }) => {
+    await openHost(page);
+    await page.evaluate((url) => window.__e2e.mount({ entry: url, appsOrigin: new URL(url).origin }), entry("coop"));
+    await page.waitForFunction(() => window.__e2e.statuses.some((s) => s.kind === "ready"));
+    await settle(page, 500);
+    expect(await page.evaluate(() => window.__e2e.statuses.some((s) => s.kind === "error"))).toBe(false);
+    expect(await page.locator("iframe[data-app-frame]").count()).toBe(1);
+  });
+});
+
 test.describe("no request leaves the frame", () => {
   test("fetch, XHR, WebSocket, EventSource, beacon, img, script, css, audio, iframe, form, window.open, top.location: the canary hears nothing", async ({ page }) => {
     await openHost(page);

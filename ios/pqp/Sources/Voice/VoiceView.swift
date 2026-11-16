@@ -103,6 +103,13 @@ struct VoiceView: View {
                 .accessibilityLabel("Keep chatting")
             }
         }
+        // Activities in the call: the strip when one runs in this room, and the
+        // entry to start one. The pane presents from this stage while the call is
+        // up (a screen can only show one cover at a time).
+        .activities(
+            channelId: channel.id, channelName: channel.name, serverId: channel.serverId,
+            isVoice: true, origin: .call, voiceChannel: channel
+        )
         // A no-op when the stage was merely reopened: `join` returns early for
         // the room we are already in.
         .task { await model.join(channel: channel, session: session, ratings: ratings) }
