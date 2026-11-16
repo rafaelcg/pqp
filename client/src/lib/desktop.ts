@@ -43,6 +43,13 @@ export interface PqpDesktop {
    */
   shareSilentRetryArm?(): Promise<boolean>;
   /**
+   * The share just requested was answered with nothing, which the page sees
+   * as `AbortError: Invalid capture constraints` whatever the cause. Which
+   * refusal it was, once, or null. See `capabilities.shareRefusalReason` and
+   * `lib/share-shell-refusal.ts`.
+   */
+  shareRefusalReason?(): Promise<string | null>;
+  /**
    * After `getDisplayMedia`: did the share start a capture? If so its PCM
    * port has been posted to this window as a `message` event first.
    */
@@ -305,6 +312,12 @@ export interface DesktopShareCapabilities {
    * sound on the same surface, with no second picker. Absent before it.
    */
   silentRetry?: boolean;
+  /**
+   * The shell answers `shareRefusalReason()`: why it answered a share
+   * request with nothing (a Cancel, a picker that never loaded, a second
+   * request while the picker is open). Absent before it.
+   */
+  shareRefusalReason?: boolean;
   /** The shell's version, for diagnostics. Null when it could not be read. */
   version: string | null;
 }

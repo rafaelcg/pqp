@@ -83,6 +83,11 @@ import {
 } from "@/lib/screen-capture-audio";
 import { lostSoundToFailure, retryShareWithoutSound } from "@/lib/share-silent-fallback";
 import {
+  readShellRefusal,
+  reportShellRefusal,
+  shellRefusalMessageKey,
+} from "@/lib/share-shell-refusal";
+import {
   armOrFallBackToChromiumAudio,
   attachNativeShareAudio,
   discardPrimedNativeShareAudio,
@@ -1390,6 +1395,15 @@ function screenShareErrorMessage(err: unknown): string {
       "voice.error.shareAudioUnavailable",
       desktopContext(),
     );
+  }
+  // Chromium words its AbortErrors in English ("Invalid capture constraints",
+  // "Error starting screen capture") and none of them is a sentence a person
+  // can act on. The desktop shell's refusals never get here
+  // (`lib/share-shell-refusal.ts`); this is everything else, said plainly,
+  // with Chromium's words kept in the log.
+  if (err.name === "AbortError") {
+    console.warn("[share] capture aborted:", err.message);
+    return translateMessage("voice.error.shareFailed");
   }
   return err.message;
 }
@@ -7471,9 +7485,38 @@ export function createVoiceController(transport: RealtimeTransport) {
           desktop: getDesktop(),
           getDisplayMedia: (retry) => navigator.mediaDevices.getDisplayMedia(retry),
         });
+        // The desktop shell answered with nothing. Every such answer is
+        // `AbortError: Invalid capture constraints`, a Cancel included, so it
+        // is told apart here and never printed as Chromium's sentence
+        // (`lib/share-shell-refusal.ts`).
+        const desktop = silent ? null : getDesktop();
+        const refusal = silent
+          ? null
+          : await readShellRefusal(err, captureEnv.isDesktopShell, desktop);
         if (silent) {
           stream = silent;
           sharedWithoutSoundAfterFailure = true;
+        } else if (refusal !== null) {
+          reportShellRefusal(refusal, {
+            options,
+            shellVersion: desktop?.capabilities?.version,
+            platform: desktop?.platform,
+            surface: intent.watchParty === true ? "watch-party" : "call",
+          });
+          discardPrimedNativeShareAudio();
+          // Not the sound's fault: the shell refused before any capture
+          // opened, so "share without sound" would refuse the same way.
+          state.screenShareAudioFailed = false;
+          const key = shellRefusalMessageKey(refusal);
+          if (key !== null) {
+            recordCaptureFailed(err, askedForAudio);
+            state.error = translateMessage(key);
+            state.screenShareError = state.error;
+            state.errorKind = "share";
+          }
+          // A closed picker is the person's answer: logged above, no error.
+          emit();
+          return;
         } else {
           // A browser that refuses the *shape* of the request rather than the
           // request itself would otherwise cost the user their screen share

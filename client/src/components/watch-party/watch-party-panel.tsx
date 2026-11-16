@@ -80,6 +80,7 @@ import {
 import { supportsScreenShare } from "@/components/voice/capabilities";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
 import { retryShareWithoutSound } from "@/lib/share-silent-fallback";
+import { readShellRefusal, reportShellRefusal } from "@/lib/share-shell-refusal";
 import {
   useWatchPartySilentShareWarning,
   WatchPartySilentShareWarning,
@@ -1233,6 +1234,22 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           getDisplayMedia: (retry) => navigator.mediaDevices.getDisplayMedia(retry),
         });
         if (!silent) {
+          // The desktop shell's "no" (a Cancel included) is one AbortError
+          // whatever the cause; ask which, and log it, before deciding.
+          const desktop = getDesktop();
+          const refusal = await readShellRefusal(error, pickEnv.isDesktopShell, desktop);
+          if (refusal !== null) {
+            reportShellRefusal(refusal, {
+              options,
+              shellVersion: desktop?.capabilities?.version,
+              platform: desktop?.platform,
+              surface: "watch-party",
+            });
+            if (refusal === "cancelled") {
+              discardPrimedNativeShareAudio();
+              return;
+            }
+          }
           throw error;
         }
         picked = silent;
