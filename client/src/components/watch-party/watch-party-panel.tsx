@@ -92,6 +92,7 @@ import {
   offersShellSystemAudio,
   screenCaptureOptions,
   shareStreamHasAudio,
+  stripLeakedSystemAudioTracks,
 } from "@/lib/screen-capture-audio";
 import {
   armOrFallBackToChromiumAudio,
@@ -1276,7 +1277,6 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         picked = silent;
         lostSound = true;
       }
-      setSoundFailed(lostSound);
       if (nativeAudio && !lostSound) {
         const attach = await attachNativeShareAudio(picked, {
           onEnded: () => setNativeAudioNotice("ended"),
@@ -1288,8 +1288,24 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       // The bus the arm above built, opened by name and put on the preview,
       // so go-live broadcasts what the host checked. A failure leaves a silent
       // pick, which the "sem áudio" line under the preview already says.
-      if (linuxSound && options.audio !== false && !lostSound) {
-        await attachLinuxShellShareAudio(picked);
+      // Attached after a silent retry too, like the ordinary share: the bus is
+      // its own capture, not the display request's audio that failed.
+      let linuxBusAttached = false;
+      if (linuxSound && options.audio !== false) {
+        // The ordinary share's order: a leaking mixer tap goes first. Left on,
+        // it would make the attach skip ("already has audio") and then be
+        // stripped at go-live, leaving the party with neither.
+        stripLeakedSystemAudioTracks(picked);
+        linuxBusAttached =
+          (await attachLinuxShellShareAudio(picked)) === "attached";
+      }
+      setSoundFailed(lostSound && !linuxBusAttached);
+      // The host stopped the share from the browser's bar while the sound was
+      // being attached: the `ended` listener below would never fire for it, so
+      // drop the pick here rather than preview a dead picture with a live bus.
+      if (picked.getVideoTracks()[0]?.readyState === "ended") {
+        picked.getTracks().forEach((track) => track.stop());
+        return;
       }
       stream?.getTracks().forEach((track) => track.stop());
       // The host stopping the share from the browser's own bar during setup

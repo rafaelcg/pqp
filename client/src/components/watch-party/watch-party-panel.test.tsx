@@ -833,6 +833,18 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     expect(pick.indexOf("attachLinuxShellShareAudio(picked)")).toBeGreaterThan(
       pick.indexOf("getDisplayMedia(options)"),
     );
+    // A leaking mixer tap is stripped BEFORE the bus, as in an ordinary share,
+    // or the attach skips and go-live strips the tap, leaving no sound at all.
+    expect(pick.indexOf("stripLeakedSystemAudioTracks(picked)")).toBeGreaterThan(-1);
+    expect(pick.indexOf("stripLeakedSystemAudioTracks(picked)")).toBeLessThan(
+      pick.indexOf("attachLinuxShellShareAudio(picked)"),
+    );
+    // The bus is its own capture: a silent retry of the display request does
+    // not stop it from being attached.
+    expect(pick).toContain("if (linuxSound && options.audio !== false) {");
+    expect(pick).not.toContain("options.audio !== false && !lostSound");
+    // A share stopped during the attach is dropped, not previewed.
+    expect(pick).toContain('picked.getVideoTracks()[0]?.readyState === "ended"');
   });
 
   it("hands go-live a stream without claiming system-audio opt-in", () => {
