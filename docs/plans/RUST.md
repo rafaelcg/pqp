@@ -198,7 +198,9 @@ Rust step has to beat.
 1. **Protocol and rule vectors for every client** (salvaged from #1561). Move
    the generators to `packages/shared/scripts/`, commit their output to
    `packages/shared/fixtures/`, and make the web, iOS and Android test suites
-   decode and re-encode every vector. Extend the house pattern of
+   decode and re-encode every valid vector to zod's canonical form, and refuse
+   (or at least never apply) every vector zod refuses, at the path zod blames
+   where the client validates at all. Extend the house pattern of
    `channel-layout-cases.json` to client-side rules with a history of drift:
    Jam stem placement and offsets first, the roster delta convergence rule
    second.
@@ -269,7 +271,7 @@ week between them.
 | # | Milestone | Exit criteria | Estimate |
 |---|---|---|---|
 | 0 | Close #1561 and #1553 with a pointer here; open Node issues for client frame validation and the resume dev key | Both PRs closed, branches kept, two issues filed | 1 evening |
-| 1 | Shared vectors: generators in `packages/shared/scripts/`, voice frames and value rules first, then Jam placement and roster delta cases; decode tests in web, iOS and Android | All three suites replay every vector in CI; adding a voice frame arm without vectors fails `packages/shared` tests; one drift bug caught by a vector before review | 2 to 3 weeks |
+| 1 | Shared vectors: generators in `packages/shared/scripts/`, voice frames and value rules first, then Jam placement and roster delta cases; decode tests in web, iOS and Android | All three suites round-trip every valid vector and never apply a refused one, in CI; adding a voice frame arm without vectors fails `packages/shared` tests; one drift bug caught by a vector before review | 2 to 3 weeks |
 | 2 | Electron diet with a committed bench (`tools/desktop-bench/`, salvaged from #1553) and budgets | 2,000 loaded messages under 500 MB; leaving a heavy channel under 100 ms; in-call CPU measured with two real peers and with a share; startup measured with five or more runs on an idle machine | 4 to 6 weeks |
 | 3 | Optional Rust pilot: `pqp-mobile-core` with one pure module behind a runtime flag in both apps | Ships to TestFlight and Play internal; meets every budget above; the vectors pass on the Rust copy; the next change to that module is made once instead of twice | 6 to 8 weeks |
 | 4 | Desktop decision, around Q2 2027 | A written go or no-go with numbers from milestone 2 against a native prototype that can join a call and share a screen. Go only if GPUI has shipped accessibility in a stable release, Discord's client has shipped, desktop performance is still a top complaint after milestone 2, and both of us accept that every UI change becomes a signed release on three operating systems | 2 weeks of measuring |
