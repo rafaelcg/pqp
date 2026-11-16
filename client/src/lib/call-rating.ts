@@ -118,3 +118,36 @@ export function finishCall(
     channelId: progress.channelId,
   };
 }
+
+/**
+ * The JSON `POST /api/voice/ratings` receives, as a pure function so the shape
+ * the product actually sends can be pinned by a test.
+ *
+ * TWO RULES, AND THEY DIFFER ON PURPOSE. The note is a low-score thing: above
+ * `LOW_SCORE_MAX` the card never asks for one, and the server drops one
+ * anyway. The media reading is NOT: it goes with every score, a 5 as much as a
+ * 1, because a bad call can only be explained by comparing it with a good one.
+ * It used to go only at 3 or below (and the server threw a good call's away
+ * too), so over eight weeks 726 ratings of 4 or 5 carried none. It is bounded
+ * numbers and booleans (`mediaQualitySchema`): no peer id, no address, no
+ * device name.
+ */
+export const LOW_SCORE_MAX = 3;
+
+export function buildRatingBody(
+  call: RatableCall,
+  score: number,
+  note: string,
+): Record<string, unknown> {
+  const trimmed = note.trim();
+  return {
+    rating: score,
+    note: score <= LOW_SCORE_MAX && trimmed ? trimmed : undefined,
+    durationSeconds: call.durationSeconds,
+    peerCount: call.peerCount,
+    transport: call.transport,
+    hadScreenShare: call.hadScreenShare,
+    channelId: call.channelId ?? undefined,
+    mediaQuality: call.mediaQuality,
+  };
+}

@@ -560,7 +560,12 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
 - **call quality, last 7 days**: the full 1-to-5 distribution as bars, the
   average, the share that gave 4 or 5, the split by transport (mesh vs the
   LiveKit SFU, both always listed so "no SFU calls yet" is visible), and the
-  notes people wrote, which the client only asks for on a 3 or less
+  notes people wrote, which the client only asks for on a 3 or less. Beside
+  the transport split, good calls (4 and 5) against low ones (1 to 3): packet
+  loss and RTT medians, the share with a reconnect, the share relayed and the
+  audio faults seen, from the media reading every web rating now carries
+  (`callRatings.mediaByBand`; the first row says how many of the ratings in
+  each band measured anything, since phones and old bundles send none)
 - the five most active servers of the last 24h
 - first-touch acquisition and landing pages
 - **quem fica, por canal**: the same channels, judged on who stayed rather
