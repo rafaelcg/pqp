@@ -54,6 +54,7 @@ const {
   pickAutomatically,
   screenPermission,
   captureResponse,
+  sourceIsListed,
   windowsBuildAllowsOwnAudioExclude,
   windowsNtBuild,
   pickerAudioState,
@@ -1377,6 +1378,25 @@ async function startLinuxShareAudio() {
 }
 
 /**
+ * Is this window still on the machine? A fresh listing with no thumbnails (the
+ * cost of the question is the list, not a screenshot of every surface). A
+ * listing that throws answers true: see `sourceIsListed`.
+ */
+async function windowStillListed(id) {
+  try {
+    const now = await desktopCapturer.getSources({
+      types: ["window"],
+      thumbnailSize: { width: 0, height: 0 },
+      fetchWindowIcons: false,
+    });
+    return sourceIsListed(now, id);
+  } catch (err) {
+    console.warn("[pqp] could not re-check the chosen window:", err?.message ?? err);
+    return true;
+  }
+}
+
+/**
  * The whole "which surface?" decision, from permission to callback payload.
  *
  * Order matters. macOS raises its own screen-recording prompt on the FIRST
@@ -1466,6 +1486,14 @@ async function chooseDisplaySource(audioRequested, requester = null) {
   // for IPC and is not what the callback accepts.
   const source = raw.find((candidate) => candidate.id === choice.id);
   if (!source) {
+    shareRefusal.note("source-gone", requester);
+    return null;
+  }
+  // `raw` is the snapshot the picker was drawn from, so the lookup above can
+  // never miss. A window closed after that snapshot (while the picker was
+  // open, or before Share) is only noticed by asking again; left alone it
+  // fails inside Chromium as `NotReadableError` and the page blames the sound.
+  if (choice.id.startsWith("window:") && !(await windowStillListed(choice.id))) {
     shareRefusal.note("source-gone", requester);
     return null;
   }

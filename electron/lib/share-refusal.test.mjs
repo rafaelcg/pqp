@@ -107,6 +107,20 @@ describe("share refusal reason", () => {
     assert.match(handler, /shareRefusal\.note\("error"/);
   });
 
+  it("asks again whether a chosen window still exists before it answers with it", () => {
+    // `raw` is the picker's snapshot, so `raw.find` cannot notice a window that
+    // closed after the picker opened; that failed inside Chromium as
+    // NotReadableError and the page blamed the sound.
+    const start = main.indexOf("async function chooseDisplaySource(");
+    const end = main.indexOf("\nfunction configureSessionSecurity(", start);
+    const body = main.slice(start, end);
+    assert.match(
+      body,
+      /choice\.id\.startsWith\("window:"\) && !\(await windowStillListed\(choice\.id\)\)\) \{\n\s+shareRefusal\.note\("source-gone", requester\);\n\s+return null;/,
+    );
+    assert.match(main, /async function windowStillListed\(id\)/);
+  });
+
   it("is reachable from the page through the bridge", () => {
     assert.match(main, /"pqp:share-refusal-reason",\n\s+\(event\) => shareRefusal\.take\(requesterKey\(event\.senderFrame\)\)/);
     assert.match(preload, /shareRefusalReason: true/);
