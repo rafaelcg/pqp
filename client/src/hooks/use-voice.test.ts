@@ -17,6 +17,8 @@ import { resetNativeShareAudioForTests } from "@/lib/native-share-audio";
 import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
 import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 import { retryShareWithoutSound } from "@/lib/share-silent-fallback";
+import { reportFaroEvent } from "@/lib/faro";
+import { translateMessage } from "@/lib/i18n";
 import { showsDockedShareError } from "@/components/voice/docked-share-error";
 
 /**
@@ -63,6 +65,12 @@ interface ManagerStub {
  * not something a test can wait on.
  */
 const statsListeners = vi.hoisted(() => new Set<(snapshot: unknown) => void>());
+// A spy on the one telemetry call a refused desktop share makes; Faro itself
+// is off in tests either way.
+vi.mock("@/lib/faro", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/faro")>()),
+  reportFaroEvent: vi.fn(),
+}));
 vi.mock("@/lib/voice-stats-probe", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/voice-stats-probe")>();
   return {
@@ -899,6 +907,150 @@ describe("screen share audio", () => {
 
       expect(shell.nativeShareAudioArm).not.toHaveBeenCalled();
       expect(shell.nativeShareAudioClaim).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * "Invalid capture constraints", 16 Nov 2026, a Windows 11 desktop user.
+   * Electron 44.9.1 rejects `getDisplayMedia` with exactly this (a
+   * DOMException named AbortError, Chromium's English sentence) for every
+   * `callback(null)` from the shell's display-media handler: a Cancel, a
+   * picker that never loaded, a second request while the picker is open. The
+   * page used to print that sentence. These tests throw the shape Electron
+   * throws, from the request the product really builds on Windows 11.
+   */
+  describe("a desktop share the shell answered with nothing", () => {
+    function windowsShell(overrides: Record<string, unknown> = {}) {
+      return {
+        isElectron: true,
+        platform: "win32",
+        sharePickerOffersAudio: true,
+        capabilities: {
+          displayMedia: true,
+          systemAudio: "loopback",
+          restrictOwnAudio: true,
+          pickerOffersAudio: true,
+          silentRetry: true,
+          shareRefusalReason: true,
+          version: "0.2.10",
+        },
+        shareSilentRetryArm: vi.fn(async () => false),
+        shareRefusalReason: vi.fn(async () => "cancelled"),
+        ...overrides,
+      };
+    }
+
+    /** What 0.2.9, the shell installed today, publishes: no reason to ask for. */
+    function shellWithoutReason() {
+      const shell = windowsShell({
+        capabilities: {
+          displayMedia: true,
+          systemAudio: "loopback",
+          restrictOwnAudio: true,
+          pickerOffersAudio: true,
+          silentRetry: true,
+          version: "0.2.9",
+        },
+      });
+      delete (shell as { shareRefusalReason?: unknown }).shareRefusalReason;
+      return shell;
+    }
+
+    function installShell(shell: unknown) {
+      (globalThis as { window?: unknown }).window = {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        pqpDesktop: shell,
+      };
+    }
+
+    /** Electron's rejection for `callback(null)`, as measured on 44.9.1. */
+    function shellSaysNo() {
+      displayMedia = async () => {
+        throw new DOMException("Invalid capture constraints", "AbortError");
+      };
+    }
+
+    beforeEach(() => {
+      setOsCanExcludeCallAudioForTests(true);
+      vi.mocked(reportFaroEvent).mockClear();
+    });
+
+    afterEach(() => {
+      delete (globalThis as { window?: unknown }).window;
+    });
+
+    it("never shows Chromium's sentence from a shell that cannot say why", async () => {
+      installShell(shellWithoutReason());
+      shellSaysNo();
+      const { voice } = await connectedMesh();
+      // The picker's sound box was ticked: the request carries loopback.
+      await voice.startScreenShare(true);
+
+      // The request that failed is the one the product sends on Windows 11.
+      expect(displayMediaCalls).toHaveLength(1);
+      const asked = displayMediaCalls[0] as { audio?: unknown; video?: { frameRate?: unknown } };
+      expect(asked.audio).not.toBe(false);
+      expect(asked.video?.frameRate).toEqual({ ideal: 30, max: 30 });
+
+      const state = voice.getState();
+      expect(state.isSharingScreen).toBe(false);
+      expect(state.error).toBe(translateMessage("voice.error.shareShellRefused"));
+      expect(state.error).not.toMatch(/invalid capture constraints/i);
+      expect(state.screenShareError).toBe(state.error);
+      // The shell refused before any sound was opened: offering "share
+      // without sound" would be refused the same way.
+      expect(state.screenShareAudioFailed).toBe(false);
+      expect(reportFaroEvent).toHaveBeenCalledWith(
+        "share_shell_refused",
+        expect.objectContaining({ refusal: "unknown", shellVersion: "0.2.9", platform: "win32" }),
+      );
+    });
+
+    it("treats a closed picker as the person's answer, not an error, and still logs it", async () => {
+      const shell = windowsShell();
+      installShell(shell);
+      shellSaysNo();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(true);
+
+      expect(shell.shareRefusalReason).toHaveBeenCalledTimes(1);
+      expect(displayMediaCalls).toHaveLength(1);
+      expect(voice.getState().error).toBeNull();
+      expect(voice.getState().screenShareError).toBeNull();
+      expect(voice.getState().screenShareAudioFailed).toBe(false);
+      expect(reportFaroEvent).toHaveBeenCalledWith(
+        "share_shell_refused",
+        expect.objectContaining({ refusal: "cancelled", shellVersion: "0.2.10" }),
+      );
+    });
+
+    it.each([
+      ["busy", "voice.error.sharePickerBusy"],
+      ["picker-failed", "voice.error.sharePickerFailed"],
+      ["source-gone", "voice.error.shareSourceGone"],
+      ["error", "voice.error.shareFailed"],
+      ["from-a-newer-shell", "voice.error.shareFailed"],
+    ] as const)("says what the shell's %s refusal means", async (reason, key) => {
+      installShell(windowsShell({ shareRefusalReason: vi.fn(async () => reason) }));
+      shellSaysNo();
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(displayMediaCalls).toHaveLength(1);
+      expect(voice.getState().error).toBe(translateMessage(key));
+      expect(voice.getState().screenShareAudioFailed).toBe(false);
+    });
+
+    it("never asks a browser's shell for a reason, and words a browser's AbortError plainly", async () => {
+      displayMedia = async () => {
+        throw Object.assign(new Error("Error starting screen capture"), { name: "AbortError" });
+      };
+      const { voice } = await connectedMesh();
+      await voice.startScreenShare(false);
+
+      expect(voice.getState().error).toBe(translateMessage("voice.error.shareFailed"));
+      expect(reportFaroEvent).not.toHaveBeenCalledWith("share_shell_refused", expect.anything());
     });
   });
 

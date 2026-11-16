@@ -144,6 +144,14 @@ const SHARE_CAPABILITIES = Object.freeze({
    * Absent in older shells, where a retry would open the picker again.
    */
   silentRetry: true,
+  /**
+   * Every refusal of a display-media request reaches the page as the same
+   * `AbortError: Invalid capture constraints` (a Cancel, a picker that never
+   * loaded, a second request while one is open). This binary answers
+   * `shareRefusalReason()` with which one it was (`lib/share-refusal.js`).
+   * Absent in older shells, where the page can only say it did not start.
+   */
+  shareRefusalReason: true,
   version: shellVersion(),
 });
 
@@ -293,6 +301,16 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
    */
   shareSilentRetryArm() {
     return ipcRenderer.invoke("pqp:share-silent-retry-arm");
+  },
+
+  /**
+   * The share just requested was answered with nothing
+   * (`capabilities.shareRefusalReason`). Resolves the reason once
+   * ("cancelled", "busy", "picker-failed", "no-sources", "permission",
+   * "source-gone", "origin", "error"), or null when there is none to give.
+   */
+  shareRefusalReason() {
+    return ipcRenderer.invoke("pqp:share-refusal-reason");
   },
 
   /**
