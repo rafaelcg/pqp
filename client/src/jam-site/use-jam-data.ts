@@ -143,6 +143,11 @@ export function useJamList(tab: JamTab, need: Instrument | null): ListState {
   return { songs, status, more, loadingMore, loadMore, retry: () => setAttempt((n) => n + 1) };
 }
 
+/** The hero's rule over a page in Em alta order: the first song with a part to show. */
+export function pickFeatured<T extends Pick<PublicJamSong, "parts">>(songs: readonly T[]): T | null {
+  return songs.find((candidate) => candidate.parts.length > 0) ?? null;
+}
+
 /** The featured song: the most liked one that has a part to show. */
 export function useFeatured(): { song: PublicJamSong | null; status: "loading" | "ready" | "error" } {
   const [song, setSong] = useState<PublicJamSong | null>(null);
@@ -151,7 +156,7 @@ export function useFeatured(): { song: PublicJamSong | null; status: "loading" |
     const controller = new AbortController();
     fetchJamList({ sort: "top", limit: 6 }, controller.signal).then(
       (result) => {
-        setSong(result.songs.find((candidate) => candidate.parts.length > 0) ?? null);
+        setSong(pickFeatured(result.songs));
         setStatus("ready");
       },
       (error: unknown) => {

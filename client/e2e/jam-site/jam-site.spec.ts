@@ -209,13 +209,15 @@ test.describe("the home", () => {
     const gridPage = page.waitForResponse((response) => /\/api\/public\/jams\?/.test(response.url()) && new URL(response.url()).searchParams.get("limit") === "24");
     await page.goto("/jam");
     await gridPage;
-    // The grid's page is in and the hero is still on its way: the grid waits for it
-    // rather than show the hero's song as a card and pull it out a moment later.
+    // The grid's page is in and the hero is still on its way: the grid is drawn
+    // without waiting for it, and already leaves out the song the hero will be,
+    // rather than show it as a card and pull it out a moment later.
     // Read once, not retried: a retrying assertion would pass by waiting for the hero.
     await page.waitForTimeout(300);
     expect(await page.locator("[data-jam-hero]").count()).toBe(0);
+    expect(await page.locator(`[data-jam-card="${SONG_B}"]`).count()).toBe(1);
     expect(await page.locator(`[data-jam-card="${SONG_A}"]`).count()).toBe(0);
-    await expect(page.locator("[data-jam-hero]")).toBeVisible();
+    await expect(page.locator(`[data-jam-hero="${SONG_A}"]`)).toBeVisible();
     await expect(page.locator("[data-jam-card]")).toHaveCount(3);
     await expect(page.locator(`[data-jam-card="${SONG_A}"]`)).toHaveCount(0);
     expect(calls.list.some((url) => url.searchParams.get("cursor") === "c2")).toBe(true);
