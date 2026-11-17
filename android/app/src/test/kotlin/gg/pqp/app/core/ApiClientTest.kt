@@ -235,6 +235,22 @@ class ApiClientTest {
         assertEquals("/api/me/age-check", request.path)
     }
 
+    /**
+     * The plausibility floor (server PR #1454): a 400 with a stable `code`
+     * beside `error`, which the gate reads as "check the year", not as blocked.
+     */
+    @Test
+    fun `the age check floor arrives as a 400 with its stable code`() = runTest {
+        answers += Answer(
+            400,
+            """{"error":"That date of birth does not look right. Check the year.","code":"birth_date_implausible"}""",
+        )
+        val error = runCatching { client().submitAgeCheck("2026-06-26") }.exceptionOrNull() as ApiException
+        assertEquals(400, error.status)
+        assertEquals("birth_date_implausible", error.code)
+        assertEquals(gg.pqp.app.onboarding.AgeCheckFailure.CheckYear, gg.pqp.app.onboarding.ageCheckFailureOf(error))
+    }
+
     /** Root-relative avatars, presigned absolute attachments, one helper. */
     @Test
     fun `url building keeps one slash between the base and the path`() {
