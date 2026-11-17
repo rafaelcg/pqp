@@ -194,6 +194,22 @@ export async function readUpTo(
   });
 }
 
+/** Pin message `n` the way the menu does: `pinned_at` and `pinned_by` on its row. */
+export async function pinMessage(
+  seeded: LongChannel,
+  n: number,
+): Promise<void> {
+  await withPool(async (pool) => {
+    await pool.query(
+      `UPDATE messages
+          SET pinned_at = now(),
+              pinned_by = (SELECT id FROM users WHERE clerk_id = $3)
+        WHERE channel_id = $1 AND body LIKE 'msg ' || $2::int || ' %'`,
+      [seeded.channelId, n, `dev_local_user_${seeded.owner}`],
+    );
+  });
+}
+
 /** One message from one account, over its own socket, as a person sends it. */
 export async function sendAs(
   suffix: string,

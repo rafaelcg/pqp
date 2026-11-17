@@ -15209,7 +15209,13 @@ function MainAppContent({
         // unpin — the same split `requirePinAccess` enforces server-side.
         canUnpin={selectedServerId ? canManageMessages : true}
         onClose={() => setPinsOpen(false)}
-        onJumpToMessage={(messageId) => void jumpToMessage(messageId)}
+        // Through the message list's own jump (the one a permalink takes), not
+        // `chat.jumpTo` alone: that only swapped the loaded page and left the
+        // list where it was, scrolled to nothing in particular (and, with the
+        // transcript windowed, to a window planned for the tail: a blank pane).
+        // The list loads the page around the pin if it has to, mounts it,
+        // centres it and flashes it.
+        onJumpToMessage={(messageId) => setHighlightMessageId(messageId)}
       />
 
       <BulkPurgeDialog
