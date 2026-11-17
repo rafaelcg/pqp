@@ -395,8 +395,8 @@ importers:
         specifier: ^5.7.3
         version: 5.9.3
       undici:
-        specifier: ^7.10.0
-        version: 7.29.0
+        specifier: ^8.12.4
+        version: 8.12.4
       ws:
         specifier: ^8.23.0
         version: 8.23.0
@@ -5709,10 +5709,6 @@ packages:
   undici@6.29.1:
     resolution: {integrity: sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==}
     engines: {node: '>=18.17'}
-
-  undici@7.29.0:
-    resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
-    engines: {node: '>=20.18.1'}
 
   undici@7.30.2:
     resolution: {integrity: sha512-mLyPQnHwUxaM/rideoK/+KL8DaAJLRl4aBCfmX444aCSLnIaomqPLtNRe2jdCYcsk5wZzXrDIQC8ZeYNRAYyIA==}
@@ -12013,8 +12009,6 @@ snapshots:
     optional: true
 
   undici@6.29.1: {}
-
-  undici@7.29.0: {}
 
   undici@7.30.2:
     optional: true
