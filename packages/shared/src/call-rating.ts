@@ -206,7 +206,8 @@ export const createCallRatingSchema = z.object({
   /**
    * Only ever collected on a low score, where the number alone does not say
    * what broke. Optional everywhere so a client that does not ask still
-   * validates.
+   * validates. (The media quality below is NOT held to this rule: it rides on
+   * every score, see `mediaQuality`.)
    */
   note: z
     .string()
@@ -229,14 +230,43 @@ export const createCallRatingSchema = z.object({
   hadScreenShare: z.boolean(),
   channelId: z.string().uuid().optional(),
   /**
-   * Absent on a build that does not collect it yet, and absent whenever the
-   * call had no video sender or receiver to sample in the first place --
-   * neither means the client is lying, so this is optional rather than a
-   * required field defaulted to nulls.
+   * Sent with EVERY score. It used to ride only on 3 or below, which left the
+   * table unable to say what a good call looks like: a bad call cannot be
+   * compared with a good one, and a week of low scores cannot be explained,
+   * if only one side was ever measured. The numbers are bounded and identify
+   * nobody (`mediaQualitySchema`), so keeping them on a 5 costs no privacy.
+   *
+   * Absent on a build that does not collect it (the phones today, bundles
+   * from before the sampler) and absent whenever the client had nothing to
+   * attach -- neither means the client is lying, so this is optional rather
+   * than a required field defaulted to nulls.
    */
   mediaQuality: mediaQualitySchema.optional(),
 });
 export type CreateCallRatingRequest = z.infer<typeof createCallRatingSchema>;
+
+/**
+ * One side of the good-versus-low comparison. `ratings` is every rating in the
+ * band; `withMedia` is how many of them carried a `mediaQuality` at all (phones
+ * and old bundles send none), which is the sample size every figure below is
+ * over, so read the two together. Shares are 0 to 1, null with nothing to
+ * divide by.
+ */
+export const mediaBandSummarySchema = z.object({
+  ratings: z.number(),
+  withMedia: z.number(),
+  /** Median of each call's own packet loss percent. */
+  packetLossPercentMedian: z.number().nullable(),
+  /** Median of each call's own median round trip, milliseconds. */
+  rttMsMedian: z.number().nullable(),
+  /** Of the calls with media, the share that reconnected at least once. */
+  reconnectShare: z.number().nullable(),
+  /** Of the calls whose path was known, the share carried by a TURN relay. */
+  relayedShare: z.number().nullable(),
+  /** Calls that saw each audio fault at least once; every kind is present. */
+  audioHealthCalls: z.record(z.string(), z.number()),
+});
+export type MediaBandSummary = z.infer<typeof mediaBandSummarySchema>;
 
 /**
  * What the operator dashboard shows. Counts, not rows: an individual score is
@@ -259,10 +289,9 @@ export const callRatingSummarySchema = z.object({
     }),
   ),
   /**
-   * The newest few notes, which only exist on low scores -- and, precisely
-   * because they only exist on low scores, the one place a low rating's own
-   * media quality reading belongs. Null when the rating carried none (an
-   * older client, or a call with nothing to sample).
+   * The newest few notes, which only exist on low scores. Each carries its
+   * own media quality reading, null when the rating carried none (an older
+   * client, a phone, or a call with nothing to sample).
    */
   recentNotes: z.array(
     z.object({
@@ -274,12 +303,20 @@ export const callRatingSummarySchema = z.object({
   ),
   /**
    * What the audio self-repair reported on rated calls since this API
-   * process started, every score included (the stored `media_quality` keeps
-   * only scores of 3 or less). Keys are `<kind>.<field>` from
+   * process started, every score included. Keys are `<kind>.<field>` from
    * `audioHealthKindCountsSchema`, plus `<kind>.calls` and `<kind>.lowRated`,
    * the calls that saw that kind at all and how many of them scored 2 or
    * less. Absent from a summary read on its own.
    */
   audioHealthSinceBoot: z.record(z.string(), z.number()).optional(),
+  /**
+   * Good calls (4 to 5) beside low ones (1 to 3), from the media quality
+   * stored on every rating, so the two can finally be compared. Counts and
+   * medians over the window, never a row.
+   */
+  mediaByBand: z.object({
+    good: mediaBandSummarySchema,
+    low: mediaBandSummarySchema,
+  }),
 });
 export type CallRatingSummary = z.infer<typeof callRatingSummarySchema>;

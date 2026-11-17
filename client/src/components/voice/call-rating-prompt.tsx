@@ -2,6 +2,7 @@ import { useState } from "react";
 import { CALL_RATING_NOTE_MAX_LENGTH } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
+import { buildRatingBody, LOW_SCORE_MAX } from "@/lib/call-rating";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { RatableCall } from "@/hooks/use-call-rating";
@@ -39,7 +40,7 @@ export function CallRatingPrompt({
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
 
-  const wantsNote = rating !== null && rating <= 3;
+  const wantsNote = rating !== null && rating <= LOW_SCORE_MAX;
 
   async function send(score: number, withNote: string) {
     setSending(true);
@@ -47,20 +48,7 @@ export function CallRatingPrompt({
       await apiFetch("/api/voice/ratings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rating: score,
-          note: withNote.trim() ? withNote.trim() : undefined,
-          durationSeconds: call.durationSeconds,
-          peerCount: call.peerCount,
-          transport: call.transport,
-          hadScreenShare: call.hadScreenShare,
-          channelId: call.channelId ?? undefined,
-          // Same rule as the note above, and the server enforces it too
-          // (`recordCallRating`) rather than trusting this: a quality
-          // reading on a good call is not diagnostic, so there is nothing to
-          // send.
-          mediaQuality: score <= 3 ? call.mediaQuality : undefined,
-        }),
+        body: JSON.stringify(buildRatingBody(call, score, withNote)),
       });
     } catch {
       // A rating that failed to send is not worth an error message. The person
@@ -77,7 +65,7 @@ export function CallRatingPrompt({
     setRating(score);
     // A good score is the whole answer, so it goes immediately and the card
     // gets out of the way. A low one waits for the optional detail.
-    if (score > 3) {
+    if (score > LOW_SCORE_MAX) {
       void send(score, "");
     }
   }
