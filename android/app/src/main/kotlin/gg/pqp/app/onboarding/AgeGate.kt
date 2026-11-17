@@ -44,11 +44,15 @@ fun formatBirthDateInWords(isoDate: String, locale: Locale): String? {
 /**
  * Whether the gate says the date back before sending it, from `ageGateReadback`
  * on `GET /api/me` (the `age_gate_readback` kill switch, which the server
- * serves only while the gate is pending). Unknown reads as ON: the switch is
- * default-on, only an explicit `false` turns it off, and showing the read-back
- * to somebody an old server did not tell is the safe side of the mistake.
+ * serves only while the gate is pending).
+ *
+ * ABSENT READS AS OFF, like the web (`me.ageGateReadback === true` in
+ * `client/src/App.tsx`), iOS, and what `packages/shared/src/api.ts` documents:
+ * an API that predates the flag keeps the direct submit the gate always had.
+ * Only an explicit `true` turns the read-back on. The server always sends the
+ * field while the gate is pending, so absent only ever means an old server.
  */
-fun ageGateReadbackEnabled(served: Boolean?): Boolean = served != false
+fun ageGateReadbackEnabled(served: Boolean?): Boolean = served == true
 
 /** What the Continue button does with what is typed. */
 sealed interface ContinueOutcome {

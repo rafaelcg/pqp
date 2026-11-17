@@ -329,10 +329,12 @@ class SessionStore(
 
     /**
      * Whether the age gate reads the date back before sending it, from the
-     * same `/api/me` that sent the phase there (`age_gate_readback`).
+     * same `/api/me` that sent the phase there (`age_gate_readback`). Off until
+     * a pending account is routed, and absent reads as off: see
+     * `ageGateReadbackEnabled`.
      */
     @Volatile
-    var ageGateReadback: Boolean = true
+    var ageGateReadback: Boolean = false
         private set
 
     /**

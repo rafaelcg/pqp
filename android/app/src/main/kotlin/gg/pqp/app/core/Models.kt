@@ -56,7 +56,7 @@ data class Me(
      * Whether the age gate says the date back in words before sending it
      * (`age_gate_readback`, a runtime kill switch). The server sends it only
      * while [ageGate] is `pending`, the one moment a client can use it. Absent
-     * is read as on, see `ageGateReadbackEnabled`.
+     * is read as off, like the web and iOS, see `ageGateReadbackEnabled`.
      */
     val ageGateReadback: Boolean? = null,
     /**

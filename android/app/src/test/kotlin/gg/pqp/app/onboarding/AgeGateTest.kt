@@ -81,10 +81,13 @@ class AgeGateTest {
     }
 
     @Test
-    fun `the flag is on unless the server says it is off`() {
+    fun `the flag is on only when the server says it is on, and absent reads as off`() {
+        // The web reads `me.ageGateReadback === true`, the shared schema says
+        // absent reads as off, and iOS agrees: an API that predates the flag
+        // submits directly.
         assertTrue(ageGateReadbackEnabled(true))
-        assertTrue(ageGateReadbackEnabled(null))
         assertFalse(ageGateReadbackEnabled(false))
+        assertFalse(ageGateReadbackEnabled(null))
     }
 
     @Test
@@ -94,12 +97,17 @@ class AgeGateTest {
             """{"id":"u1","displayName":"Ana","ageGate":"pending","ageGateReadback":false}""",
         )
         assertFalse(ageGateReadbackEnabled(served.ageGateReadback))
+        val explicitTrue = PqpJson.decodeFromString(
+            Me.serializer(),
+            """{"id":"u1","displayName":"Ana","ageGate":"pending","ageGateReadback":true}""",
+        )
+        assertTrue(ageGateReadbackEnabled(explicitTrue.ageGateReadback))
         val silent = PqpJson.decodeFromString(
             Me.serializer(),
             """{"id":"u1","displayName":"Ana","ageGate":"pending"}""",
         )
         assertNull(silent.ageGateReadback)
-        assertTrue(ageGateReadbackEnabled(silent.ageGateReadback))
+        assertFalse(ageGateReadbackEnabled(silent.ageGateReadback))
     }
 
     // --- the plausibility floor ---
@@ -136,6 +144,8 @@ class AgeGateTest {
         assertTrue(server.contains("ageGateReadback: isEnabled(\"age_gate_readback\")"))
         assertTrue(RepoSources.read("server/src/lib/flags.ts").contains("age_gate_readback: {"))
         assertTrue(RepoSources.read("packages/shared/src/api.ts").contains("ageGateReadback: z.boolean()"))
+        // Absent is off on the web, and Android has to agree.
+        assertTrue(RepoSources.read("client/src/App.tsx").contains("setAgeGateReadback(me.ageGateReadback === true)"))
     }
 
     /**
