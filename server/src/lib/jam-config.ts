@@ -19,7 +19,7 @@ import { isStorageConfigured } from "./s3.js";
  * `uploads` is whether object storage is configured here, independent of the
  * flag: a deployment with no `S3_*` can create a song and never a track.
  */
-const serverIdSchema = z.string().uuid();
+const serverIdSchema = z.string().guid();
 
 export function jamConfigForServer(rawServerId: string | null): JamConfig {
   const parsed = serverIdSchema.safeParse(rawServerId);

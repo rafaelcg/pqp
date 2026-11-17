@@ -267,7 +267,7 @@ export type JamPublicErrorCode = (typeof JAM_PUBLIC_ERRORS)[keyof typeof JAM_PUB
 
 // ------------------------------------------------------------ primitives
 
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 
 /** Query-string integer. */
 const queryInt = (min: number, max: number) => z.coerce.number().int().min(min).max(max);
