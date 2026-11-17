@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 const require = createRequire(import.meta.url);
 const {
   kindOf,
+  sourceIsListed,
   toDataUrl,
   normalizeSources,
   labelSources,
@@ -452,5 +453,24 @@ describe("macOS system audio", () => {
   it("points at the System Audio Recording pane, not Screen Recording", () => {
     assert.match(MAC_AUDIO_SETTINGS_URL, /^x-apple\.systempreferences:/);
     assert.match(MAC_AUDIO_SETTINGS_URL, /Privacy_AudioCapture$/);
+  });
+});
+
+describe("sourceIsListed", () => {
+  const now = [{ id: "screen:1:0" }, { id: "window:42:0" }];
+
+  it("is true while the surface is still on the machine", () => {
+    assert.equal(sourceIsListed(now, "window:42:0"), true);
+    assert.equal(sourceIsListed(now, "screen:1:0"), true);
+  });
+
+  it("is false once the window has closed, so the shell can refuse as source-gone", () => {
+    assert.equal(sourceIsListed(now, "window:1813:0"), false);
+    assert.equal(sourceIsListed([], "window:42:0"), false);
+  });
+
+  it("never blocks a capture on a listing it could not read", () => {
+    assert.equal(sourceIsListed(null, "window:42:0"), true);
+    assert.equal(sourceIsListed(undefined, "window:42:0"), true);
   });
 });

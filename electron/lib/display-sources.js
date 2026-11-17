@@ -166,6 +166,26 @@ function kindOf(id) {
 }
 
 /**
+ * Is `id` still among `sources`, a fresh `desktopCapturer` listing?
+ *
+ * The picker works from a snapshot taken when it opened, and a person can pick
+ * a window and then close it before pressing Share (2026-11-16 QA: Calculator
+ * quit with its tile selected). Chromium then fails the capture with a
+ * `NotReadableError` ("Could not start video source"), which the client words
+ * as a problem with the SOUND ("That screen's sound could not be opened"), so
+ * the shell checks the surface is still there and refuses as `source-gone`
+ * instead. Anything that is not a list answers true: this check may only ever
+ * turn a capture that was going to fail into a clear refusal, never block one
+ * that would have worked.
+ */
+function sourceIsListed(sources, id) {
+  if (!Array.isArray(sources)) {
+    return true;
+  }
+  return sources.some((candidate) => candidate?.id === id);
+}
+
+/**
  * A `NativeImage`, a data URL, or nothing.
  *
  * Images cannot cross IPC, so every thumbnail has to become a string before the
@@ -398,6 +418,7 @@ module.exports = {
   windowsBuildAllowsOwnAudioExclude,
   pickerAudioState,
   kindOf,
+  sourceIsListed,
   toDataUrl,
   normalizeSources,
   labelSources,
