@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { safeTextSchema } from "./api.js";
+import { minUtf16Length, safeTextSchema } from "./api.js";
 
 /**
  * Message search: the wire contract for `GET /api/servers/:serverId/search`.
@@ -20,7 +20,7 @@ export const SEARCH_PAGE_MAX = 50;
  */
 export const messageSearchQuerySchema = z
   .string()
-  .min(SEARCH_QUERY_MIN_LENGTH)
+  .refine(minUtf16Length(SEARCH_QUERY_MIN_LENGTH), `Use at least ${SEARCH_QUERY_MIN_LENGTH} characters.`)
   .max(SEARCH_QUERY_MAX_LENGTH)
   .pipe(safeTextSchema);
 

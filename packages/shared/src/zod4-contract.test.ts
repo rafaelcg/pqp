@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { auditChangeSchema } from "./audit.js";
 import { forwardResultSchema } from "./forward.js";
-import { messageSearchQuerySchema } from "./search.js";
+import {
+  DISPLAY_NAME_MAX_LENGTH,
+  MESSAGE_MAX_LENGTH,
+  USER_SEARCH_MAX_LENGTH,
+  messageBodyTextSchema,
+  messageReactionSchema,
+  updateProfileSchema,
+  userSearchQuerySchema,
+  usernameSchema,
+} from "./api.js";
+import { JAM_TITLE_MAX, jamTitleSchema } from "./jam.js";
+import { roleNameSchema } from "./permissions.js";
+import { SEARCH_QUERY_MAX_LENGTH, messageSearchQuerySchema } from "./search.js";
 import { createWatchPartySchema, updateWatchPartySchema } from "./watch-party-session.js";
 
 /**
@@ -80,12 +92,71 @@ describe("the zod 4 migration keeps the wire contract", () => {
 
   describe("string length is counted in code points now (the one deliberate difference)", () => {
     // zod 3 counted UTF-16 units, zod 4 counts code points, which is what Postgres counts
-    // and what a person sees. It only differs for characters outside the BMP (most emoji).
-    it("a single emoji is one character, so it no longer reaches a 2-character minimum", () => {
-      expect(messageSearchQuerySchema.safeParse("ok").success).toBe(true);
-      expect(messageSearchQuerySchema.safeParse("a").success).toBe(false);
-      expect(messageSearchQuerySchema.safeParse("\u{1F600}").success).toBe(false);
-      expect(messageSearchQuerySchema.safeParse("\u{1F600}\u{1F600}").success).toBe(true);
+    // (`char_length`) and what a person sees. It only differs for characters outside the
+    // BMP (most emoji). A MAXIMUM can only get looser (code points never outnumber units),
+    // so no request accepted before is refused now. A MINIMUM can get stricter, and the
+    // audit of every `z.string().min(n)` with n >= 2 found exactly two that a client gates
+    // on in UTF-16 units: the search boxes (below). The others are ASCII-only by regex.
+    const emoji = "\u{1F600}";
+
+    it("a maximum admits as many emoji as the limit says (it used to stop at half)", () => {
+      expect(messageBodyTextSchema.safeParse(emoji.repeat(MESSAGE_MAX_LENGTH)).success).toBe(true);
+      expect(messageBodyTextSchema.safeParse(emoji.repeat(MESSAGE_MAX_LENGTH + 1)).success).toBe(false);
+      expect(messageBodyTextSchema.safeParse("a".repeat(MESSAGE_MAX_LENGTH)).success).toBe(true);
+      expect(messageBodyTextSchema.safeParse("a".repeat(MESSAGE_MAX_LENGTH + 1)).success).toBe(false);
+      expect(jamTitleSchema.safeParse(emoji.repeat(JAM_TITLE_MAX)).success).toBe(true);
+      expect(jamTitleSchema.safeParse(emoji.repeat(JAM_TITLE_MAX + 1)).success).toBe(false);
+      expect(
+        updateProfileSchema.safeParse({ displayName: emoji.repeat(DISPLAY_NAME_MAX_LENGTH) }).success,
+      ).toBe(true);
+      expect(
+        updateProfileSchema.safeParse({ displayName: emoji.repeat(DISPLAY_NAME_MAX_LENGTH + 1) }).success,
+      ).toBe(false);
+    });
+
+    it("a lone emoji still reaches the search boxes' two-character minimum, as it did on zod 3", () => {
+      // The web client and Android gate on `String.length` / Kotlin `length` (UTF-16), so a
+      // lone emoji is a "searchable" query to both. The schema keeps counting it that way.
+      for (const schema of [messageSearchQuerySchema, userSearchQuerySchema]) {
+        expect(schema.safeParse("ok").success).toBe(true);
+        expect(schema.safeParse(emoji).success).toBe(true);
+        expect(schema.safeParse(`${emoji}${emoji}`).success).toBe(true);
+        expect(schema.safeParse("a").success).toBe(false);
+        expect(schema.safeParse("").success).toBe(false);
+        expect(schema.safeParse("\u0000a").success).toBe(false);
+      }
+      // The maximum is the one that now counts code points: 200 and 32 emoji fit.
+      expect(messageSearchQuerySchema.safeParse(emoji.repeat(SEARCH_QUERY_MAX_LENGTH)).success).toBe(true);
+      expect(messageSearchQuerySchema.safeParse(emoji.repeat(SEARCH_QUERY_MAX_LENGTH + 1)).success).toBe(false);
+      expect(userSearchQuerySchema.safeParse(emoji.repeat(USER_SEARCH_MAX_LENGTH)).success).toBe(true);
+      expect(userSearchQuerySchema.safeParse(emoji.repeat(USER_SEARCH_MAX_LENGTH + 1)).success).toBe(false);
+    });
+
+    it("the other two-character minimums are ASCII by regex, so the counting cannot matter", () => {
+      expect(usernameSchema.safeParse("ab").success).toBe(true);
+      expect(usernameSchema.safeParse(emoji).success).toBe(false);
+      expect(usernameSchema.safeParse(`${emoji}${emoji}`).success).toBe(false);
+      expect(roleNameSchema.safeParse("ab").success).toBe(true);
+      expect(roleNameSchema.safeParse(emoji).success).toBe(false);
+      expect(roleNameSchema.safeParse(`${emoji}${emoji}`).success).toBe(false);
+    });
+  });
+
+  describe(".int() is a safe integer now (the other deliberate difference)", () => {
+    // zod 3's `.int()` took any integral double (1e300, 2^53 + 2); zod 4's takes only
+    // |n| <= 2^53 - 1. Nothing in the clients sends one (counts, milliseconds, byte sizes).
+    const count = messageReactionSchema.shape.count;
+
+    it("accepts every integer a client can produce exactly", () => {
+      expect(count.safeParse(1).success).toBe(true);
+      expect(count.safeParse(Date.now()).success).toBe(true);
+      expect(count.safeParse(Number.MAX_SAFE_INTEGER).success).toBe(true);
+    });
+
+    it("refuses what no client sends, instead of storing a number it already rounded", () => {
+      expect(count.safeParse(Number.MAX_SAFE_INTEGER + 1).success).toBe(false);
+      expect(count.safeParse(1e300).success).toBe(false);
+      expect(count.safeParse(1.5).success).toBe(false);
     });
   });
 });

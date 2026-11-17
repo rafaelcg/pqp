@@ -882,6 +882,19 @@ export const safeTextSchema = z
   .string()
   .refine((value) => !CONTROL_CHARS.test(value), "Invalid characters");
 
+/**
+ * A minimum length counted in UTF-16 units, which is how zod 3 counted every
+ * string minimum and how `String.length` (the web client) and Kotlin's `length`
+ * (Android) count the same text. zod 4 counts code points, so a lone emoji (two
+ * units, one code point) would pass those clients' own gate and then be refused
+ * here. Used only where a client gates on the same number: the two search boxes.
+ * A maximum needs no such care, because code points never outnumber units, so
+ * zod 4's `.max()` only ever accepts more than the clients let anybody type.
+ */
+export function minUtf16Length(min: number): (value: string) => boolean {
+  return (value) => value.length >= min;
+}
+
 export const reactionEmojiSchema = z
   .string()
   .min(1)
@@ -1611,7 +1624,7 @@ export const USER_SEARCH_PAGE_SIZE = 20;
 
 export const userSearchQuerySchema = z
   .string()
-  .min(USER_SEARCH_MIN_LENGTH)
+  .refine(minUtf16Length(USER_SEARCH_MIN_LENGTH), `Use at least ${USER_SEARCH_MIN_LENGTH} characters.`)
   .max(USER_SEARCH_MAX_LENGTH)
   .pipe(safeTextSchema);
 
