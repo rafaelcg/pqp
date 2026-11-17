@@ -1084,7 +1084,11 @@ final class ChatModel {
              .callIncoming, .callRingCancelled, .callDeclined,
              // A forum's list frames are the forum screen's. An open post
              // reads its own state from them in `ForumPostModel`.
-             .forumPostUpsert, .forumPostRemoved, .forumConfigUpdate:
+             .forumPostUpsert, .forumPostRemoved, .forumConfigUpdate,
+             // A jam's frames belong to the jam wall and the open song.
+             .jam,
+             // An activity's frames belong to the activity store and the open pane.
+             .apps:
             break
         }
     }

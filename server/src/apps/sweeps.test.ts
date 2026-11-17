@@ -163,6 +163,17 @@ describeDb("the sweeps of a live app session", () => {
       expect(await row(id)).toMatchObject({ status: "ended", end_reason: "app-disabled" });
     });
 
+    it("a session that runs on the app's default release ends when the default goes off, and not while it holds", async () => {
+      await q(`DELETE FROM server_apps WHERE app_id = $1`, [appId]);
+      await q(`UPDATE apps SET default_operator_enabled = TRUE WHERE id = $1`, [appId]);
+      const id = await start(world.owner);
+      expect((await sweep(0)).ended).toEqual({});
+      expect((await row(id)).status).toBe("live");
+      await q(`UPDATE apps SET default_operator_enabled = FALSE WHERE id = $1`, [appId]);
+      expect((await sweep(0)).ended).toEqual({ "app-disabled": 1 });
+      expect((await row(id)).end_reason).toBe("app-disabled");
+    });
+
     it("ends with app-disabled when the server became a public community the app is not unlocked for", async () => {
       const id = await start(world.owner);
       await q(`UPDATE servers SET is_community = TRUE WHERE id = $1`, [world.serverId]);

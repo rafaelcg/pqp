@@ -20,6 +20,14 @@ export const REPORT_REASONS = [
   "self_harm",
   "illegal_content",
   /**
+   * Somebody posted what they do not own: a song, a recording, a video, a
+   * picture. Its own reason so the instance queue can filter and count it, and
+   * because it is handled differently from illegal content: it is the rights
+   * holder's claim, answered by taking the one thing down (`docs/JAM_PUBLIC.md`,
+   * "Copyright reports"), not by a safety escalation. Routing is unchanged.
+   */
+  "copyright",
+  /**
    * A minor in sexual content. Its own reason, and the one reason that
    * decides ROUTING: whatever the subject, a report with it goes to the
    * instance queue and never to a server's own staff (see `createReport`).
@@ -444,6 +452,7 @@ export const REPORT_REASON_LABELS: Record<ReportReason, string> = {
   sexual_content: "Unwanted sexual content",
   self_harm: "Self-harm or suicide",
   illegal_content: "Illegal content",
+  copyright: "Copyright",
   minor_sexual: "A minor in sexual content",
   other: "Something else",
 };

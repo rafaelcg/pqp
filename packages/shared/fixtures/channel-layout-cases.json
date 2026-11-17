@@ -32,9 +32,28 @@
     "single": [
       { "id": "cat-a", "type": "category", "parentId": null, "position": 0 },
       { "id": "t-x", "type": "text", "parentId": "cat-a", "position": 0 }
+    ],
+    "jam": [
+      { "id": "j-songs", "type": "jam", "parentId": null, "position": 0 },
+      { "id": "t-chat", "type": "text", "parentId": null, "position": 1 },
+      { "id": "v-sala", "type": "voice", "parentId": null, "position": 2 }
     ]
   },
   "build": [
+    {
+      "name": "a jam channel mixes like any other type",
+      "server": "jam",
+      "mixed": true,
+      "hideWatchParty": false,
+      "expect": { "loose": ["j-songs", "t-chat", "v-sala"], "categories": [] }
+    },
+    {
+      "name": "not mixed: a type with no rank of its own (jam) sorts after text and voice",
+      "server": "jam",
+      "mixed": false,
+      "hideWatchParty": false,
+      "expect": { "loose": ["t-chat", "v-sala", "j-songs"], "categories": [] }
+    },
     {
       "name": "mixed: loose in one order above the categories, threads dropped, empty category kept",
       "server": "guris",

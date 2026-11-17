@@ -34,6 +34,8 @@ function mount(overrides: Partial<Parameters<typeof mountAppFrame>[0]> = {}) {
     users,
     locale: () => "pt-BR",
     host: { theme: new FakeTheme(), fetchImpl: (async () => new Response("no", { status: 404 })) as typeof fetch },
+    // the entry is served unless a test says otherwise (never the network from a unit test)
+    probeEntry: async () => ({ kind: "ok" }),
     onStatus: (status) => statuses.push(status),
     ...overrides,
   });
@@ -163,6 +165,74 @@ describe("the handshake", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(container.querySelector("iframe")).toBeNull();
     expect(controller.status).toEqual({ kind: "error", reason: "timeout" });
+  });
+});
+
+describe("an entry the apps origin does not serve", () => {
+  it("removes the frame at once as entry-unavailable and releases the seat, without waiting for the hello timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const asked: string[] = [];
+    const { controller, transport, statuses } = mount({
+      helloTimeoutMs: 20_000,
+      probeEntry: async (url) => {
+        asked.push(url);
+        return { kind: "missing", status: 404 };
+      },
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(asked).toEqual(["http://localhost:5175/pqp-eco/1.0.0/index.html"]);
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(controller.status).toEqual({ kind: "error", reason: "entry-unavailable" });
+    expect(statuses.at(-1)).toEqual({ kind: "error", reason: "entry-unavailable" });
+    expect(transport.left).toBe(1);
+    // the timeout that would have come later changes nothing
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(statuses.filter((s) => s.kind === "error")).toHaveLength(1);
+  });
+
+  it("leaves a probe that got no answer to the hello timeout", async () => {
+    vi.useFakeTimers();
+    const { controller } = mount({ helloTimeoutMs: 5000, probeEntry: async () => ({ kind: "unknown" }) });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(controller.status).toEqual({ kind: "loading" });
+    expect(container.querySelector("iframe")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(controller.status).toEqual({ kind: "error", reason: "timeout" });
+  });
+
+  it("never takes down a frame that already said hello", async () => {
+    let answer!: (result: { kind: "missing"; status: number }) => void;
+    let signal!: AbortSignal;
+    const { iframe, controller } = mount({
+      probeEntry: (_url, s) => {
+        signal = s;
+        return new Promise((resolve) => (answer = resolve));
+      },
+    });
+    vi.spyOn(iframe!.contentWindow!, "postMessage").mockImplementation(() => {});
+    post(iframe!.contentWindow!, HELLO);
+    await flush();
+    expect(controller.status.kind).toBe("ready");
+    // a stalled probe is not left running once the frame works
+    expect(signal.aborted).toBe(true);
+    answer({ kind: "missing", status: 404 });
+    await flush();
+    expect(controller.status.kind).toBe("ready");
+    expect(container.querySelector("iframe")).toBe(iframe);
+  });
+
+  it("aborts the probe when the frame goes away", async () => {
+    let signal!: AbortSignal;
+    const { controller } = mount({
+      probeEntry: (_url, s) => {
+        signal = s;
+        return new Promise(() => {});
+      },
+    });
+    expect(signal.aborted).toBe(false);
+    controller.destroy();
+    expect(signal.aborted).toBe(true);
   });
 });
 

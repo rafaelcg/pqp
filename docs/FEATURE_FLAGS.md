@@ -961,13 +961,71 @@ once it has done its job. Open tabs follow on the next config refresh (focus or
 10 min). `server/src/lib/flag-client-contract.test.ts` pins the field on both
 sides; `server/src/api/forum-flag.test.ts` pins the answer with rows.
 
+## `jam_channels` (per server)
+
+Jam channels: a channel type, `jam`, whose posts are songs made of recorded
+tracks that play together (`docs/JAM.md`, the wire contract in
+`packages/shared/src/jam.ts`). Behind `JAM_CHANNELS` (default off, **per
+server**, born as a flag). Served as `enabled` on
+`GET /api/jam/config?serverId=` (`server/src/lib/jam-config.ts`), beside
+`uploads` (object storage is configured here).
+
+Off gates **creating and changing**, never reading: `POST
+/api/servers/:id/channels` with `type: "jam"` answers 403 `jam_channels_off`,
+and so does creating or editing a song, asking for an upload, adding or editing
+a track, and voting. A jam and its songs stay readable and playable. The three
+removals (delete a song, delete a track, take a vote back) keep working, so
+turning it off freezes the feature without stranding a moderator or somebody's
+own recording. Nothing is hidden or deleted.
+
+Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "jam_channels", serverId, enabled: true }` or from controles →
+interruptores; `enabled: null` returns to the default. Open tabs follow on the
+next config refresh (focus or 10 min). Both phones leave a channel type they do
+not know out of the list (iOS `isListed`, Android `drawable`), so a jam channel
+is invisible there rather than a dead row. Before it goes on, the bucket's CORS
+policy has to allow GET and PUT from the app's origin (`docs/ATTACHMENTS.md`
+section 4), because the audio engine fetches the stems from the browser.
+`server/src/lib/flag-client-contract.test.ts` pins the route, the field and the
+create guard.
+
+## `jam_public` (global, default off)
+
+Public jams: songs anybody hears and watches at jam.pqp.gg without an account
+(`docs/JAM_PUBLIC.md`, the wire contract in `packages/shared/src/jam-public.ts`).
+Behind `JAM_PUBLIC` (only `true` turns it on), born as a flag. **Global**: a
+standalone public jam has no server and the website's visitor has none either.
+
+- **A legal category change.** Like `COMMUNITIES_ENABLED`, on is public content
+  to the open web. It goes on when Rafael says so, after
+  `docs/CONTENT_SAFETY.md` §"Public jams". One flag, no environment
+  acknowledgement on top: the dashboard flip is the decision.
+- **Served by** `GET /api/public/jams/config` -> `{ enabled }` and nothing else
+  (unauthenticated, never reads `Authorization`, its own address bucket,
+  `public, max-age=60`, 200 `{ enabled: false }` when off), and by
+  `GET /api/jam-public/config` (signed in: `enabled`, what this account may do,
+  whether storage is configured).
+- **Off is dark.** Every other `/api/public/jams*` route is not matched (the
+  401 an unknown path gets), every publishing write is 403 `jam_public_off`,
+  a non-member loses public access to a channel's song, and nothing about
+  `jam_channels` changes. The removals stay open (unpublish, a consent of
+  `no`, unlike, deleting a track), so off never strands somebody's own content.
+- **Read per request, nothing cached per process**, so a flip, an unpublish or
+  a takedown is in the next answer on both API containers; a shared cache in
+  front holds a list for at most 60 s and a song for 30 s.
+
+Turn it on from controles → interruptores, or `PUT /api/admin/flags
+{ key: "jam_public", enabled: true }`. Rollback is the same with `false`.
+Pinned by `server/src/api/jam-public.test.ts` (with the flag as a row, the way
+production sets it) and `server/src/lib/flag-client-contract.test.ts`.
+
 ## `apps` (per server)
 
 The apps platform: small interactive things (Locadora, a game room) that a person
 starts in a text or voice channel and others join from a live card in the
 timeline. Behind `APPS` (default off, **per server**, born as a flag). It is the
 first of the platform's gates: an app is also released by the operator per server
-(`server_apps.operator_enabled`), and Locadora needs `emulator_room` on top.
+(`server_apps.operator_enabled`, or for every server at once with the app's `default_operator_enabled`, see `docs/APPS.md` §"The operator's release"), and Locadora needs `emulator_room` on top.
 
 Off means nothing renders and every apps route answers 404, except
 `GET /api/apps/config?serverId=` (`enabled`), which answers `{ enabled: false }`

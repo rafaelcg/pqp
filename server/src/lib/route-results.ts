@@ -13,6 +13,14 @@ export class Created {
 }
 
 /**
+ * Wrap a handler result to answer 204 with no body. Defined here (it was
+ * private to `api/index.ts`) so a route module outside that file can answer a
+ * delete the way every other delete answers; `handleApi` tests for this one
+ * class with `instanceof`.
+ */
+export class NoContent {}
+
+/**
  * An `HttpError` whose body carries more than `{ error }`: `detail` is merged
  * into the error envelope, so `error` stays exactly where every client already
  * looks for it.

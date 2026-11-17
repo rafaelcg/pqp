@@ -12,10 +12,12 @@ import { readContainerDuration, type ContainerInfo } from "../speech/container-d
 import { collapseLoops } from "../speech/metrics.js";
 import { selectSttProvider } from "../speech/select.js";
 import { isFfmpegAvailable, transcodeToAac } from "../speech/transcode.js";
+import { isJamTranscodeAvailable } from "../speech/video-transcode.js";
 import type { SttResult } from "../speech/types.js";
 import { broadcastToChannel } from "../ws/chat.js";
 import { isTranscriptionOnFor } from "./attachments.js";
 import { runCommunityHomeCaptionsJob } from "./community-home-captions-worker.js";
+import { runJamVideoJob } from "./jam-video-transcode.js";
 import {
   claimSpeechJobs,
   dropSpeechJob,
@@ -457,6 +459,7 @@ async function runJob(job: SpeechJob): Promise<void> {
     if (job.kind === "voice_note") await runVoiceNoteJob(job);
     else if (job.kind === "voice_transcode") await runTranscodeJob(job);
     else if (job.kind === "community_home_captions") await runCommunityHomeCaptionsJob(job);
+    else if (job.kind === "jam_video_transcode") await runJamVideoJob(job);
   } catch (error) {
     // Anything unexpected (the database, storage) is a retry, never a crash.
     const message = error instanceof Error ? error.message : String(error);
@@ -480,11 +483,13 @@ async function runJob(job: SpeechJob): Promise<void> {
 
 /**
  * The kinds this process can run. Transcoding and Baú video subtitles need
- * ffmpeg; nothing claims what it cannot do.
+ * ffmpeg, a Jam video copy needs ffmpeg with libx264; nothing claims what it
+ * cannot do.
  */
 export async function runnableSpeechJobKinds(): Promise<SpeechJobKind[]> {
   const kinds: SpeechJobKind[] = ["voice_note"];
   if (await isFfmpegAvailable()) kinds.push("voice_transcode", "community_home_captions");
+  if (await isJamTranscodeAvailable()) kinds.push("jam_video_transcode");
   return kinds;
 }
 
@@ -495,6 +500,15 @@ export async function runnableSpeechJobKinds(): Promise<SpeechJobKind[]> {
  * it.
  */
 let captionsInFlight: Promise<void> | null = null;
+/**
+ * The Jam camera video being converted on this process, if any: another lane,
+ * for the same reason (an x264 pass over up to 100 MiB is minutes) and one at
+ * a time, which is also the whole of the backfill's rate limit.
+ */
+let jamVideoInFlight: Promise<void> | null = null;
+
+/** The kinds that run in a lane of their own and never in the voice notes' batch. */
+const LANE_KINDS: readonly SpeechJobKind[] = ["community_home_captions", "jam_video_transcode"];
 
 /**
  * One tick: claim what is due and run it. Skipped without storage (there are
@@ -504,10 +518,10 @@ export async function runSpeechJobsTick(): Promise<number> {
   if (!isStorageConfigured()) return 0;
   const kinds = await runnableSpeechJobKinds();
   const jobs = await claimSpeechJobs(
-    kinds.filter((kind) => kind !== "community_home_captions"),
+    kinds.filter((kind) => !LANE_KINDS.includes(kind)),
     CONCURRENCY,
   );
-  let captions = 0;
+  let lanes = 0;
   if (kinds.includes("community_home_captions") && !captionsInFlight) {
     // Its own failure must not strand the voice jobs claimed just above.
     const [job] = await claimSpeechJobs(["community_home_captions"], 1).catch((error: unknown) => {
@@ -515,19 +529,36 @@ export async function runSpeechJobsTick(): Promise<number> {
       return [];
     });
     if (job) {
-      captions = 1;
+      lanes += 1;
       captionsInFlight = runJob(job).finally(() => {
         captionsInFlight = null;
       });
     }
   }
+  if (kinds.includes("jam_video_transcode") && !jamVideoInFlight) {
+    const [job] = await claimSpeechJobs(["jam_video_transcode"], 1).catch((error: unknown) => {
+      console.error("[speech] jam video claim failed:", error instanceof Error ? error.message : error);
+      return [];
+    });
+    if (job) {
+      lanes += 1;
+      jamVideoInFlight = runJob(job).finally(() => {
+        jamVideoInFlight = null;
+      });
+    }
+  }
   await Promise.all(jobs.map((job) => runJob(job)));
-  return jobs.length + captions;
+  return jobs.length + lanes;
 }
 
 /** Tests only: wait for the video subtitles job this process started, if any. */
 export async function waitForCaptionsJobForTests(): Promise<void> {
   await captionsInFlight;
+}
+
+/** Tests only: wait for the Jam video job this process started, if any. */
+export async function waitForJamVideoJobForTests(): Promise<void> {
+  await jamVideoInFlight;
 }
 
 /** Started by `jobs.ts`: 1 s while busy, backing off to 30 s, woken by the enqueue's NOTIFY. */

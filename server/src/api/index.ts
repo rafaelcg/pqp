@@ -378,6 +378,25 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import { registerAppRoutes } from "./app-routes.js";
+import { registerJamRoutes } from "./jam-routes.js";
+import {
+  ADMIN_JAM_PUBLIC_BLOCK_PATH,
+  ADMIN_JAM_PUBLIC_QUEUE_PATH,
+  ADMIN_JAM_PUBLIC_REMOVE_PART_PATH,
+  ADMIN_JAM_PUBLIC_REVIEW_PATH,
+  ADMIN_JAM_PUBLIC_SONGS_PATH,
+  ADMIN_JAM_PUBLIC_UNPUBLISH_PATH,
+  adminJamPublicBlock,
+  adminJamPublicQueue,
+  adminJamPublicRemovePart,
+  adminJamPublicReview,
+  adminJamPublicSongs,
+  adminJamPublicUnpublish,
+  handleJamPublicPublicRoute,
+  registerJamPublicRoutes,
+  resetJamPublicRateLimits,
+} from "./jam-public-routes.js";
+import { JAM_CHANNELS_OFF, jamChannelsEnabled } from "../lib/jam-config.js";
 import {
   handleBauPaymentsWebhook,
   registerBauPaymentsRoutes,
@@ -386,7 +405,7 @@ import { noteStaffVipChange } from "../services/bau-payments/vip.js";
 import { endSessionsOfChannel } from "../apps/sweeps.js";
 import { publicAppsConfig } from "../apps/public-config.js";
 import { registerAppOwnerRoutes } from "./app-owner-routes.js";
-import { Created, HttpErrorWithDetail } from "../lib/route-results.js";
+import { Created, HttpErrorWithDetail, NoContent } from "../lib/route-results.js";
 import {
   ADMIN_APP_REVIEW_PATH,
   ADMIN_APP_SERVERS_PATH,
@@ -1479,6 +1498,7 @@ const listenLimiter = createRateLimiter({
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
+  resetJamPublicRateLimits();
   writeLimiter.reset();
   anonLimiter.reset();
   publicCommunitiesConfigLimiter.reset();
@@ -1542,9 +1562,7 @@ function created(body: unknown): Created {
   return new Created(body);
 }
 
-/** Wrap a handler result to answer 204 with no body. */
-class NoContent {}
-
+/** Wrap a handler result to answer 204 with no body (`NoContent`, in `lib/route-results.ts`). */
 function noContent(): NoContent {
   return new NoContent();
 }
@@ -1731,6 +1749,14 @@ const router = createRouter();
 
 // The apps platform's routes (`app-routes.ts`), behind the `apps` flag.
 registerAppRoutes(router);
+
+// Jam channels' routes (`jam-routes.ts`), behind the `jam_channels` flag for
+// writes only; every read answers whatever the flag says.
+registerJamRoutes(router);
+// Public jams' authenticated routes and the operator's session half
+// (`jam-public-routes.ts`), behind the global `jam_public` flag. The public
+// `/api/public/jams*` routes are answered in `handleApi`, before any of this.
+registerJamPublicRoutes(router);
 registerBauPaymentsRoutes(router);
 // The owner's switches for the apps the operator released (`app-owner-routes.ts`).
 registerAppOwnerRoutes(router);
@@ -3078,6 +3104,42 @@ const ADMIN_MACHINE_ROUTES: {
     method: "POST",
     path: ADMIN_APP_SESSION_END_PATH,
     run: async (req) => adminEndSession(req, { kind: "dashboard" }),
+  },
+  // Public jams (`jam-public-routes.ts`, docs/JAM_PUBLIC.md): the list and
+  // the review queue (they name people, like the feedback queue), and four
+  // writes: take a song down, approve or reject a queued item, take one part
+  // out of the public version, block an account from publishing. Ids travel
+  // in the body or the query. Every write is audited in `jam_public_audit`
+  // with a NULL actor and `actor_kind` 'dashboard'.
+  {
+    method: "GET",
+    path: ADMIN_JAM_PUBLIC_SONGS_PATH,
+    run: async (_req, query) => adminJamPublicSongs(query),
+  },
+  {
+    method: "GET",
+    path: ADMIN_JAM_PUBLIC_QUEUE_PATH,
+    run: async () => adminJamPublicQueue(),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_JAM_PUBLIC_UNPUBLISH_PATH,
+    run: async (req) => adminJamPublicUnpublish(req, { kind: "dashboard" }),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_JAM_PUBLIC_REVIEW_PATH,
+    run: async (req) => adminJamPublicReview(req, { kind: "dashboard" }),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_JAM_PUBLIC_REMOVE_PART_PATH,
+    run: async (req) => adminJamPublicRemovePart(req, { kind: "dashboard" }),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_JAM_PUBLIC_BLOCK_PATH,
+    run: async (req) => adminJamPublicBlock(req, { kind: "dashboard" }),
   },
 ];
 
@@ -8208,6 +8270,10 @@ router.post(
     // is what keeps it inert until the runtime flag is on for this server.
     if (body.type === "forum" && !forumChannelsEnabled(serverId!)) {
       throw new Forbidden(FORUM_CHANNELS_OFF);
+    }
+    // Same for a jam channel (`jam_channels`).
+    if (body.type === "jam" && !jamChannelsEnabled(serverId!)) {
+      throw new Forbidden(JAM_CHANNELS_OFF);
     }
     // ABSENT `parentId` is an older client (the legacy-create rule): on a
     // server in the mixed layout its channel goes to the end of the first
@@ -15409,6 +15475,13 @@ export async function handleApi(
     req.method === "GET" ? PUBLIC_INVITE_PATH.exec(pathname) : null;
   if (publicInviteMatch) {
     await servePublicInvitePreview(req, res, publicInviteMatch[1]!);
+    return;
+  }
+
+  // Public jams (`jam-public-routes.ts`): `config` always answers; every
+  // other `/api/public/jams*` route is not matched at all while `jam_public`
+  // is off, so it falls through to the 401 an unknown path gets.
+  if (await handleJamPublicPublicRoute(req, res, pathname)) {
     return;
   }
 

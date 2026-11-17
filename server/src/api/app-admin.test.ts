@@ -64,6 +64,8 @@ const { upsertUser } = await import("../services/users.js");
 const { createMemoryHub, createMemoryTransport, observeBusFrames, setBusTransport } =
   await import("../lib/bus.js");
 const { APPS_BUS_TOPIC, onAppsChanged } = await import("../apps/changed.js");
+const { setShippedCatalogForTests, reportCurrentVersionsNotServed } = await import("../apps/served.js");
+const { appsMetrics } = await import("../apps/metrics.js");
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
 const WRONG_TOKEN = "ffffffffffffffffffffffffffffffff";
@@ -152,15 +154,18 @@ interface AppView {
   status: string;
   globalEnabled: boolean;
   communityUnlocked: boolean;
+  defaultOperatorEnabled: boolean;
   currentVersion: string | null;
   currentApproved: boolean;
   goLiveBlocker: string | null;
+  currentServed: string;
   serversOn: number;
   serversOwnerOff: number;
   liveSessions: number;
   versions: {
     version: string;
     isCurrent: boolean;
+    served: string;
     reviewStatus: string;
     reviewedBy: string | null;
     manifest: { name: string; category: string | null };
@@ -589,6 +594,102 @@ describeDb("operator apps routes", () => {
       expect(rows.map((r) => r.app_version)).toEqual(["1.1.0", "1.0.0"]);
     });
 
+    describe("a version this build's apps site does not serve (2026-11-12: Locadora live on 1.0.3, site on 1.0.6)", () => {
+      afterEach(() => setShippedCatalogForTests(null));
+
+      async function addVersion(version: string, source: "repo" | "submission" = "repo") {
+        await getPool().query(
+          `INSERT INTO app_versions (app_id, version, manifest, manifest_sha256, entry_sha256, source)
+           VALUES ('quadro', $1, $2::jsonb, $3, $3, $4)`,
+          [version, JSON.stringify({ ...manifest("quadro", "tool", "Quadro"), version }), SHA, source],
+        );
+        await approve("quadro", version);
+      }
+
+      it("is refused as a new current version, and as the version an app goes live or global on", async () => {
+        await approve("quadro");
+        await addVersion("1.1.0");
+        // this build ships 1.1.0 only: 1.0.0 is gone from the apps site
+        setShippedCatalogForTests([{ id: "quadro", version: "1.1.0" }]);
+        expect((await appOf("quadro")).currentServed).toBe("not-served");
+        expect((await appOf("quadro")).versions.map((v) => [v.version, v.served])).toEqual(
+          expect.arrayContaining([
+            ["1.0.0", "not-served"],
+            ["1.1.0", "served"],
+          ]),
+        );
+
+        const live = await asMachine<{ error: string }>("PUT", "/api/admin/apps", { appId: "quadro", status: "live" });
+        expect(live.status).toBe(409);
+        expect(live.body.error).toBe("version-not-served");
+        const global = await asMachine<{ error: string }>("PUT", "/api/admin/apps", {
+          appId: "quadro",
+          globalEnabled: true,
+        });
+        expect(global.status).toBe(409);
+        expect(global.body.error).toBe("version-not-served");
+        expect(await appOf("quadro")).toMatchObject({ status: "draft", globalEnabled: false });
+
+        // on the served version it goes live, and a move back to the gone one is refused
+        expect(
+          (await asMachine("PUT", "/api/admin/apps", { appId: "quadro", currentVersion: "1.1.0", status: "live" }))
+            .status,
+        ).toBe(200);
+        const back = await asMachine<{ error: string }>("PUT", "/api/admin/apps", {
+          appId: "quadro",
+          currentVersion: "1.0.0",
+        });
+        expect(back.status).toBe(409);
+        expect(back.body.error).toBe("version-not-served");
+        expect(await appOf("quadro")).toMatchObject({ currentVersion: "1.1.0", currentServed: "served" });
+        expect((await auditRows()).filter((r) => r.action === "current-version")).toHaveLength(1);
+      });
+
+      it("never refuses switching a stranded app off, or moving it to a served version", async () => {
+        await approve("quadro");
+        await addVersion("1.1.0");
+        await asMachine("PUT", "/api/admin/apps", { appId: "quadro", status: "live", globalEnabled: true });
+        // the next deploy's site no longer has 1.0.0, and the app is still on it
+        setShippedCatalogForTests([{ id: "quadro", version: "1.1.0" }]);
+        expect((await asMachine("PUT", "/api/admin/apps", { appId: "quadro", communityUnlocked: true })).status).toBe(200);
+        expect((await asMachine("PUT", "/api/admin/apps", { appId: "quadro", globalEnabled: false })).status).toBe(200);
+        expect((await asMachine("PUT", "/api/admin/apps", { appId: "quadro", currentVersion: "1.1.0" })).status).toBe(200);
+        expect(await appOf("quadro")).toMatchObject({ status: "live", currentVersion: "1.1.0", currentServed: "served" });
+      });
+
+      it("does not judge what the catalog cannot speak for: a submission, or an app it does not name", async () => {
+        await approve("quadro");
+        await addVersion("2.0.0", "submission");
+        setShippedCatalogForTests([{ id: "quadro", version: "1.1.0" }]);
+        expect(
+          (await asMachine("PUT", "/api/admin/apps", { appId: "quadro", currentVersion: "2.0.0", status: "live" }))
+            .status,
+        ).toBe(200);
+        expect((await appOf("quadro")).currentServed).toBe("unknown");
+        // `sala-de-jogos` is not in this catalog at all
+        await approve("sala-de-jogos");
+        expect((await asMachine("PUT", "/api/admin/apps", { appId: "sala-de-jogos", status: "live" })).status).toBe(200);
+      });
+
+      it("lists every live app on a version that is not served, on the metrics and in the boot report", async () => {
+        await approve("quadro");
+        await asMachine("PUT", "/api/admin/apps", { appId: "quadro", status: "live" });
+        setShippedCatalogForTests([{ id: "quadro", version: "1.2.0" }, { id: "quadro", version: "1.1.0" }]);
+        const expected = [{ appId: "quadro", currentVersion: "1.0.0", shipped: ["1.1.0", "1.2.0"] }];
+        expect((await appsMetrics()).currentVersionNotServed).toEqual(expected);
+        const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          expect(await reportCurrentVersionsNotServed()).toEqual(expected);
+          expect(errors.mock.calls.some((call) => String(call[0]).includes("quadro is live on 1.0.0"))).toBe(true);
+        } finally {
+          errors.mockRestore();
+        }
+        // a draft app on a gone version strands nobody
+        await asMachine("PUT", "/api/admin/apps", { appId: "quadro", status: "draft" });
+        expect((await appsMetrics()).currentVersionNotServed).toEqual([]);
+      });
+    });
+
     it("sends one apps.changed hint per committed write", async () => {
       await approve("quadro");
       frames.length = 0;
@@ -773,6 +874,197 @@ describeDb("operator apps routes", () => {
         (await operatorSwitch("00000000-0000-4000-8000-000000000001", "quadro", true)).status,
       ).toBe(404);
       expect((await operatorSwitch(privateId, "nao-existe", true)).status).toBe(404);
+    });
+  });
+
+  describe("the app's default release (defaultOperatorEnabled)", () => {
+    interface ServerList {
+      servers: { id: string; operatorEnabled: boolean | null; released: boolean; locked: boolean }[];
+      matched: number;
+      enabledCount: number;
+      defaultOperatorEnabled: boolean;
+    }
+    let seq = 0;
+
+    async function setDefault(appId: string, value: boolean) {
+      return asMachine<{ app: (AppView & { defaultOperatorEnabled: boolean }) | null; changed: number }>(
+        "PUT",
+        "/api/admin/apps",
+        { appId, defaultOperatorEnabled: value },
+      );
+    }
+
+    async function operatorSwitch(serverId: string, appId: string, value: boolean | null) {
+      return asMachine<{ changed: boolean; sessionsEnded: number }>("PUT", "/api/admin/server-apps", {
+        serverId,
+        appId,
+        operatorEnabled: value,
+      });
+    }
+
+    async function goLive(appId: string) {
+      await approve(appId);
+      await asMachine("PUT", "/api/admin/apps", { appId, status: "live", globalEnabled: true });
+    }
+
+    async function liveSession(serverId: string, appId: string): Promise<string> {
+      seq += 1;
+      const channel = await getPool().query<{ id: string }>(
+        `INSERT INTO channels (server_id, name, type) VALUES ($1, $2, 'text') RETURNING id`,
+        [serverId, `padrao${seq}`],
+      );
+      const session = await getPool().query<{ id: string }>(
+        `INSERT INTO app_sessions (server_id, channel_id, app_id, app_version)
+         VALUES ($1, $2, $3, '1.0.0') RETURNING id`,
+        [serverId, channel.rows[0]!.id, appId],
+      );
+      return session.rows[0]!.id;
+    }
+
+    async function statusOf(id: string): Promise<string> {
+      return (
+        await getPool().query<{ status: string }>(`SELECT status FROM app_sessions WHERE id = $1`, [id])
+      ).rows[0]!.status;
+    }
+
+    async function serverList(query = "") {
+      const response = await asMachine<ServerList>("GET", `/api/admin/app-servers?appId=quadro${query}`);
+      expect(response.status).toBe(200);
+      return response.body;
+    }
+
+    it("is off by default, and the write is audited once with no review needed", async () => {
+      expect((await appOf("quadro")).serversOn).toBe(0);
+      expect(await appOf("quadro")).toMatchObject({ defaultOperatorEnabled: false });
+      const on = await setDefault("quadro", true);
+      expect(on.status).toBe(200);
+      expect(on.body.changed).toBe(1);
+      expect(on.body.app).toMatchObject({ defaultOperatorEnabled: true, status: "draft" });
+      const again = await setDefault("quadro", true);
+      expect(again.body.changed).toBe(0);
+      const rows = (await auditRows()).filter((r) => r.action === "default-operator");
+      expect(rows.map((r) => [r.actor_kind, r.app_id, r.before, r.after])).toEqual([
+        ["dashboard", "quadro", { defaultOperatorEnabled: false }, { defaultOperatorEnabled: true }],
+      ]);
+      expect(frames.at(-1)).toEqual({ topic: APPS_BUS_TOPIC, data: { appId: "quadro", serverId: null } });
+      // The body must name something to change: the new field counts as one.
+      expect((await asMachine("PUT", "/api/admin/apps", { appId: "quadro" })).status).toBe(400);
+      expect(
+        (await asMachine("PUT", "/api/admin/apps", { appId: "quadro", defaultOperatorEnabled: "yes" })).status,
+      ).toBe(400);
+    });
+
+    it("the counts agree: servers on, the owner's switch-offs, the community lock and an explicit OFF", async () => {
+      await setDefault("quadro", true);
+      // Three servers, one a locked community: the two private ones are released.
+      expect((await appOf("quadro")).serversOn).toBe(2);
+      let list = await serverList();
+      expect(list.defaultOperatorEnabled).toBe(true);
+      expect(list.enabledCount).toBe(2);
+      expect(list.servers.filter((s) => s.released).map((s) => s.id).sort()).toEqual(
+        [privateId, otherPrivateId].sort(),
+      );
+      expect(list.servers.find((s) => s.id === communityId)).toMatchObject({
+        released: false,
+        locked: true,
+        operatorEnabled: null,
+      });
+      // Released servers first.
+      expect(list.servers.slice(0, 2).every((s) => s.released)).toBe(true);
+
+      // An explicit OFF wins; an explicit ON is counted once, not twice.
+      await operatorSwitch(otherPrivateId, "quadro", false);
+      await operatorSwitch(privateId, "quadro", true);
+      expect((await appOf("quadro")).serversOn).toBe(1);
+      list = await serverList();
+      expect(list.enabledCount).toBe(1);
+      expect(list.servers.find((s) => s.id === otherPrivateId)).toMatchObject({
+        released: false,
+        operatorEnabled: false,
+      });
+
+      // The owner switching it off on a server the default released is counted.
+      await getPool().query(
+        `INSERT INTO server_apps (server_id, app_id, owner_enabled) VALUES ($1, 'quadro', FALSE)
+         ON CONFLICT (server_id, app_id) DO UPDATE SET owner_enabled = FALSE`,
+        [otherPrivateId],
+      );
+      await operatorSwitch(otherPrivateId, "quadro", null);
+      expect(await appOf("quadro")).toMatchObject({ serversOn: 2, serversOwnerOff: 1 });
+
+      // Unlocking the app for communities releases the community too.
+      await asMachine("PUT", "/api/admin/apps", { appId: "quadro", communityUnlocked: true });
+      expect((await appOf("quadro")).serversOn).toBe(3);
+      list = await serverList();
+      expect(list.enabledCount).toBe(3);
+      expect(list.servers.find((s) => s.id === communityId)).toMatchObject({ released: true, locked: false });
+    });
+
+    it("filters to the released servers, defaults included, and the total matches", async () => {
+      await setDefault("quadro", true);
+      await operatorSwitch(otherPrivateId, "quadro", false);
+      const on = await serverList("&on=1");
+      expect(on.servers.map((s) => s.id)).toEqual([privateId]);
+      expect(on.matched).toBe(1);
+      expect(on.enabledCount).toBe(1);
+      // With the default off the same filter is the old explicit-only one.
+      await setDefault("quadro", false);
+      const off = await serverList("&on=1");
+      expect(off.matched).toBe(0);
+      expect(off.enabledCount).toBe(0);
+      expect((await appOf("quadro")).serversOn).toBe(0);
+    });
+
+    it("an explicit OFF over a default release ends that server's sessions; back to undecided keeps the app", async () => {
+      await goLive("quadro");
+      await setDefault("quadro", true);
+      const here = await liveSession(privateId, "quadro");
+      const there = await liveSession(otherPrivateId, "quadro");
+
+      // Explicit ON then back to undecided: still released by the default, nothing ends.
+      await operatorSwitch(privateId, "quadro", true);
+      const kept = await operatorSwitch(privateId, "quadro", null);
+      expect(kept.body.sessionsEnded).toBe(0);
+      expect(await statusOf(here)).toBe("live");
+
+      // Undecided to an explicit OFF is taking the app away.
+      const off = await operatorSwitch(privateId, "quadro", false);
+      expect(off.body).toMatchObject({ changed: true, sessionsEnded: 1 });
+      expect(await statusOf(here)).toBe("ended");
+      expect(await statusOf(there)).toBe("live");
+    });
+
+    it("Desligar em todos also clears the default, and it stays off when the master comes back", async () => {
+      await goLive("quadro");
+      await setDefault("quadro", true);
+      const session = await liveSession(privateId, "quadro");
+      const response = await asMachine<{ sessionsEnded: number; app: AppView & { defaultOperatorEnabled: boolean } }>(
+        "POST",
+        "/api/admin/app-disable-everywhere",
+        { appId: "quadro" },
+      );
+      expect(response.status).toBe(200);
+      expect(response.body.sessionsEnded).toBe(1);
+      expect(response.body.app).toMatchObject({ globalEnabled: false, defaultOperatorEnabled: false, serversOn: 0 });
+      expect(await statusOf(session)).toBe("ended");
+      const audit = (await auditRows()).filter((r) => r.action === "disable-everywhere");
+      expect(audit[0]).toMatchObject({
+        // The two private servers the default reached (the community is locked), no explicit row among them.
+        before: { globalEnabled: true, defaultOperatorEnabled: true, serversOn: 2 },
+        after: { globalEnabled: false, defaultOperatorEnabled: false },
+      });
+      await asMachine("PUT", "/api/admin/apps", { appId: "quadro", globalEnabled: true });
+      expect(await appOf("quadro")).toMatchObject({ serversOn: 0, defaultOperatorEnabled: false });
+    });
+
+    it("an app that was never default-released and is already off everywhere audits as before", async () => {
+      await goLive("quadro");
+      const response = await asMachine<{ sessionsEnded: number }>("POST", "/api/admin/app-disable-everywhere", {
+        appId: "quadro",
+      });
+      expect(response.status).toBe(200);
+      const audit = (await auditRows()).filter((r) => r.action === "disable-everywhere");
+      expect(audit[0]).toMatchObject({ before: { defaultOperatorEnabled: false } });
     });
   });
 

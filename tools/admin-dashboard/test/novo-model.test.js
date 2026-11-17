@@ -104,6 +104,19 @@ test("a degraded component and an open breaker come first", () => {
   assert.ok(list.slice(0, 2).some((a) => /instável/.test(a.title)));
 });
 
+test("a live app on a version the apps site does not serve is a red line that opens Apps", () => {
+  const m = metrics({ apps: { currentVersionNotServed: [{ appId: "pqp-locadora", currentVersion: "1.0.3", shipped: ["1.0.6"] }] } });
+  const line = M.attention(m, [], { components: [] }).find((a) => /pqp-locadora/.test(a.title));
+  assert.ok(line);
+  assert.equal(line.tone, "bad");
+  assert.equal(line.target, "apps");
+  assert.match(line.title, /v1\.0\.3 não está no site dos apps/);
+  assert.match(line.detail, /o site serve 1\.0\.6/);
+  // an API from before the field, or a read that failed (null), says nothing
+  assert.ok(!M.attention(metrics({ apps: { currentVersionNotServed: null } }), [], { components: [] }).some((a) => /tela branca/.test(a.title)));
+  assert.ok(!M.attention(metrics(), [], { components: [] }).some((a) => /tela branca/.test(a.title)));
+});
+
 test("the feed reports only real differences between two reads", () => {
   const a = metrics();
   assert.deepEqual(M.feedDiff(a, a), []);

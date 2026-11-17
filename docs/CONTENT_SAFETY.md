@@ -129,6 +129,10 @@ the row and is not a pass.
 | Direct and group messages (text) | **no**, by decision: the built-in text filter does not read private conversations | | |
 | Avatars and profile banners (`avatars.ts`) | **no** | | |
 | Server icon / banner / community featured image uploaded in the app (`server-images.ts`) | **no** | | |
+| Jam song cover (`PUT /api/jam-songs/:songId/cover`) | **no** in a channel | | The claim checks the bytes are a real JPEG, PNG or WebP, not that they are acceptable. The author or a moderator can remove one at any time, even with the flag off. |
+| Public jam cover (`jam_public`, [Public jams](#public-jams)) | **yes** | On the worker, once per picture, at least 16 minutes after its upload; not public until it passed | `jam_public_cover_scans`; refused ones in `jam_public_quarantine` |
+| Public jam camera video | **yes**, sampled frames (the first, then one every 5 s, at most 24) | Same, only on a process with ffmpeg; the part is audio only publicly until it passed | `jam_public_tracks.video_scan_*`; refused ones in `jam_public_quarantine` |
+| Public jam audio | **no** | | Nothing here listens to audio. Stated in docs/JAM_PUBLIC.md too. |
 
 The last two rows are open gaps, not decisions. The community featured image
 in particular is shown on the public `pqp.gg/c/<slug>` page.
@@ -595,7 +599,7 @@ the matched URL with a 451.
 
 <https://developers.cloudflare.com/cache/reference/csam-scanning/>
 
-Two caveats, and neither is small:
+Three caveats, and none is small:
 
 - It is a **serving-path** control, not an upload-path one. It cannot stop bytes
   landing in R2, only stop them being served once matched.
@@ -606,6 +610,11 @@ Two caveats, and neither is small:
   no official Cloudflare statement confirming R2-via-custom-domain coverage** —
   open a support ticket rather than assuming it, and do not let it be your only
   line.
+- **The documentation speaks of images.** It names images ("identify and block
+  images identified as CSAM"), lists no other supported type and no size limit,
+  and never mentions video or audio. Treat video and audio as **not covered**
+  unless Cloudflare says otherwise in writing. This matters for public jams
+  ([Public jams](#public-jams)): their audio has no scanner of ours either.
 
 If you do this: serve attachments through a proxied custom domain, add a
 cache-everything rule for the attachment path, and **disable `r2.dev` public
@@ -1216,6 +1225,76 @@ newer ones were answered; that is the intent.
 
 ---
 
+## Public jams
+
+`jam_public` (global, default off) publishes songs to people with no account
+at jam.pqp.gg. Like [Communities](#communities-the-public-directory), turning it
+on changes the instance's category: it is public content, not private
+messaging. The whole model, the limits and the operator runbook are
+`docs/JAM_PUBLIC.md`; this section is what it adds to the scanning story.
+
+- **What is scanned before it is public.** The cover (the image scanner) and
+  each part's camera video (frames sampled by ffmpeg, each through the same
+  scanner). Audio is not scanned at all. Titles, artists and labels do not go
+  through the built-in text filter.
+- **Fail closed, and stricter than a channel.** Only `pass` is public. A
+  `flagged` cover or video stays private (and files a report); a scan error is
+  retried three times, then recorded `unscanned` and stays private; with no
+  provider configured nothing is ever judged and the cover and video are simply
+  never public (`unscanned`), which is the honest state.
+- **No bytes judged that can still be swapped.** A cover or video is not claimed
+  for scanning until its presigned PUT has expired (16 minutes), so the bytes
+  judged are the bytes shown. Residual risk 9 below does not apply here.
+- **On a rejection** the cover is taken off the song, or the video (and the
+  worker's MP4 copy of it) off the track, in its channel as well; the objects go
+  to `jam_public_quarantine` (no foreign key, skipped by every sweep and every
+  cascade key read); a report is filed to the **instance** queue
+  (`createAutomatedInstanceReport`, "Jam pública · <title>"). `illegal` or
+  `csam_suspected` logs `ILLEGAL-CONTENT MATCH` and is never auto-deleted;
+  anything else expires after `CONTENT_SCAN_QUARANTINE_DAYS`
+  (`sweepJamPublicQuarantine`).
+- **Reports** from people (signed in only) go to the instance queue, never to a
+  server owner, and enough distinct reporters hide the song until an operator
+  looks (`JAM_PUBLIC_REPORTS_TO_HIDE`).
+- **The edge seam and what it does and does not cover.**
+  `JAM_PUBLIC_MEDIA_BASE_URL` routes public media through
+  `tools/jam-media-edge`, a Worker on a pqp.gg hostname (proposed
+  `jam-media.pqp.gg`), so public jam bytes are served through our zone and its
+  colo cache. That is the precondition for Cloudflare's
+  [CSAM Scanning Tool](#3-enable-cloudflares-csam-scanning-tool--free-zero-approval-do-it-today)
+  to see them, and it is **only** a precondition. Per Cloudflare's own
+  documentation (read 2026-11-14): the tool compares "content served for your
+  website through the Cloudflare cache" to known CSAM lists, the documentation
+  names **images** and mentions neither video nor audio, and says nothing about
+  Workers, the Cache API or R2. So:
+  - **Public audio is not scanned by anything**, with or without the Worker.
+    The tool is not documented to look at audio, and nothing of ours listens.
+  - **Public video is not documented as covered either.** Our own control for it
+    is the ffmpeg frame sampling above, which exists regardless of the Worker.
+  - **Covers** are already scanned by our image scanner before they are public;
+    the Cloudflare tool, if it applies, is a second, hash-list check of the same
+    pictures.
+  - **Whether the Worker's cache entries are in the tool's scope is not
+    confirmed.** The Worker is built so the answer can be yes (our zone, our
+    hostname, the colo cache), and the runbook asks Cloudflare support in
+    writing (`tools/jam-media-edge/README.md` step 4.3). Until that is
+    answered, do not describe the tool as covering public jams.
+  - It is a serving-path control. It cannot stop bytes landing in R2, and a
+    match is an email once a day plus a block "if possible".
+  - Without `JAM_PUBLIC_MEDIA_BASE_URL` set, public media is served from the
+    bucket's own endpoint, which the tool does not see at all.
+  The Worker also has an effect that is not about scanning: the URL names no
+  object key (the key is encrypted), so the origin server's id is not readable
+  in a media URL. A removal reaches the Worker as the URL's own expiry, at most
+  60 minutes (`tools/jam-media-edge/README.md` §"How long a removal takes").
+
+```sql
+SELECT storage_key, kind, song_id, track_id, uploader_id, scan_provider,
+       scan_score, scan_labels, quarantined_at
+FROM jam_public_quarantine
+ORDER BY quarantined_at DESC;
+```
+
 ## Residual risk, stated plainly
 
 Everything below is true with the recommended configuration (`openai`) turned
@@ -1238,7 +1317,10 @@ on. This is the honest list.
    and its phone cut). A Baú video's custom cover is scanned, because it is an
    image upload; the first frame a player paints when there is no cover is
    not. A story's video is the exception, and a partial one: its poster and
-   three sampled frames are scanned (see Stories).
+   three sampled frames are scanned (see Stories). A public jam's camera video
+   is scanned by sampled frames too, but **public jam audio is not scanned by
+   anything**, including when it is served through the edge Worker and
+   Cloudflare's tool is on (see Public jams).
 5. **Nothing uploaded before scanning was enabled has been checked.** Those rows
    read `unscanned` and there is no backfill. Writing one is possible — iterate
    the rows, presign, scan — but it is not implemented, and on a free tier it is

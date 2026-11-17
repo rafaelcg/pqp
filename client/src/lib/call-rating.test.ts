@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { createCallRatingSchema } from "@pqp/shared";
 import {
   advanceCall,
+  buildRatingBody,
   COOLDOWN_MS,
   finishCall,
   startCall,
   type CallSnapshot,
+  type RatableCall,
 } from "./call-rating";
+import { createQualityAccumulator, finishQuality } from "./call-quality-summary";
 
 /**
  * The rules that decide whether a person gets interrupted.
@@ -91,5 +95,56 @@ describe("advanceCall", () => {
     expect(finishCall(call, T0 + FIVE_MINUTES, 0)!.channelId).toBe(
       "11111111-1111-1111-1111-111111111111",
     );
+  });
+});
+
+describe("buildRatingBody", () => {
+  const call = (): RatableCall => {
+    const quality = createQualityAccumulator();
+    quality.rtt.push(40, 60, 50);
+    quality.lossLost = 2;
+    quality.lossReceived = 198;
+    quality.totalPathSamples = 3;
+    return {
+      durationSeconds: 300,
+      peerCount: 2,
+      transport: "mesh",
+      hadScreenShare: false,
+      channelId: "11111111-1111-1111-1111-111111111111",
+      mediaQuality: { ...finishQuality(quality), reconnectCount: 1 },
+    };
+  };
+
+  // Round-tripped through JSON and the server's own schema: this is the
+  // request the API receives, not an object the client holds.
+  const sent = (score: number, note = "") =>
+    createCallRatingSchema.parse(
+      JSON.parse(JSON.stringify(buildRatingBody(call(), score, note))),
+    );
+
+  it("sends the media reading with a 5, not only with a low score", () => {
+    for (const score of [1, 2, 3, 4, 5]) {
+      expect(sent(score).mediaQuality).toMatchObject({
+        packetLossPercent: 1,
+        rttMsMedian: 50,
+        relayed: false,
+        reconnectCount: 1,
+      });
+    }
+  });
+
+  it("keeps the note low-score-only", () => {
+    expect(sent(2, "  voz cortando ").note).toBe("voz cortando");
+    expect(sent(5, "muito bom").note).toBeUndefined();
+    expect(sent(1, "   ").note).toBeUndefined();
+  });
+
+  it("still rates when there is no reading to attach", () => {
+    const bare = { ...call(), mediaQuality: undefined };
+    const body = createCallRatingSchema.parse(
+      JSON.parse(JSON.stringify(buildRatingBody(bare, 5, ""))),
+    );
+    expect(body.rating).toBe(5);
+    expect(body.mediaQuality).toBeUndefined();
   });
 });

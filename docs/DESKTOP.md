@@ -1060,6 +1060,33 @@ Electron 44: it is `AbortError: Invalid capture constraints`, the same string a
 Cancel in the picker produces. That string from the desktop app means "the
 shell answered no", never a bad constraint from the page.
 
+**Why it kept coming back (16 Nov 2026).** The string is Chromium's name for
+`INVALID_DISPLAY_CAPTURE_CONSTRAINTS`, and Electron 44.9.1 answers every
+`callback(null)`, `undefined` or `{}` from the handler with it
+(`DisplayMediaDeviceChosen` in `electron_browser_context.cc`; reproduced on
+44.9.1). The 13 Sep fix (no tab steer) and the 27 Oct fix (the fuse) each
+removed one cause, but `startScreenShare` printed `err.message` for any error
+name it did not know, so the next refusal, a picker already open, a window
+that closed before it was handed over, or a plain Cancel, showed the same
+English sentence to a Windows 11 desktop user again. Now:
+
+- The handler records which refusal it was (`lib/share-refusal.js`:
+  `cancelled`, `busy`, `picker-failed`, `no-sources`, `permission`,
+  `source-gone`, `origin`, `error`), every `return null` in
+  `chooseDisplaySource` names one (`lib/share-refusal.test.mjs` counts them),
+  and the page reads it once through `shareRefusalReason()`
+  (`capabilities.shareRefusalReason`). Needs a desktop release.
+- The page (`client/src/lib/share-shell-refusal.ts`) never shows Chromium's
+  sentence. A Cancel is no error; the other reasons get their own pt-BR line;
+  a shell too old to say why (0.2.9 and before) gets "the picker closed
+  without a screen chosen, try again". Works on every shell with a web deploy.
+- Every refusal is logged (`[share] the desktop shell refused the capture`)
+  and sent to Faro as `share_shell_refused` with the reason, the shell
+  version, the platform and the request's size, frame rate and audio, so the
+  next report says which one it was.
+- No retry with smaller constraints: the page only asks `ideal`/`max`, which
+  cannot produce this code, and a retry after a Cancel is a second picker.
+
 Not flipped, with the reason: `EnableEmbeddedAsarIntegrityValidation` and
 `OnlyLoadAppFromAsar` (the pair is what makes tampering with `app.asar` detectable,
 but it is macOS and Windows only, has to be proven on a signed Windows build and on
