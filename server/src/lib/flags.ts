@@ -630,6 +630,20 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/voice/config (cleanVoiceDefault)",
   },
+  message_list_windowing: {
+    description:
+      "Lista de mensagens que só monta o que está perto da tela (janela de linhas) e só monta a barra de reação e os tooltips de uma mensagem quando o mouse ou o foco chega nela. Sem isso, cada mensagem carregada fica montada: 2.000 mensagens passavam de 1 GB e 100 mil nós no app desktop. Desligado: volta a montar todas as linhas, na hora (abas abertas no próximo refresh da config).",
+    env: "MESSAGE_LIST_WINDOWING",
+    parseEnv: onUnlessOff,
+    // On: the point is that nobody has to remember to turn it on. The kill
+    // switch is for a scroll anchoring or focus problem seen live: off puts
+    // every client back on the old list (every row mounted, `content-visibility`
+    // only) on its next config refresh, with nothing to migrate. Global: it is
+    // a rendering strategy of the client and a DM has no server. Client-only.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (messageListWindowing)",
+  },
   voice_gate: {
     description:
       "Porta de voz da Voz limpa: depois do RNNoise, um expansor adaptativo abaixa uns 20 dB o que sobra entre as falas (sem cortar seco, com antecipação pra não comer o começo das palavras). Desligado: a Voz limpa volta a ser só o RNNoise, na hora, até no meio da call.",
