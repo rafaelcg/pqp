@@ -435,8 +435,9 @@ val nativeJniClasses = listOf(
     "Lorg/jni_zero/JniInit;",
     "Lorg/webrtc/PeerConnectionFactory;",
     "Lorg/webrtc/audio/JavaAudioDeviceModule;",
-    // io.github.webrtc-sdk:android-prefixed, LiveKit's.
-    "Llivekit/org/jni_zero/JniInit;",
+    // io.github.webrtc-sdk:android-prefixed, LiveKit's. Since livekit-android
+    // 2.30 (prefixed 150) native code resolves `JniZero`; `JniInit` is gone.
+    "Llivekit/org/jni_zero/JniZero;",
     "Llivekit/org/webrtc/PeerConnectionFactory;",
     "Llivekit/org/webrtc/audio/JavaAudioDeviceModule;",
 )

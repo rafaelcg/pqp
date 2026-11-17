@@ -741,6 +741,33 @@
         }
       }
     },
+    "Age check" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verificação de idade"
+          }
+        }
+      }
+    },
+    "ageGate.readback.edit" : {
+      "comment" : "The read-back step of the age gate: back to the date fields. Web: ageGate.readback.edit.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change it"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corrigir"
+          }
+        }
+      }
+    },
     "anyone can join" : {
       "localizations" : {
         "pt-BR" : {
@@ -1741,6 +1768,46 @@
         }
       }
     },
+    "Check the day, the month and the year." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confere o dia, o mês e o ano."
+          }
+        }
+      }
+    },
+    "Check the year. That date of birth does not look right." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confere o ano. Essa data de nascimento não parece certa."
+          }
+        }
+      }
+    },
+    "Check your date of birth" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confere tua data de nascimento"
+          }
+        }
+      }
+    },
+    "Could not save that. Check your connection and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra salvar. Confere tua conexão e tenta de novo."
+          }
+        }
+      }
+    },
     "Couldn't check how many posts are pinned. Try again." : {
       "localizations" : {
         "pt-BR" : {
@@ -1831,6 +1898,16 @@
         }
       }
     },
+    "Entered the wrong date by mistake? Write to [contato@pqp.gg](mailto:contato@pqp.gg) from this account's email address." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Errou a data sem querer? Escreve pra [contato@pqp.gg](mailto:contato@pqp.gg) usando o e-mail da conta."
+          }
+        }
+      }
+    },
     "Forward" : {
       "localizations" : {
         "pt-BR" : {
@@ -1897,6 +1974,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Os posts livres chegam como cartões nos canais que as pessoas escolherem. Numa comunidade pública qualquer membro pode configurar; nas outras, só quem gerencia o servidor. Posts só pra membros nunca saem."
+          }
+        }
+      }
+    },
+    "How appeals work, and how to ask us to delete the account and the data attached to it, is on our [Terms page](https://pqp.gg/terms)." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como funciona o recurso, e como pedir a exclusão da conta e dos dados ligados a ela, está na nossa página de [Termos](https://pqp.gg/terms)."
           }
         }
       }
@@ -2451,12 +2538,32 @@
         }
       }
     },
+    "Please do not open another account in the meantime, we would rather settle this one." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Por favor, não abre outra conta enquanto isso, a gente prefere resolver esta aqui."
+          }
+        }
+      }
+    },
     "Posts will show up here." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Os posts vão aparecer aqui."
+          }
+        }
+      }
+    },
+    "pqp is for %lld and over" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O pqp é para maiores de %lld anos"
           }
         }
       }
@@ -2521,6 +2628,16 @@
         }
       }
     },
+    "Thanks for answering honestly. The date of birth you gave is under %lld, so this account is closed. That is a rule about the service, not a judgement about you, pqp is built for adults and we are not able to make exceptions to it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obrigado por responder com honestidade. A data de nascimento que tu informou é de menor de %lld anos, então esta conta foi encerrada. Isso é uma regra do serviço, não um julgamento sobre ti: o pqp foi feito para adultos e a gente não consegue abrir exceções."
+          }
+        }
+      }
+    },
     "Take out of the mix" : {
       "localizations" : {
         "pt-BR" : {
@@ -2557,6 +2674,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esse endereço já é de outra comunidade. Escolhe outro."
+          }
+        }
+      }
+    },
+    "That is not a date we can read. Check the day, month and year." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra ler essa data. Confere o dia, o mês e o ano."
+          }
+        }
+      }
+    },
+    "That is right" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Está certo"
           }
         }
       }
@@ -10937,16 +11074,6 @@
         }
       }
     },
-    "The date of birth on file is under 18. pqp's Terms require everyone to be 18 or older." : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "A data de nascimento registrada é de menor de 18. Os Termos do pqp exigem 18 anos ou mais."
-          }
-        }
-      }
-    },
     "The marked answer was deleted." : {
       "localizations" : {
         "pt-BR" : {
@@ -11053,16 +11180,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A pessoa não fica sabendo. Vocês podem se adicionar de novo depois."
-          }
-        }
-      }
-    },
-    "This account can't be used" : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Esta conta não pode ser usada"
           }
         }
       }
@@ -12563,6 +12680,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tu desligou o chamar a atenção. Liga de novo em Ajustes."
+          }
+        }
+      }
+    },
+    "You were born on %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu nasceu em %@."
           }
         }
       }
@@ -14168,7 +14295,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O pqp é pra maiores de %lld. A gente pergunta uma vez e acredita em você."
+            "value" : "O pqp é pra maiores de %lld. A gente pergunta uma vez e acredita no que tu disser."
           }
         }
       }
@@ -14598,7 +14725,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sua data de nascimento"
+            "value" : "Tua data de nascimento"
           }
         }
       }

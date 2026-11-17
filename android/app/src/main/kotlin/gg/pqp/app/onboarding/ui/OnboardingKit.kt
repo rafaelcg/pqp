@@ -154,7 +154,7 @@ fun StepRail(index: Int, total: Int, modifier: Modifier = Modifier) {
 fun StepHeader(
     eyebrow: String,
     title: String,
-    description: String,
+    description: String?,
     icon: ImageVector,
     modifier: Modifier = Modifier,
 ) {
@@ -190,12 +190,14 @@ fun StepHeader(
             color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.semantics { heading() },
         )
-        Spacer(Modifier.height(Spacing.sm))
-        Text(
-            text = description,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (description != null) {
+            Spacer(Modifier.height(Spacing.sm))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

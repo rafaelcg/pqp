@@ -67,3 +67,19 @@
 # now greps the built APK and AAB for one class per prefixed package.
 -keep class livekit.org.webrtc.** { *; }
 -keep class livekit.org.jni_zero.** { *; }
+
+# livekit-android 2.30 moved to `android-prefixed` 150, whose jni_zero is a
+# newer generation. Two things changed, both read out of the artifacts:
+#
+#  * Native code no longer looks up `JniInit`. `liblkjingle_peerconnection_so.so`
+#    now resolves `livekit.org.jni_zero.JniZero` by name (kept by the rule above,
+#    and the app's `nativeJniClasses` check now asserts it survives).
+#  * `JniZero.setJniClassLoader` calls `livekit.org.jni_zero.JniZeroJni`, a proxy
+#    class jni_zero generates into the final app. The artifact does not ship it,
+#    so R8 failed with "Missing class livekit.org.jni_zero.JniZeroJni". Nothing
+#    calls `setJniClassLoader`: not livekit-android, not the rest of the prefixed
+#    jar, and the native side only reads `init` and `jniClassLoader`, which
+#    never touch `JniZeroJni`. It is the optional hook for apps that load the
+#    library through a custom class loader. The `-dontwarn` names that one class
+#    on purpose, so any other missing class still fails the build.
+-dontwarn livekit.org.jni_zero.JniZeroJni

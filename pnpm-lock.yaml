@@ -102,8 +102,8 @@ importers:
         specifier: ^5.22.4
         version: 5.61.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@clerk/localizations':
-        specifier: 3.37.8
-        version: 3.37.8(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        specifier: 4.24.8
+        version: 4.24.8(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@clerk/themes':
         specifier: ^2.4.57
         version: 2.4.57(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -1092,9 +1092,9 @@ packages:
       react: ^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0
       react-dom: ^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0
 
-  '@clerk/localizations@3.37.8':
-    resolution: {integrity: sha512-ib/8WciLkflXsg72IM9BjMZgENUv3nfXx1BrygKkpDqFPb1Dshron1+u+sG7dD+quQpZOLn6iie2Vno5YJy3zQ==}
-    engines: {node: '>=18.17.0'}
+  '@clerk/localizations@4.24.8':
+    resolution: {integrity: sha512-JKtLkGL/YJ2kqyID/0icY4Nv8Lh4j6AuNoRi2uvj96t8J8/SeWjYE23SBM+PqaFJaerf/letX/jFZjNd5LhYqQ==}
+    engines: {node: '>=20.9.0'}
 
   '@clerk/shared@3.47.7':
     resolution: {integrity: sha512-9Yv4MJFEaC7BzV0whxa4txQ4SoMu/3j1LBnI85EBykb5CcfXxIKvNX/9sjMUUySHlTOjsj7XZa5i3W5Dx02K/Q==}
@@ -1108,9 +1108,9 @@ packages:
       react-dom:
         optional: true
 
-  '@clerk/shared@3.47.8':
-    resolution: {integrity: sha512-cPURU1it/Eal4uXO9SOcHzw9sfE6Opi21W8EJUg+Ri80Q6JKtK8qBmyOpIyqgf09EanexhTzS4xrmYlvn2p7Iw==}
-    engines: {node: '>=18.17.0'}
+  '@clerk/shared@4.45.1':
+    resolution: {integrity: sha512-rAGh+U8dSE6Ov1I3mXysIHaGhxx63ET+24kW4gnmApJvrfU8nq9JT9pQOoyzG3X4PQa93aaAsxkck46CynDeHA==}
+    engines: {node: '>=20.9.0'}
     peerDependencies:
       react: ^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0
       react-dom: ^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0
@@ -1126,11 +1126,6 @@ packages:
 
   '@clerk/types@4.101.20':
     resolution: {integrity: sha512-MHvr1tGL5lwxD6zdzzixkHICbbZz/S1LChONKR52Qeu0yRGChZomPknsgqBMG9J3yNeyhaj0SWa5phQgQUk0lg==}
-    engines: {node: '>=18.17.0'}
-    deprecated: 'This package is no longer supported. Please import types from @clerk/shared/types instead. See the upgrade guide for more info: https://clerk.com/docs/guides/development/upgrading/upgrade-guides/core-3'
-
-  '@clerk/types@4.101.26':
-    resolution: {integrity: sha512-tUeiElAZoXu9Dxom9t6IjkEfsfP7aWSVf5x5mCoHnSr2w+wV4EtEwoLl9vexT5LL0di4qidROSfcrOnorzczIQ==}
     engines: {node: '>=18.17.0'}
     deprecated: 'This package is no longer supported. Please import types from @clerk/shared/types instead. See the upgrade guide for more info: https://clerk.com/docs/guides/development/upgrading/upgrade-guides/core-3'
 
@@ -2742,6 +2737,9 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
+  '@tanstack/query-core@5.107.1':
+    resolution: {integrity: sha512-PSyAik11oQBEVOiVy5hjZWHmoUqOXqK1WYy4v55mcxozEfKaQgpUMsgnXhWjuESzSht8JfzqMS1m6M/9CpNgvg==}
+
   '@trickfilm400/rollup-plugin-off-main-thread@3.0.0-pre1':
     resolution: {integrity: sha512-/67zpWDBLV+oYAEL682s1ktXL0HgqX76f6gaVGkGnVZlBbm1zd0v4Bz8MFF2GGhoX9rvfq3KSQHubFHwa6w6/Q==}
     engines: {node: '>=12'}
@@ -4247,6 +4245,9 @@ packages:
     resolution: {integrity: sha512-z/wZZgDrkNV1eA0ULjM/F9/50Ya8fbzgKneSpoPsXSGd0KnpdtHfOZWK+GcwLk+EZbS4F9RBhU+K2RgzuDaItw==}
     engines: {node: '>=20'}
 
+  js-cookie@3.0.8:
+    resolution: {integrity: sha512-yeJd4aNAdYZQjaon2bpD/Gb0B/omw7HQOsynXXcOiWVCacbBcPlgn8S/d1X6blFSaHao7ozqtW7NZW19xpCtIw==}
+
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
 
@@ -5530,11 +5531,11 @@ packages:
     resolution: {integrity: sha512-Bf+ILmBgretUrdJxzXM0SgXLZ3XfiaUuOj/IKQHuTXip+05Xn+uyEYdVg0kYDipTBcLrCVyUzAPz7QmArb0mmw==}
     engines: {node: '>=14.0.0'}
 
-  tldts-core@7.5.2:
-    resolution: {integrity: sha512-8W1topazDwhMKbm2I83IPa57Ow5VUxFgLbXv42+vSILnv8FY5OHvdEY/tS6WoWeMbxkHZQhra5cmeFHriKptSQ==}
+  tldts-core@7.4.12:
+    resolution: {integrity: sha512-nYNzS2WRf4QJmjzFFgAxLOBjyBxAGRbCy9PVBPaglcYyYajh40VBn+v5Ngr96ZMc7oM0+aCJdtQnNejvdBnXMQ==}
 
-  tldts@7.5.2:
-    resolution: {integrity: sha512-p+JwEdxIWQx033pMvW9ULBbyC1Eg6JtWo2Mo0jbC8TVSjp2QrHFE+WKs8JpMGc3ECMsmBpU2RH/25NgX3k1ulg==}
+  tldts@7.4.12:
+    resolution: {integrity: sha512-WylhSDKVeYnWXL3a+vKTaOxjnOeEGw938hImY8zoRWJjRRK/Jp1K+IihBzIONpUmW4e3WmXT6q5FW6vlESVZCA==}
     hasBin: true
 
   tmp-promise@3.0.3:
@@ -5544,8 +5545,8 @@ packages:
     resolution: {integrity: sha512-e0votIpp4Uo2AJYSzVHV6xCcawuiez3DzqDAbrTc3YxBkplN6e+dM13ZeIcZnDg/QpSuU2zfZ3rzwY8ukEnaXw==}
     engines: {node: '>=14.14'}
 
-  tough-cookie@6.1.0:
-    resolution: {integrity: sha512-FTxc8u8Kl2tz0Lat1u8ksvcy8bwHRyEMawwTWybo51JqaC6O7SvfuhAKg+Ld6VqyIe2QRJBzY9HA7y2WyFRT2w==}
+  tough-cookie@6.0.2:
+    resolution: {integrity: sha512-exgYmnmL/sJpR3upZfXG5PoatXQii55xAiXGXzY+sROLZ/Y+SLcp9PgJNI9Vz37HpQ74WvDcLT8eqm+kV3FzrA==}
     engines: {node: '>=16'}
 
   tr46@7.0.0:
@@ -7011,9 +7012,9 @@ snapshots:
       react-dom: 19.3.1(react@19.3.1)
       tslib: 2.8.1
 
-  '@clerk/localizations@3.37.8(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@clerk/localizations@4.24.8(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
-      '@clerk/types': 4.101.26(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@clerk/shared': 4.45.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
     transitivePeerDependencies:
       - react
       - react-dom
@@ -7030,14 +7031,12 @@ snapshots:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
 
-  '@clerk/shared@3.47.8(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@clerk/shared@4.45.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
-      csstype: 3.1.3
+      '@tanstack/query-core': 5.107.1
       dequal: 2.0.3
       glob-to-regexp: 0.4.1
-      js-cookie: 3.0.7
-      std-env: 3.10.0
-      swr: 2.3.4(react@19.3.1)
+      js-cookie: 3.0.8
     optionalDependencies:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
@@ -7053,13 +7052,6 @@ snapshots:
   '@clerk/types@4.101.20(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
       '@clerk/shared': 3.47.7(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-    transitivePeerDependencies:
-      - react
-      - react-dom
-
-  '@clerk/types@4.101.26(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
-    dependencies:
-      '@clerk/shared': 3.47.8(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
     transitivePeerDependencies:
       - react
       - react-dom
@@ -8352,6 +8344,8 @@ snapshots:
       '@tailwindcss/oxide': 4.3.5
       tailwindcss: 4.3.5
       vite: 6.4.3(@types/node@26.6.6)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(tsx@4.23.15)
+
+  '@tanstack/query-core@5.107.1': {}
 
   '@trickfilm400/rollup-plugin-off-main-thread@3.0.0-pre1':
     dependencies:
@@ -10188,6 +10182,8 @@ snapshots:
 
   js-cookie@3.0.7: {}
 
+  js-cookie@3.0.8: {}
+
   js-tokens@4.0.0: {}
 
   js-yaml@4.3.2:
@@ -10207,7 +10203,7 @@ snapshots:
       parse5: 8.1.1
       parse5-parser-stream: 8.1.1
       saxes: 6.0.0
-      tough-cookie: 6.1.0
+      tough-cookie: 6.0.2
       undici: 8.12.4
       w3c-xmlserializer: 6.0.0
       webidl-conversions: 8.0.1
@@ -11779,11 +11775,11 @@ snapshots:
 
   tinyrainbow@3.1.0: {}
 
-  tldts-core@7.5.2: {}
+  tldts-core@7.4.12: {}
 
-  tldts@7.5.2:
+  tldts@7.4.12:
     dependencies:
-      tldts-core: 7.5.2
+      tldts-core: 7.4.12
 
   tmp-promise@3.0.3:
     dependencies:
@@ -11791,9 +11787,9 @@ snapshots:
 
   tmp@0.2.7: {}
 
-  tough-cookie@6.1.0:
+  tough-cookie@6.0.2:
     dependencies:
-      tldts: 7.5.2
+      tldts: 7.4.12
 
   tr46@7.0.0:
     dependencies:
