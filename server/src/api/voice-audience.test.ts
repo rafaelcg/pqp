@@ -139,6 +139,7 @@ describeDb("audience mode routes", () => {
       cleanVoiceDefault: true,
       voiceGate: true,
       raisedHandSticky: true,
+      messageListWindowing: true,
     });
     process.env.AUDIENCE_MODE = "false";
     expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toEqual({
@@ -149,6 +150,7 @@ describeDb("audience mode routes", () => {
       cleanVoiceDefault: true,
       voiceGate: true,
       raisedHandSticky: true,
+      messageListWindowing: true,
     });
   });
 
