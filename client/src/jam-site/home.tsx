@@ -307,7 +307,12 @@ export function HomePage() {
   // The next page loads when the end of the list nears the screen; the button
   // under it is the same action for a keyboard, a browser without the observer,
   // and a page that failed.
-  const { loadMore, more, status, loadingMore } = list;
+  const { loadMore, more, loadingMore } = list;
+  // On Em alta the grid leaves out the hero's song, so it waits for the hero. The
+  // two reads race, and a grid drawn first would show that song as a card and pull
+  // it out a moment later, shifting every card after it. A hero that failed does
+  // not hold the grid; it just has nothing to leave out.
+  const status = tab === "top" && featured.status === "loading" && list.status === "ready" ? "loading" : list.status;
   useEffect(() => {
     const node = sentinel.current;
     if (!node || !more || status !== "ready" || typeof IntersectionObserver === "undefined") return;
