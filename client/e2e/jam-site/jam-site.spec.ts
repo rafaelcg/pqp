@@ -108,7 +108,10 @@ interface Calls {
   config: number;
 }
 
-async function mockApi(page: Page, options: { enabled?: boolean; songs?: object[]; page2?: object[] } = {}): Promise<Calls> {
+async function mockApi(
+  page: Page,
+  options: { enabled?: boolean; songs?: object[]; page2?: object[]; featuredDelayMs?: number } = {},
+): Promise<Calls> {
   const calls: Calls = { list: [], detail: [], media: [], plays: [], config: 0 };
   const enabled = options.enabled ?? true;
   const songs = options.songs ?? [A, B, C];
@@ -119,6 +122,11 @@ async function mockApi(page: Page, options: { enabled?: boolean; songs?: object[
   await page.route("**/api/public/jams?**", async (route) => {
     const url = new URL(route.request().url());
     calls.list.push(url);
+    // The hero's read (`useFeatured`, six of Em alta) can be held back, so the grid's
+    // own first page lands before it, which is the order a slow network can pick.
+    if (options.featuredDelayMs && url.searchParams.get("limit") === "6") {
+      await new Promise((resolve) => setTimeout(resolve, options.featuredDelayMs));
+    }
     if (url.searchParams.get("cursor") === "c2") {
       return route.fulfill({ json: { songs: options.page2 ?? [], nextCursor: null } });
     }
@@ -193,6 +201,26 @@ test.describe("the home", () => {
     await expect(page.locator("[data-jam-card]")).toHaveCount(3);
     expect(calls.list.some((url) => url.searchParams.get("cursor") === "c2")).toBe(true);
     await expect(page.locator("[data-jam-more]")).toHaveCount(0);
+  });
+
+  test("the hero's song never shows in the grid, even when the grid's page lands first", async ({ page }) => {
+    const second = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Segunda página", [["vocals", "Lia"]], []);
+    const calls = await mockApi(page, { page2: [second], featuredDelayMs: 1500 });
+    const gridPage = page.waitForResponse((response) => /\/api\/public\/jams\?/.test(response.url()) && new URL(response.url()).searchParams.get("limit") === "24");
+    await page.goto("/jam");
+    await gridPage;
+    // The grid's page is in and the hero is still on its way: the grid is drawn
+    // without waiting for it, and already leaves out the song the hero will be,
+    // rather than show it as a card and pull it out a moment later.
+    // Read once, not retried: a retrying assertion would pass by waiting for the hero.
+    await page.waitForTimeout(300);
+    expect(await page.locator("[data-jam-hero]").count()).toBe(0);
+    expect(await page.locator(`[data-jam-card="${SONG_B}"]`).count()).toBe(1);
+    expect(await page.locator(`[data-jam-card="${SONG_A}"]`).count()).toBe(0);
+    await expect(page.locator(`[data-jam-hero="${SONG_A}"]`)).toBeVisible();
+    await expect(page.locator("[data-jam-card]")).toHaveCount(3);
+    await expect(page.locator(`[data-jam-card="${SONG_A}"]`)).toHaveCount(0);
+    expect(calls.list.some((url) => url.searchParams.get("cursor") === "c2")).toBe(true);
   });
 
   test("has a button that does the same where the page cannot watch the scroll", async ({ page }) => {
