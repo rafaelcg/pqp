@@ -189,6 +189,18 @@ const liveAttachDeps: AttachDeps = {
 /** The longest a share waits for the shell's capture to open. */
 export const ATTACH_TIMEOUT_MS = 4_000;
 
+/**
+ * Tracks this file put on a share. The watch party setup preview attaches the
+ * bus before go-live, so its track is already on the stream when
+ * `stripLeakedSystemAudioTracks` judges it; that check is about Chromium's
+ * mixer tap and this track is not one, so it is told apart here.
+ */
+const attachedTracks = new WeakSet<object>();
+
+export function isLinuxShellShareAudioTrack(track: unknown): boolean {
+  return typeof track === "object" && track !== null && attachedTracks.has(track);
+}
+
 export type AttachResult = "attached" | "skipped" | "unavailable";
 
 /**
@@ -240,6 +252,7 @@ export async function attachLinuxShellShareAudio(
       media.getAudioTracks().forEach((late) => late.stop());
       return "unavailable";
     }
+    attachedTracks.add(track);
     stream.addTrack(track);
     stream.getVideoTracks()[0]?.addEventListener?.("ended", () => track.stop(), {
       once: true,

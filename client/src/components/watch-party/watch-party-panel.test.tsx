@@ -816,6 +816,37 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     );
   });
 
+  it("arms and attaches the Linux desktop bus in the setup pick, since go-live never does", () => {
+    const source = readFileSync(
+      new URL("./watch-party-panel.tsx", import.meta.url),
+      "utf8",
+    );
+    const pick = source.slice(
+      source.indexOf("const pick = async () => {"),
+      source.indexOf("const goLive = async () => {"),
+    );
+    expect(pick).toContain("ensureLinuxShellShareAudio()");
+    expect(pick).toContain("screenCaptureOptions(linuxSound, pickEnv, intent)");
+    expect(pick.indexOf("armLinuxShellShareAudio()")).toBeLessThan(
+      pick.indexOf("getDisplayMedia(options)"),
+    );
+    expect(pick.indexOf("attachLinuxShellShareAudio(picked)")).toBeGreaterThan(
+      pick.indexOf("getDisplayMedia(options)"),
+    );
+    // A leaking mixer tap is stripped BEFORE the bus, as in an ordinary share,
+    // or the attach skips and go-live strips the tap, leaving no sound at all.
+    expect(pick.indexOf("stripLeakedSystemAudioTracks(picked)")).toBeGreaterThan(-1);
+    expect(pick.indexOf("stripLeakedSystemAudioTracks(picked)")).toBeLessThan(
+      pick.indexOf("attachLinuxShellShareAudio(picked)"),
+    );
+    // The bus is its own capture: a silent retry of the display request does
+    // not stop it from being attached.
+    expect(pick).toContain("const triedLinuxBus = linuxSound && options.audio !== false;");
+    expect(pick).not.toContain("options.audio !== false && !lostSound");
+    // A share stopped during the attach is dropped, not previewed.
+    expect(pick).toContain('picked.getVideoTracks()[0]?.readyState === "ended"');
+  });
+
   it("hands go-live a stream without claiming system-audio opt-in", () => {
     const source = readFileSync(
       new URL("../../App.tsx", import.meta.url),

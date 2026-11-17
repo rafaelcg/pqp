@@ -92,6 +92,7 @@ import {
   offersShellSystemAudio,
   screenCaptureOptions,
   shareStreamHasAudio,
+  stripLeakedSystemAudioTracks,
 } from "@/lib/screen-capture-audio";
 import {
   armOrFallBackToChromiumAudio,
@@ -100,6 +101,11 @@ import {
   ensureNativeShareAudio,
   prefetchNativeShareAudio,
 } from "@/lib/native-share-audio";
+import {
+  armLinuxShellShareAudio,
+  attachLinuxShellShareAudio,
+  ensureLinuxShellShareAudio,
+} from "@/lib/linux-shell-share-audio";
 import {
   blocksGoLive,
   desktopSharesTabAudio,
@@ -1203,6 +1209,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       const [, nativeShareAudio] = await Promise.all([
         ensureOsCanExcludeCallAudio(),
         ensureNativeShareAudio(party.serverId ?? null),
+        // The Linux desktop app's "everything but pqp" bus. Warmed here
+        // because this surface is the watch party's only picker: go-live
+        // publishes this stream as it is and never arms the shell again.
+        ensureLinuxShellShareAudio(),
       ]);
       const intent = {
         preferBrowserTab: true,
@@ -1218,7 +1228,19 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         intent,
       );
       setNativeShareAudioOffered(nativeAudio);
-      const options = screenCaptureOptions(false, pickEnv, intent);
+      // LINUX DESKTOP: the shell's picker never asks about sound (on Wayland
+      // it never even opens), so a watch party, whose whole point is the
+      // film's sound, asks for it here, the way the ordinary share prompt
+      // defaults to yes. Only where the shell, the runtime flag and a sound
+      // server all said yes (`shellLinuxShareAudio`); everywhere else this is
+      // the same `false` as before. Before this, a Linux desktop host always
+      // went live silent: the preview asked for no sound and go-live never
+      // arms a stream the preview already opened.
+      const linuxSound = pickEnv.shellLinuxShareAudio === true;
+      const options = screenCaptureOptions(linuxSound, pickEnv, intent);
+      if (linuxSound && options.audio !== false) {
+        await armLinuxShellShareAudio();
+      }
       let picked: MediaStream;
       let lostSound = false;
       try {
@@ -1255,7 +1277,6 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         picked = silent;
         lostSound = true;
       }
-      setSoundFailed(lostSound);
       if (nativeAudio && !lostSound) {
         const attach = await attachNativeShareAudio(picked, {
           onEnded: () => setNativeAudioNotice("ended"),
@@ -1263,6 +1284,32 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         if (!attach.attached && attach.reason !== "none") {
           setNativeAudioNotice("failed");
         }
+      }
+      // The bus the arm above built, opened by name and put on the preview,
+      // so go-live broadcasts what the host checked. A failure leaves a silent
+      // pick, which the "sem áudio" line under the preview already says.
+      // Attached after a silent retry too, like the ordinary share: the bus is
+      // its own capture, not the display request's audio that failed.
+      const triedLinuxBus = linuxSound && options.audio !== false;
+      let linuxBusAttached = false;
+      if (triedLinuxBus) {
+        // The ordinary share's order: a leaking mixer tap goes first. Left on,
+        // it would make the attach skip ("already has audio") and then be
+        // stripped at go-live, leaving the party with neither.
+        stripLeakedSystemAudioTracks(picked);
+        linuxBusAttached =
+          (await attachLinuxShellShareAudio(picked)) === "attached";
+      }
+      // Which line the "sem áudio" warning shows (it shows whenever the pick
+      // has no audio): on Linux the bus IS the sound, so a bus that did not
+      // attach is the computer's sound failing, retry or not.
+      setSoundFailed(triedLinuxBus ? !linuxBusAttached : lostSound);
+      // The host stopped the share from the browser's bar while the sound was
+      // being attached: the `ended` listener below would never fire for it, so
+      // drop the pick here rather than preview a dead picture with a live bus.
+      if (picked.getVideoTracks()[0]?.readyState === "ended") {
+        picked.getTracks().forEach((track) => track.stop());
+        return;
       }
       stream?.getTracks().forEach((track) => track.stop());
       // The host stopping the share from the browser's own bar during setup
