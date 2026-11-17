@@ -47,8 +47,10 @@ CMD ["node", "server/dist/index.js"]
 # (server/src/speech/video-transcode.ts, which needs the package's libx264 and
 # checks for it at boot). Only the worker runs those jobs, so only the
 # worker pays for ffmpeg: about 131 MB uncompressed, 49 MB compressed, on
-# linux/amd64 (node:22-alpine, 2026-10). A process without ffmpeg never claims
-# a transcode job, so an API image doing a worker's job just leaves them queued.
+# linux/amd64 (node:22-alpine, 2026-10; node:24-alpine ships the same Alpine
+# 3.24 and the same ffmpeg 8.1.3, checked 2026-11). A process without ffmpeg
+# never claims a transcode job, so an API image doing a worker's job just
+# leaves them queued.
 FROM app AS worker
 USER root
 RUN apk add --no-cache ffmpeg

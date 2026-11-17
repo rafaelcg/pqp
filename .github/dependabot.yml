@@ -96,8 +96,10 @@ updates:
     cooldown:
       default-days: 3
     ignore:
-      # The runtime major is a decision (Node 22 is what CI and prod run),
-      # not a weekly chore. Minor and patch of the same major still flow.
+      # The runtime major is a decision (Node 24 is what CI and the API image
+      # run; the support-bot and ambient images are still on 22 until somebody
+      # moves them by hand), not a weekly chore. Minor and patch of the same
+      # major still flow.
       - dependency-name: "node"
         update-types:
           - version-update:semver-major
