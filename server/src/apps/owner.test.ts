@@ -249,6 +249,83 @@ describeDb("the owner's apps switches", () => {
     });
   });
 
+  describe("an app released by the operator's default (no server_apps row)", () => {
+    beforeEach(async () => {
+      await q(`DELETE FROM server_apps WHERE app_id = $1`, [appId]);
+      await q(`UPDATE apps SET default_operator_enabled = TRUE WHERE id = $1`, [appId]);
+    });
+
+    it("is listed, and a server with no row at all can start it", async () => {
+      expect((await list(world.owner)).body.apps).toHaveLength(1);
+      expect((await list(world.owner)).body.apps[0]).toMatchObject({ id: appId, enabled: true });
+      const summary = await sessions.startAppSession(world.member, world.channels.general, appId);
+      expect(summary.appId).toBe(appId);
+      // Nothing was written just to start it.
+      expect((await q(`SELECT 1 FROM server_apps WHERE app_id = $1`, [appId])).rowCount).toBe(0);
+    });
+
+    it("an explicit operator OFF hides it again, and the default off is the old behaviour", async () => {
+      await q(`INSERT INTO server_apps (server_id, app_id, operator_enabled) VALUES ($1, $2, FALSE)`, [
+        world.serverId,
+        appId,
+      ]);
+      expect((await list(world.owner)).body.apps).toEqual([]);
+      expect((await put(world.owner, false)).status).toBe(404);
+      await expect(sessions.startAppSession(world.member, world.channels.general, appId)).rejects.toMatchObject({
+        status: 403,
+        detail: { reason: "not-allowed-here" },
+      });
+      await q(`DELETE FROM server_apps WHERE app_id = $1`, [appId]);
+      await q(`UPDATE apps SET default_operator_enabled = FALSE WHERE id = $1`, [appId]);
+      expect((await list(world.owner)).body.apps).toEqual([]);
+      expect((await put(world.owner, false)).status).toBe(404);
+      expect((await q(`SELECT 1 FROM server_apps WHERE app_id = $1`, [appId])).rowCount).toBe(0);
+    });
+
+    it("the owner can switch it off, which creates the row, ends sessions and is audited; back to null restores it", async () => {
+      await sessions.startAppSession(world.member, world.channels.general, appId);
+      const off = await put(world.owner, false);
+      expect(off.body).toEqual({ appId, enabled: false, changed: true, sessionsEnded: 1 });
+      const row = await q<{ operator_enabled: boolean | null; owner_enabled: boolean | null }>(
+        `SELECT operator_enabled, owner_enabled FROM server_apps WHERE server_id = $1 AND app_id = $2`,
+        [world.serverId, appId],
+      );
+      expect(row.rows).toEqual([{ operator_enabled: null, owner_enabled: false }]);
+      await expect(sessions.startAppSession(world.member, world.channels.general, appId)).rejects.toMatchObject({
+        detail: { reason: "owner-off" },
+      });
+      expect((await put(world.owner, null)).body).toMatchObject({ enabled: true, changed: true });
+      expect((await sessions.startAppSession(world.member, world.channels.general, appId)).appId).toBe(appId);
+      const audit = await q(`SELECT before, after FROM app_admin_audit WHERE action = 'owner-server' ORDER BY id`);
+      expect(audit.rows).toEqual([
+        { before: { ownerEnabled: null }, after: { ownerEnabled: false } },
+        { before: { ownerEnabled: false }, after: { ownerEnabled: null } },
+      ]);
+    });
+
+    it("two first switches at once are one change: one audit row, one answer of changed", async () => {
+      const answers = await Promise.all([put(world.owner, false), put(world.manager, false)]);
+      expect(answers.map((a) => a.status)).toEqual([200, 200]);
+      expect(answers.filter((a) => a.body.changed)).toHaveLength(1);
+      const audit = await q(`SELECT 1 FROM app_admin_audit WHERE action = 'owner-server'`);
+      expect(audit.rowCount).toBe(1);
+      expect((await q(`SELECT owner_enabled FROM server_apps WHERE app_id = $1`, [appId])).rows).toEqual([
+        { owner_enabled: false },
+      ]);
+    });
+
+    it("a public community stays locked: not listed, not switchable, not startable", async () => {
+      await q(`UPDATE servers SET is_community = TRUE WHERE id = $1`, [world.serverId]);
+      expect((await list(world.owner)).body.apps).toEqual([]);
+      expect((await put(world.owner, false)).status).toBe(404);
+      await expect(sessions.startAppSession(world.member, world.channels.general, appId)).rejects.toMatchObject({
+        detail: { reason: "community-locked" },
+      });
+      await q(`UPDATE apps SET community_unlocked = TRUE WHERE id = $1`, [appId]);
+      expect((await list(world.owner)).body.apps).toHaveLength(1);
+    });
+  });
+
   describe("what it does", () => {
     it("a new start is refused with owner-off, and allowed again when the switch goes back", async () => {
       await put(world.owner, false);

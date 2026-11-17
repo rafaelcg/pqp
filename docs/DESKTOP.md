@@ -151,7 +151,7 @@ as "blocked or cancelled" rather than as a failure.
 |---|---|---|
 | Windows 11 (NT build ≥ 22000) | The machine's own output, minus pqp's | `{ video: source, audio: "loopback" }` when the page asked for audio **and** the picker's box was ticked. Electron 43.4+ remaps that to `loopbackWithoutChrome` when the page sent `restrictOwnAudio: true`. `os.release()` is still `10.0.22631` on Windows 11; parse the build, never `major === 11` |
 | Windows 10 | Video only | Chromium cannot exclude this app from the mixer. The handler returns no loopback, the picker hides the audio box, and the page asks for no audio |
-| macOS | Video only | Chromium's loopback device is WASAPI and exists nowhere else. The client asks for no audio track at all, because an audio request the embedder cannot satisfy rejects the **whole** capture, video included (3 Sep 2026: "o picker fecha e a stream não começa") |
+| macOS | The computer's sound minus pqp's on macOS 14.2+ with a shell that publishes `capabilities.macShareAudio` and `mac_desktop_system_audio` on (the default); video only otherwise | The client asks for no audio track unless the flag is on, the shell publishes `capabilities.macShareAudio` and the Mac is on 14.2 or newer, because an audio request the embedder cannot satisfy rejects the **whole** capture, video included (3 Sep 2026: "o picker fecha e a stream não começa"). With all three, Chromium's CoreAudio Tap carries the sound; see "macOS share audio" below. The picker says plainly on a Mac without it (before 14.2, an older shell, or the flag switched off) that sound is not available yet |
 | Linux | Video only, or with `linux_desktop_system_audio` on (0.2.3+) the computer's sound minus pqp's | Chromium's loopback carries the call on Linux, so the shell builds its own bus (`electron/lib/linux-share-audio.js`); see "Linux share audio: what is captured and what is not" below. Wayland may hand back one pre-picked surface |
 
 `loopbackWithMute` is deliberately never used. It taps the same output and
@@ -222,6 +222,88 @@ and the watch party lowers the capture's height with `applyConstraints` while it
 runs. A capture that refuses a constraint keeps running unchanged; nothing in
 that path stops a track.
 
+### macOS share audio: what is captured and what is not
+
+Behind `mac_desktop_system_audio` (global, default **on** since 2026-11-05, the kill switch), a shell that publishes
+`capabilities.macShareAudio` (0.2.10+) and a Mac on macOS 14.2 or newer. Written
+2026-11-05 after a user could not share sound from a Mac; **the capture itself
+was not run on a Mac when it was written**, so §"What was verified" lists what
+is read off the source and what is still to be seen.
+
+**The mechanism is Chromium's, not ours.** Since Electron 39, `audio:
+"loopback"` on macOS 14.2+ is Apple's CoreAudio Tap
+(`media/audio/mac/catap_audio_input_stream.mm`). When the page asks
+`getDisplayMedia({ audio: { restrictOwnAudio: true } })`, Electron remaps
+`"loopback"` to `loopbackWithoutChrome` (`electron_browser_context.cc`, the
+`IS_MAC` branch, present on the 44 line), and the tap is built with
+`initStereoGlobalTapButExcludeProcesses:` over the CoreAudio process objects of
+Chromium's audio service process. Every sound this app plays (the call, the
+chime, a film) is rendered by that process, so the call stays out of the share
+without any routing of ours. Nothing like Linux's bus is needed.
+
+**What the shell adds**, `electron/lib/mac-share-audio.js`:
+
+- The OS gate. Below 14.2 Chromium has no tap (`CreateCatapAudioInputStream`
+  answers null) and a loopback request fails the whole capture, so
+  `captureResponse` answers loopback only for `macVersionAllowsSystemAudio(
+  process.getSystemVersion())`, which is the macOS version, not the Darwin
+  number `os.release()` gives.
+- The arm. Like Linux, the page arms right before a share it has asked sound
+  for with the flag on (`macShareAudioArm()`); a request that merely carries
+  `audioRequested` is answered video only. One request per arm, 30 s expiry.
+- The picker row. Armed: the sound switch, starting on, with a hint that macOS
+  asks permission the first time. Not armed on 14.2+ (flag off, or a page older
+  than the shell): one line saying the desktop app does not carry sound on a Mac
+  yet and that a Chrome tab does. Before 14.2: one line saying it needs 14.2.
+  Never a switch that would be a lie.
+- `NSAudioCaptureUsageDescription` in `build.mac.extendInfo`. Without the key
+  macOS never shows the permission prompt and the tap is dead.
+
+**The permission, and its silent failure.** The tap sits behind Privacy &
+Security > Screen & System Audio Recording > System Audio Recording Only
+(`kTCCServiceAudioCapture`), a separate grant from Screen Recording that no API
+can read. Two shapes of "not granted", both handled:
+
+1. Chromium probes the tap when it opens it (`kMacCatapProbeTapOnCreation`, on
+   by default in 152). A failed probe fails the open, the capture rejects with
+   `NotReadableError`, and PQP-31's silent retry gives the same surface without
+   sound. On a Mac shell the notice that follows is the permission card, not the
+   generic line.
+2. Electron's own docs: the audio track is created `ended` and never delivers
+   a sample, with no error. `settleMacShareAudio` takes an already-ended track
+   off the stream before it can be published, watches a live one for 2.5 s, and
+   raises the same card.
+
+The card (`MacShareAudioPermissionNotice`) says what the viewers get, what to
+turn on and has one button that opens the pane
+(`macShareAudioOpenSettings()` -> `Privacy_AudioCapture`). A track that is live
+and silent is indistinguishable from a Mac playing nothing and is not caught.
+
+**Known edges, said plainly.**
+
+- The exclusion is a list of the audio service's process objects taken when the
+  tap opens. If that process has produced no sound yet (a share started alone in
+  an empty room) the list is empty, Chromium logs it, and a person who joins
+  later could be heard in the share. `macShareAudioStatus` cannot tell the
+  difference. The card and the picker hint do not promise otherwise, and the
+  retry line tells the presenter to wear headphones if the viewers hear the call.
+- `stripLeakedSystemAudioTracks` is skipped on the Mac shell: it keys on
+  `getSettings().restrictOwnAudio === false`, a setting written for the Windows
+  device. The settings are logged (`[share] mac system audio settings`) so a
+  leak report comes with the facts.
+- The watch party setup preview opens its own capture and never arms, so it
+  stays video only on a Mac.
+- macOS 15+ `useSystemPicker` is not used (see `configureSessionSecurity`), so
+  this path is the only one a share takes.
+
+**What was verified.** Source read, Electron 44.9.1 (Chromium 152.0.7977.169):
+the `IS_MAC` remap, the exclude of the audio service pid, the probe, the 14.2
+gate, `NSAudioCaptureUsageDescription` in Electron's docs. Unit tests for the
+version gate, the arm, the picker states, the capability, the env wiring and the
+dead-track watcher. **Not verified:** a real capture, the prompt, the pane link
+(`Privacy_AudioCapture` is what Apple's own sample code uses, not tried here),
+the leak edge above. Rafael's test list is in the PR.
+
 ### Linux share audio: what is captured and what is not
 
 Behind `linux_desktop_system_audio` (global, default off) and a shell that
@@ -233,6 +315,18 @@ sounds, a film it plays) never reach the bus: that is the whole point.
 
 **Not in the Flatpak build.** The Flathub package never offers it and says why
 (§7 "Share audio in the sandbox").
+
+**A watch party asks for it in its setup preview (2026-11).** The preview is the
+watch party's only picker: go-live publishes that stream as it is and never arms
+the shell. Until this, the preview asked the Linux shell for no sound at all, so
+a Linux desktop host always went live silent, flag on or not, while an ordinary
+share in the same call carried sound. With the bus ready (shell, flag, sound
+server) the preview now asks for it, arms, and attaches it after the pick,
+defaulting to yes like the ordinary share prompt; the "sem áudio" line under the
+preview covers a failed attach. The bus track is skipped by
+`stripLeakedSystemAudioTracks` at go-live (`isLinuxShellShareAudioTrack`),
+because that check is about Chromium's mixer tap and this is not one. Client
+only. Not yet verified on a Linux machine.
 
 **How the bus is fed, since 0.2.4.** The first report from real hardware (a
 CachyOS desktop, PipeWire with pipewire-pulse) said browsers and one game reached
@@ -977,6 +1071,33 @@ Note also that `callback(null)` from the handler is NOT a `NotAllowedError` in
 Electron 44: it is `AbortError: Invalid capture constraints`, the same string a
 Cancel in the picker produces. That string from the desktop app means "the
 shell answered no", never a bad constraint from the page.
+
+**Why it kept coming back (16 Nov 2026).** The string is Chromium's name for
+`INVALID_DISPLAY_CAPTURE_CONSTRAINTS`, and Electron 44.9.1 answers every
+`callback(null)`, `undefined` or `{}` from the handler with it
+(`DisplayMediaDeviceChosen` in `electron_browser_context.cc`; reproduced on
+44.9.1). The 13 Sep fix (no tab steer) and the 27 Oct fix (the fuse) each
+removed one cause, but `startScreenShare` printed `err.message` for any error
+name it did not know, so the next refusal, a picker already open, a window
+that closed before it was handed over, or a plain Cancel, showed the same
+English sentence to a Windows 11 desktop user again. Now:
+
+- The handler records which refusal it was (`lib/share-refusal.js`:
+  `cancelled`, `busy`, `picker-failed`, `no-sources`, `permission`,
+  `source-gone`, `origin`, `error`), every `return null` in
+  `chooseDisplaySource` names one (`lib/share-refusal.test.mjs` counts them),
+  and the page reads it once through `shareRefusalReason()`
+  (`capabilities.shareRefusalReason`). Needs a desktop release.
+- The page (`client/src/lib/share-shell-refusal.ts`) never shows Chromium's
+  sentence. A Cancel is no error; the other reasons get their own pt-BR line;
+  a shell too old to say why (0.2.9 and before) gets "the picker closed
+  without a screen chosen, try again". Works on every shell with a web deploy.
+- Every refusal is logged (`[share] the desktop shell refused the capture`)
+  and sent to Faro as `share_shell_refused` with the reason, the shell
+  version, the platform and the request's size, frame rate and audio, so the
+  next report says which one it was.
+- No retry with smaller constraints: the page only asks `ideal`/`max`, which
+  cannot produce this code, and a retry after a Cancel is a second picker.
 
 Not flipped, with the reason: `EnableEmbeddedAsarIntegrityValidation` and
 `OnlyLoadAppFromAsar` (the pair is what makes tampering with `app.asar` detectable,

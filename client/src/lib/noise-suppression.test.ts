@@ -6,6 +6,7 @@ import {
   createRnnoiseNode,
   loadRnnoiseBinary,
   parseNoiseSuppressionMode,
+  type MicChainGate,
   type MicChainNode,
 } from "./noise-suppression";
 
@@ -184,5 +185,94 @@ describe("connectMicChain", () => {
     // The exact graph the pipeline had before this feature existed: off and
     // browser mode must not gain a node.
     expect(source.wiredTo).toEqual(["gain"]);
+  });
+
+  describe("with the voice gate", () => {
+    /** A node that records which input of which node it was wired into. */
+    function wiredNode(name: string) {
+      const edges: string[] = [];
+      const node: MicChainGate & { name: string; edges: string[] } = {
+        name,
+        edges,
+        onprocessorerror: null,
+        connect: (destination: never, output = 0, input = 0) => {
+          edges.push(
+            `${(destination as unknown as { name: string }).name}:${output}>${input}`,
+          );
+        },
+        disconnect: (destination?: never) => {
+          if (destination === undefined) {
+            edges.length = 0;
+            return;
+          }
+          const target = (destination as unknown as { name: string }).name;
+          for (let i = edges.length - 1; i >= 0; i--) {
+            if (edges[i].startsWith(`${target}:`)) {
+              edges.splice(i, 1);
+            }
+          }
+        },
+      };
+      return node;
+    }
+
+    it("feeds the gate the suppressor's audio and the raw microphone as its sidechain", () => {
+      const source = wiredNode("source");
+      const suppressor = wiredNode("rnnoise");
+      const gate = wiredNode("gate");
+      const gain = wiredNode("gain");
+
+      connectMicChain({ source, suppressor, gain, gate });
+
+      // Input 0 is the audio that gets gained, input 1 the signal the gate
+      // makes its decisions from. The raw microphone is ahead of the audio by
+      // RNNoise's own delay, which is what the gate's head start is made of.
+      expect(source.edges).toEqual(["rnnoise:0>0", "gate:0>1"]);
+      expect(suppressor.edges).toEqual(["gate:0>0"]);
+      expect(gate.edges).toEqual(["gain:0>0"]);
+    });
+
+    it("never wires a gate where there is no suppressor", () => {
+      const source = wiredNode("source");
+      const gate = wiredNode("gate");
+      const gain = wiredNode("gain");
+
+      connectMicChain({ source, suppressor: null, gain, gate });
+
+      expect(source.edges).toEqual(["gain:0>0"]);
+      expect(gate.edges).toEqual([]);
+    });
+
+    it("cuts the gate out and wires the suppressor straight to the gain when it fails", () => {
+      const source = wiredNode("source");
+      const suppressor = wiredNode("rnnoise");
+      const gate = wiredNode("gate");
+      const gain = wiredNode("gain");
+      connectMicChain({ source, suppressor, gain, gate });
+
+      // A worklet whose processor throws goes silent, and a silent microphone
+      // is the one failure this chain may never have.
+      gate.onprocessorerror?.(new Event("processorerror") as never);
+
+      expect(suppressor.edges).toEqual(["gain:0>0"]);
+      expect(source.edges).toEqual(["rnnoise:0>0"]);
+      expect(gate.edges).toEqual([]);
+    });
+
+    it("survives a gate that was already disconnected when it fails", () => {
+      const source = wiredNode("source");
+      const suppressor = wiredNode("rnnoise");
+      const gate = wiredNode("gate");
+      const gain = wiredNode("gain");
+      gate.disconnect = () => {
+        throw new Error("InvalidAccessError");
+      };
+      connectMicChain({ source, suppressor, gain, gate });
+
+      expect(() =>
+        gate.onprocessorerror?.(new Event("processorerror") as never),
+      ).not.toThrow();
+      expect(suppressor.edges).toContain("gain:0>0");
+    });
   });
 });

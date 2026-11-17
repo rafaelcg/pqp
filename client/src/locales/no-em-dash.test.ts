@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import en from "./en/translation.json";
 import ptBR from "./pt-BR/translation.json";
 import es from "./es/translation.json";
+import jamEn from "./jam-site/en.json";
+import jamPt from "./jam-site/pt-BR.json";
+import jamEs from "./jam-site/es.json";
 // `?raw` rather than node:fs: this is the client project and its tsconfig
 // carries no node types, which is what the blog bodies already do for the
 // same reason (see `lib/blog/bodies.ts`).
@@ -75,6 +78,12 @@ describe("user-facing copy carries no dash punctuation", () => {
       .filter(([char]) => indexHtml.includes(char))
       .map(([, name]) => name);
     expect(found).toEqual([]);
+  });
+
+  it("the public jam site's catalogues", () => {
+    for (const catalogue of [jamEn, jamPt, jamEs]) {
+      expect(offences(catalogue as Record<string, unknown>)).toEqual([]);
+    }
   });
 
   it("catches one if it comes back", () => {

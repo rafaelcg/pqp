@@ -19,6 +19,38 @@ import {
   Video,
 } from "lucide-react";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Second-screen surfaces: each is its own chunk, fetched when first drawn.
+import {
+  BotWizard,
+  BulkPurgeDialog,
+  ChannelSettingsDialog,
+  CommunitiesView,
+  CommunityHomeFeed,
+  ConnectionDoctorDialog,
+  CreateServerDialog,
+  CreateWatchPartyDialog,
+  DmCallStage,
+  ForumPane,
+  ForwardDialog,
+  ForwardPicker,
+  InvitePanel,
+  MembersPanel,
+  NewDmDialog,
+  OnboardingFlow,
+  PinnedMessagesPanel,
+  QuickSwitcher,
+  ReportDialog,
+  ScheduleSessionSheet,
+  ServerSettingsDialog,
+  SettingsModal,
+  ShortcutOverlay,
+  ThreadPanel,
+  VoiceChannelStage,
+  WatchPartyHistoryDialog,
+  WatchPartyPanel,
+  WatchPartyWaitlistDialog,
+  WhatsNewView,
+} from "@/components/deferred-panels";
 import { Menu as ActionMenu } from "@/components/ui/menu";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -82,12 +114,8 @@ import {
 } from "@/lib/voice-note-transcript";
 import { adoptVoiceTranscription } from "@/lib/voice-transcription-prefs";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
-import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
-import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
-import {
-  ForwardPicker,
-  type ForwardedSummary,
-} from "@/components/forward/forward-picker";
+import type { ForwardTarget } from "@/components/chat/forward-dialog";
+import type { ForwardedSummary } from "@/components/forward/forward-picker";
 import { ForwardedToast } from "@/components/forward/forwarded-toast";
 import { NotInServerToast } from "@/components/forward/not-in-server-toast";
 import {
@@ -96,32 +124,34 @@ import {
   useForwardEnabled,
   type ForwardSourceRequest,
 } from "@/lib/forward";
-import { ThreadPanel } from "@/components/chat/thread-panel";
-import {
-  ReportDialog,
-  type ReportTarget,
-} from "@/components/chat/report-dialog";
+import type { ReportTarget } from "@/components/chat/report-dialog";
 import {
   AppBootstrapError,
   AppLoadingShell,
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
-import { ForumPane } from "@/components/forum";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
-import { ChannelList } from "@/components/layout/channel-list";
+import { dispatchJamFrame, dispatchJamReconnected } from "@/lib/jam-frames";
 import {
-  ChannelSettingsDialog,
-  type ChannelSettingsSectionId,
-} from "@/components/layout/channel-settings-dialog";
-import { DmCallStage } from "@/components/dm/dm-call-stage";
+  dispatchJamPublicNotice,
+  isJamPublicNotice,
+  jamPublicReconnected,
+} from "@/lib/jam-public-store";
+import { JamPane } from "@/components/jam/jam-pane";
+import { createJamOnce } from "@/lib/jam-create";
+import { setJamViewer } from "@/lib/jam-store";
+import { useJamHintContext } from "@/lib/jam-hint-context";
+import { useJamConfig } from "@/hooks/use-jam-config";
+import { useJamSidebar } from "@/hooks/use-jam-sidebar";
+import { emitBauPlusUpdate, onBauPayRequest } from "@/lib/bau-plus/updates";
+import { ChannelList } from "@/components/layout/channel-list";
+import type { ChannelSettingsSectionId } from "@/components/layout/channel-settings-dialog";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
-import { ConnectionDoctorDialog } from "@/components/layout/connection-doctor-dialog";
 import { DmToasts } from "@/components/dm/dm-toasts";
 import { WhatsNewPrompt } from "@/components/layout/whats-new-prompt";
 import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
-import { CommunitiesView } from "@/components/communities/communities-view";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
 import { setProfileVisibility } from "@/components/depoimentos/depoimentos-api";
 import { waitingOnYou } from "@/components/depoimentos/depoimentos-model";
@@ -129,20 +159,14 @@ import {
   FriendsContext,
   useFriendsStore,
 } from "@/components/friends/use-friends";
-import { InvitePanel } from "@/components/layout/invite-panel";
 import { MemberSidebar } from "@/components/layout/member-sidebar";
-import { MembersPanel } from "@/components/layout/members-panel";
 import {
   ProfilePopoverProvider,
   type ProfileWatchPartyContext,
 } from "@/components/user/user-profile-popover";
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
-import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
-import { WhatsNewView } from "@/components/layout/whats-new-view";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
-import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
-import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
 import {
   SeasonalLookHint,
@@ -215,22 +239,17 @@ import {
   hasUnseenWhatsNew,
   rememberWhatsNewFeed,
 } from "@/lib/whats-new-feed";
-import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
-import { BotWizard } from "@/components/bots/bot-wizard";
 import { BotIntroHint } from "@/components/bots/bot-intro-hint";
 import { useBotInvite } from "@/lib/use-bot-invite";
-import { CreateServerDialog } from "@/components/layout/create-server-dialog";
 import { DiscordImportHost } from "@/components/layout/discord-import-host";
 import {
   applyRemotePreferences,
   defaultLocalSettings,
   loadLocalSettings,
   saveLocalSettings,
-  SettingsModal,
   type LocalSettings,
-  type SettingsSectionId,
-} from "@/components/layout/settings-modal";
-import { ShortcutOverlay } from "@/components/layout/shortcut-overlay";
+} from "@/components/settings/local-settings";
+import type { SettingsSectionId } from "@/components/layout/settings-modal";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import {
@@ -267,6 +286,7 @@ import {
   type AppSessionPeople,
 } from "@/components/apps/app-session-layout";
 import { appSessionWire, appWireLink } from "@/lib/apps/session-wire-instance";
+import { registerShareSender, settleShareFrame } from "@/lib/jam-share-send";
 import {
   handleAppsFrame,
   noteAppsReconnected,
@@ -274,9 +294,7 @@ import {
   setAppsOnline,
   setAppsViewer,
 } from "@/lib/apps/app-sessions-store";
-import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
 import { CallDockOutlet, CallDockProvider } from "@/components/voice/call-dock";
-import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
 import {
   canOfferWatchPartyCreate,
   isWatchPartyChannelType,
@@ -290,8 +308,6 @@ import {
   shouldReleaseAudienceWatchSeat,
   type AudienceSeatClock,
 } from "@/lib/watch-party-seat";
-import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
-import { WatchPartyHistoryDialog } from "@/components/watch-party/watch-party-history-dialog";
 import {
   watchPartyHistoryCandidates,
   type WatchPartyHistoryChannel,
@@ -321,7 +337,6 @@ import {
 } from "@/lib/watch-party-draft";
 import { decideGoLiveMicPrompt } from "@/lib/watch-party-go-live";
 import { resetWatchPartyStreamQualityForNewParty } from "@/lib/watch-party-stream-quality";
-import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
 import { UpcomingSessionCard } from "@/components/voice/upcoming-session-card";
 import { ChannelSessionToasts } from "@/components/voice/channel-session-toasts";
 import {
@@ -445,10 +460,13 @@ import {
   type ServerRole,
 } from "@/lib/api";
 import { clearBootPrefetch } from "@/lib/boot-prefetch";
+import { jamHistoryState, type JamRouteMode } from "@/lib/jam-history";
 import {
   channelRoutePath,
   forumPostRoutePath,
+  jamSongRoutePath,
   linkFollowedAt,
+  messageLinkState,
   parseAppRoute,
   pickOpenableServer,
   signedOutRedirectPath,
@@ -459,6 +477,14 @@ import {
   hasStashedConnectionCallback,
   stashConnectionCallbackFromWindow,
 } from "@/lib/connection-callback";
+import {
+  JAM_INTENT_PARAMS,
+  jamIntentFromSearch,
+  takeJamIntent,
+} from "@/lib/jam-intent";
+import { parsePublicJamPath } from "@/lib/jam-public-links";
+import { openPublicJam } from "@/lib/jam-public-nav";
+import { JamPublicHost } from "@/components/jam/jam-public-host";
 import {
   addIntentFromSearch,
   CREATE_INTENT_PARAMS,
@@ -491,14 +517,17 @@ import {
   shouldOfferWatchPartyTeaser,
   useWatchPartyWaitlist,
 } from "@/lib/watch-party-waitlist";
-import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
 import { startConfigRefresh } from "@/lib/config-refresh";
 import { startNotifyConfig } from "@/lib/notify-config";
+import { preloadDeferredPanels } from "@/components/deferred";
+import { startCalmDetectorFlag } from "@/lib/calm-detector-flag";
 import { startAudioSelfHealFlag } from "@/lib/audio-self-heal-flag";
 import {
   startCleanVoiceDefaultFlag,
   useCleanVoiceDefaultMode,
 } from "@/lib/clean-voice-default";
+import { startMessageListWindowingFlag } from "@/lib/message-list-windowing";
+import { startVoiceGateFlag } from "@/lib/voice-gate/voice-gate-flag";
 import { withEffectiveNoiseSuppression } from "@/components/settings/local-settings";
 import {
   WatchPartyApprovedToasts,
@@ -580,7 +609,6 @@ import {
 } from "@/components/conversations/phone-screens";
 import { clearListTyping, noteListTyping } from "@/lib/conversation-typing";
 import { FriendAcceptedToast } from "@/components/conversations/friend-accepted-toast";
-import { QuickSwitcher } from "@/components/conversations/quick-switcher";
 import { ConversationsEmpty } from "@/components/conversations/conversations-empty";
 import { trackDmOpen, trackDmStart, type DmDoor } from "@/lib/conversation-events";
 import { SEARCH_MESSAGES_EVENT } from "@/components/layout/channel-list";
@@ -661,6 +689,7 @@ import {
   isCommunityHomeEnabled,
   isCommunityHomeRowNew,
   loadCommunityHomeConfig,
+  loadCommunityHomeVipEnabled,
   markCommunityHomeRowSeen,
   mergeServerUpdate,
   pickServerLandingTarget,
@@ -677,7 +706,6 @@ import {
 } from "@/components/live-preview/live-preview-auth";
 import { heroHue } from "@/lib/hero-tint";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
-import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { CommunityHomePostHint } from "@/components/community-home/community-home-post-hint";
 import {
   applyDesktopAuthStart,
@@ -1814,6 +1842,7 @@ function MainAppContent({
     featureHintEligible("channelPin"),
   );
   const [wantsForumHint] = useState(() => featureHintEligible("forum"));
+  const [wantsJamWallHint] = useState(() => featureHintEligible("jamWall"));
   const [wantsShortcutsHint, setWantsShortcutsHint] = useState(() =>
     featureHintEligible("shortcuts") && supportsKeyBinding(),
   );
@@ -2073,6 +2102,8 @@ function MainAppContent({
     },
     [],
   );
+  const jamCreating = useRef(false);
+  const jamCreateUnsure = useRef<{ serverId: string; known: Set<string> } | null>(null);
   const refreshChannelListRef = useRef<
     (serverId: string, confirmingVanishedId?: string | null) => void
   >(() => {});
@@ -3031,10 +3062,33 @@ function MainAppContent({
     () => (notifyConfigUserId ? startAudioSelfHealFlag() : undefined),
     [notifyConfigUserId],
   );
+  // The second-screen chunks (settings, forum, watch party panel, call stages)
+  // are fetched one at a time when the browser is idle, a few seconds after the
+  // shell is up, so the first open of any of them is already local.
+  useEffect(() => preloadDeferredPanels(), []);
+  // `voice_calm_detector` (`lib/calm-detector-flag.ts`): the speaking ring's
+  // loop on a timer instead of every frame. Same refresh, same reason to wait.
+  useEffect(
+    () => (notifyConfigUserId ? startCalmDetectorFlag() : undefined),
+    [notifyConfigUserId],
+  );
   // `clean_voice_default` (`lib/clean-voice-default.ts`): Voz limpa as the
   // default for a device that never chose. Same refresh, same reason to wait.
   useEffect(
     () => (notifyConfigUserId ? startCleanVoiceDefaultFlag() : undefined),
+    [notifyConfigUserId],
+  );
+  // `message_list_windowing` (`lib/message-list-windowing.ts`): the transcript
+  // mounts only the rows near the viewport. On unless the server says off;
+  // same refresh, same reason to wait for an account.
+  useEffect(
+    () => (notifyConfigUserId ? startMessageListWindowingFlag() : undefined),
+    [notifyConfigUserId],
+  );
+  // `voice_gate` (`lib/voice-gate/voice-gate-flag.ts`): the kill switch for the
+  // gate after RNNoise. Same refresh; a flip reaches a call already running.
+  useEffect(
+    () => (notifyConfigUserId ? startVoiceGateFlag() : undefined),
     [notifyConfigUserId],
   );
   // Modo 2005's kill switch (`retro_look`), asked only by a browser that found
@@ -3506,8 +3560,14 @@ function MainAppContent({
     (userId: string, volume: number) => voice.setScreenVolume(userId, volume),
   );
   const stableOnCreateChannel = useStableCallback(
-    (type: ChannelType, isPrivate: boolean, parentId?: string | null) =>
-      setChannelPrompt({ mode: "create", type, isPrivate, parentId: parentId ?? null }),
+    (type: ChannelType, isPrivate: boolean, parentId?: string | null) => {
+      // A Jam is an app you add, not a channel you name: one click, called "jam".
+      if (type === "jam") {
+        void handleCreateJam(parentId ?? null);
+        return;
+      }
+      setChannelPrompt({ mode: "create", type, isPrivate, parentId: parentId ?? null });
+    },
   );
   const stableOnApplyLayout = useStableCallback(
     (layout: SidebarLayout<Channel>, baseVersion: number) =>
@@ -4491,6 +4551,11 @@ function MainAppContent({
     forumId: string;
     postId: string;
   } | null>(null);
+  /** The song in the address bar while a Jam is open (`/song/<songId>`). */
+  const [jamRouteSong, setJamRouteSong] = useState<{
+    jamId: string;
+    songId: string;
+  } | null>(null);
   /** Files dropped on a forum, waiting for the pane to open Novo post with them. */
   const [forumDroppedFiles, setForumDroppedFiles] = useState<File[] | null>(null);
   /**
@@ -4547,6 +4612,7 @@ function MainAppContent({
       // also closes whatever post or drop the last forum had.
       visitReadCursorRef.current = { channelId, cursor: readCursor, taken: false };
       setForumRoutePost(null);
+      setJamRouteSong(null);
       setForumDroppedFiles(null);
 
       try {
@@ -5439,6 +5505,9 @@ function MainAppContent({
         scheduleUnreadRefresh(false);
 
         transport.onMessage((message) => {
+          // The answer to a song sent into a channel from the Jam (it falls through:
+          // the broadcast is also an ordinary message for everybody who reads it).
+          settleShareFrame(message as { type: string; nonce?: string; reason?: string });
           if (message.type === "watch-party-waitlist-approved") {
             setWaitlistApprovals((current) =>
               current.some((card) => card.serverId === message.serverId)
@@ -6010,6 +6079,29 @@ function MainAppContent({
             return;
           }
 
+          // --- public jams --- a nudge to one account ("somebody is waiting for
+          // your answer", "an outside take arrived"): not a chat frame, so it is
+          // told apart by its type and handed to the public jam store.
+          if (isJamPublicNotice(message)) {
+            dispatchJamPublicNotice(message);
+            return;
+          }
+
+          // --- jam --- songs and tracks of the open jam: straight to the jam
+          // store, which applies each frame by id.
+          if (
+            message.type === "jam-song-created" ||
+            message.type === "jam-song-updated" ||
+            message.type === "jam-song-deleted" ||
+            message.type === "jam-track-added" ||
+            message.type === "jam-track-updated" ||
+            message.type === "jam-track-deleted" ||
+            message.type === "jam-track-votes"
+          ) {
+            dispatchJamFrame(message);
+            return;
+          }
+
           // --- threads --- the chip refresh: reply count and freshness for
           // an origin message in whatever channel the main view is showing.
           if (message.type === "thread-update") {
@@ -6191,6 +6283,13 @@ function MainAppContent({
             return;
           }
 
+          // Baú+: one of this account's own memberships moved (paid, expired,
+          // refunded...). Per person, never a channel frame.
+          if (message.type === "bau-plus-update") {
+            emitBauPlusUpdate(message);
+            return;
+          }
+
           // Apps in channels (behind the per-server `apps` flag): a channel's
           // live summary, and a session's snapshot, state, events, end and
           // refusals. They are chat frames, not voice ones, so they stop here
@@ -6326,6 +6425,9 @@ function MainAppContent({
           // --- forums --- the forum list refetches its first page: frames
           // sent while the socket was down are not replayed.
           dispatchForumReconnected();
+          // --- jam --- the same: re-read the open wall and the sidebar counts.
+          dispatchJamReconnected();
+          jamPublicReconnected();
           // Stories frames sent while the socket was down are gone; the
           // strips on screen re-read, after the same jitter.
           setTimeout(
@@ -6440,6 +6542,11 @@ function MainAppContent({
       if (connectionProviderFromPath(window.location.pathname)) {
         return;
       }
+      // A public jam is open over the app (`/app/jam/<id>`): it owns the address
+      // until it is closed, and closing puts the selection's back.
+      if (parsePublicJamPath(window.location.pathname)) {
+        return;
+      }
       const path = selectionRoutePath(target, channelId);
       if (routeRef.current === path) {
         return;
@@ -6453,7 +6560,7 @@ function MainAppContent({
   /** `syncRoute` for an address that is not a plain channel (a forum post). */
   const syncPath = useCallback(
     (path: string) => {
-      if (routeRef.current === path) {
+      if (routeRef.current === path || parsePublicJamPath(window.location.pathname)) {
         return;
       }
       routeRef.current = path;
@@ -6461,6 +6568,14 @@ function MainAppContent({
     },
     [navigate],
   );
+
+  /** A public jam was left with nothing of ours to go back to: the selection's own address comes back. */
+  const closePublicJam = useCallback(() => {
+    routeRef.current = "";
+    const path = selectionRoutePath(selection, selectedChannelId);
+    routeRef.current = path;
+    navigate(path, { replace: true });
+  }, [navigate, selection, selectedChannelId]);
 
   /**
    * --- forums --- the forum pane opened or closed a post: its own address
@@ -6480,6 +6595,43 @@ function MainAppContent({
       }
     },
     [syncPath],
+  );
+
+  /**
+   * --- jam --- the Jam's wall opened or closed a song: its own address goes in
+   * the bar (`/channel/<jamId>/song/<songId>`), so a refresh or a copied link
+   * lands on the same song, and closing it puts the Jam's back.
+   */
+  const setJamSongRoute = useCallback(
+    (jamId: string, songId: string | null, mode: JamRouteMode = "replace") => {
+      setJamRouteSong(songId ? { jamId, songId } : null);
+      const serverId = selectedServerIdRef.current;
+      if (serverId && selectedChannelIdRef.current === jamId) {
+        const path = songId
+          ? jamSongRoutePath(serverId, jamId, songId)
+          : channelRoutePath(serverId, jamId);
+        if (mode === "pop") {
+          // The pane takes its own entry off with `navigate(-1)`: the address
+          // it lands on is this one, which the deep-link effect must not read
+          // as a link to follow.
+          routeRef.current = path;
+          return;
+        }
+        if (mode === "push" || mode === "swap") {
+          if (window.location.pathname === path) {
+            return;
+          }
+          routeRef.current = path;
+          navigate(path, {
+            replace: mode === "swap",
+            state: jamHistoryState("song"),
+          });
+          return;
+        }
+        syncPath(path);
+      }
+    },
+    [syncPath, navigate],
   );
 
   /**
@@ -7040,6 +7192,58 @@ function MainAppContent({
    * overlay, where nobody reads it. Only what fails after the dialog closed
    * still goes to the banner.
    */
+  async function handleCreateJam(parentId: string | null) {
+    if (!selectedServerId || jamCreating.current) {
+      return;
+    }
+    // One create at a time, and no second one until the first is settled: a retry
+    // that races an answer still on its way is how a second channel gets made.
+    jamCreating.current = true;
+    const serverId = selectedServerId;
+    try {
+      const unsure = jamCreateUnsure.current?.serverId === serverId ? jamCreateUnsure.current.known : null;
+      const result = await createJamOnce<Channel>({
+        known: new Set(channels.map((one) => one.id)),
+        unsure,
+        create: async () => (await createChannel(serverId, "jam", "jam", false, undefined, parentId)).channel,
+        list: async () => (await fetchChannels(serverId)).channels,
+      });
+      jamCreateUnsure.current = result.unsure ? { serverId, known: new Set(result.unsure) } : null;
+      if (result.listed) {
+        refreshChannelListRef.current(serverId);
+      }
+      const made = result.channel;
+      if (!made) {
+        const failure = result.failure;
+        if (failure === "unreadable") {
+          setAppError(translateMessage("jam.error.network"));
+        } else {
+          const error = failure?.error;
+          setAppError(
+            error instanceof ApiError && error.message === "jam_channels_off"
+              ? translateMessage("jam.error.off")
+              : error instanceof Error
+                ? error.message
+                : "Channel action failed",
+          );
+        }
+        return;
+      }
+      channelListTickets.created(made);
+      setChannels((before) =>
+        before.some((one) => one.id === made.id)
+          ? before
+          : [...before, made].sort((a, b) => a.position - b.position),
+      );
+      setAppError(null);
+      await selectChannel(made.id);
+    } catch (error) {
+      setAppError(error instanceof Error ? error.message : "Channel action failed");
+    } finally {
+      jamCreating.current = false;
+    }
+  }
+
   async function handleChannelPromptConfirm(
     name: string,
     isPrivate?: boolean,
@@ -8519,6 +8723,16 @@ function MainAppContent({
   // `forum_channels` for this server: the "+" menu's Fórum, and whether an
   // open forum takes new posts. Asked here, once, for every surface.
   const forumConfig = useForumConfig(selectedServerId);
+  // `jam_channels` for this server: whether the add menus offer a Jam, and
+  // (with the song counts) what the Jam row in the sidebar says.
+  const jamConfig = useJamConfig(selectedServerId);
+  // What the Jam store holds belongs to this account: another one empties it.
+  // Done while rendering, before any screen below reads the store (an effect
+  // would run after the first paint of the new account over the old one's data,
+  // and after a child's first load had begun); it is idempotent per account.
+  setJamViewer(user?.id ?? null);
+  const jamSidebar = useJamSidebar(channels);
+  const jamHintContext = useJamHintContext();
   // Opening a forum by any route (the list, a link, the card) is the "O fórum
   // abriu" card done for that server: nobody needs to be told about a forum
   // they are reading. Only while the card is live: with the flag off nothing
@@ -8567,6 +8781,16 @@ function MainAppContent({
           } as unknown as Parameters<typeof transport.sendChat>[0]);
           return true;
         },
+      }),
+    [transport],
+  );
+  // A song's link sent into a channel from the Jam (`lib/jam-share-send.ts`): the same
+  // `message-create` frame the composer sends, answered to this socket by nonce.
+  useEffect(
+    () =>
+      registerShareSender({
+        isOnline: () => transport.getStatus() === "online",
+        send: (frame) => transport.sendChat(frame),
       }),
     [transport],
   );
@@ -8927,6 +9151,7 @@ function MainAppContent({
       messageId: string | null = null,
       linkedAt: number = Date.now(),
       postId: string | null = null,
+      songId: string | null = null,
     ) => {
       const known = serversRef.current.map((server) => server.id);
       const openable = pickOpenableServer(serverId, known);
@@ -8935,6 +9160,7 @@ function MainAppContent({
       const targetChannelId = usedFallback ? null : channelId;
       const targetMessageId = usedFallback ? null : messageId;
       const targetPostId = usedFallback ? null : postId;
+      const targetSongId = usedFallback ? null : songId;
       const routeApply = ++routeApplySeqRef.current;
       // Taken before the first wait (the channel list), so a click made while
       // any of this is out wins over the link.
@@ -9012,6 +9238,14 @@ function MainAppContent({
           if (targetPostId && requested.type === "forum" && stillOn(requested.id)) {
             setForumPostRoute(requested.id, targetPostId);
           }
+          // `/channel/<jamId>/song/<songId>`: the Jam, with the song on its
+          // wall. The pane reads the song itself and says so when it is gone.
+          if (targetSongId && requested.type === "jam" && stillOn(requested.id)) {
+            setJamSongRoute(requested.id, targetSongId);
+          } else if (requested.type === "jam" && stillOn(requested.id)) {
+            // Back (or a link) to the Jam's own address: no song open any more.
+            setJamRouteSong(null);
+          }
         } else {
           const targetServer = serversRef.current.find(
             (row) => row.id === targetServerId,
@@ -9055,6 +9289,7 @@ function MainAppContent({
       selectChannel,
       sentSince,
       setForumPostRoute,
+      setJamSongRoute,
     ],
   );
 
@@ -9081,6 +9316,17 @@ function MainAppContent({
       }
     },
     [applyChannelRoute],
+  );
+
+  // Baú+ "Renovar" from Configurações, Assinaturas: open that creator's Baú;
+  // the feed there takes the request and opens the pay sheet.
+  useEffect(
+    () =>
+      onBauPayRequest((serverId) => {
+        setSettingsOpen(false);
+        void applyHomeRoute(serverId, null);
+      }),
+    [applyHomeRoute],
   );
 
   /**
@@ -9169,6 +9415,30 @@ function MainAppContent({
       setCommunityHomeComposeNonce(0);
     }
   }, [communityHomeOpen]);
+  // `community_home_vip` is a per-server flag, so the boot probe (which names
+  // no server) cannot answer it for a pilot server: ask with the server when
+  // its feed opens, so an operator's flip is seen on the next open.
+  const [communityHomeVipByServer, setCommunityHomeVipByServer] = useState<
+    Record<string, boolean>
+  >({});
+  useEffect(() => {
+    if (!communityHomeOpen || !selectedServerId) {
+      return;
+    }
+    let cancelled = false;
+    void loadCommunityHomeVipEnabled(selectedServerId).then((on) => {
+      if (!cancelled) {
+        setCommunityHomeVipByServer((prev) =>
+          prev[selectedServerId] === on
+            ? prev
+            : { ...prev, [selectedServerId]: on },
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [communityHomeOpen, selectedServerId]);
   useEffect(() => {
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeRowNew(false);
@@ -9595,6 +9865,7 @@ function MainAppContent({
       target.messageId,
       linkedAt,
       target.postId,
+      target.songId,
     );
     // applyChannelRoute reads current state; re-running only on path/readiness
     // changes is intentional — selection changes write the URL via syncRoute.
@@ -9753,6 +10024,23 @@ function MainAppContent({
 
     const storage = browserStorage();
     const params = new URLSearchParams(location.search);
+    /**
+     * A public jam somebody came from (jam.pqp.gg, `lib/jam-intent.ts`): the
+     * account now exists, so this is the moment the intention is acted on. The
+     * public jam view (`components/jam/jam-public-host.tsx`) opens the song,
+     * and the studio, a like or a report when that is what they came for, or
+     * the start sheet for a new jam. Nothing here is spent for it: the other
+     * intents of this arrival still run.
+     *
+     * Both carriers are consumed together, so a later visit to the app does not
+     * open it again, and the query string is wiped with the other intents'
+     * below (a reload would otherwise like it twice).
+     */
+    const jamIntent = jamIntentFromSearch(location.search) ?? takeJamIntent(storage);
+    takeJamIntent(storage);
+    if (jamIntent) {
+      openPublicJam(jamIntent);
+    }
     // Both stashes are consumed unconditionally, even when the URL also carries
     // the value: leaving one behind is how an intent fires on a later visit.
     const stashedClaim = takeHandleClaim(storage);
@@ -9810,8 +10098,14 @@ function MainAppContent({
       params.has("add") ||
       params.has("join") ||
       waitlistIntentFromSearch(location.search) ||
-      CREATE_INTENT_PARAMS.some((name) => params.has(name))
+      CREATE_INTENT_PARAMS.some((name) => params.has(name)) ||
+      (jamIntent !== null && JAM_INTENT_PARAMS.some((name) => params.has(name)))
     ) {
+      if (jamIntent) {
+        for (const name of JAM_INTENT_PARAMS) {
+          params.delete(name);
+        }
+      }
       params.delete("claim");
       params.delete("add");
       params.delete("join");
@@ -11436,6 +11730,8 @@ function MainAppContent({
       Boolean(selectedServerId),
     // The pane gates it further (posts on screen, may post, not paused).
     forum: wantsForumHint && selectedChannel?.type === "forum",
+    // The wall and the studio say when they are on screen (`lib/jam-hint-context.ts`).
+    jamWall: wantsJamWallHint && jamHintContext.wall && !jamHintContext.studio,
   });
   const voiceChannel =
     voiceState.voiceChannelId
@@ -11610,7 +11906,10 @@ function MainAppContent({
   // update prompt already gets. The card records no impression while it
   // yields (`docs/ONBOARDING.md` §Adding a card, rule 3): `enabled` goes
   // false below, which every corner card already treats as "never rendered".
-  const effectiveCornerHint = dmToastActive ? null : cornerHint;
+  // Nothing in the corner while the Jam studio is open: a standing card there can
+  // sit over the end of "Mandar pra banda" (and the studio says its own first-run
+  // words inline).
+  const effectiveCornerHint = dmToastActive || jamHintContext.studio ? null : cornerHint;
   const liveAttachedHint =
     !hintsQuiet &&
     (effectiveCornerHint === null || effectiveCornerHint === "shortcuts")
@@ -11743,7 +12042,14 @@ function MainAppContent({
           isMuted={voiceState.isMuted}
           inputMode={voiceState.inputMode}
           isTransmitting={voiceState.isTransmitting}
-          listenOnly={!voiceState.canSpeak}
+          listenOnly={
+            !voiceState.canSpeak || Boolean(voiceState.micUnavailableReason)
+          }
+          listenOnlyReason={
+            voiceState.canSpeak
+              ? (voiceState.micUnavailableReason ?? undefined)
+              : undefined
+          }
           audienceLocked={voiceState.speakReason === "audience"}
           peerQualities={voiceState.remotePeers.flatMap((peer) =>
             peer.quality ? [peer.quality] : [],
@@ -13892,6 +14198,8 @@ function MainAppContent({
           onSetScreenVolume={stableOnSetScreenVolume}
           onCreateChannel={stableOnCreateChannel}
           forumCreateEnabled={forumConfig.enabled}
+          jamCreateEnabled={jamConfig.enabled}
+          jamSidebar={jamSidebar}
           onRenameChannel={stableOnRenameChannel}
           onOpenChannelSettings={stableOnOpenChannelSettings}
           onDeleteChannel={stableOnDeleteChannel}
@@ -14166,7 +14474,10 @@ function MainAppContent({
             canManageServer={canManageServer}
             isOwner={selectedServer.role === "owner"}
             isVip={meVip}
-            vipEnabled={communityHomeConfig.vipEnabled}
+            vipEnabled={
+              communityHomeVipByServer[selectedServer.id] ??
+              communityHomeConfig.vipEnabled
+            }
             mediaEnabled={communityHomeConfig.mediaEnabled}
             introDismissed={Boolean(
               user.preferences?.communityHomeIntroDismissedAt,
@@ -14221,6 +14532,45 @@ function MainAppContent({
             The whole pane takes a dropped file as the start of a new post
             (`chatDropVerdict` says when). Everything inside belongs to the
             forum pane; see `components/forum/forum-pane.tsx` for the seam. */}
+        {/* A jam holds songs, not messages, so it never mounts the chat either.
+            The whole pane is `components/jam/jam-pane.tsx`: the wall, the open
+            song and the studio. */}
+        {selectedChannel?.type === "jam" && selectedServerId && (
+          <JamPane
+            key={selectedChannel.id}
+            channel={selectedChannel}
+            server={{ id: selectedServerId, name: selectedServer?.name ?? "" }}
+            viewerId={user?.id ?? null}
+            canPost={canSendHere}
+            routeSongId={
+              jamRouteSong?.jamId === selectedChannel.id ? jamRouteSong.songId : null
+            }
+            onRouteSongChange={(songId, mode) => setJamSongRoute(selectedChannel.id, songId, mode)}
+            onOpenNav={() => setMobileNavOpen(true)}
+            headerActions={
+              canManageChannels || canManageRoles ? (
+                <Tooltip label={t("chrome.channelSettings")}>
+                  <button
+                    type="button"
+                    className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper"
+                    data-channel-header-settings=""
+                    aria-label={t("chrome.channelSettings")}
+                    onClick={() =>
+                      setChannelSettings({
+                        channelId: selectedChannel.id,
+                        section: canManageChannels ? "overview" : "permissions",
+                        forceAdvanced: false,
+                      })
+                    }
+                  >
+                    <Settings className="h-4 w-4" />
+                  </button>
+                </Tooltip>
+              ) : undefined
+            }
+          />
+        )}
+
         {selectedChannel?.type === "forum" && selectedServerId && (
           <FileDropZone
             className="flex min-h-0 min-w-0 flex-1 flex-col"
@@ -14787,6 +15137,11 @@ function MainAppContent({
         }
       />
       <NotInServerToast />
+      <JamPublicHost
+        viewerId={user?.id ?? null}
+        ready={bootstrapReady}
+        onClosed={closePublicJam}
+      />
       <ForwardedToast
         summary={forwardedToast}
         onView={viewForwarded}
@@ -14854,7 +15209,13 @@ function MainAppContent({
         // unpin — the same split `requirePinAccess` enforces server-side.
         canUnpin={selectedServerId ? canManageMessages : true}
         onClose={() => setPinsOpen(false)}
-        onJumpToMessage={(messageId) => void jumpToMessage(messageId)}
+        // Through the message list's own jump (the one a permalink takes), not
+        // `chat.jumpTo` alone: that only swapped the loaded page and left the
+        // list where it was, scrolled to nothing in particular (and, with the
+        // transcript windowed, to a window planned for the tail: a blank pane).
+        // The list loads the page around the pin if it has to, mounts it,
+        // centres it and flashes it.
+        onJumpToMessage={(messageId) => setHighlightMessageId(messageId)}
       />
 
       <BulkPurgeDialog
@@ -15253,6 +15614,12 @@ function MainAppContent({
             void loadChannels(serverId);
           }}
           onSelectChannel={stableOnSelectChannel}
+          onOpenJamSong={(song) => {
+            setWhatsNewOpen(false);
+            navigate(jamSongRoutePath(song.serverId, song.channelId, song.id), {
+              state: messageLinkState(),
+            });
+          }}
           onSearchMessages={(query) =>
             window.dispatchEvent(
               new CustomEvent(SEARCH_MESSAGES_EVENT, { detail: { query } }),

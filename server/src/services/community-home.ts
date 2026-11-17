@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  BASELINE_REJECTION_MESSAGE,
   bauPublicPostPath,
   COMMUNITY_HOME_COMMENTS_LIMIT,
   COMMUNITY_HOME_COVER_CONTENT_TYPES,
@@ -9,6 +10,7 @@ import {
   COMMUNITY_HOME_MAX_BYTES,
   COMMUNITY_HOME_MIME_ALLOWLIST,
   communityHomeMediaKindFromContentType,
+  communityHomeReadMinutes,
   hasPermission,
   isCommunityHomeEmbedKind,
   normalizeCommunityHomeLang,
@@ -32,6 +34,7 @@ import {
 import type { PoolClient } from "pg";
 import { isEnabled } from "../lib/flags.js";
 import { getPool } from "../db.js";
+import { checkBaselineText } from "./automod.js";
 import {
   copyObject,
   deleteObject,
@@ -60,7 +63,7 @@ import {
   scheduleCommunityHomeCaptions,
 } from "./community-home-captions.js";
 import { isCommunitiesEnabled } from "./communities.js";
-import { toPublicUserSummary } from "./users.js";
+import { getMemberRole, toPublicUserSummary } from "./users.js";
 import { checkCommunityHomeUpload } from "./community-home-scan.js";
 import { isContentScanConfigured, type ScanStatus } from "./content-scan.js";
 
@@ -111,10 +114,18 @@ export function isCommunityHomeEnabled(): boolean {
  * into existence, existing ones are hidden from the member feed (staff still
  * see them in drafts), and the client shows no lock, no tier chip and no
  * "preview as" inspector. Requires the main flag; on its own it does nothing.
+ *
+ * Runtime flag `community_home_vip`, PER SERVER (the creator-hub pilot turns
+ * it on for one server at a time); `COMMUNITY_HOME_VIP_ENABLED` is its default
+ * and a global row beats it, so with no per-server override the answer is
+ * what it always was. Every reader says which server it is answering for;
+ * `null` (no server named, e.g. the config probe before a server is chosen)
+ * is the global answer.
  */
-export function isCommunityHomeVipEnabled(): boolean {
-  // Runtime flag `community_home_vip`; `COMMUNITY_HOME_VIP_ENABLED` is its default.
-  return isCommunityHomeEnabled() && isEnabled("community_home_vip");
+export function isCommunityHomeVipEnabled(serverId: string | null): boolean {
+  return (
+    isCommunityHomeEnabled() && isEnabled("community_home_vip", { serverId })
+  );
 }
 
 /**
@@ -647,6 +658,15 @@ function toPost(
         ? youtubePosterUrl(row.media_youtube_url)
         : null,
     locked,
+    // What the lock may say about what it hides: the kind of media and how
+    // long the text runs, from the ORIGINAL body (a translation is the same
+    // length to within a word). Only for a locked viewer; never a word of it.
+    lockedHint: locked
+      ? {
+          mediaKind: row.media_kind ?? null,
+          readMinutes: communityHomeReadMinutes(row.body),
+        }
+      : null,
     likeCount: Number(row.like_count),
     likedByMe: row.liked_by_me,
     commentCount: Number(row.comment_count),
@@ -759,7 +779,7 @@ export async function listCommunityHomePosts(
   // With VIP off, members-only rows stay out of the feed for everybody,
   // staff included. They are still reachable through the drafts list so an
   // owner can flip them to free rather than lose them.
-  const visibilityFilter = isCommunityHomeVipEnabled()
+  const visibilityFilter = isCommunityHomeVipEnabled(serverId)
     ? ""
     : " AND p.visibility = 'free'";
   const result = await getPool().query<PostRow>(
@@ -854,7 +874,7 @@ export async function countUnreadCommunityHomePosts(
   // Same catch-up as the feed read: a due scheduled post counts toward unread
   // the moment its time passes, so the badge and the feed never disagree.
   await flushDueScheduledPosts(serverId);
-  const visibilityFilter = isCommunityHomeVipEnabled()
+  const visibilityFilter = isCommunityHomeVipEnabled(serverId)
     ? ""
     : " AND p.visibility = 'free'";
   const result = await getPool().query<{ n: string; newest: Date | null }>(
@@ -894,35 +914,45 @@ export async function countUnreadCommunityHomePostsAllServers(
   servers: Record<string, number>;
   newest: Record<string, string>;
 }> {
-  const visibilityFilter = isCommunityHomeVipEnabled()
-    ? ""
-    : " AND p.visibility = 'free'";
+  // The VIP switch is per server, so the SQL cannot filter on it: count free
+  // and members-only separately and drop the members-only half in code for
+  // every server where VIP is off (what the single-server count does in SQL).
   const result = await getPool().query<{
     server_id: string;
+    visibility: CommunityHomeVisibility;
     n: string;
     newest: Date | null;
   }>(
-    `SELECT p.server_id, COUNT(*)::text AS n, MAX(p.published_at) AS newest
+    `SELECT p.server_id, p.visibility, COUNT(*)::text AS n,
+            MAX(p.published_at) AS newest
        FROM server_members sm
        JOIN servers s ON s.id = sm.server_id AND s.community_home_enabled
        JOIN community_home_posts p
          ON p.server_id = sm.server_id
         AND p.status = 'published'
         AND p.author_id <> $1
-        ${visibilityFilter}
        LEFT JOIN community_home_reads r
          ON r.server_id = sm.server_id AND r.user_id = $1
       WHERE sm.user_id = $1
         AND (r.last_seen_at IS NULL OR p.published_at > r.last_seen_at)
-      GROUP BY p.server_id`,
+      GROUP BY p.server_id, p.visibility`,
     [viewerId],
   );
   const servers: Record<string, number> = {};
   const newest: Record<string, string> = {};
   for (const row of result.rows) {
-    servers[row.server_id] = Number(row.n);
+    if (
+      row.visibility === "members" &&
+      !isCommunityHomeVipEnabled(row.server_id)
+    ) {
+      continue;
+    }
+    servers[row.server_id] = (servers[row.server_id] ?? 0) + Number(row.n);
     if (row.newest) {
-      newest[row.server_id] = new Date(row.newest).toISOString();
+      const at = new Date(row.newest).toISOString();
+      if (!newest[row.server_id] || at > newest[row.server_id]!) {
+        newest[row.server_id] = at;
+      }
     }
   }
   return { servers, newest };
@@ -974,7 +1004,7 @@ export async function listLatestCommunityHomePosts(
   const caps = await resolveHomeViewerCaps(serverId, viewerId);
   // Same catch-up as the feed and the unread read.
   await flushDueScheduledPosts(serverId);
-  const visibilityFilter = isCommunityHomeVipEnabled()
+  const visibilityFilter = isCommunityHomeVipEnabled(serverId)
     ? ""
     : " AND p.visibility = 'free'";
   type LatestRow = PostRow & {
@@ -1466,11 +1496,14 @@ function assertPublishable(input: {
   }
 }
 
-function assertVisibilityAllowed(visibility: CommunityHomeVisibility): void {
-  if (visibility === "members" && !isCommunityHomeVipEnabled()) {
+function assertVisibilityAllowed(
+  serverId: string,
+  visibility: CommunityHomeVisibility,
+): void {
+  if (visibility === "members" && !isCommunityHomeVipEnabled(serverId)) {
     throw new CommunityHomeError(
       "invalid",
-      "VIP posts are off on this instance",
+      "VIP posts are off on this server",
     );
   }
 }
@@ -1492,6 +1525,25 @@ export type CreateHomePostInput = {
   scheduleTimezone: string | null;
 };
 
+/**
+ * pqp's built-in text filter over the words of a Baú post or comment. The
+ * owner's switch for the server is honoured; staff are not exempt, because
+ * the baseline is the instance's rule and not the owner's list. Refused with
+ * `invalid`, which the routes answer as a 400 carrying this sentence.
+ */
+async function assertBaselineClean(
+  serverId: string,
+  ...texts: Array<string | null | undefined>
+): Promise<void> {
+  const text = texts.filter((part): part is string => Boolean(part)).join("\n");
+  if (!text) {
+    return;
+  }
+  if (await checkBaselineText(serverId, text)) {
+    throw new CommunityHomeError("invalid", BASELINE_REJECTION_MESSAGE);
+  }
+}
+
 export async function createCommunityHomePost(
   serverId: string,
   authorId: string,
@@ -1509,7 +1561,8 @@ export async function createCommunityHomePost(
   if (input.mediaUploadId && input.youtubeUrl) {
     throw new CommunityHomeError("invalid", "Pick one media source");
   }
-  assertVisibilityAllowed(input.visibility);
+  assertVisibilityAllowed(serverId, input.visibility);
+  await assertBaselineClean(serverId, input.title, input.body, input.teaser);
 
   const status = input.status;
   if (status === "scheduled") {
@@ -1689,6 +1742,7 @@ export async function updateCommunityHomePost(
   if (!canManage) {
     throw new CommunityHomeError("forbidden", "Staff only");
   }
+  await assertBaselineClean(serverId, input.title, input.body, input.teaser);
 
   const pool = getPool();
   const client = await pool.connect();
@@ -1812,7 +1866,7 @@ export async function updateCommunityHomePost(
 
     const visibility = input.visibility ?? row.visibility;
     if (input.visibility !== undefined) {
-      assertVisibilityAllowed(visibility);
+      assertVisibilityAllowed(serverId, visibility);
     }
     const title = input.title !== undefined ? input.title : row.title;
     const body = input.body !== undefined ? (input.body ?? "") : row.body;
@@ -2150,6 +2204,7 @@ export async function addCommunityHomeComment(
   if (!post.commentsEnabled) {
     throw new CommunityHomeError("forbidden", "Comments are off on this post");
   }
+  await assertBaselineClean(serverId, body);
   const result = await getPool().query<CommentRow>(
     `WITH inserted AS (
        INSERT INTO community_home_comments (post_id, author_id, body)
@@ -2224,6 +2279,325 @@ export async function toggleCommunityHomeLike(
   );
   const liked = !existing.rows[0];
   return { liked, likeCount: Number(count.rows[0]?.n ?? 0) };
+}
+
+// ----------------------------------------------------------------- reports
+
+/** What a report needs to know about the Baú thing it is about. */
+export interface BauReportTarget {
+  serverId: string;
+  postId: string;
+  /** Set for a comment report, null for a post report. */
+  commentId: string | null;
+  /** The person who wrote the reported post or comment. */
+  authorId: string;
+  /** The words as they stand now, to be copied into the report. */
+  snapshot: string;
+}
+
+/**
+ * The Baú post or comment a reporter may report, or null.
+ *
+ * "You cannot report what you cannot see" (rule 1 of services/reports.ts),
+ * answered with the SAME reads the feed uses and never a copy of their rules:
+ * the instance flag and the server's membership (what every `/home/*` route
+ * runs first), then `getCommunityHomePost`, whose `locked` is the VIP gate, so
+ * a members-only post is reportable by exactly the people the lock lets in
+ * (staff and the VIP cargo) and by nobody else. A comment is looked for in
+ * `listCommunityHomeComments`, which already hides a locked post's comments,
+ * comments switched off, and the ones by somebody the reporter blocked.
+ *
+ * Then, on top: a draft or scheduled post is not published and cannot be
+ * reported; a members-only post with the VIP half switched off is out of the
+ * feed for everybody, so it is out of reach here too; and your own words are
+ * not reportable. Every one of those, like "no such id", is the same null, so
+ * the route's 404 stays an answer that confirms nothing.
+ */
+export async function resolveBauReportTarget(input: {
+  reporterId: string;
+  postId?: string;
+  commentId?: string;
+}): Promise<BauReportTarget | null> {
+  if (!isCommunityHomeEnabled()) {
+    return null;
+  }
+  const pool = getPool();
+  let postId = input.postId ?? null;
+  const commentId = input.commentId ?? null;
+  if (commentId) {
+    const found = await pool.query<{ post_id: string }>(
+      `SELECT post_id FROM community_home_comments WHERE id = $1`,
+      [commentId],
+    );
+    postId = found.rows[0]?.post_id ?? null;
+  }
+  if (!postId) {
+    return null;
+  }
+  const home = await pool.query<{ server_id: string }>(
+    `SELECT server_id FROM community_home_posts WHERE id = $1`,
+    [postId],
+  );
+  const serverId = home.rows[0]?.server_id;
+  if (!serverId || !(await getMemberRole(serverId, input.reporterId))) {
+    return null;
+  }
+
+  let post: CommunityHomePost;
+  try {
+    post = await getCommunityHomePost(serverId, postId, input.reporterId);
+  } catch (error) {
+    if (error instanceof CommunityHomeError) {
+      return null;
+    }
+    throw error;
+  }
+  if (
+    post.status !== "published" ||
+    post.locked ||
+    (post.visibility === "members" && !isCommunityHomeVipEnabled(serverId))
+  ) {
+    return null;
+  }
+
+  if (commentId) {
+    const comments = await listCommunityHomeComments(
+      serverId,
+      postId,
+      input.reporterId,
+    );
+    const comment = comments.find((c) => c.id === commentId);
+    if (!comment || comment.author.id === input.reporterId) {
+      return null;
+    }
+    return {
+      serverId,
+      postId,
+      commentId,
+      authorId: comment.author.id,
+      snapshot: comment.body,
+    };
+  }
+  if (post.author.id === input.reporterId) {
+    return null;
+  }
+  return {
+    serverId,
+    postId,
+    commentId: null,
+    authorId: post.author.id,
+    snapshot: bauPostSnapshot(post),
+  };
+}
+
+/**
+ * The reported post's words, copied at report time: the title, the body, and
+ * one line naming the media (the bytes are not copied: an uploaded file is
+ * metadata, an embed is its link). Evidence that outlives the post.
+ */
+function bauPostSnapshot(post: CommunityHomePost): string {
+  const parts: string[] = [];
+  if (post.title?.trim()) {
+    parts.push(post.title.trim());
+  }
+  if (post.teaser?.trim()) {
+    // The teaser is what a locked reader sees, so it can be the reported text.
+    parts.push(post.teaser.trim());
+  }
+  if (post.body?.trim()) {
+    parts.push(post.body.trim());
+  }
+  const media = post.media;
+  if (media) {
+    const link = media.youtubeUrl ?? media.twitchUrl;
+    parts.push(
+      `[${media.kind}${media.name ? `: ${media.name}` : ""}${link ? ` ${link}` : ""}]`,
+    );
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * THE ONE READ IN THE PRODUCT THAT SKIPS THE VIP LOCK, for a moderator.
+ *
+ * A members-only post is exactly what somebody reports, and the person who has
+ * to judge it is an instance moderator who is not a VIP (or a server's
+ * moderation staff who lack MANAGE_SERVER). So the report's card opens the
+ * post as it stands. It is narrow on purpose: it takes the ids a REPORT names
+ * and nothing else (there is no route that passes it a post id from a
+ * client), the caller (`getReportContext`, behind the same gate as the rest of
+ * the card) writes the audit trail before handing the words out, it returns
+ * words and media metadata only (never a URL to a stored upload), and it does
+ * not touch the feed, the comment list or any viewer's lock.
+ *
+ * Null when the post is gone; the report's own snapshot is what is left.
+ */
+export async function readBauSubjectForModeration(input: {
+  postId: string | null;
+  commentId: string | null;
+}): Promise<{
+  serverId: string;
+  serverName: string;
+  post: {
+    id: string;
+    authorName: string;
+    title: string | null;
+    body: string;
+    teaser: string | null;
+    visibility: CommunityHomeVisibility;
+    status: CommunityHomePostStatus;
+    publishedAt: string | null;
+    media: {
+      kind: string;
+      name: string | null;
+      contentType: string | null;
+      byteSize: number | null;
+      link: string | null;
+    } | null;
+  } | null;
+  comment: ModerationBauComment | null;
+  commentsBefore: ModerationBauComment[];
+  commentsAfter: ModerationBauComment[];
+} | null> {
+  const pool = getPool();
+  let postId = input.postId;
+  let comment: ModerationBauComment | null = null;
+  if (input.commentId) {
+    const found = await pool.query<ModerationCommentRow>(
+      `SELECT c.id, c.post_id, c.author_id, c.body, c.created_at,
+              u.display_name AS author_name
+         FROM community_home_comments c
+         JOIN users u ON u.id = c.author_id
+        WHERE c.id = $1`,
+      [input.commentId],
+    );
+    const row = found.rows[0];
+    if (row) {
+      comment = toModerationComment(row);
+      postId = row.post_id;
+    }
+  }
+  if (!postId) {
+    return null;
+  }
+  const result = await pool.query<{
+    id: string;
+    server_id: string;
+    server_name: string;
+    author_name: string;
+    title: string | null;
+    body: string;
+    teaser: string | null;
+    visibility: CommunityHomeVisibility;
+    status: CommunityHomePostStatus;
+    published_at: Date | null;
+    media_kind: string | null;
+    media_name: string | null;
+    media_content_type: string | null;
+    media_byte_size: string | null;
+    media_youtube_url: string | null;
+  }>(
+    `SELECT p.id, p.server_id, s.name AS server_name,
+            u.display_name AS author_name, p.title, p.body, p.teaser,
+            p.visibility, p.status, p.published_at, p.media_kind, p.media_name,
+            p.media_content_type, p.media_byte_size, p.media_youtube_url
+       FROM community_home_posts p
+       JOIN servers s ON s.id = p.server_id
+       JOIN users u ON u.id = p.author_id
+      WHERE p.id = $1`,
+    [postId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  // Five comments either side of the reported one, compared INSIDE SQL: a JS
+  // Date carries milliseconds and a timestamptz microseconds, so a round trip
+  // through `Date` would let the anchor itself match.
+  let commentsBefore: ModerationBauComment[] = [];
+  let commentsAfter: ModerationBauComment[] = [];
+  if (comment) {
+    const select = `SELECT c.id, c.post_id, c.author_id, c.body, c.created_at,
+                           u.display_name AS author_name
+                      FROM community_home_comments c
+                      JOIN users u ON u.id = c.author_id`;
+    const [before, after] = await Promise.all([
+      pool.query<ModerationCommentRow>(
+        `${select}
+          WHERE c.post_id = $1
+            AND (c.created_at, c.id) < (SELECT created_at, id FROM community_home_comments WHERE id = $2)
+          ORDER BY c.created_at DESC, c.id DESC LIMIT 5`,
+        [postId, comment.id],
+      ),
+      pool.query<ModerationCommentRow>(
+        `${select}
+          WHERE c.post_id = $1
+            AND (c.created_at, c.id) > (SELECT created_at, id FROM community_home_comments WHERE id = $2)
+          ORDER BY c.created_at ASC, c.id ASC LIMIT 5`,
+        [postId, comment.id],
+      ),
+    ]);
+    commentsBefore = before.rows.reverse().map(toModerationComment);
+    commentsAfter = after.rows.map(toModerationComment);
+  }
+
+  const kind = row.media_kind;
+  const isLink =
+    kind != null && (kind === "twitch" || isCommunityHomeEmbedKind(kind));
+  return {
+    serverId: row.server_id,
+    serverName: row.server_name,
+    post: {
+      id: row.id,
+      authorName: row.author_name,
+      title: row.title,
+      body: row.body,
+      teaser: row.teaser,
+      visibility: row.visibility,
+      status: row.status,
+      publishedAt: row.published_at?.toISOString() ?? null,
+      media: kind
+        ? {
+            kind,
+            name: row.media_name,
+            contentType: row.media_content_type,
+            byteSize: row.media_byte_size ? Number(row.media_byte_size) : null,
+            link: isLink ? row.media_youtube_url : null,
+          }
+        : null,
+    },
+    comment,
+    commentsBefore,
+    commentsAfter,
+  };
+}
+
+interface ModerationCommentRow {
+  id: string;
+  post_id: string;
+  author_id: string;
+  author_name: string;
+  body: string;
+  created_at: Date;
+}
+
+interface ModerationBauComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+}
+
+function toModerationComment(row: ModerationCommentRow): ModerationBauComment {
+  return {
+    id: row.id,
+    authorId: row.author_id,
+    authorName: row.author_name,
+    body: row.body,
+    createdAt: row.created_at.toISOString(),
+  };
 }
 
 // ------------------------------------------------------------------ media

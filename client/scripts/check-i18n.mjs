@@ -82,6 +82,47 @@ for (const [key, translated] of Object.entries(es)) {
   }
 }
 
+// The public jam site's own catalogues (`locales/jam-site/`, read by
+// `lib/i18n/jam-site.ts`): the same parity and placeholder rules.
+{
+  const jamSite = Object.fromEntries(
+    ["en", "pt-BR", "es"].map((locale) => [
+      locale,
+      JSON.parse(readFileSync(join(clientSrc, `locales/jam-site/${locale}.json`), "utf8")),
+    ]),
+  );
+  for (const locale of ["pt-BR", "es"]) {
+    for (const key of Object.keys(jamSite.en)) {
+      if (!(key in jamSite[locale])) {
+        errors.push(`jam-site ${locale} is missing "${key}"`);
+      }
+    }
+    for (const [key, translated] of Object.entries(jamSite[locale])) {
+      if (!(key in jamSite.en)) {
+        errors.push(`jam-site ${locale} has stale key "${key}"`);
+        continue;
+      }
+      if (JSON.stringify(slots(translated)) !== JSON.stringify(slots(jamSite.en[key]))) {
+        errors.push(`jam-site ${locale} placeholder mismatch on "${key}"`);
+      }
+      if (/\{\{/.test(translated)) {
+        errors.push(`jam-site ${locale} double-brace leftover on "${key}"`);
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(jamSite.en)) {
+    if (/\{\{/.test(value)) {
+      errors.push(`jam-site en "${key}" still uses {{placeholders}}`);
+    }
+  }
+  // The pt-BR voice is `tu`.
+  for (const [key, value] of Object.entries(jamSite["pt-BR"])) {
+    if (/\bvocê\b|\bvocês\b/i.test(value)) {
+      errors.push(`jam-site pt-BR "${key}" says você: the voice is tu`);
+    }
+  }
+}
+
 for (const [key, value] of Object.entries(en)) {
   if (/\{\{/.test(value)) {
     errors.push(`en "${key}" still uses {{placeholders}}`);

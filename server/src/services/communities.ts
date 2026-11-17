@@ -6,6 +6,9 @@ import {
   mapCommunityFeatured,
   monthStamp,
   parseStoredCommunityLinks,
+  communityLinksWithoutSupport,
+  communitySupportOf,
+  mergeCommunityLinks,
   type CommunityCategory,
   type CommunityFeaturedEmbed,
   type CommunityJoinVia,
@@ -617,7 +620,13 @@ export function toPublicCommunity(row: PublicCommunityRow): PublicCommunity {
     name: row.name,
     tagline: row.community_tagline,
     about: row.community_about,
-    links: parseStoredCommunityLinks(row.community_links),
+    // The stranger's poster carries no support link. A Pix key is a person's
+    // CPF, phone or e-mail and the payment page is for the card a member sees
+    // on a locked post; neither belongs on a page anybody can read. Showing a
+    // support button on `/c/` is its own decision.
+    links: communityLinksWithoutSupport(
+      parseStoredCommunityLinks(row.community_links),
+    ),
     featured: mapCommunityFeatured({
       kind: row.community_featured_kind,
       embedUrl: row.community_featured_embed_url,
@@ -742,6 +751,12 @@ export interface CommunityUpdate {
   tagline?: string | null;
   about?: string | null;
   links?: CommunityLink[];
+  /**
+   * The one support link (a payment page or Pix text). Null clears it, absent
+   * leaves it, and so does a patch that only sends `links`: the two boxes are
+   * edited separately and neither may wipe the other.
+   */
+  support?: CommunityLink | null;
   /** Null clears youtube, twitch, and an uploaded image. */
   featured?: CommunityFeaturedEmbed | null;
   category?: CommunityCategory;
@@ -941,6 +956,21 @@ export async function updateCommunitySettings(
       );
     }
 
+    // Links and support share one column. Merged here, under the row lock, so
+    // a save that only touches one of them keeps the other as it was read.
+    let nextLinks: CommunityLink[] | undefined;
+    if (update.links !== undefined || update.support !== undefined) {
+      const previousLinks = parseStoredCommunityLinks(previousRow.community_links);
+      nextLinks = mergeCommunityLinks(
+        update.links !== undefined
+          ? communityLinksWithoutSupport(update.links)
+          : communityLinksWithoutSupport(previousLinks),
+        update.support !== undefined
+          ? update.support
+          : communitySupportOf(previousLinks),
+      );
+    }
+
     let nextSlug = previousRow.community_slug;
     if (update.slug !== undefined) {
       nextSlug = update.slug;
@@ -991,8 +1021,8 @@ export async function updateCommunitySettings(
         willBeListed,
         update.about !== undefined,
         update.about ?? null,
-        update.links !== undefined,
-        JSON.stringify(update.links ?? []),
+        nextLinks !== undefined,
+        JSON.stringify(nextLinks ?? []),
         update.featured !== undefined,
         update.featured?.kind ?? null,
         update.featured?.url ?? null,

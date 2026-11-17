@@ -85,6 +85,11 @@ const backend = vi.hoisted(() => ({
   configured: "mesh" as "mesh" | "livekit",
   /** What `getServerVoiceProfile` answers; null is the configured default. */
   profile: null as { isCommunity: boolean; memberCount: number } | null,
+  /**
+   * `channels.kind`. Every group holds a server voice channel except the
+   * share-sound case, which flips it to a DM for one test and back.
+   */
+  kind: "server" as "server" | "dm",
 }));
 
 vi.mock("../voice/backends.js", () => ({
@@ -120,15 +125,16 @@ vi.mock("../services/dms.js", () => ({
 
 vi.mock("../services/servers.js", () => ({
   getChannel: async () => ({
-    kind: "server",
-    type: "voice",
-    server_id: "11111111-1111-4111-8111-111111111111",
+    kind: backend.kind,
+    type: backend.kind === "server" ? "voice" : null,
+    server_id:
+      backend.kind === "server" ? "11111111-1111-4111-8111-111111111111" : null,
   }),
   // Everyone can see every channel: a roster that failed to cross would be
   // visible here rather than hidden by a scoping rule.
   getChannelAudience: async () => ({
     serverId: null,
-    kind: "server",
+    kind: backend.kind,
     has: () => true,
   }),
   getServerVoiceProfile: async () => backend.profile,
@@ -2241,6 +2247,108 @@ describeDb("voice across two instances", () => {
       // Nobody was evicted to do it.
       expect(frames(onB, "peer-left")).toHaveLength(0);
       expect(frames(onB, "voice-transport-unsupported")).toHaveLength(0);
+    });
+
+    it("a phone's share with sound in a DM split over A and B moves the call, the row and B's seat", async () => {
+      // Production's shape for `share_sound_promotion`: the registry on, the
+      // flag at its code default, and the two people in a DM call on two
+      // different machines, which a rolling deploy makes the ordinary case.
+      backend.configured = "livekit";
+      backend.profile = null;
+      backend.kind = "dm";
+      const original = process.env.SHARE_SOUND_PROMOTION;
+      delete process.env.SHARE_SOUND_PROMOTION;
+      try {
+        const channel = randomUUID();
+        const a = await bootInstance();
+        const b = await bootInstance();
+        await a.registry.heartbeatVoiceInstance();
+        await b.registry.heartbeatVoiceInstance();
+
+        const phone = await joinFollowing(a, channel);
+        const friend = await joinFollowing(b, channel);
+        expect(frames(phone, "welcome")[0]?.transport).toBe("mesh");
+        expect(await roomRow(channel)).toBe("mesh");
+        await settle();
+
+        onTheWire.length = 0;
+        await a.voice.handleVoiceMessage(
+          { socket: phone.socket, user: phone.user },
+          { type: "set-sharing-screen", sharing: true, audioNeedsSfu: true },
+        );
+
+        expect(await roomRow(channel)).toBe("livekit");
+        expect(frames(phone, "voice-transport-changed")).toHaveLength(1);
+        await waitFor(
+          () => frames(friend, "voice-transport-changed").length === 1,
+          "the promotion on B",
+        );
+        expect(frames(friend, "voice-transport-changed")[0]).toMatchObject({
+          voiceChannelId: channel,
+          transport: "livekit",
+          reason: "screens",
+        });
+        expect(b.voice.getRoomTransport(channel)).toBe("livekit");
+        expect(
+          onTheWire.filter((f) => f.topic === "voice.transport"),
+        ).toHaveLength(1);
+        expect(frames(friend, "peer-left")).toHaveLength(0);
+        expect(frames(friend, "voice-transport-unsupported")).toHaveLength(0);
+      } finally {
+        backend.kind = "server";
+        if (original === undefined) {
+          delete process.env.SHARE_SOUND_PROMOTION;
+        } else {
+          process.env.SHARE_SOUND_PROMOTION = original;
+        }
+      }
+    });
+
+    it("a phone's share does not move a DM while somebody on the other machine is sharing", async () => {
+      // The other share is only visible in the rows: the gate has to read
+      // them, or it would stop B's share to give A's one its sound.
+      backend.configured = "livekit";
+      backend.profile = null;
+      backend.kind = "dm";
+      try {
+        const channel = randomUUID();
+        const a = await bootInstance();
+        const b = await bootInstance();
+        await a.registry.heartbeatVoiceInstance();
+        await b.registry.heartbeatVoiceInstance();
+
+        const phone = await joinFollowing(a, channel);
+        const friend = await joinFollowing(b, channel);
+        await b.voice.handleVoiceMessage(
+          { socket: friend.socket, user: friend.user },
+          { type: "set-sharing-screen", sharing: true },
+        );
+        await settle();
+
+        const lines: string[] = [];
+        const spy = vi
+          .spyOn(console, "log")
+          .mockImplementation((...args: unknown[]) => {
+            lines.push(args.join(" "));
+          });
+        try {
+          await a.voice.handleVoiceMessage(
+            { socket: phone.socket, user: phone.user },
+            { type: "set-sharing-screen", sharing: true, audioNeedsSfu: true },
+          );
+        } finally {
+          spy.mockRestore();
+        }
+
+        expect(
+          lines.find((line) => line.includes("voice.transportPromotionRefused")),
+        ).toContain("refusal=other-share-live");
+        expect(await roomRow(channel)).toBe("mesh");
+        expect(frames(phone, "voice-transport-changed")).toHaveLength(0);
+        expect(frames(friend, "voice-transport-changed")).toHaveLength(0);
+      } finally {
+        backend.kind = "server";
+      }
     });
 
     /** Ask to join, and report what came back whether or not it was a seat. */

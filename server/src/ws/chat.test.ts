@@ -112,7 +112,9 @@ const slowModeClock = new Map<string, { at: number; seconds: number }>();
 
 vi.mock("../services/automod.js", () => ({
   checkAutomod: async () => null,
+  checkBaselineText: async () => null,
   recordAutomodHit: async () => {},
+  recordBaselineHit: () => {},
 }));
 
 // The locked-post read. "Not a post" unless a case says otherwise; the real

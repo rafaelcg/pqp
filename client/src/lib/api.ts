@@ -130,6 +130,7 @@ import type {
   RoleSystemKey,
   OutgoingWebhook,
   AutomodRule,
+  BaselineStatus,
   CreateAutomodRuleInput,
   UpdateAutomodRuleInput,
   PublicInvitePreview,
@@ -1115,6 +1116,11 @@ export interface ShareConfig {
    */
   linuxDesktopSystemAudio?: boolean;
   /**
+   * The macOS desktop app may carry the computer's sound, minus the call
+   * (`lib/mac-shell-share-audio.ts`). Absent on an older API: off.
+   */
+  macDesktopSystemAudio?: boolean;
+  /**
    * The Windows desktop app watches the presenter's share for a dead picture
    * and explains exclusive fullscreen (`lib/share-game-capture-hint.ts`).
    * Absent on an older API: off.
@@ -1166,6 +1172,13 @@ export interface VoiceConfig {
    */
   audioSelfHeal?: boolean;
   /**
+   * `voice_calm_detector`: the call's speaking ring is read on a 20 Hz timer
+   * (4 Hz while the window is hidden) instead of on every frame
+   * (`lib/speaking-clock.ts`). Global; absent is off, which is the per-frame
+   * loop this client always had.
+   */
+  calmDetector?: boolean;
+  /**
    * `soundboard`: this server's calls offer the soundboard and its settings
    * tab. Per server, default off. The play gate on the server reads it too.
    */
@@ -1177,12 +1190,25 @@ export interface VoiceConfig {
    */
   cleanVoiceDefault?: boolean;
   /**
+   * `voice_gate`: Voz limpa's adaptive gate after RNNoise
+   * (`lib/voice-gate/`). Global, on by default; absent (an older API) reads as
+   * ON, the code default, and only an explicit `false` is the kill switch.
+   */
+  voiceGate?: boolean;
+  /**
    * `raised_hand_sticky`: a raised hand stays up until the person, a
    * moderator or leaving takes it down; the call offers to lower your own
    * hand from its badge and a moderator gets "Baixar todas". Global, on by
    * default; absent (an older API) reads as off, which is the old behaviour.
    */
   raisedHandSticky?: boolean;
+  /**
+   * `message_list_windowing`: the transcript mounts only the rows near the
+   * viewport (`lib/message-list-windowing.ts`). Global, on by default; only an
+   * explicit `false` turns it off, so an older API that sends no field leaves
+   * it on.
+   */
+  messageListWindowing?: boolean;
 }
 
 export const fetchVoiceConfig = (serverId: string) =>
@@ -2320,6 +2346,12 @@ export const updateAutomodRule = (
     body,
   );
 
+export const fetchAutomodBaseline = (serverId: string) =>
+  apiFetch<BaselineStatus>(`/api/servers/${serverId}/automod/baseline`);
+
+export const setAutomodBaseline = (serverId: string, enabled: boolean) =>
+  put<BaselineStatus>(`/api/servers/${serverId}/automod/baseline`, { enabled });
+
 export const deleteAutomodRule = (serverId: string, ruleId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/automod/rules/${ruleId}`);
 
@@ -2709,9 +2741,17 @@ export const previewInvite = (code: string) =>
 // the same mint / PUT / claim dance as attachments — see `uploadHomeMedia` in
 // `lib/community-home/media.ts` for the sequence in one place.
 
-/** The instance flags. Off is a 200 with `enabled: false`, never a 404. */
-export const fetchCommunityHomeConfig = () =>
-  apiFetch<CommunityHomeConfig>("/api/community-home/config");
+/**
+ * The instance flags. Off is a 200 with `enabled: false`, never a 404.
+ * `vipEnabled` is a per-server flag: with `serverId` it is that server's
+ * answer, without it the global one (what the boot probe asks).
+ */
+export const fetchCommunityHomeConfig = (serverId?: string) =>
+  apiFetch<CommunityHomeConfig>(
+    serverId
+      ? `/api/community-home/config?serverId=${encodeURIComponent(serverId)}`
+      : "/api/community-home/config",
+  );
 
 /** This server's own opt-in (owner-set in Server settings). */
 export const fetchServerCommunityHomeConfig = (serverId: string) =>

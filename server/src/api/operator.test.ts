@@ -117,11 +117,12 @@ async function asUser<T = Record<string, unknown>>(
 }
 
 describe("matchAdminMachineRoute", () => {
-  it("is exactly the twenty-three routes, and account deletion is not one of them", () => {
+  it("is exactly the listed routes, and account deletion is not one of them", () => {
     const reachable = [
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
       ["GET", "/api/admin/user-activity"],
+      ["GET", "/api/admin/acquisition"],
       ["GET", "/api/admin/bots"],
       ["GET", "/api/admin/user-client"],
       ["GET", "/api/admin/feedback"],
@@ -144,6 +145,12 @@ describe("matchAdminMachineRoute", () => {
       ["PUT", "/api/admin/server-apps"],
       ["POST", "/api/admin/app-disable-everywhere"],
       ["POST", "/api/admin/app-session-end"],
+      ["GET", "/api/admin/jam-public/songs"],
+      ["GET", "/api/admin/jam-public/queue"],
+      ["PUT", "/api/admin/jam-public/unpublish"],
+      ["PUT", "/api/admin/jam-public/review"],
+      ["PUT", "/api/admin/jam-public/remove-part"],
+      ["PUT", "/api/admin/jam-public/block"],
     ] as const;
     for (const [method, path] of reachable) {
       expect(matchAdminMachineRoute(method, path)).not.toBeNull();
@@ -153,7 +160,8 @@ describe("matchAdminMachineRoute", () => {
     // these ever matches, the token in a Cloudflare Worker can do it.
     const refused = [
       ["DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001"],
-      ["GET", "/api/admin/acquisition"],
+      ["POST", "/api/admin/acquisition"],
+      ["DELETE", "/api/admin/acquisition"],
       // The path-parameter form is the moderator's alone; the token's is the
       // query form above, and it has no write of any kind.
       ["GET", "/api/admin/users/00000000-0000-4000-8000-000000000001/client"],
@@ -177,6 +185,10 @@ describe("matchAdminMachineRoute", () => {
       ["PUT", "/api/admin/flags/watch_party_waitlist"],
       ["GET", "/api/admin/channel-layout"],
       ["PUT", "/api/servers/00000000-0000-4000-8000-000000000001/channel-layout"],
+      ["POST", "/api/admin/jam-public/unpublish"],
+      ["GET", "/api/admin/jam-public/block"],
+      ["DELETE", "/api/admin/jam-public/songs"],
+      ["PUT", "/api/admin/jam-public/songs/00000000-0000-4000-8000-000000000001"],
     ] as const;
     for (const [method, path] of refused) {
       expect(matchAdminMachineRoute(method, path)).toBeNull();
@@ -750,6 +762,43 @@ describeDb("the operator's two levers", () => {
       expect((await asMachine("GET", "/api/admin/bots", undefined, WRONG_TOKEN)).status).toBe(404);
       // A read, not a lever: the token cannot write to it.
       expect((await asMachine("PUT", "/api/admin/bots", {})).status).toBe(401);
+    });
+  });
+
+  describe("the acquisition read", () => {
+    it("answers the machine token and a moderator, and nobody else", async () => {
+      const machine = await asMachine<{
+        days: number;
+        hours?: number;
+        total: number;
+        rows: unknown[];
+        landings: unknown[];
+      }>("GET", "/api/admin/acquisition");
+      expect(machine.status).toBe(200);
+      expect(machine.body.days).toBe(30);
+      expect("hours" in machine.body).toBe(false);
+      expect(Array.isArray(machine.body.rows)).toBe(true);
+      expect(Array.isArray(machine.body.landings)).toBe(true);
+
+      const narrow = await asMachine<{ days: number; hours?: number }>(
+        "GET",
+        "/api/admin/acquisition?days=7&hours=3",
+      );
+      expect(narrow.status).toBe(200);
+      expect(narrow.body.days).toBe(7);
+      expect(narrow.body.hours).toBe(3);
+
+      expect((await asUser(operator, "GET", "/api/admin/acquisition")).status).toBe(200);
+      expect((await asUser(ana, "GET", "/api/admin/acquisition")).status).toBe(404);
+      expect(
+        (await asMachine("GET", "/api/admin/acquisition", undefined, WRONG_TOKEN)).status,
+      ).toBe(404);
+      // No credential at all answers like a wrong one: not a route for them.
+      stubs.actor = null;
+      const bare = await fetch(`${baseUrl}/api/admin/acquisition`);
+      expect(bare.status).toBe(404);
+      // A read, not a lever.
+      expect((await asMachine("POST", "/api/admin/acquisition", {})).status).toBe(401);
     });
   });
 

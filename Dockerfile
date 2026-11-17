@@ -43,7 +43,9 @@ CMD ["node", "server/dist/index.js"]
 
 # The worker image (`docker build --target worker`, tagged `<sha>-worker`):
 # the same application plus ffmpeg, for the voice note AAC transcode
-# (server/src/speech/transcode.ts). Only the worker runs that job, so only the
+# (server/src/speech/transcode.ts) and the MP4 copy of a Jam camera video
+# (server/src/speech/video-transcode.ts, which needs the package's libx264 and
+# checks for it at boot). Only the worker runs those jobs, so only the
 # worker pays for ffmpeg: about 131 MB uncompressed, 49 MB compressed, on
 # linux/amd64 (node:22-alpine, 2026-10). A process without ffmpeg never claims
 # a transcode job, so an API image doing a worker's job just leaves them queued.

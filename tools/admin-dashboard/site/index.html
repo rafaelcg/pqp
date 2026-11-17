@@ -2057,6 +2057,8 @@
           mesh é ponto a ponto entre os participantes; livekit é o sfu. a comparação só
           fica honesta quando as duas colunas têm chamadas na janela.
         </p>
+        <p class="subtle-title" style="margin-top:16px">boas (4 e 5) contra baixas (1 a 3)</p>
+        <div id="ratingBands"><!-- injected --></div>
       </div>
     </div>
 
@@ -4133,6 +4135,42 @@
           '<span class="tr-sub">' + fmt(Number(r.total) || 0) + ' avaliações</span>';
         trEl.appendChild(box);
       });
+    }
+
+    // good vs low, from the media reading every rating now carries. An API
+    // from before this field simply has no `mediaByBand` and the block says so.
+    var bandsEl = $("ratingBands");
+    if (bandsEl) {
+      var mb = cr.mediaByBand;
+      if (!mb || !mb.good || !mb.low) {
+        bandsEl.innerHTML = '<div class="empty">a api ainda não manda essa comparação.</div>';
+      } else {
+        var share = function (v) {
+          return typeof v === "number" && isFinite(v) ? fmtPct(v, 1) : "-";
+        };
+        var healthLine = function (b) {
+          var h = b.audioHealthCalls || {}, parts = [];
+          Object.keys(h).forEach(function (k) { if (h[k] > 0) parts.push(k + " " + fmt(h[k])); });
+          return parts.length ? parts.join(", ") : "nenhuma";
+        };
+        var rowsHtml = [
+          ["mediu", function (b) { return fmt(b.withMedia) + " de " + fmt(b.ratings); }],
+          ["perda de pacotes (mediana)", function (b) {
+            return typeof b.packetLossPercentMedian === "number" ? fmtDec(b.packetLossPercentMedian) + "%" : "-";
+          }],
+          ["rtt (mediana)", function (b) { return fmtMs(b.rttMsMedian); }],
+          ["com reconexão", function (b) { return share(b.reconnectShare); }],
+          ["via relay", function (b) { return share(b.relayedShare); }],
+          ["falhas de áudio", healthLine],
+        ].map(function (r) {
+          return '<tr><td>' + r[0] + '</td><td class="r num">' + esc(r[1](mb.good)) +
+            '</td><td class="r num">' + esc(r[1](mb.low)) + '</td></tr>';
+        }).join("");
+        bandsEl.innerHTML = '<div class="table-scroll"><table style="min-width:0"><thead><tr><th></th><th class="r">boas</th>' +
+          '<th class="r">baixas</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>' +
+          '<p class="m-note" style="font-size:11.5px;color:var(--faint);margin:8px 0 0">' +
+          'só entra quem mandou a medição (celular e versões antigas não mandam), por isso a primeira linha.</p>';
+      }
     }
 
     // notes

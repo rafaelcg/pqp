@@ -44,6 +44,19 @@ import { activityDay } from "./user-activity.js";
  * (two people muted and deafened, or simply away) still counts: the sampler
  * does not judge what a seat is doing.
  *
+ * MIC OPEN AND SHARING MUTED (added 2026-11-10)
+ * Two more counts from the same minute, answering one question the other two
+ * cannot: of the minutes somebody sat in a call, how many had a live
+ * microphone (`open_mic_seconds`), and how many of the minutes they were
+ * sharing had none anywhere (`share_muted_seconds`). Production on 2026-11-09
+ * showed most rooms with a share live had every seat muted while no room
+ * without one did, and nothing stored could say whether that is a person who
+ * never unmutes or a person who mutes and unmutes all night. A seat is open
+ * when its roster row is neither muted nor deafened; a person with two tabs
+ * is open when either is. Still counts and nothing else: never who was in the
+ * room, never a word said, never a reason (a muted seat cannot say whether it
+ * is a habit, a missing microphone or voice carried by another app).
+ *
  * Each row remembers the time of the last sample that added a minute
  * (`voice_sampled_at`), and the upsert only adds when that time is at least
  * `MIN_SAMPLE_GAP_SECONDS` older than this sample. One sampler always counts,
@@ -100,6 +113,14 @@ export interface LiveSeat {
   userId: string;
   voiceChannelId: string;
   sharingScreen: boolean;
+  /**
+   * The seat's microphone is open right now: not self-muted, not deafened
+   * (which mutes). A flag on the roster row, not a claim that anything was
+   * said: it is what separates a person in a call with their mic live from a
+   * person who sits in one muted. A seat the room does not let speak, or a
+   * moderator mute, is muted here too, because the roster says so.
+   */
+  micOpen: boolean;
 }
 
 /**
@@ -168,8 +189,10 @@ async function readLiveSeats(): Promise<{
       user_id: string;
       channel_id: string;
       sharing_screen: boolean;
+      mic_open: boolean;
     }>(
-      `SELECT user_id, channel_id, sharing_screen
+      `SELECT user_id, channel_id, sharing_screen,
+              NOT muted AND NOT deafened AS mic_open
          FROM voice_peers
         WHERE orphaned_at IS NULL`,
     );
@@ -179,6 +202,7 @@ async function readLiveSeats(): Promise<{
         userId: row.user_id,
         voiceChannelId: row.channel_id,
         sharingScreen: row.sharing_screen,
+        micOpen: row.mic_open,
       })),
     };
   }
@@ -363,9 +387,9 @@ export function createUserStatsRecorder(
       // since the read drops out instead of failing on the foreign key.
       const result = await pool().query(
         `WITH seats AS (
-           SELECT v.user_id, v.channel_id, v.sharing
-             FROM unnest($1::uuid[], $2::uuid[], $3::boolean[])
-                    AS v(user_id, channel_id, sharing)
+           SELECT v.user_id, v.channel_id, v.sharing, v.mic_open
+             FROM unnest($1::uuid[], $2::uuid[], $3::boolean[], $6::boolean[])
+                    AS v(user_id, channel_id, sharing, mic_open)
              JOIN users u ON u.id = v.user_id
             WHERE NOT u.is_webhook AND NOT u.is_character AND NOT u.is_bot
          ), rooms AS (
@@ -373,18 +397,25 @@ export function createUserStatsRecorder(
             GROUP BY channel_id
            HAVING count(DISTINCT user_id) >= ${MIN_PEOPLE_IN_ROOM}
          ), people AS (
-           SELECT s.user_id, bool_or(s.sharing) AS sharing
+           SELECT s.user_id, bool_or(s.sharing) AS sharing,
+                  bool_or(s.mic_open) AS mic_open
              FROM seats s JOIN rooms r USING (channel_id)
             GROUP BY s.user_id
          )
          INSERT INTO user_daily_stats
-           (user_id, day, voice_seconds, share_seconds, voice_sampled_at)
+           (user_id, day, voice_seconds, share_seconds, open_mic_seconds,
+            share_muted_seconds, voice_sampled_at)
          SELECT user_id, $4::date, 60,
-                CASE WHEN sharing THEN 60 ELSE 0 END, $5::timestamptz
+                CASE WHEN sharing THEN 60 ELSE 0 END,
+                CASE WHEN mic_open THEN 60 ELSE 0 END,
+                CASE WHEN sharing AND NOT mic_open THEN 60 ELSE 0 END,
+                $5::timestamptz
            FROM people
          ON CONFLICT (user_id, day) DO UPDATE SET
            voice_seconds    = user_daily_stats.voice_seconds + EXCLUDED.voice_seconds,
            share_seconds    = user_daily_stats.share_seconds + EXCLUDED.share_seconds,
+           open_mic_seconds = user_daily_stats.open_mic_seconds + EXCLUDED.open_mic_seconds,
+           share_muted_seconds = user_daily_stats.share_muted_seconds + EXCLUDED.share_muted_seconds,
            voice_sampled_at = EXCLUDED.voice_sampled_at
          WHERE user_daily_stats.voice_sampled_at IS NULL
             OR user_daily_stats.voice_sampled_at
@@ -395,6 +426,7 @@ export function createUserStatsRecorder(
           seats.map((seat) => seat.sharingScreen),
           day,
           at.toISOString(),
+          seats.map((seat) => seat.micOpen),
         ],
       );
       const written = result.rowCount ?? 0;

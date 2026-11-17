@@ -4,6 +4,7 @@ import {
   type CallRatingSummary,
   type CallTransport,
   type CreateCallRatingRequest,
+  type MediaBandSummary,
   type MediaQualitySummary,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
@@ -20,17 +21,15 @@ import { logEvent } from "../lib/log.js";
  */
 
 /**
- * The audio self-repair's own report, tallied before the storage rule below
- * throws a good call's `mediaQuality` away.
+ * The audio self-repair's own report, tallied per rated call.
  *
- * WHY HERE AND NOT ONLY IN THE ROW. The row keeps `media_quality` for scores
- * of 3 or less, which is right for a diagnostic read next to a complaint and
- * wrong for the question this feature has to answer: did the repair work?
- * A call that broke, healed itself and was rated 5 is the success case, and
- * it is exactly the one the row forgets. So the counts are folded in here,
- * every score, as bounded integers keyed by the five fixed kinds: nothing
- * about who, nothing that grows. Since boot, in process, on
- * `GET /api/admin/metrics` as `callRatings.audioHealthSinceBoot`, and one
+ * WHY STILL HERE NOW THAT THE ROW KEEPS EVERY SCORE'S `media_quality`. The
+ * row answers "how did calls in each band look over the window"; this answers
+ * "did the repair work since the last deploy", with `<kind>.lowRated` and the
+ * `autoFixed` / `manualFixed` / `unresolved` totals, which the per-band read
+ * does not add up. Bounded integers keyed by the five fixed kinds: nothing
+ * about who, nothing that grows. Since boot, in process, on `GET
+ * /api/admin/metrics` as `callRatings.audioHealthSinceBoot`, and one
  * `voice.audioHealthRated` log line per rated call that saw anything.
  */
 const audioHealthCounts = new Map<string, number>();
@@ -101,15 +100,14 @@ export async function recordCallRating(
       input.peerCount,
       input.transport,
       input.hadScreenShare,
-      // Same rule, same reason, same enforcement point as the note above: a
-      // media quality reading on a good call is not diagnostic, it is a
-      // measurement nobody will ever read, and the dashboard only ever shows
-      // this next to a note -- which only exists on a rating of 3 or less.
-      // Keeping a good call's sample around anyway would be the note rule
-      // with a loophole in it.
-      input.rating <= 3 && input.mediaQuality
-        ? JSON.stringify(input.mediaQuality)
-        : null,
+      // Every score carries it, on purpose. It used to be kept only for 3 or
+      // less, so over eight weeks a good call had no measurements at all and
+      // a bad one could not be compared with anything. The shape is bounded
+      // numbers and booleans (`mediaQualitySchema`, strict, already parsed by
+      // the route), nothing that names anybody, so there is no privacy reason
+      // to throw a good call's reading away. The NOTE rule above is separate
+      // and unchanged.
+      input.mediaQuality ? JSON.stringify(input.mediaQuality) : null,
     ],
   );
   // Counted only once the row is stored, so a failed write (and the retry
@@ -137,10 +135,57 @@ interface NoteRow {
   media_quality: MediaQualitySummary | null;
 }
 
+interface BandRow {
+  good: boolean;
+  ratings: string;
+  with_media: string;
+  loss_median: number | null;
+  rtt_median: number | null;
+  reconnected: string;
+  relay_known: string;
+  relayed: string;
+  [kind: string]: unknown;
+}
+
+function emptyBand(): MediaBandSummary {
+  return {
+    ratings: 0,
+    withMedia: 0,
+    packetLossPercentMedian: null,
+    rttMsMedian: null,
+    reconnectShare: null,
+    relayedShare: null,
+    audioHealthCalls: Object.fromEntries(AUDIO_HEALTH_KINDS.map((kind) => [kind, 0])),
+  };
+}
+
+function share(part: string, whole: string): number | null {
+  const n = Number(whole);
+  return n > 0 ? Math.round((Number(part) / n) * 1000) / 1000 : null;
+}
+
+function round1(value: number | null): number | null {
+  return value === null ? null : Math.round(Number(value) * 10) / 10;
+}
+
+/**
+ * Good calls (4 to 5) beside low ones (1 to 3), in one scan of the window the
+ * `created_at` index already serves. `media_quality` is NULL on phones and old
+ * bundles, so every figure is over `withMedia`, not over `ratings`: a median of
+ * the calls that were measured, with the sample size beside it.
+ * `percentile_cont` ignores NULL, so a call with no loss reading adds nothing
+ * to the loss median rather than dragging it to zero.
+ */
+const BAND_AUDIO_COLUMNS = AUDIO_HEALTH_KINDS.map(
+  (kind) =>
+    `COUNT(*) FILTER (WHERE media_quality->'audioHealth'->'${kind}' IS NOT NULL
+        AND COALESCE((media_quality->'audioHealth'->'${kind}'->>'detected')::int, 0) > 0)::text AS "${kind}"`,
+).join(",\n              ");
+
 /**
  * The dashboard's view of call quality over the last `days` days.
  *
- * Three queries rather than one with grouping sets: each is a trivial index
+ * Four queries rather than one with grouping sets: each is a trivial index
  * scan over a small table, and the alternative is a single query whose result
  * needs unpicking in JavaScript anyway. Run concurrently.
  */
@@ -149,7 +194,7 @@ export async function callRatingSummary(
 ): Promise<CallRatingSummary> {
   const pool = getPool();
   const since = `now() - ($1::int * interval '1 day')`;
-  const [distribution, byTransport, notes] = await Promise.all([
+  const [distribution, byTransport, notes, bands] = await Promise.all([
     pool.query<SummaryRow>(
       `SELECT rating::text AS rating, COUNT(*)::text AS n
          FROM call_ratings
@@ -177,7 +222,41 @@ export async function callRatingSummary(
         LIMIT 10`,
       [days],
     ),
+    pool.query<BandRow>(
+      `SELECT rating >= 4 AS good,
+              COUNT(*)::text AS ratings,
+              COUNT(media_quality)::text AS with_media,
+              percentile_cont(0.5) WITHIN GROUP
+                (ORDER BY (media_quality->>'packetLossPercent')::float8) AS loss_median,
+              percentile_cont(0.5) WITHIN GROUP
+                (ORDER BY (media_quality->>'rttMsMedian')::float8) AS rtt_median,
+              COUNT(*) FILTER (
+                WHERE COALESCE((media_quality->>'reconnectCount')::int, 0) > 0
+              )::text AS reconnected,
+              COUNT(*) FILTER (WHERE media_quality->>'relayed' IS NOT NULL)::text AS relay_known,
+              COUNT(*) FILTER (WHERE media_quality->>'relayed' = 'true')::text AS relayed,
+              ${BAND_AUDIO_COLUMNS}
+         FROM call_ratings
+        WHERE created_at >= ${since}
+        GROUP BY 1`,
+      [days],
+    ),
   ]);
+
+  const mediaByBand = { good: emptyBand(), low: emptyBand() };
+  for (const row of bands.rows) {
+    mediaByBand[row.good ? "good" : "low"] = {
+      ratings: Number(row.ratings),
+      withMedia: Number(row.with_media),
+      packetLossPercentMedian: round1(row.loss_median),
+      rttMsMedian: round1(row.rtt_median),
+      reconnectShare: share(row.reconnected, row.with_media),
+      relayedShare: share(row.relayed, row.relay_known),
+      audioHealthCalls: Object.fromEntries(
+        AUDIO_HEALTH_KINDS.map((kind) => [kind, Number(row[kind])]),
+      ),
+    };
+  }
 
   const counts: Record<string, number> = {};
   let total = 0;
@@ -204,5 +283,6 @@ export async function callRatingSummary(
       createdAt: row.created_at.toISOString(),
       mediaQuality: row.media_quality,
     })),
+    mediaByBand,
   };
 }

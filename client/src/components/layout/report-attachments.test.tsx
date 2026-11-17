@@ -313,6 +313,8 @@ function baseReport(): Report {
     channelId: null,
     channelName: "general",
     storyId: null,
+    bauPostId: null,
+    bauCommentId: null,
     resolvedAt: null,
     resolvedByName: null,
     resolutionNote: null,

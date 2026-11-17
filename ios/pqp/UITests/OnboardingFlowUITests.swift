@@ -37,6 +37,10 @@ final class OnboardingFlowUITests: XCTestCase {
             "The welcome should say what pqp is on a fresh install"
         )
         XCTAssertTrue(app.buttons["welcome.signIn"].exists, "Somebody with an account needs a door too")
+        // App Review 1.2: the Terms are in front of the person before they sign up.
+        XCTAssertTrue(app.staticTexts["welcome.agreement"].exists, "The welcome should show the Terms and Privacy line")
+        XCTAssertTrue(app.links["Terms"].exists, "Terms should be a tappable link")
+        XCTAssertTrue(app.links["Privacy Policy"].exists, "Privacy Policy should be a tappable link")
         app.buttons["welcome.start"].tap()
 
         XCTAssertTrue(

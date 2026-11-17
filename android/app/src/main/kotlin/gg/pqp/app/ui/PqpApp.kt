@@ -203,9 +203,34 @@ private const val CHANNEL_LOOKUP_MS = 1_200L
 )
 
 /**
- * Where a channel row goes: a forum to its list, anything else to its chat.
- * One function so the channel list, a `#channel` in a Baú post and the
- * arrival banner cannot disagree about it.
+ * A jam channel: its wall, and a song opened out of it ([songId], from a song
+ * link). The song is state of the screen, not a route of its own; see
+ * `JamScreen`.
+ */
+@Serializable data class JamRoute(
+    val serverId: String,
+    val channelId: String,
+    val channelName: String = "",
+    val serverName: String = "",
+    val songId: String? = null,
+)
+
+/**
+ * A running activity (`docs/APPS.md`): the app's bundle in a sandboxed frame, full screen, onto
+ * [sessionId]. [spectate] asks for a place to watch, for an app a phone can only look at.
+ */
+@Serializable data class ActivityRoute(
+    val serverId: String,
+    val channelId: String,
+    val sessionId: String,
+    val appId: String,
+    val spectate: Boolean = false,
+)
+
+/**
+ * Where a channel row goes: a forum to its list, a jam to its wall, anything
+ * else to its chat. One function so the channel list, a `#channel` in a Baú
+ * post and the arrival banner cannot disagree about it.
  */
 internal fun androidx.navigation.NavHostController.openChannel(
     channel: gg.pqp.app.core.Channel,
@@ -214,6 +239,10 @@ internal fun androidx.navigation.NavHostController.openChannel(
 ) {
     if (channel.isForum) {
         navigate(ForumRoute(serverId, channel.id, channel.name, serverName, channel.topic))
+        return
+    }
+    if (channel.isJam) {
+        navigate(JamRoute(serverId, channel.id, channel.name, serverName))
         return
     }
     navigate(
@@ -700,6 +729,32 @@ private fun SignedInNav(
                     )
                     }
                 }
+                composable<JamRoute> { entry ->
+                    val route = entry.toRoute<JamRoute>()
+                    gg.pqp.app.jam.ui.JamScreen(
+                        session = session,
+                        serverId = route.serverId,
+                        serverName = route.serverName.ifEmpty {
+                            session.servers.value.firstOrNull { it.id == route.serverId }?.name.orEmpty()
+                        },
+                        channelId = route.channelId,
+                        channelName = route.channelName,
+                        initialSongId = route.songId,
+                        onBack = nav::popBackStack,
+                    )
+                }
+                composable<ActivityRoute> { entry ->
+                    val route = entry.toRoute<ActivityRoute>()
+                    gg.pqp.app.activities.ui.ActivityScreen(
+                        session = session,
+                        serverId = route.serverId,
+                        channelId = route.channelId,
+                        sessionId = route.sessionId,
+                        appId = route.appId,
+                        startAsSpectator = route.spectate,
+                        onBack = nav::popBackStack,
+                    )
+                }
                 composable<ForumPostRoute> { entry ->
                     val route = entry.toRoute<ForumPostRoute>()
                     CompositionLocalProvider(LocalEmojiServerId provides route.serverId) {
@@ -850,6 +905,24 @@ private fun SignedInNav(
                     // `hostState` itself is collected once, above, at
                     // `SignedInNav` level -- see the toast effect there.
 
+                    // Activities (docs/APPS.md): a text or voice channel of a server whose config says they are on.
+                    // A watch party, a forum, a jam and every conversation answer null and draw nothing.
+                    val activityChannel = gg.pqp.app.activities.ui.rememberActivityChannel(
+                        session = session,
+                        serverId = route.serverId,
+                        channelId = route.channelId,
+                        channelType = when {
+                            route.isWatchParty -> "watch_party"
+                            route.isVoiceChannel -> "voice"
+                            else -> "text"
+                        },
+                    )
+                    val openActivity: (gg.pqp.app.activities.ui.ActivityOpen) -> Unit = { open ->
+                        route.serverId?.let { serverId ->
+                            nav.navigate(ActivityRoute(serverId, route.channelId, open.sessionId, open.appId, open.spectate))
+                        }
+                    }
+
                     // The server's custom emoji draw in its messages; a conversation (no server) shows `:name:`.
                     CompositionLocalProvider(LocalEmojiServerId provides route.serverId) {
                     ChatScreen(
@@ -895,6 +968,12 @@ private fun SignedInNav(
                         // never will, off `watch_party`) and is therefore
                         // untouched.
                         header = {
+                            // Activities: the strip of a live one (and the first-run hint) above the transcript.
+                            gg.pqp.app.activities.ui.ActivityChannelHeader(
+                                session = session,
+                                state = activityChannel,
+                                onOpen = openActivity,
+                            )
                             if (route.isVoiceChannel) {
                                 WatchChannelPane(
                                     session = session,
@@ -974,6 +1053,11 @@ private fun SignedInNav(
                             }
                         },
                         actions = {
+                            gg.pqp.app.activities.ui.ActivityChannelAction(
+                                session = session,
+                                state = activityChannel,
+                                onOpen = openActivity,
+                            )
                             // Seguir: what this text channel follows. Absent for a
                             // voice room, a conversation, and anybody who may not
                             // manage the channel or whose channel follows nothing.
@@ -1048,6 +1132,8 @@ private fun NavBackStackEntry.serverIdOrNull(): String? = when {
     destination.hasRoute<ChannelsRoute>() -> toRoute<ChannelsRoute>().serverId
     destination.hasRoute<BauRoute>() -> toRoute<BauRoute>().serverId
     destination.hasRoute<ForumRoute>() -> toRoute<ForumRoute>().serverId
+    destination.hasRoute<JamRoute>() -> toRoute<JamRoute>().serverId
+    destination.hasRoute<ActivityRoute>() -> toRoute<ActivityRoute>().serverId
     destination.hasRoute<ForumPostRoute>() -> toRoute<ForumPostRoute>().serverId
     destination.hasRoute<ForumComposerRoute>() -> toRoute<ForumComposerRoute>().serverId
     destination.hasRoute<ChatRoute>() -> toRoute<ChatRoute>().serverId
@@ -1147,6 +1233,21 @@ private suspend fun navigateToPush(
             }?.firstOrNull { it.id == target.forumId }
             nav.navigate(ForumRoute(target.serverId, target.forumId, forum?.name.orEmpty(), name, forum?.topic))
             nav.navigate(ForumPostRoute(target.serverId, target.forumId, target.postId, forum?.name.orEmpty()))
+        }
+
+        // A jam song's own link: the channel list under it so back lands on the server, then the wall
+        // with the song open. A server where jam is off still reads (the flag gates writes, not reads).
+        is DeepLinkTarget.JamSong -> {
+            val name = serverName(target.serverId)
+            nav.navigate(ChannelsRoute(target.serverId, name))
+            val jam = try {
+                session.api.channels(target.serverId)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }?.firstOrNull { it.id == target.channelId }
+            nav.navigate(JamRoute(target.serverId, target.channelId, jam?.name.orEmpty(), name, target.songId))
         }
 
         is DeepLinkTarget.Server ->

@@ -60,6 +60,9 @@ import { FeatureHint } from "@/components/layout/feature-hint";
 import { LivePill } from "@/components/watch-party/live-pill";
 import { browserShareCapabilities, type ShareOutcome } from "@/lib/share-handle";
 import { shareWatchParty, watchPartyShareUrl } from "@/lib/share-watch-party";
+import { visibleRaisedHands } from "@/components/watch-party/raised-hands-cap";
+
+export { visibleRaisedHands };
 import {
   MicLevelMeterBar,
   StreamMixControl,
@@ -77,6 +80,7 @@ import {
 import { supportsScreenShare } from "@/components/voice/capabilities";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
 import { retryShareWithoutSound } from "@/lib/share-silent-fallback";
+import { readShellRefusal, reportShellRefusal } from "@/lib/share-shell-refusal";
 import {
   useWatchPartySilentShareWarning,
   WatchPartySilentShareWarning,
@@ -88,6 +92,7 @@ import {
   offersShellSystemAudio,
   screenCaptureOptions,
   shareStreamHasAudio,
+  stripLeakedSystemAudioTracks,
 } from "@/lib/screen-capture-audio";
 import {
   armOrFallBackToChromiumAudio,
@@ -96,6 +101,11 @@ import {
   ensureNativeShareAudio,
   prefetchNativeShareAudio,
 } from "@/lib/native-share-audio";
+import {
+  armLinuxShellShareAudio,
+  attachLinuxShellShareAudio,
+  ensureLinuxShellShareAudio,
+} from "@/lib/linux-shell-share-audio";
 import {
   blocksGoLive,
   desktopSharesTabAudio,
@@ -603,30 +613,6 @@ function WatchPartyShareButton({
 
 // ------------------------------------------------- options: one dialog, one row
 
-/**
- * How many raised hands the options dialog draws before it stops and just
- * counts the rest. Farol flagged the uncapped list (2026-09-13): with voice
- * on and `hosts_only`/`everyone`, every viewer can raise a hand, and a real
- * audience could put hundreds of avatar rows into one dialog on every open.
- */
-const MAX_VISIBLE_HANDS = 20;
-
-/**
- * Splits a raised-hand queue at `MAX_VISIBLE_HANDS`: the rows the dialog
- * actually draws, and how many more are waiting than that. The queue already
- * arrives in the server's own raise order (`docs/RAISED_HANDS.md`), so the
- * visible slice is the people waiting longest — exactly who a host should
- * see first — and not an arbitrary cut. Exported (pure, no Dialog/portal
- * involved) so the cap has a test that does not need a DOM.
- */
-export function visibleRaisedHands(
-  hands: WatchParty["stage"]["hands"],
-): { visible: WatchParty["stage"]["hands"]; hiddenCount: number } {
-  return {
-    visible: hands.slice(0, MAX_VISIBLE_HANDS),
-    hiddenCount: Math.max(0, hands.length - MAX_VISIBLE_HANDS),
-  };
-}
 
 /**
  * THE SAME DIALOG BEFORE AND DURING THE SHOW. The setup surface used to carry
@@ -1223,6 +1209,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       const [, nativeShareAudio] = await Promise.all([
         ensureOsCanExcludeCallAudio(),
         ensureNativeShareAudio(party.serverId ?? null),
+        // The Linux desktop app's "everything but pqp" bus. Warmed here
+        // because this surface is the watch party's only picker: go-live
+        // publishes this stream as it is and never arms the shell again.
+        ensureLinuxShellShareAudio(),
       ]);
       const intent = {
         preferBrowserTab: true,
@@ -1238,7 +1228,19 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         intent,
       );
       setNativeShareAudioOffered(nativeAudio);
-      const options = screenCaptureOptions(false, pickEnv, intent);
+      // LINUX DESKTOP: the shell's picker never asks about sound (on Wayland
+      // it never even opens), so a watch party, whose whole point is the
+      // film's sound, asks for it here, the way the ordinary share prompt
+      // defaults to yes. Only where the shell, the runtime flag and a sound
+      // server all said yes (`shellLinuxShareAudio`); everywhere else this is
+      // the same `false` as before. Before this, a Linux desktop host always
+      // went live silent: the preview asked for no sound and go-live never
+      // arms a stream the preview already opened.
+      const linuxSound = pickEnv.shellLinuxShareAudio === true;
+      const options = screenCaptureOptions(linuxSound, pickEnv, intent);
+      if (linuxSound && options.audio !== false) {
+        await armLinuxShellShareAudio();
+      }
       let picked: MediaStream;
       let lostSound = false;
       try {
@@ -1254,12 +1256,27 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           getDisplayMedia: (retry) => navigator.mediaDevices.getDisplayMedia(retry),
         });
         if (!silent) {
+          // The desktop shell's "no" (a Cancel included) is one AbortError
+          // whatever the cause; ask which, and log it, before deciding.
+          const desktop = getDesktop();
+          const refusal = await readShellRefusal(error, pickEnv.isDesktopShell, desktop);
+          if (refusal !== null) {
+            reportShellRefusal(refusal, {
+              options,
+              shellVersion: desktop?.capabilities?.version,
+              platform: desktop?.platform,
+              surface: "watch-party",
+            });
+            if (refusal === "cancelled") {
+              discardPrimedNativeShareAudio();
+              return;
+            }
+          }
           throw error;
         }
         picked = silent;
         lostSound = true;
       }
-      setSoundFailed(lostSound);
       if (nativeAudio && !lostSound) {
         const attach = await attachNativeShareAudio(picked, {
           onEnded: () => setNativeAudioNotice("ended"),
@@ -1267,6 +1284,32 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         if (!attach.attached && attach.reason !== "none") {
           setNativeAudioNotice("failed");
         }
+      }
+      // The bus the arm above built, opened by name and put on the preview,
+      // so go-live broadcasts what the host checked. A failure leaves a silent
+      // pick, which the "sem áudio" line under the preview already says.
+      // Attached after a silent retry too, like the ordinary share: the bus is
+      // its own capture, not the display request's audio that failed.
+      const triedLinuxBus = linuxSound && options.audio !== false;
+      let linuxBusAttached = false;
+      if (triedLinuxBus) {
+        // The ordinary share's order: a leaking mixer tap goes first. Left on,
+        // it would make the attach skip ("already has audio") and then be
+        // stripped at go-live, leaving the party with neither.
+        stripLeakedSystemAudioTracks(picked);
+        linuxBusAttached =
+          (await attachLinuxShellShareAudio(picked)) === "attached";
+      }
+      // Which line the "sem áudio" warning shows (it shows whenever the pick
+      // has no audio): on Linux the bus IS the sound, so a bus that did not
+      // attach is the computer's sound failing, retry or not.
+      setSoundFailed(triedLinuxBus ? !linuxBusAttached : lostSound);
+      // The host stopped the share from the browser's bar while the sound was
+      // being attached: the `ended` listener below would never fire for it, so
+      // drop the pick here rather than preview a dead picture with a live bus.
+      if (picked.getVideoTracks()[0]?.readyState === "ended") {
+        picked.getTracks().forEach((track) => track.stop());
+        return;
       }
       stream?.getTracks().forEach((track) => track.stop());
       // The host stopping the share from the browser's own bar during setup

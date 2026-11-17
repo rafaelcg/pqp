@@ -17,6 +17,7 @@ import { useId, useRef, type ReactNode } from "react";
 import { CommunityAboutText } from "@/components/communities/community-about-text";
 import { HeroMosaic } from "@/components/communities/hero-mosaic";
 import { CommunityOfficialLinks } from "@/components/communities/community-official-links";
+import { CommunitySupportField } from "@/components/communities/community-support-field";
 import { Button } from "@/components/ui/button";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
@@ -29,6 +30,8 @@ export type CommunityIdentityDraft = {
   tagline: string;
   about: string;
   linkUrls: string[];
+  /** The one support link, as typed: a payment page or a Pix text. */
+  supportText: string;
 };
 
 export type CommunityIdentityEdit = {
@@ -419,6 +422,12 @@ export function CommunityIdentityHeader({
                 </Button>
               )}
             </div>
+
+            <CommunitySupportField
+              value={edit.draft.supportText}
+              disabled={edit.saving}
+              onChange={(supportText) => edit.onChange({ supportText })}
+            />
           </div>
         ) : (
           poster &&

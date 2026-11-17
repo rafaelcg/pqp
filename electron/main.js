@@ -48,17 +48,21 @@ const { ALLOW_OVERRIDE_ENV, resolveAppUrlSource } = require("./lib/app-url");
 const {
   THUMBNAIL_SIZE,
   MAC_SCREEN_SETTINGS_URL,
+  MAC_AUDIO_SETTINGS_URL,
   normalizeSources,
   labelSources,
   pickAutomatically,
   screenPermission,
   captureResponse,
+  sourceIsListed,
   windowsBuildAllowsOwnAudioExclude,
   windowsNtBuild,
   pickerAudioState,
 } = require("./lib/display-sources");
 const { displayRequestAllowed } = require("./lib/display-origin.js");
+const { createMacShareAudio } = require("./lib/mac-share-audio");
 const { createShareSilentRetry, requesterKey } = require("./lib/share-silent-retry");
+const { createShareRefusal } = require("./lib/share-refusal");
 const {
   createLinuxShareAudio,
   SHARE_SOURCE_LABEL: LINUX_SHARE_SOURCE_LABEL,
@@ -1012,17 +1016,19 @@ async function explainNoSources() {
  * in exactly the shells that most need the fix. A `file://` page inside the
  * bundle cannot skew away from the main process that talks to it.
  *
- * Resolves with `{ id, shareAudio }`, or null for every way of saying no: the
- * Cancel button, Escape, closing the window, a page that never loads.
+ * Resolves with `{ id, shareAudio }`, or `{ refused }` for every way of saying
+ * no: `"cancelled"` for the Cancel button, Escape or closing the window,
+ * `"picker-failed"` for a page that never loads, `"busy"` while another
+ * picker is open (`lib/share-refusal.js` hands the reason to the page).
  * `shareAudio` is only meaningful on Windows; the handler still ignores it
  * everywhere else. `offersNativeAudio` is true when the shell's own per-process capture is armed for this share, which draws the sound box on any Windows.
  */
-function showSourcePicker(labeled, offersNativeAudio) {
+function showSourcePicker(labeled, offersNativeAudio, macAudioArmed = false) {
   // One at a time. A second voice channel asking mid-decision would stack two
   // identical windows with no way to tell which call each belongs to.
   if (pickerWindow && !pickerWindow.isDestroyed()) {
     pickerWindow.focus();
-    return Promise.resolve(null);
+    return Promise.resolve({ refused: "busy" });
   }
 
   return new Promise((resolve) => {
@@ -1055,7 +1061,7 @@ function showSourcePicker(labeled, offersNativeAudio) {
     let loadTimer = setTimeout(() => {
       loadTimer = null;
       console.warn("[pqp] share picker never finished loading");
-      finish(null);
+      finish({ refused: "picker-failed" });
     }, PICKER_LOAD_TIMEOUT_MS);
 
     // Every one of these channels is answered only for this window's own
@@ -1080,7 +1086,10 @@ function showSourcePicker(labeled, offersNativeAudio) {
             // `pickerAudioState` for why this replaced a plain boolean.
             audioState: offersNativeAudio
               ? "checkbox"
-              : pickerAudioState(process.platform, os.release()),
+              : pickerAudioState(process.platform, os.release(), {
+                  version: macShareAudio.status().version,
+                  armed: macAudioArmed,
+                }),
             strings: {
               title: t("share.title"),
               subtitle: t("share.subtitle"),
@@ -1091,10 +1100,17 @@ function showSourcePicker(labeled, offersNativeAudio) {
               confirm: t("share.confirm"),
               empty: t("share.empty"),
               shareAudio: t("share.audio"),
-              shareAudioHint: t("share.audioHint"),
+              shareAudioHint:
+                process.platform === "darwin"
+                  ? t("share.audioHintMac")
+                  : t("share.audioHint"),
               shareAudioOffNote: t("share.audioOffNote"),
               shareAudioWin10: t("share.audioWin10Unavailable"),
               shareAudioWin10Hint: t("share.audioWin10UnavailableHint"),
+              shareAudioMac: t("share.audioMacUnavailable"),
+              shareAudioMacHint: t("share.audioMacUnavailableHint"),
+              shareAudioMacOld: t("share.audioMacOld"),
+              shareAudioMacOldHint: t("share.audioMacOldHint"),
             },
           }
         : null;
@@ -1118,7 +1134,7 @@ function showSourcePicker(labeled, offersNativeAudio) {
       if (!fromPicker(event, "pqp:picker-cancel")) {
         return;
       }
-      finish(null);
+      finish({ refused: "cancelled" });
     };
 
     function finish(choice) {
@@ -1162,15 +1178,15 @@ function showSourcePicker(labeled, offersNativeAudio) {
       if (pickerWindow === win) {
         pickerWindow = null;
       }
-      finish(null);
+      finish({ refused: "cancelled" });
     });
 
     win.webContents.on("did-fail-load", (_e, code, description) => {
       console.warn(`[pqp] share picker failed to load: ${code} ${description}`);
-      finish(null);
+      finish({ refused: "picker-failed" });
     });
     win.webContents.on("render-process-gone", () => {
-      finish(null);
+      finish({ refused: "picker-failed" });
     });
 
     // Nothing in this window may navigate anywhere, ever. It renders window
@@ -1181,7 +1197,7 @@ function showSourcePicker(labeled, offersNativeAudio) {
 
     win.loadFile(path.join(__dirname, "picker", "index.html")).catch((err) => {
       console.warn("[pqp] share picker load failed:", err?.message ?? err);
-      finish(null);
+      finish({ refused: "picker-failed" });
     });
   });
 }
@@ -1305,9 +1321,21 @@ const linuxShareAudio =
       })
     : null;
 
+/**
+ * macOS system audio (`lib/mac-share-audio.js`): Chromium's CoreAudio Tap
+ * with this app's own audio process excluded. The object holds only the arm
+ * and the OS-version gate; the capture is Chromium's.
+ */
+const macShareAudio = createMacShareAudio();
+
 let linuxShareAudioStartSeq = 0;
 
 const shareSilentRetry = createShareSilentRetry();
+
+// Why the last request was answered with nothing (`lib/share-refusal.js`):
+// every refusal reaches the page as the same `AbortError: Invalid capture
+// constraints`, and this is how the page tells a Cancel from a failure.
+const shareRefusal = createShareRefusal();
 
 /** How long a share may wait on the sound server before going out silent. */
 const LINUX_SHARE_AUDIO_START_TIMEOUT_MS = 3000;
@@ -1350,6 +1378,25 @@ async function startLinuxShareAudio() {
 }
 
 /**
+ * Is this window still on the machine? A fresh listing with no thumbnails (the
+ * cost of the question is the list, not a screenshot of every surface). A
+ * listing that throws answers true: see `sourceIsListed`.
+ */
+async function windowStillListed(id) {
+  try {
+    const now = await desktopCapturer.getSources({
+      types: ["window"],
+      thumbnailSize: { width: 0, height: 0 },
+      fetchWindowIcons: false,
+    });
+    return sourceIsListed(now, id);
+  } catch (err) {
+    console.warn("[pqp] could not re-check the chosen window:", err?.message ?? err);
+    return true;
+  }
+}
+
+/**
  * The whole "which surface?" decision, from permission to callback payload.
  *
  * Order matters. macOS raises its own screen-recording prompt on the FIRST
@@ -1372,6 +1419,11 @@ async function chooseDisplaySource(audioRequested, requester = null) {
   // person about, with the runtime flag on. A request that merely carries
   // `audioRequested` (a console probe, a stale page) never builds the bus.
   const linuxAudioArmed = platform === "linux" && linuxShareAudio?.consumeArm() === true;
+  // Same rule on macOS (14.2+): the page arms only with the runtime flag on
+  // and the shell's capability, so a request that merely carries
+  // `audioRequested` is never answered with loopback. Read first and once, for
+  // the same reason as the other two: an arm is good for the next request only.
+  const macAudioArmed = platform === "darwin" && macShareAudio.consumeArm() === true;
   // Whatever the last share left running belongs to a share that is over.
   shareAudioController?.stop();
 
@@ -1385,6 +1437,7 @@ async function chooseDisplaySource(audioRequested, requester = null) {
 
   if (screenPermission(platform, macScreenAccessStatus()) === "blocked") {
     await explainScreenPermission();
+    shareRefusal.note("permission", requester);
     return null;
   }
 
@@ -1409,20 +1462,23 @@ async function chooseDisplaySource(audioRequested, requester = null) {
     // asking right now: either way the list in hand is not the machine's real
     // surfaces, and showing it would be worse than saying why.
     await explainScreenPermission();
+    shareRefusal.note("permission", requester);
     return null;
   }
 
   const labeled = labelSources(normalizeSources(raw), t);
   if (labeled.length === 0) {
     await explainNoSources();
+    shareRefusal.note("no-sources", requester);
     return null;
   }
 
   const autoId = pickAutomatically(labeled);
   const choice = autoId
     ? { id: autoId, shareAudio: false }
-    : await showSourcePicker(labeled, nativeAudio);
-  if (!choice) {
+    : await showSourcePicker(labeled, nativeAudio, macAudioArmed);
+  if (!choice || typeof choice.id !== "string") {
+    shareRefusal.note(choice?.refused ?? "cancelled", requester);
     return null;
   }
 
@@ -1430,6 +1486,15 @@ async function chooseDisplaySource(audioRequested, requester = null) {
   // for IPC and is not what the callback accepts.
   const source = raw.find((candidate) => candidate.id === choice.id);
   if (!source) {
+    shareRefusal.note("source-gone", requester);
+    return null;
+  }
+  // `raw` is the snapshot the picker was drawn from, so the lookup above can
+  // never miss. A window closed after that snapshot (while the picker was
+  // open, or before Share) is only noticed by asking again; left alone it
+  // fails inside Chromium as `NotReadableError` and the page blames the sound.
+  if (choice.id.startsWith("window:") && !(await windowStillListed(choice.id))) {
+    shareRefusal.note("source-gone", requester);
     return null;
   }
   // NATIVE: the page armed it and asked Chromium for no audio at all, so the
@@ -1459,11 +1524,16 @@ async function chooseDisplaySource(audioRequested, requester = null) {
   // The picker checkbox is the consent. `audioRequested` is only whether the
   // page asked for a track Chromium will accept; an auto-pick (one surface,
   // no dialog) never attaches loopback, because nobody ticked anything.
+  // macOS needs more than the tick: the page armed it (flag on, shell
+  // capability) AND the Mac is on 14.2+, or the answer stays video-only,
+  // because a loopback Chromium cannot open fails the whole capture.
+  const macAudioWanted = macAudioArmed && audioRequested && choice.shareAudio === true;
   const response = captureResponse(
     source,
     platform,
-    audioRequested && choice.shareAudio === true,
+    platform === "darwin" ? macAudioWanted : audioRequested && choice.shareAudio === true,
     os.release(),
+    platform === "darwin" ? process.getSystemVersion() : undefined,
   );
   if (response?.audio === "loopback") {
     shareSilentRetry.rememberLoopback(source, requester);
@@ -1545,6 +1615,7 @@ function configureSessionSecurity(appOrigin) {
       // trailing slash, so compare origins through `URL`, never by string
       // equality (0.1.6 refused every pqp share this way).
       if (!displayRequestAllowed(request, allowedOrigin)) {
+        shareRefusal.note("origin", requesterKey(request?.frame));
         console.warn(
           "[pqp] refused a display-media request from an untrusted origin:",
           request?.securityOrigin ?? "(unknown)",
@@ -1559,10 +1630,15 @@ function configureSessionSecurity(appOrigin) {
           // NotAllowedError, for a Cancel and for every refusal above alike.
           // So that string from the desktop app means "the shell said no"
           // (see docs/DESKTOP.md 3.6b for the 0.2.8 picker that never loaded).
+          // `shareRefusal` holds which refusal it was, for the page to ask.
+          if (!response) {
+            console.warn("[pqp] display-media request answered with nothing");
+          }
           callback(response);
         })
         .catch((err) => {
           console.warn("[pqp] screen capture source failed:", err?.message ?? err);
+          shareRefusal.note("error", requesterKey(request?.frame));
           callback(null);
         });
     },
@@ -2476,6 +2552,32 @@ if (probingShareAudio) {
     { rejected: null },
   );
 
+  // macOS share audio. `status` is asked before a share, once the runtime flag
+  // is on, to decide whether to offer the sound at all (macOS 14.2+); `arm`
+  // right before `getDisplayMedia` for a share the person said yes to sound
+  // for; `open-settings` from the notice shown when the System Audio
+  // Recording permission is what stands in the way. All answer "no" off macOS
+  // and to any frame that is not the app.
+  ipcGuard.handle("pqp:mac-share-audio-status", () => macShareAudio.status(), {
+    rejected: { supported: false, version: null },
+  });
+
+  ipcGuard.handle("pqp:mac-share-audio-arm", () => macShareAudio.arm(), {
+    rejected: false,
+  });
+
+  ipcGuard.handle(
+    "pqp:mac-share-audio-open-settings",
+    () => {
+      if (process.platform !== "darwin") {
+        return false;
+      }
+      shell.openExternal(MAC_AUDIO_SETTINGS_URL).catch(() => {});
+      return true;
+    },
+    { rejected: false },
+  );
+
   ipcGuard.handle("pqp:get-pending-desktop-auth-ticket", () => desktopAuth.takePendingTicket(), {
     rejected: null,
   });
@@ -2657,6 +2759,15 @@ if (probingShareAudio) {
     "pqp:share-silent-retry-arm",
     (event) => shareSilentRetry.arm(requesterKey(event.senderFrame)),
     { rejected: false },
+  );
+
+  // The request this frame just made was answered with nothing, and the page
+  // saw `AbortError: Invalid capture constraints`. Which refusal it was, once
+  // (`lib/share-refusal.js`); null when there is nothing to say.
+  ipcGuard.handle(
+    "pqp:share-refusal-reason",
+    (event) => shareRefusal.take(requesterKey(event.senderFrame)),
+    { rejected: null },
   );
 
   ipcGuard.handle(

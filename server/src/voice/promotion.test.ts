@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   blockJoinPromotion,
+  blockShareSoundPromotion,
   calibratedCameraMbps,
   decidePromotion,
   decideVideoAdmission,
@@ -201,6 +202,44 @@ describe("the verdict", () => {
 
     expect(verdict.loadMbps).toBe(0);
     expect(verdict.addedMbps).toBeCloseTo(36);
+  });
+});
+
+/**
+ * The refusals of the share-sound trigger: it moves a room for a feature, not
+ * because the mesh ran out, so it yields to anybody the move would cost.
+ */
+describe("blockShareSoundPromotion", () => {
+  const open = {
+    channelOverride: null,
+    sharerFollows: true,
+    seatsThatCannotFollow: 0,
+    othersSharing: 0,
+  } as const;
+
+  it("lets an ordinary DM call through", () => {
+    expect(blockShareSoundPromotion(open)).toBeNull();
+  });
+
+  it("never overrules a channel pinned to mesh by hand", () => {
+    expect(
+      blockShareSoundPromotion({ ...open, channelOverride: "mesh" }),
+    ).toBe("mesh-override");
+  });
+
+  it("refuses when anybody, the sharer included, would be hung up by the move", () => {
+    expect(
+      blockShareSoundPromotion({ ...open, seatsThatCannotFollow: 1 }),
+    ).toBe("seat-cannot-follow");
+    expect(
+      blockShareSoundPromotion({ ...open, sharerFollows: false }),
+    ).toBe("seat-cannot-follow");
+  });
+
+  it("refuses while somebody else is sharing", () => {
+    expect(blockShareSoundPromotion({ ...open, othersSharing: 1 })).toBe(
+      "other-share-live",
+    );
   });
 });
 

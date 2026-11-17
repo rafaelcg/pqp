@@ -1,6 +1,6 @@
 {
   "name": "@pqp/electron",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Desktop shell for pqp",
@@ -27,14 +27,14 @@
     "smoke:share": "playwright test --config=playwright.share-smoke.config.mjs"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9",
+    "electron-updater": "^6.8.11",
     "i18next": "^26.4.0",
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "electron": "44.9.1",
-    "electron-builder": "^26.16.1"
+    "electron-builder": "^26.18.0"
   },
   "build": {
     "appId": "gg.pqp.app",
@@ -134,6 +134,7 @@
           }
         ],
         "NSMicrophoneUsageDescription": "pqp needs microphone access for voice channels.",
+        "NSAudioCaptureUsageDescription": "pqp needs to record the computer's sound so the people in your call can hear what you are sharing.",
         "NSCameraUsageDescription": "pqp needs camera access for video in voice channels and for taking photos and clips for stories."
       }
     },

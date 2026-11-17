@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -84,6 +85,21 @@ fun ChannelRow(
     occupants: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * A jam channel's song count, in the slot a voice room keeps its head
+     * count; null for every other row. [trailingDescription] is what TalkBack
+     * says for it ("jam, 12 songs"), because a bare number after a name is
+     * not a sentence.
+     */
+    trailingText: String? = null,
+    trailingDescription: String? = null,
+    /**
+     * The name of the activity running in this channel (docs/APPS.md), drawn as a small
+     * lime pill after the name; null for every channel with none. [activityDescription]
+     * is the TalkBack sentence for it, because a bare word after a name is not one.
+     */
+    activityLabel: String? = null,
+    activityDescription: String? = null,
 ) {
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
@@ -128,6 +144,8 @@ fun ChannelRow(
         null
     }
     val state = listOfNotNull(
+        trailingDescription,
+        activityDescription,
         unreadLabel.takeIf { unread },
         mentionsLabel,
         mutedLabel.takeIf { muted },
@@ -162,6 +180,10 @@ fun ChannelRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            if (activityLabel != null) {
+                Spacer(Modifier.width(Spacing.sm))
+                ActivityChip(activityLabel)
+            }
             if (live) {
                 Spacer(Modifier.width(Spacing.sm))
                 LiveChip()
@@ -185,6 +207,14 @@ fun ChannelRow(
                     contentDescription = null,
                     tint = colors.onSurfaceVariant,
                     modifier = Modifier.size(16.dp).testTag("channels.muted"),
+                )
+            } else if (trailingText != null) {
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = trailingText,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.onSurfaceVariant,
+                    modifier = Modifier.testTag("channels.jamCount"),
                 )
             } else if (channel.isVoice && occupants > 0 && !inCall) {
                 Spacer(Modifier.width(Spacing.sm))
@@ -236,6 +266,7 @@ internal fun ChannelGlyph(channel: Channel, tint: Color) {
             imageVector = when {
                 channel.isVoice -> PqpIcons.VoiceChannel
                 channel.isForum -> PqpIcons.ForumChannel
+                channel.isJam -> PqpIcons.JamChannel
                 else -> PqpIcons.TextChannel
             },
             contentDescription = null,
@@ -262,6 +293,28 @@ internal fun ChannelGlyph(channel: Channel, tint: Color) {
             }
         }
     }
+}
+
+/**
+ * An activity is running here: the app's name in a soft lime pill. Lime, because it is an invitation
+ * rather than an alarm, and soft, so a list of channels never turns into a list of buttons.
+ */
+@Composable
+private fun ActivityChip(label: String) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .widthIn(max = 96.dp)
+            .clip(MaterialTheme.shapes.extraSmall)
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
+            .padding(horizontal = Spacing.xs + 2.dp, vertical = 1.dp)
+            .testTag("channels.activity"),
+    )
 }
 
 /** Red because that is what a live badge is everywhere; it never competes with the lime. */

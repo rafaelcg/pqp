@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createCallRatingSchema } from "@pqp/shared";
 
 /**
  * Prompted call quality, pinned against a real database.
@@ -160,11 +161,11 @@ describeDb("call ratings", () => {
     expect(summary.recentNotes[0]!.mediaQuality).toBeNull();
   });
 
-  it("drops mediaQuality on a good score, the same rule and the same enforcement point as the note", async () => {
-    // A reading on a good call is not diagnostic -- the dashboard never shows
-    // it (it rides beside a note, which the client does not even ask for
-    // above 3), and this rule is enforced here rather than trusted from a
-    // client that could send it anyway.
+  it("stores mediaQuality on a 5 exactly as on a 1, and still drops the note", async () => {
+    // The request body the web client builds for a 5 (`buildRatingBody`),
+    // parsed by the route's own schema, then stored. Until 2026-11 a good
+    // call's reading was thrown away here, so a bad call had nothing to be
+    // compared with.
     const user = await rater("clerk-h");
     const mediaQuality = {
       outboundScreenShare: null,
@@ -174,13 +175,99 @@ describeDb("call ratings", () => {
       relayed: false,
       reconnectCount: 0,
     };
-    await recordCallRating(user.id, input(5, { mediaQuality }));
+    const body = createCallRatingSchema.parse(
+      JSON.parse(JSON.stringify(input(5, { note: "muito bom", mediaQuality }))),
+    );
+    await recordCallRating(user.id, body);
 
-    const row = await getPool().query<{ media_quality: unknown }>(
-      `SELECT media_quality FROM call_ratings WHERE user_id = $1`,
+    const row = await getPool().query<{ media_quality: unknown; note: string | null }>(
+      `SELECT media_quality, note FROM call_ratings WHERE user_id = $1`,
       [user.id],
     );
-    expect(row.rows[0]!.media_quality).toBeNull();
+    expect(row.rows[0]!.media_quality).toEqual(mediaQuality);
+    expect(row.rows[0]!.note).toBeNull();
+  });
+
+  it("compares good calls with low ones from the stored readings", async () => {
+    const user = await rater("clerk-band");
+    const reading = (
+      loss: number | null,
+      rtt: number | null,
+      relayed: boolean | null,
+      reconnectCount: number,
+      audioHealth?: Record<string, unknown>,
+    ) => ({
+      outboundScreenShare: null,
+      inboundScreenShare: null,
+      packetLossPercent: loss,
+      rttMsMedian: rtt,
+      relayed,
+      reconnectCount,
+      ...(audioHealth ? { audioHealth } : {}),
+    });
+    const fault = { detected: 1, autoFixed: 1, asked: 0, manualFixed: 0, unresolved: 0 };
+    // Good: 4, 5, 5 with readings, one 5 from a phone that sent none.
+    await recordCallRating(user.id, input(4, { mediaQuality: reading(0, 30, false, 0) }));
+    await recordCallRating(user.id, input(5, { mediaQuality: reading(1, 50, false, 0) }));
+    await recordCallRating(
+      user.id,
+      input(5, { mediaQuality: reading(2, 100, false, 1, { micNotSending: fault }) }),
+    );
+    await recordCallRating(user.id, input(5));
+    // Low: 1, 3 with readings, one 2 from an old client.
+    await recordCallRating(
+      user.id,
+      input(1, { mediaQuality: reading(8, 300, true, 2, { inboundStalled: fault }) }),
+    );
+    await recordCallRating(
+      user.id,
+      input(3, { mediaQuality: reading(4, null, null, 0, { inboundStalled: fault }) }),
+    );
+    await recordCallRating(user.id, input(2));
+
+    const { good, low } = (await callRatingSummary(7)).mediaByBand;
+    expect(good).toMatchObject({
+      ratings: 4,
+      withMedia: 3,
+      packetLossPercentMedian: 1,
+      rttMsMedian: 50,
+      relayedShare: 0,
+    });
+    expect(good.reconnectShare).toBeCloseTo(1 / 3, 3);
+    expect(good.audioHealthCalls).toEqual({
+      micNotSending: 1,
+      micUnavailable: 0,
+      playbackBlocked: 0,
+      inboundStalled: 0,
+      outputMissing: 0,
+    });
+    expect(low).toMatchObject({
+      ratings: 3,
+      withMedia: 2,
+      // Two calls, one with no RTT: the median is the one that was measured.
+      packetLossPercentMedian: 6,
+      rttMsMedian: 300,
+      reconnectShare: 0.5,
+      // Only one of the two knew its path.
+      relayedShare: 1,
+    });
+    expect(low.audioHealthCalls.inboundStalled).toBe(2);
+  });
+
+  it("answers an empty band with nulls and zeros, not NaN", async () => {
+    const user = await rater("clerk-onlygood");
+    await recordCallRating(user.id, input(5));
+    const { good, low } = (await callRatingSummary(7)).mediaByBand;
+    expect(good).toMatchObject({
+      ratings: 1,
+      withMedia: 0,
+      packetLossPercentMedian: null,
+      rttMsMedian: null,
+      reconnectShare: null,
+      relayedShare: null,
+    });
+    expect(low.ratings).toBe(0);
+    expect(low.relayedShare).toBeNull();
   });
 
   it("ignores ratings older than the window", async () => {
@@ -195,7 +282,7 @@ describeDb("call ratings", () => {
     expect(summary.total).toBe(1);
     expect(summary.average).toBe(1);
   });
-  it("tallies audioHealth on every score, though the row keeps it only on a low one", async () => {
+  it("tallies audioHealth on every score, and the row now keeps it on every score too", async () => {
     resetCallRatingAudioHealthCounts();
     const user = await rater("clerk-ah");
     const mediaQuality = (audioHealth: Record<string, unknown>) => ({
@@ -230,6 +317,26 @@ describeDb("call ratings", () => {
       [user.id],
     );
     expect(rows.rows[0]!.media_quality?.audioHealth).toEqual({ inboundStalled: stuck });
-    expect(rows.rows[1]!.media_quality).toBeNull();
+    expect(rows.rows[1]!.media_quality?.audioHealth).toEqual({ micNotSending: healed });
+  });
+
+  it("still rates for an old client that sends no mediaQuality at all", async () => {
+    // A phone, or a bundle from before the sampler: the body has no
+    // `mediaQuality` key and must validate, store, and count.
+    const user = await rater("clerk-old");
+    const body = createCallRatingSchema.parse({
+      rating: 5,
+      durationSeconds: 120,
+      peerCount: 1,
+      transport: "livekit",
+      hadScreenShare: false,
+    });
+    await recordCallRating(user.id, body);
+    const row = await getPool().query<{ media_quality: unknown }>(
+      `SELECT media_quality FROM call_ratings WHERE user_id = $1`,
+      [user.id],
+    );
+    expect(row.rows[0]!.media_quality).toBeNull();
+    expect((await callRatingSummary(7)).total).toBe(1);
   });
 });

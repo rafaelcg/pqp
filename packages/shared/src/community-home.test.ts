@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   communityHomeMediaSchema,
+  communityHomeReadMinutes,
   communityHomeUpdateSchema,
   communityHomePostSchema,
   instagramCanonicalUrl,
@@ -377,5 +378,18 @@ describe("communityHomeUpdateSchema", () => {
         version: 1.5,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("communityHomeReadMinutes", () => {
+  it("is 0 for no text and at least 1 for any text, rounded up by 200 words", () => {
+    expect(communityHomeReadMinutes(null)).toBe(0);
+    expect(communityHomeReadMinutes("  \n ")).toBe(0);
+    expect(communityHomeReadMinutes("uma frase curta")).toBe(1);
+    const words = (n: number) =>
+      Array.from({ length: n }, () => "palavra").join(" \n ");
+    expect(communityHomeReadMinutes(words(200))).toBe(1);
+    expect(communityHomeReadMinutes(words(201))).toBe(2);
+    expect(communityHomeReadMinutes(`  ${words(450)}  `)).toBe(3);
   });
 });

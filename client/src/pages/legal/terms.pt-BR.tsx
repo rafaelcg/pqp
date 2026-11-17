@@ -27,7 +27,7 @@ export const termsPtBr: LegalDocument = {
   description:
     "Termos de uso do serviço hospedado pqp.gg: o que o pqp é de verdade, quem pode usar (18+), uso aceitável, moderação, denúncias e remoção de conteúdo.",
   heading: "Termos de Uso",
-  updated: "27 de setembro de 2026",
+  updated: "5 de novembro de 2026",
   sections: [
     {
       id: "intro",
@@ -46,15 +46,19 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "before-you-move",
-      sourceRev: "11ab44a2",
+      sourceRev: "180beac5",
       heading: "Leia isto antes de trazer a sua galera pra cá",
       body: (
         <>
           <p>
             O pqp é um projeto pessoal, feito por diversão por uma pessoa no
             tempo livre dela, com a família ajudando no produto. Não tem
-            empresa, não tem produto pago e não tem equipe de suporte. Quem lê o
-            seu e-mail é quem escreveu o código. Dá para mandar um presente
+            empresa, não tem produto pago e não tem central de atendimento. Quem
+            lê o seu e-mail é quem escreveu o código, e essa mesma pessoa analisa
+            toda denúncia de abuso em até 24 horas (veja Uso aceitável e
+            Denunciar abuso, mais abaixo). Essa promessa é sobre denúncias; o
+            &quot;no estado em que se encontra&quot; mais adiante é sobre
+            disponibilidade e recursos. Dá para mandar um presente
             para a hospedagem pelo GitHub Sponsors ou Pix, em{" "}
             <Link to="/apoie">/apoie</Link>. Isso não destrava nada: sem selo,
             sem recurso extra, sem reembolso. O serviço é oferecido{" "}
@@ -159,10 +163,20 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "acceptable-use",
-      sourceRev: "1badfc47",
+      sourceRev: "748b4f44",
       heading: "Uso aceitável",
       body: (
         <>
+          <p>
+            <strong>
+              O pqp tem tolerância zero com conteúdo inadequado e com usuários
+              abusivos.
+            </strong>{" "}
+            Qualquer pessoa pode denunciar um conteúdo ou uma pessoa de dentro
+            do app, e qualquer pessoa pode bloquear alguém. A gente analisa
+            toda denúncia em até 24 horas. Quando a violação é confirmada, a
+            gente remove o conteúdo e remove a conta que o publicou.
+          </p>
           <p>Não use o pqp.gg para:</p>
           <ul>
             <li>
@@ -215,6 +229,61 @@ export const termsPtBr: LegalDocument = {
       ),
     },
     {
+      id: "filtering",
+      sourceRev: "032c8444",
+      heading: "O que a gente filtra automaticamente",
+      body: (
+        <>
+          <p>
+            O pqp confere o que você publica antes de outras pessoas verem.
+            Quando uma conferência recusa algo, você é avisado na hora e o
+            conteúdo não é publicado.
+          </p>
+          <ul>
+            <li>
+              <strong>Texto.</strong> O pqp tem um filtro de texto embutido, e
+              ele é uma opção: não roda a não ser que tenha sido ligado, pelo
+              dono de um servidor nas configurações do AutoMod daquele servidor
+              ou pelo pqp para um servidor específico. Onde está ligado,
+              mensagens e edições em canais de servidor, posts de fórum,
+              stories, comentários e posts do Baú são comparados com uma lista
+              embutida de ofensas discriminatórias e ameaças (inclusive mandar
+              alguém se matar, ameaça de estupro e conteúdo sexual com
+              crianças), em inglês, português e espanhol. Se bater, não é
+              enviado e você vê: &quot;This message was not sent: it breaks
+              pqp&apos;s rules on abusive language.&quot; (no app em português:
+              &quot;Essa mensagem não foi enviada: ela quebra as regras do pqp
+              sobre linguagem abusiva.&quot;). Xingamento e palavrão do dia a
+              dia não estão na lista. Mensagens diretas e mensagens de grupo
+              nunca são lidas por esse filtro. O dono do servidor também pode
+              somar as próprias palavras bloqueadas, links e limites de
+              menção.
+            </li>
+            <li>
+              <strong>Imagens.</strong> Uma imagem nova anexada a uma mensagem,
+              ou publicada no Baú de uma comunidade, é checada por um serviço
+              automático de segurança de imagem antes de qualquer outra pessoa
+              ver. Se não passar, é descartada.
+            </li>
+            <li>
+              <strong>O que nenhum programa confere.</strong> Arquivos de vídeo,
+              áudio e PDF, fotos de perfil e banners, e ícones de servidor não
+              são varridos automaticamente hoje; para esses, o caminho é a
+              denúncia. Chamadas de voz não são escutadas. O nome que vem da
+              sua conta de login quando você se cadastra não passa pelo filtro
+              de texto.
+            </li>
+          </ul>
+          <p>
+            Filtro automático é uma primeira linha, não um moderador. Ele deixa
+            passar coisa, e às vezes pega algo inofensivo. Não substitui a
+            denúncia: se algo passar, denuncie, e a gente analisa toda denúncia
+            em até 24 horas.
+          </p>
+        </>
+      ),
+    },
+    {
       id: "your-content",
       sourceRev: "3ab311f9",
       heading: "O seu conteúdo",
@@ -237,7 +306,7 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "moderation",
-      sourceRev: "d069ef98",
+      sourceRev: "87aae367",
       heading: "Moderação e aplicação das regras",
       body: (
         <>
@@ -264,10 +333,11 @@ export const termsPtBr: LegalDocument = {
             Dependendo da gravidade e do histórico, isso pode ser: remover
             conteúdo específico, restringir a capacidade de uma conta publicar,
             tirar um servidor do serviço hospedado, suspender uma conta ou
-            encerrar uma conta em definitivo. A gente tenta tomar a medida mais
-            estreita que resolve o problema — mas, para conteúdo envolvendo
-            menores de idade, ameaça crível de violência ou material de abuso
-            sexual infantil, a primeira medida é o encerramento.
+            encerrar uma conta em definitivo. Uma violação confirmada das regras de
+            uso aceitável acima termina com o conteúdo removido e com a conta
+            que o publicou removida. Para conteúdo envolvendo menores de idade,
+            ameaça crível de violência ou material de abuso sexual infantil, isso
+            acontece primeiro e sem aviso.
           </p>
           <p>
             A gente também pode suspender contas ou servidores que coloquem o
@@ -279,7 +349,7 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "reporting",
-      sourceRev: "357c1d96",
+      sourceRev: "97a657bd",
       heading: "Como denunciar abuso",
       body: (
         <>
@@ -287,7 +357,8 @@ export const termsPtBr: LegalDocument = {
             Se você tem conta, use a ação <strong>Denunciar</strong> numa
             mensagem, num membro ou no cartão de uma comunidade. Esse é o canal
             de denúncia. Ele manda um recorte do conteúdo denunciado para quem
-            pode agir.
+            pode agir. Dá para bloquear uma pessoa de dentro do app também, o
+            que esconde as mensagens dela para você.
           </p>
           <p>
             Você também pode escrever para <strong>contato@pqp.gg</strong>. É
@@ -307,17 +378,11 @@ export const termsPtBr: LegalDocument = {
             <li>Prints, se você tiver, e mais ou menos quando aconteceu</li>
           </ul>
           <p>
-            <strong>O que acontece depois, sem enfeite.</strong> Uma pessoa lê
-            as denúncias. Não existe equipe de moderação, não existe escala e
-            não existe plantão fora do horário, então a gente não vai publicar
-            prazo de resposta que não consegue cumprir. O que é verdade é isto:
-            as denúncias são lidas e tratadas o mais rápido que uma pessoa
-            razoavelmente consegue, normalmente em alguns dias, e denúncias
-            envolvendo menores de idade, perigo físico iminente ou imagens
-            íntimas sem consentimento furam a fila. Se a gente estiver fora ou
-            afogado, demora mais. Isso não é uma meta que a gente descumpre em
-            silêncio — é o formato de um projeto de uma pessoa só, e você
-            deveria saber disso antes de contar com a gente.
+            <strong>O que acontece depois.</strong> A gente analisa toda denúncia
+            em até 24 horas. Denúncias envolvendo menores de idade, perigo
+            físico iminente ou imagens íntimas sem consentimento furam a fila.
+            Se a denúncia procede, o conteúdo é removido e a conta que o
+            publicou também.
           </p>
           <p>
             <strong>Uma coisa não tem ressalva.</strong> Conteúdo que sexualiza

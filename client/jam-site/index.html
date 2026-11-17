@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>pqp jam</title>
+    <meta name="description" content="Songs anybody can listen to, and play along with." />
+    <!-- The edge (client/functions/_middleware.ts) writes the real head for a
+         song and for the home. This is what a request that never met it sees:
+         kept out of search, since it could be a page that is not on yet. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="pqp jam" />
+    <meta name="theme-color" content="#090e12" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <!-- The faces are in the stylesheet (src/fonts.css, via the entry), but the
+         browser only asks for a file once a rendered word needs it, and here
+         that is the end of HTML, script, catalogue, render: the headline sat in
+         the Arial-metric fallback until then. Same three files and the same
+         reason as the app's index.html. `crossorigin` is required for a font
+         preload, or the file is fetched twice. -->
+    <link rel="preload" href="/src/assets/fonts/gabarito-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/src/assets/fonts/instrument-sans-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/src/assets/fonts/dela-gothic-one-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <!-- Before the bundle, so the theme is on the element for the first paint.
+         Dark first: no stored choice is dark. Keep it dependency-free. -->
+    <script>
+      try {
+        const stored = localStorage.getItem("pqp-theme");
+        let theme = "dark";
+        if (stored === "light" || stored === "dark") {
+          theme = stored;
+        } else if (stored === "system") {
+          theme = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        }
+        document.documentElement.dataset.theme = theme;
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/jam-site/entry.tsx"></script>
+  </body>
+</html>

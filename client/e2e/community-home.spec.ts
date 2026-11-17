@@ -292,11 +292,12 @@ test.describe("Baú", () => {
     await feed.locator("[data-home-intro-dismiss]").click();
     await expect(feed.locator("[data-home-intro]")).toHaveCount(0);
 
-    // Locked VIP post: teaser in the clear, counts, no body/URL/comments, CTA disabled.
+    // Locked VIP post: teaser in the clear, counts, no body/URL/comments, and the unlock card says who to ask (no support link on this server, so no button).
     const locked = feed.locator('[data-home-post][data-home-post-locked="1"]');
     await expect(locked).toBeVisible();
     await expect(locked.getByText("só o inner vê o clip")).toBeVisible();
-    await expect(locked.locator("[data-home-unlock-cta]")).toBeDisabled();
+    await expect(locked.locator("[data-home-unlock-cta]")).toBeVisible();
+    await expect(locked.locator("[data-home-support-cta]")).toHaveCount(0);
     await expect(locked.locator("[data-home-like]")).toBeVisible();
     await expect(locked.locator("[data-home-comment-count]")).toBeVisible();
     await expect(locked.locator("[data-home-comments]")).toHaveCount(0);

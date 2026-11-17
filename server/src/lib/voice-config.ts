@@ -22,6 +22,15 @@ import { isEnabled } from "./flags.js";
  * `mediaQuality.audioHealth` on a call rating: a client that never heard
  * `true` from here never sends the field.
  *
+ * `calmDetector`: the web call's speaking ring reads its analysers on a timer
+ * (20 Hz, 4 Hz while the window is hidden) instead of on every animation
+ * frame, which woke the renderer and the GPU process 120 times a second alone
+ * in a silent call. Runtime flag `voice_calm_detector`, global, on by default,
+ * `VOICE_CALM_DETECTOR` as its environment default. Client only: nothing on
+ * the server changes with it, and off restores the per-frame loop on the
+ * client's next config refresh, mid-call, with no reload. Global because the
+ * detector belongs to the device, not to a server, and DM calls have none.
+ *
  * `soundboard`: whether this server's calls offer the soundboard and its
  * settings tab. Runtime flag `soundboard`, per server, default off,
  * `SOUNDBOARD` as its environment default. The call's button and the settings
@@ -37,6 +46,12 @@ import { isEnabled } from "./flags.js";
  * switch: a default is never persisted, so every device that never chose
  * goes back to the browser's suppressor on its next config refresh.
  *
+ * `voiceGate`: Voz limpa's adaptive gate after RNNoise (`docs/NOISE_SUPPRESSION.md`
+ * §"The voice gate"). Runtime flag `voice_gate`, global, on by default,
+ * `VOICE_GATE` as its environment default. Off is the kill switch: every
+ * running gate is bypassed on the client's next config refresh, mid-call, and
+ * none is built, so Voz limpa is plain RNNoise again.
+ *
  * `raisedHandSticky`: a raised hand stays up until the person, a moderator
  * or leaving the call takes it down (`docs/RAISED_HANDS.md` §"What lowers a
  * hand"). Runtime flag `raised_hand_sticky`, global, on by default,
@@ -46,15 +61,27 @@ import { isEnabled } from "./flags.js";
  * controls (click your own hand to lower it, "Baixar todas" for a moderator),
  * so off hides them and restores the old audience-mode behaviour.
  *
+ * `messageListWindowing`: the chat transcript mounts only the rows near the
+ * viewport and builds a row's hover toolbar on hover or focus instead of up
+ * front (`client/src/lib/message-list-windowing.ts`). Runtime flag
+ * `message_list_windowing`, global, on by default, `MESSAGE_LIST_WINDOWING` as
+ * its environment default. It rides this config only because the client
+ * already asks it globally and refreshes it (`clean_voice_default` does the
+ * same); nothing about it is a voice feature. Off is the kill switch: the
+ * transcript goes back to mounting every loaded row.
+ *
  * `serverId` absent (a DM call) or not a uuid is read as absent: the answer is
  * then the global value, and a DM call has no audience mode anyway.
  */
 export interface VoiceConfig {
   audienceMode: boolean;
   audioSelfHeal: boolean;
+  calmDetector: boolean;
   soundboard: boolean;
   cleanVoiceDefault: boolean;
+  voiceGate: boolean;
   raisedHandSticky: boolean;
+  messageListWindowing: boolean;
 }
 
 const serverIdSchema = z.string().uuid();
@@ -65,8 +92,11 @@ export function voiceConfigForServer(rawServerId: string | null): VoiceConfig {
   return {
     audienceMode: isEnabled("audience_mode", { serverId }),
     audioSelfHeal: isEnabled("voice_audio_self_heal"),
+    calmDetector: isEnabled("voice_calm_detector"),
     soundboard: isEnabled("soundboard", { serverId }),
     cleanVoiceDefault: isEnabled("clean_voice_default"),
+    voiceGate: isEnabled("voice_gate"),
     raisedHandSticky: isEnabled("raised_hand_sticky"),
+    messageListWindowing: isEnabled("message_list_windowing"),
   };
 }

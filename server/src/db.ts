@@ -1442,6 +1442,15 @@ const CONCURRENT_INDEXES: ReadonlyArray<{
       "ON reports (reporter_id, reported_story_id) WHERE status = 'open' AND subject_type = 'story'",
   },
   {
+    // A server report closed by that server's own staff is copied once into
+    // the instance queue (`escalated_from`, services/reports.ts), so the pqp
+    // team's 24 hour review does not depend on the owner leaving it open.
+    name: "idx_reports_escalated_from",
+    unique: true,
+    definition:
+      "ON reports (escalated_from) WHERE escalated_from IS NOT NULL",
+  },
+  {
     // The scanner's open report about a story: one per story, whatever races.
     name: "idx_reports_open_story_automated",
     unique: true,
@@ -1453,6 +1462,20 @@ const CONCURRENT_INDEXES: ReadonlyArray<{
     name: "idx_reports_story",
     unique: false,
     definition: "ON reports (reported_story_id) WHERE reported_story_id IS NOT NULL",
+  },
+  {
+    // A reporter's open report about a Baú post: a second tap is a duplicate.
+    name: "idx_reports_open_bau_post_dedupe",
+    unique: true,
+    definition:
+      "ON reports (reporter_id, reported_bau_post_id) WHERE status = 'open' AND subject_type = 'bau_post'",
+  },
+  {
+    // The same for a Baú comment.
+    name: "idx_reports_open_bau_comment_dedupe",
+    unique: true,
+    definition:
+      "ON reports (reporter_id, reported_bau_comment_id) WHERE status = 'open' AND subject_type = 'bau_comment'",
   },
 ];
 
@@ -1600,7 +1623,7 @@ export interface DbChannel {
    * `forum` holds posts (each a `thread` under it) and never a message of its
    * own; see packages/shared/src/forums.ts.
    */
-  type: "text" | "voice" | "category" | "thread" | "watch_party" | "forum";
+  type: "text" | "voice" | "category" | "thread" | "watch_party" | "forum" | "jam";
   position: number;
   is_private: boolean;
   topic: string | null;

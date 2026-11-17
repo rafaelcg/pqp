@@ -103,19 +103,30 @@ export async function replayAllPlayback(): Promise<boolean> {
  * the element where it was, so this is the way back to sound.
  */
 export async function resetPlaybackSinks(): Promise<void> {
-  await Promise.all(
+  await pointPlaybackSinks("");
+}
+
+/**
+ * Point every element at one output. Resolves true when every element that
+ * can choose an output took this one; a `setSinkId` that rejects (a device
+ * that is listed but not ready yet) leaves that element where it was.
+ */
+async function pointPlaybackSinks(deviceId: string): Promise<boolean> {
+  const results = await Promise.all(
     [...entries.keys()].map(async (el) => {
       const media = el as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> };
       if (typeof media.setSinkId !== "function") {
-        return;
+        return true;
       }
       try {
-        await media.setSinkId("");
+        await media.setSinkId(deviceId);
+        return true;
       } catch {
-        // Nothing better to point it at.
+        return false;
       }
     }),
   );
+  return results.every(Boolean);
 }
 
 let outputMissingEvents = 0;
@@ -125,7 +136,8 @@ let handledMissingOutput: string | null = null;
  * Is the speaker or headset the person chose still there? When it is gone,
  * every element goes back to the default output and the event is counted for
  * the call (`takeOutputMissingEvents`). Once per disappearance: the same
- * missing id is not handled twice until it has come back.
+ * missing id is not handled twice until it has come back. When it does come
+ * back, every element is pointed at it again.
  *
  * Says nothing when it cannot tell: before a microphone permission a browser
  * lists outputs without ids, and an empty list is no evidence of anything.
@@ -162,7 +174,18 @@ export async function checkOutputDevice(deviceId: string): Promise<void> {
   }
   if (outputs.some((device) => device.deviceId === deviceId)) {
     if (handledMissingOutput === deviceId) {
-      handledMissingOutput = null;
+      // It came back (a USB headset re-enumerating, a wireless dongle
+      // waking, Bluetooth reconnecting). Every element was moved to the
+      // system default when it went, and nothing else moves them back: the
+      // per-element effect only re-applies the choice when the choice or the
+      // stream changes, which a device returning is neither. Left alone, the
+      // call plays on the default output (often the monitor or the speakers)
+      // until somebody leaves and rejoins. Forgotten only once every element
+      // took it, so a device listed before it is ready is retried on the
+      // next `devicechange`.
+      if (await pointPlaybackSinks(deviceId)) {
+        handledMissingOutput = null;
+      }
     }
     return;
   }

@@ -168,9 +168,14 @@ export async function createRnnoiseNode(
 
 /** The slice of `AudioNode` this module wires, so a test can hand it fakes. */
 export interface MicChainNode {
-  connect(destination: never): unknown;
-  disconnect(): void;
+  connect(destination: never, output?: number, input?: number): unknown;
+  disconnect(destination?: never): void;
 }
+
+/** The voice gate as the wiring sees it: a node with a failure hook. */
+export type MicChainGate = MicChainNode & {
+  onprocessorerror?: ((...args: never[]) => unknown) | null;
+};
 
 /**
  * Where the suppressor sits: between the microphone and everything else.
@@ -180,18 +185,52 @@ export interface MicChainNode {
  * gets published *and* what the watch-party mix carries. One insertion, and
  * every consumer of the processed stream is suppressed for free — which is the
  * whole reason it goes here rather than beside the publish call.
+ *
+ * The voice gate (`./voice-gate/`) goes between the suppressor and the gain
+ * and has TWO inputs: the suppressor's output is the audio it gains, and the
+ * raw microphone is its sidechain, the signal it makes its decisions from (see
+ * the header of `voice-gate-worklet.js` for why). It is only wired where there
+ * is a suppressor, because that delay is what the sidechain's head start is
+ * made of.
+ *
+ * FAIL OPEN. A worklet whose processor throws goes silent, and a silent
+ * microphone is the one failure this chain may never have, so when the gate
+ * reports `processorerror` it is cut out and the suppressor is wired straight
+ * to the gain, which is the chain it was before the gate existed.
  */
 export function connectMicChain({
   source,
   suppressor,
   gain,
+  gate = null,
 }: {
   source: MicChainNode;
   suppressor: MicChainNode | null;
   gain: MicChainNode;
+  gate?: MicChainGate | null;
 }): void {
   if (suppressor) {
     source.connect(suppressor as never);
+    if (gate) {
+      suppressor.connect(gate as never, 0, 0);
+      source.connect(gate as never, 0, 1);
+      gate.connect(gain as never);
+      gate.onprocessorerror = () => {
+        for (const cut of [
+          () => suppressor.disconnect(gate as never),
+          () => source.disconnect(gate as never),
+          () => gate.disconnect(),
+        ]) {
+          try {
+            cut();
+          } catch {
+            // Already disconnected, or gone with its context.
+          }
+        }
+        suppressor.connect(gain as never);
+      };
+      return;
+    }
     suppressor.connect(gain as never);
     return;
   }
