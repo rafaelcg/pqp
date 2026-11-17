@@ -13,7 +13,7 @@ import { jamPath } from "./route";
 import { CONTAINER, FromAppNotice } from "./shell";
 import { Badge } from "./tiles";
 import { button, focusRing, Skeleton } from "./ui";
-import { useFeatured, useJamList, type JamTab } from "./use-jam-data";
+import { pickFeatured, useFeatured, useJamList, type JamTab } from "./use-jam-data";
 import { cn, compactCount, instrumentName, listOf, personLabel } from "./util";
 
 const TABS: readonly JamTab[] = ["top", "needs", "new", "done"];
@@ -333,8 +333,14 @@ export function HomePage() {
     };
   }, []);
 
-  // The hero is the first of Em alta: it is not shown twice on that tab.
-  const shown = useMemo(() => (tab === "top" && featured.song ? list.songs.filter((song) => song.id !== featured.song!.id) : list.songs), [tab, featured.song, list.songs]);
+  // The hero is the first of Em alta: it is not shown twice on that tab. The hero
+  // and the grid are two reads that race, so while the hero is still on its way the
+  // grid applies the hero's own rule to its own page (the same Em alta order).
+  // Waiting for the hero instead would hold usable cards behind a second request;
+  // leaving nothing out would draw the hero's song as a card and pull it out a
+  // moment later, shifting every card after it.
+  const heroId = tab !== "top" ? null : featured.status === "loading" ? (pickFeatured(list.songs)?.id ?? null) : (featured.song?.id ?? null);
+  const shown = useMemo(() => (heroId ? list.songs.filter((song) => song.id !== heroId) : list.songs), [heroId, list.songs]);
   const cards = useMemo(() => shown.map((song, index) => <Card key={song.id} song={song} skippable={index >= SKIPPED_AFTER} />), [shown]);
 
   return (
