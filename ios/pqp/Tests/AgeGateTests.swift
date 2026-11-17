@@ -259,7 +259,10 @@ final class AgeGateTests: XCTestCase {
         let catalogue = try JSONDecoder().decode(
             Catalogue.self, from: Data(try Self.read("ios/pqp/Resources/Localizable.xcstrings").utf8)
         )
+        // `AgeStep` writes its own constant as `Self.minimumAge`; the blocked view
+        // writes `AgeStep.minimumAge`. Same number, one spelling for the check.
         let view = try Self.read("ios/pqp/Sources/Onboarding/AgeGateView.swift")
+            .replacingOccurrences(of: "\\(Self.minimumAge)", with: "\\(AgeStep.minimumAge)")
 
         func web(_ locale: String) throws -> [String: String] {
             let data = Data(try Self.read("client/src/locales/\(locale)/translation.json").utf8)
@@ -279,6 +282,9 @@ final class AgeGateTests: XCTestCase {
         }
 
         var expected: [(en: String, pt: String)] = [
+            // The fields screen too: it kept the "você" of an earlier copy
+            // ("Sua data", "acredita em você") beside a read-back in "tu".
+            "eyebrow", "title", "description", "warning",
             "error.badDate", "error.save", "error.checkYear",
             "readback.title", "readback.born", "readback.check", "readback.confirm",
             "blocked.eyebrow", "blocked.title", "blocked.body", "blocked.wait",

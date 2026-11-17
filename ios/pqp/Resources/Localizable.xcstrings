@@ -14295,7 +14295,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O pqp é pra maiores de %lld. A gente pergunta uma vez e acredita em você."
+            "value" : "O pqp é pra maiores de %lld. A gente pergunta uma vez e acredita no que tu disser."
           }
         }
       }
@@ -14725,7 +14725,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sua data de nascimento"
+            "value" : "Tua data de nascimento"
           }
         }
       }

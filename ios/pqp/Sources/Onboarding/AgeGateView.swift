@@ -75,7 +75,31 @@ struct AgeStep: View {
         return (iso, words)
     }
 
+    /// The sentence that says what is wrong with the date. Scrolled into view
+    /// by `body` whenever it appears.
+    private static let errorAnchor = "ageGate.errorLine"
+
     var body: some View {
+        // On a small phone the number pad and the footer leave about one field's
+        // height of scroll view, and the sentence sits below the fields: after a
+        // refusal (which puts the cursor back in the year) it would be off
+        // screen, with nothing telling a sighted person why the answer did not
+        // go. So it is scrolled to, after the keyboard has finished rising.
+        ScrollViewReader { proxy in
+            screen
+                .onChange(of: error) { _, message in
+                    guard message != nil else { return }
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(450))
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                            proxy.scrollTo(Self.errorAnchor, anchor: .center)
+                        }
+                    }
+                }
+        }
+    }
+
+    private var screen: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 StepHeading(
@@ -102,6 +126,7 @@ struct AgeStep: View {
                         .foregroundStyle(Palette.danger)
                         .transition(.opacity)
                         .accessibilityIdentifier("ageGate.error")
+                        .id(Self.errorAnchor)
                 }
 
                 if readback == nil { warning }
@@ -277,6 +302,7 @@ struct AgeStep: View {
                             .foregroundStyle(Palette.paperMuted)
                     }
                 }
+                .accessibilityValue(month == 0 ? Text("Choose") : Text(monthNames[month - 1]))
                 .accessibilityIdentifier("ageGate.month")
             }
             .overlay(
@@ -312,6 +338,10 @@ struct AgeStep: View {
                 .foregroundStyle(Palette.paperMuted)
                 .textCase(.uppercase)
             content()
+                // The caption above is a separate element, so without this a
+                // screen reader says the placeholder ("DD", "YYYY") and not
+                // which part of the date the field is.
+                .accessibilityLabel(label)
                 .font(.title3.weight(.semibold).monospacedDigit())
                 .foregroundStyle(Palette.paper)
                 .padding(.vertical, 12)

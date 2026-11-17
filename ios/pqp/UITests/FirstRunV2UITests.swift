@@ -83,6 +83,53 @@ final class FirstRunV2UITests: XCTestCase {
         if confirm.waitForExistence(timeout: 3) { confirm.tap() }
     }
 
+    // MARK: - The plausibility floor
+
+    /// A date the server refuses (a birth this year) puts the cursor back in the
+    /// year, which raises the number pad. On a small phone (run this one on an
+    /// iPhone SE) the sentence under the fields used to land behind the pad and
+    /// the footer: the person saw the cursor and no reason. It has to be on
+    /// screen, above the pad.
+    func testTheFloorSentenceIsVisibleAboveTheKeyboard() {
+        shotPrefix = "floor"
+        let app = launchNewAccount()
+        app.buttons["welcome.start"].tap()
+
+        let day = app.textFields["ageGate.day"]
+        XCTAssertTrue(day.waitForExistence(timeout: 15))
+        day.tap()
+        day.typeText("05")
+        app.buttons["ageGate.month"].tap()
+        let may = app.buttons.matching(NSPredicate(format: "label ==[c] %@ OR label ==[c] %@", "May", "maio")).firstMatch
+        XCTAssertTrue(may.waitForExistence(timeout: 5))
+        may.tap()
+        let year = app.textFields["ageGate.year"]
+        year.tap()
+        year.typeText(String(Calendar(identifier: .gregorian).component(.year, from: Date())))
+        app.buttons["ageGate.submit"].tap()
+        let confirm = app.buttons["ageGate.confirm"]
+        guard confirm.waitForExistence(timeout: 3) else {
+            // Without the read-back the submit above already sent it.
+            return assertFloorSentenceVisible(app)
+        }
+        confirm.tap()
+        assertFloorSentenceVisible(app)
+    }
+
+    private func assertFloorSentenceVisible(_ app: XCUIApplication) {
+        let error = app.descendants(matching: .any)["ageGate.error"]
+        XCTAssertTrue(error.waitForExistence(timeout: 10), "A refused date says so")
+        // The scroll to it waits for the pad to finish rising.
+        Thread.sleep(forTimeInterval: 1.5)
+        shot("01-floor-error")
+        // The footer (Continue, the agreement, Sign out) is drawn over the lower
+        // part of the screen and `isHittable` does not see through to what it
+        // covers, so compare frames: the sentence ends above the Continue button.
+        let footer = app.buttons["ageGate.submit"]
+        XCTAssertTrue(footer.exists)
+        XCTAssertLessThanOrEqual(error.frame.maxY, footer.frame.minY, "The sentence is above the footer")
+    }
+
     // MARK: - The invitee
 
     func testAnInviteeSeesTheRoomBeforeSigningUpAndLandsInIt() {
