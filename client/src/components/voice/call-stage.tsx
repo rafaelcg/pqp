@@ -4937,6 +4937,7 @@ function TileOverlay({
   insets?: VideoInsets;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const [moreOpen, setMoreOpen] = useState(false);
   useReportTileMenu(moreOpen);
   const isWakePress = useContext(WakePressContext);
@@ -4948,6 +4949,7 @@ function TileOverlay({
   const moreItems = cameraTileMoreItems(t, {
     name,
     fit,
+    pin: onPin && !redesign ? { pinned, onToggle: onPin } : undefined,
     soundboard: audio?.soundboardUserId
       ? {
           muted: soundboardMuted,
@@ -5006,7 +5008,7 @@ function TileOverlay({
           revealed,
         )}
       >
-        {onPin && <TilePinButton name={name} pinned={pinned} onToggle={onPin} />}
+        {onPin && redesign && <TilePinButton name={name} pinned={pinned} onToggle={onPin} />}
         {moreItems.length > 0 && (
           <Menu
             items={moreItems}
@@ -6106,6 +6108,7 @@ export function ScreenTileFrame({
   coverUrl?: string | null;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const [moreOpen, setMoreOpen] = useState(false);
   useReportTileMenu(moreOpen);
   const isWakePress = useContext(WakePressContext);
@@ -6212,6 +6215,7 @@ export function ScreenTileFrame({
     // An HLS player carries its own fill switch beside its quality and
     // volume, so the tile's "⋯" does not offer a second one.
     fit: hideSelfPreview || useHls ? undefined : fit,
+    pin: onPin && !redesign ? { pinned, onToggle: onPin } : undefined,
     soundboard:
       audio?.soundboardUserId && !tile.isSelf
         ? {
@@ -6242,7 +6246,7 @@ export function ScreenTileFrame({
       </button>
     </Menu>
   );
-  const pinButton = onPin ? (
+  const pinButton = onPin && redesign ? (
     <TilePinButton
       name={tile.isSelf ? t("voice.share.yourScreen") : tile.presenterName}
       pinned={pinned}

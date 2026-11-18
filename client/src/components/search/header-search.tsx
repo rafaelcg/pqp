@@ -192,14 +192,14 @@ function SearchPanel({
   const hasLabel = (value: HasValue) => t(`search.has.${value}`);
 
   const token = trailingChipToken(text, prefixes);
-  const words = searchWords(text, prefixes);
+  const queryText = searchWords(text, prefixes);
   const channelChip = chips.some((chip) => chip.kind === "em");
   const filters = useMemo(
     () => chipFilters(chips, scope === "channel" ? channel.id : null),
     [chips, scope, channel.id],
   );
   const filterKey = JSON.stringify(filters);
-  const searchable = words.length >= SEARCH_QUERY_MIN_LENGTH;
+  const searchable = queryText.length >= SEARCH_QUERY_MIN_LENGTH;
 
   useEffect(() => {
     if (!searchable) {
@@ -213,7 +213,7 @@ function SearchPanel({
     const timer = window.setTimeout(() => {
       void searchServerMessages(
         serverId,
-        { q: words, filters: JSON.parse(filterKey) as typeof filters },
+        { q: queryText, filters: JSON.parse(filterKey) as typeof filters },
         controller.signal,
       )
         .then((page) => {
@@ -232,7 +232,8 @@ function SearchPanel({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [searchable, words, filterKey, serverId]);
+  // All deps are primitives (boolean, strings), compared by value.
+  }, [searchable, queryText, filterKey, serverId]);
 
   // The rows in the order they are drawn: grouped by channel, first hit first.
   const groups = useMemo(() => {
@@ -378,7 +379,8 @@ function SearchPanel({
                 autoFocus
                 onChange={(event) => {
                   const day = event.target.value;
-                  if (day) {
+                  // Typing a year fires change at its first digit (0002-..), so wait for a real one.
+                  if (day && day >= "2015-01-01") {
                     const shown = new Date(`${day}T12:00:00`).toLocaleDateString(locale, {
                       day: "numeric",
                       month: "short",

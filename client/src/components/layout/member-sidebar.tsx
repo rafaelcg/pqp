@@ -296,6 +296,7 @@ export const MemberSidebar = memo(function MemberSidebar({
   showManageRoster = false,
 }: MemberSidebarProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const width = useChannelSidebarWidth(MEMBER_SIDEBAR_SLOT);
   const openProfile = useProfilePopover();
   const [error, setError] = useState<string | null>(null);
@@ -725,15 +726,15 @@ export const MemberSidebar = memo(function MemberSidebar({
         data-member-sidebar=""
         data-immersive-hide=""
         aria-label={t("memberList.title")}
-        style={wide ? ({ "--member-sidebar-width": `${width.width}px` } as CSSProperties) : undefined}
+        style={wide && redesign ? ({ "--member-sidebar-width": `${width.width}px` } as CSSProperties) : undefined}
         className={cn(
           "flex shrink-0 flex-col border-l border-ink-4/60 bg-channel",
           wide
-            ? cn("relative w-[var(--member-sidebar-width)]", PANE_SIDE_REDESIGN)
+            ? cn(redesign ? "relative w-[var(--member-sidebar-width)]" : "w-60", PANE_SIDE_REDESIGN)
             : "fixed inset-y-0 right-0 z-30 w-[min(100%,15rem)] shadow-[var(--shadow-popover)]",
         )}
       >
-        {wide && (
+        {wide && redesign && (
           <SidebarResizeHandle
             edge="left"
             label={t("chrome.resizeMemberList")}

@@ -127,6 +127,11 @@ export type SearchHas = (typeof SEARCH_HAS)[number];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
+function isRealDay(value: string): boolean {
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
 /**
  * The filters from a search URL. A malformed value is dropped rather than
  * refused: a stale chip should cost a filter, never the whole search.
@@ -138,7 +143,8 @@ export function parseSearchFilters(params: URLSearchParams): SearchFilters {
   };
   const day = (name: string) => {
     const value = params.get(name);
-    return value && DAY.test(value) && !Number.isNaN(Date.parse(value)) ? value : undefined;
+    // Round trip: V8 parses 2026-02-31 as March 3, and Postgres would then fail the ::date cast.
+    return value && DAY.test(value) && isRealDay(value) ? value : undefined;
   };
   const has = params.get("has");
   return {

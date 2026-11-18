@@ -48,7 +48,7 @@ function Fold({ children }: { children: ReactNode }) {
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [open, children]);
+  }, [open]);
 
   const folded = tall && !open;
   return (

@@ -130,4 +130,17 @@ describe("parseSearchFilters", () => {
       until: "2026-10-30",
     });
   });
+
+  it("accepts a real day and drops one the calendar does not have", () => {
+    const filters = (since: string, until: string) =>
+      parseSearchFilters(new URLSearchParams({ since, until }));
+    expect(filters("2026-02-28", "2024-02-29")).toMatchObject({
+      since: "2026-02-28",
+      until: "2024-02-29",
+    });
+    expect(filters("2026-02-31", "2026-13-01")).toMatchObject({
+      since: undefined,
+      until: undefined,
+    });
+  });
 });
