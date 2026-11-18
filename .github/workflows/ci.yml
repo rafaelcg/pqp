@@ -502,19 +502,6 @@ jobs:
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
 
-      # The Azure Ubuntu mirror intermittently stalls ONE package fetch for
-      # ~75 s with no data (`Ign:` in the log) and apt waits it out, package
-      # after package: `playwright install-deps` took 10 to 14 minutes in at
-      # least 12 of the 77 jobs sampled across 7 runs (2026-10-23 to 26, any
-      # leg), and on this job's 20 minute budget that is a cancellation with
-      # no failing test. A short per-fetch timeout with retries turns a stall
-      # into a retry, and the step timeouts below are the backstop that names
-      # the step.
-      - name: Bound apt stalls
-        run: |
-          printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "5";\n' \
-            | sudo tee /etc/apt/apt.conf.d/99ci-bounded > /dev/null
-
       - name: Cache Playwright browsers
         id: playwright-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -525,18 +512,11 @@ jobs:
       - name: Install Playwright browser
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         timeout-minutes: 8
-        run: pnpm --filter @pqp/client exec playwright install --with-deps chromium
+        run: pnpm --filter @pqp/client exec playwright install chromium
 
-      # A cache hit restores the browser binaries but not the apt packages the
-      # runner image may be missing; install-deps alone is cheap.
-      - name: Install Playwright system deps
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 8
-        run: pnpm --filter @pqp/client exec playwright install-deps chromium
-
-      # Firefox runs only the stale-bundle install specs, so only that job
-      # needs it. Its own cache key: the Chromium cache above is immutable once
-      # saved and cannot pick Firefox up.
+      # Firefox runs only the stale-bundle and app-frame specs, so only those
+      # jobs need it. Its own cache key: the Chromium cache above is immutable
+      # once saved and cannot pick Firefox up.
       - name: Cache Playwright Firefox
         if: matrix.stale || matrix.appframe
         id: playwright-firefox-cache
@@ -548,12 +528,31 @@ jobs:
       - name: Install Playwright Firefox
         if: (matrix.stale || matrix.appframe) && steps.playwright-firefox-cache.outputs.cache-hit != 'true'
         timeout-minutes: 8
-        run: pnpm --filter @pqp/client exec playwright install --with-deps firefox
+        run: pnpm --filter @pqp/client exec playwright install firefox
 
-      - name: Install Playwright Firefox system deps
-        if: (matrix.stale || matrix.appframe) && steps.playwright-firefox-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 8
-        run: pnpm --filter @pqp/client exec playwright install-deps firefox
+      # The system packages (`install-deps`) are the slow part, and they are
+      # needed on a browser cache hit too, because the cache restores binaries
+      # and not apt packages. The runner's Ubuntu mirror served them at 59 to
+      # 106 kB/s on 2026-11-18 (22 MB of fonts for Chromium, 32 MB of ffmpeg
+      # libraries for Firefox), so this step took 4 to 8 minutes and timed out
+      # twice in 24 hours (runs 44215705483 and 44387025255, both in the
+      # Firefox deps step), failing main CI and so skipping the production
+      # deploys that wait on it. The action caches the .deb files, kills a
+      # download that crawls and restarts it (apt resumes), and saves what it
+      # got even when it fails. It carries its own bounds, so the step has no
+      # `timeout-minutes` (a step killed by the runner cannot save the cache);
+      # the job's budget is the backstop.
+      - name: Playwright system deps (Chromium and Firefox)
+        if: matrix.stale || matrix.appframe
+        uses: ./.github/actions/playwright-system-deps
+        with:
+          browsers: chromium firefox
+
+      - name: Playwright system deps (Chromium)
+        if: ${{ !(matrix.stale || matrix.appframe) }}
+        uses: ./.github/actions/playwright-system-deps
+        with:
+          browsers: chromium
 
       - name: E2E (${{ matrix.suite }} ${{ matrix.label }})
         if: matrix.shards
