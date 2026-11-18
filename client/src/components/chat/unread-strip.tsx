@@ -15,18 +15,21 @@ export function UnreadStrip({
   since,
   onJump,
   onDismiss,
+  escapeDisabled = false,
 }: {
   count: number;
   mentions: number;
   since: string;
   onJump: () => void;
   onDismiss: () => void;
+  /** Escape belongs to something else right now (select mode). */
+  escapeDisabled?: boolean;
 }) {
   const { t } = useTranslation();
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) {
+      if (event.key !== "Escape" || event.defaultPrevented || escapeDisabled) {
         return;
       }
       if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) {
@@ -36,7 +39,7 @@ export function UnreadStrip({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onDismiss]);
+  }, [onDismiss, escapeDisabled]);
 
   return (
     <div

@@ -1438,6 +1438,8 @@ export const MessageList = memo(function MessageList({
     }
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        // Taken: the unread strip must not read the same Escape as "mark read".
+        event.preventDefault();
         leaveSelectMode();
       }
     }
@@ -2438,6 +2440,7 @@ export const MessageList = memo(function MessageList({
             since={unreadStrip.since}
             onJump={jumpToFirstUnread}
             onDismiss={dismissUnread}
+            escapeDisabled={selecting}
           />
         )}
         {forumPost?.listHeader}
@@ -5159,7 +5162,7 @@ const MessageRow = memo(function MessageRow({
       </ContextMenu>
       <ConfirmDialog
         open={deleteOpen}
-        title={t("chat.deleteConfirmTitle")}
+        title={t(redesign ? "chat.deleteConfirmTitle" : "chat.delete")}
         description={t("chat.deleteConfirm")}
         confirmLabel={t("chat.delete")}
         onConfirm={() => onDelete?.()}
