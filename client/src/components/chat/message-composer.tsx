@@ -560,7 +560,9 @@ export function MessageComposer({
   // raises the format bar over the field.
   const [countFlash, setCountFlash] = useState(false);
   const countFlashTimer = useRef<number | null>(null);
-  const [pasteOffer, setPasteOffer] = useState<{ previous: string } | null>(null);
+  // `pasted` is the text right after the paste. Any later edit drops the
+  // offer, so undoing it can never erase what was typed since.
+  const [pasteOffer, setPasteOffer] = useState<{ previous: string; pasted: string | null } | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const [isRunningSlash, setIsRunningSlash] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
@@ -1187,12 +1189,11 @@ export function MessageComposer({
         attachmentId,
       });
     } catch (error) {
+      uploadDoneRef.current.delete(localId);
       updatePending(localId, {
         status: "failed",
         error: error instanceof Error ? error.message : t("composer.gifFailed"),
       });
-    } finally {
-      uploadDoneRef.current.delete(localId);
     }
   }
 
@@ -1251,6 +1252,7 @@ export function MessageComposer({
       .catch((error: unknown) => {
         // A cancel already removed the chip and revoked its URL; re-adding an
         // error to a row that is gone would resurrect it.
+        uploadDoneRef.current.delete(localId);
         if (error instanceof AttachmentAbortError) {
           return;
         }
@@ -1261,7 +1263,9 @@ export function MessageComposer({
       })
       .finally(() => {
         uploadsRef.current.delete(localId);
-        uploadDoneRef.current.delete(localId);
+        // A landed upload keeps its entry until it is sent or removed: "ready"
+        // only arrives on the next commit, and an Enter in between still needs
+        // the promise to send the file with the message.
       });
   }
 
@@ -1316,6 +1320,7 @@ export function MessageComposer({
     const target = pendingRef.current.find((item) => item.localId === localId);
     uploadsRef.current.get(localId)?.abort();
     uploadsRef.current.delete(localId);
+    uploadDoneRef.current.delete(localId);
     if (target) {
       revokePreviewUrl(target.previewUrl);
     }
@@ -1335,7 +1340,7 @@ export function MessageComposer({
       const input = event.currentTarget;
       const replaced = (input.selectionEnd ?? 0) - (input.selectionStart ?? 0);
       if (text && body.length - replaced + text.length > MESSAGE_MAX_LENGTH) {
-        setPasteOffer({ previous: body });
+        setPasteOffer({ previous: body, pasted: null });
       }
     }
     if (!channelId || !attachmentLimits?.enabled) {
@@ -1531,6 +1536,8 @@ export function MessageComposer({
     );
     for (const item of waiting) {
       uploadsRef.current.delete(item.localId);
+    }
+    for (const item of [...ready, ...waiting]) {
       uploadDoneRef.current.delete(item.localId);
     }
     // The object URLs of everything just sent now belong to the chat
@@ -1813,7 +1820,12 @@ export function MessageComposer({
     redesign && hasSelection && menuKind === null && !isFormatBarOpen && !embedded && variant !== "stream" && !disabled;
   // Only where a file can go: without attachments the red count says enough.
   const showPasteOffer =
-    redesign && pasteOffer !== null && overLimit && !embedded && isAttachmentsEnabled;
+    redesign &&
+    pasteOffer !== null &&
+    (pasteOffer.pasted === null || pasteOffer.pasted === body) &&
+    overLimit &&
+    !embedded &&
+    isAttachmentsEnabled;
 
   return (
     <form
@@ -2101,6 +2113,11 @@ export function MessageComposer({
               }
               setHasSelection(false);
               const typingFrom = expanded?.value ?? nextValue;
+              // The first change after a paste is the paste itself. Any
+              // later one ends the undo offer.
+              setPasteOffer((offer) =>
+                offer === null ? null : offer.pasted === null ? { ...offer, pasted: typingFrom } : null,
+              );
               if (typingFrom.trim() && !typingFrom.startsWith("/")) {
                 onTyping?.();
               }
@@ -2151,7 +2168,13 @@ export function MessageComposer({
           {/* Hidden rather than empty: a self-host without attachments in a
               panel without slash commands has nothing for the + to add. */}
           {(insertItems.length > 0 || appsInMenu) && variant !== "stream" && (
-          <div ref={insertMenuRef} className={cn("relative", oneRow && "redesign:order-0!")}>
+          // With apps in the menu the wrapper mounts the launcher even before
+          // the + has anything: the launcher is what reports `available`, and
+          // the Apps row is itself an insert item. Hidden while it is empty.
+          <div
+            ref={insertMenuRef}
+            className={cn("relative", insertItems.length === 0 && "hidden", oneRow && "redesign:order-0!")}
+          >
             {insertItems.length > 0 && (
             <Tooltip label={t("composer.insert")}>
               <Button
