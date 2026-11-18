@@ -15,7 +15,6 @@ updates:
   # `npm` ecosystem and needs each workspace package listed.
   - package-ecosystem: npm
     directories:
-      - "/"
       - "/server"
       - "/client"
       - "/electron"
@@ -49,6 +48,30 @@ updates:
       # once the Locadora frame or that spec is fixed and 1.65 can be taken by hand.
       - dependency-name: "@playwright/test"
         versions: ["1.65.x"]
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # The workspace root, on its own because of one ignore that must not reach
+  # the packages. The root `typescript` exists for typescript-eslint, which
+  # declares `typescript >=4.8.4 <6.1.0` and needs the compiler's JS API; TypeScript
+  # 7 is a native binary whose `typescript` module has no such API. Every
+  # package type-checks and builds with 7 (their own `typescript`), so only the
+  # root is held on 6.x. Revisit when typescript-eslint ships a release whose
+  # peer range admits `@typescript/native` / 7.1 (its typescript-estree 8.73
+  # already lists that peer), then remove the ignore and move the root to 7.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-minor-patch:
         update-types:

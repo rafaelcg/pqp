@@ -9,7 +9,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const tsc = createRequire(import.meta.url).resolve("typescript/bin/tsc");
+// TypeScript 7 has an exports map that does not list bin/tsc, so find the package first.
+const tsc = join(dirname(createRequire(import.meta.url).resolve("typescript/package.json")), "bin", "tsc");
 
 rmSync(join(root, "dist"), { recursive: true, force: true });
 execFileSync(process.execPath, [tsc, "-p", "tsconfig.build.json"], { cwd: root, stdio: "inherit" });
