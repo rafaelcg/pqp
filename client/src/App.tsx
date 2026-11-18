@@ -4156,7 +4156,22 @@ function MainAppContent({
     const canMass = perms.can(Permission.MENTION_EVERYONE);
     // How many each mass or role mention reaches, not counting the sender:
     // the @ list says so under the redesign.
-    const others = serverMembers.filter((member) => member.id !== user?.id);
+    // One pass for every count, not one per role.
+    let total = 0;
+    let online = 0;
+    const roleReach = new Map<string, number>();
+    for (const member of serverMembers) {
+      if (member.id === user?.id) {
+        continue;
+      }
+      total += 1;
+      if (member.status && member.status !== "offline") {
+        online += 1;
+      }
+      for (const roleId of member.roleIds ?? []) {
+        roleReach.set(roleId, (roleReach.get(roleId) ?? 0) + 1);
+      }
+    }
     if (canMass) {
       extra.push({
         id: "mention:everyone",
@@ -4164,7 +4179,7 @@ function MainAppContent({
         displayName: t("composer.mentionEveryone"),
         avatarUrl: null,
         mentionKind: "mass",
-        reach: others.length,
+        reach: total,
       });
       extra.push({
         id: "mention:here",
@@ -4172,7 +4187,7 @@ function MainAppContent({
         displayName: t("composer.mentionHere"),
         avatarUrl: null,
         mentionKind: "mass",
-        reach: others.filter((member) => member.status && member.status !== "offline").length,
+        reach: online,
       });
     }
     for (const role of mentionableRoles) {
@@ -4186,7 +4201,7 @@ function MainAppContent({
           displayName: role.name,
           avatarUrl: null,
           mentionKind: "role",
-          reach: others.filter((member) => member.roleIds?.includes(role.id)).length,
+          reach: roleReach.get(role.id) ?? 0,
         });
       }
     }
@@ -10092,9 +10107,13 @@ function MainAppContent({
   }
 
   const handleBlockUser = useCallback(
-    async (userId: string) => {
+    async (userId: string): Promise<boolean> => {
+      // True once the block itself landed, even if a refresh after it fails:
+      // the report dialog says "blocked" only on that.
+      let blocked = false;
       try {
         await blockUser(userId);
+        blocked = true;
         await loadBlocks();
         // A blocked author's messages stop counting towards unread on the
         // server, so the conversation's badge is now wrong by however much they
@@ -10114,6 +10133,7 @@ function MainAppContent({
           error instanceof Error ? error.message : "Failed to block that person",
         );
       }
+      return blocked;
     },
     [loadBlocks, loadConversations],
   );
@@ -13088,6 +13108,7 @@ function MainAppContent({
         onJumpToPresent={jumpToPresent}
         onEditMessage={chat.editMessage}
         onDeleteMessage={chat.deleteMessage}
+        onActionError={setAppError}
         // Server channels only: a conversation has no moderators, and the
         // endpoint refuses one. Offering the mode there would be a menu entry
         // whose confirm ends in a 404.
@@ -14782,7 +14803,7 @@ function MainAppContent({
       <ReportDialog
         target={reportTarget}
         onClose={() => setReportTarget(null)}
-        onBlock={handleBlockAuthor}
+        onBlock={handleBlockUser}
         isBlocked={(userId) => blockedUserIds.has(userId)}
         placeName={selection.kind === "server" ? (selectedServer?.name ?? null) : null}
       />

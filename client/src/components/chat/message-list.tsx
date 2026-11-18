@@ -186,6 +186,7 @@ import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
 import { hintDietHides, useHintDiet } from "@/lib/hint-diet";
 import { shouldOpenUp } from "@/lib/menu-flip";
+import { extendUnreadTally, type UnreadTally } from "@/lib/unread-tally";
 import {
   cn,
   formatDayLabel,
@@ -387,6 +388,7 @@ function staffRungLabel(
 
 /** A run of back-to-back curtained messages; `ids` is shared by the run. */
 type BlockedRun = { lead: boolean; ids: string[] };
+const NO_BLOCKED_RUNS: ReadonlyMap<string, BlockedRun> = new Map();
 const EMPTY_AUTHORS: ReadonlyMap<string, MessageAuthorInfo> = new Map();
 const EMPTY_ROLES: readonly MessageRoleColor[] = [];
 
@@ -459,6 +461,8 @@ interface MessageListProps {
   onJumpToPresent?: () => Promise<boolean>;
   onEditMessage?: (messageId: string, body: string) => Promise<void>;
   onDeleteMessage?: (messageId: string) => Promise<void>;
+  /** A menu action that failed after its dialog closed (the app's error strip). */
+  onActionError?: (message: string) => void;
   /**
    * Delete a hand-picked set in one call, MANAGE_MESSAGES only.
    *
@@ -905,6 +909,7 @@ export const MessageList = memo(function MessageList({
   onJumpToPresent,
   onEditMessage,
   onDeleteMessage,
+  onActionError,
   onBulkDelete,
   onRetryMessage,
   onDiscardMessage,
@@ -1209,10 +1214,11 @@ export const MessageList = memo(function MessageList({
   // registered (a permalink still lands) and draw nothing. A day line ends a
   // run. With the toggle off every curtained message keeps its own line.
   const blockedRuns = useMemo(() => {
-    const runs = new Map<string, BlockedRun>();
-    if (!redesign) {
-      return runs;
+    // Nobody blocked is the common case: no pass and no new map per arrival.
+    if (!redesign || blockedAuthorIds.size === 0) {
+      return NO_BLOCKED_RUNS;
     }
+    const runs = new Map<string, BlockedRun>();
     let lead: BlockedRun | null = null;
     for (const row of rows) {
       const id = row.message.id;
@@ -1252,12 +1258,16 @@ export const MessageList = memo(function MessageList({
           action,
           serverId: moderation.serverId,
           userId: subject.id,
-        }).then(() => moderation.onModerated(), () => {});
+        }).then(
+          () => moderation.onModerated(),
+          (error: unknown) =>
+            onActionError?.(error instanceof Error ? error.message : t("member.moderationFailed")),
+        );
         return;
       }
       setPendingModeration({ action, subject, deleteMessageId });
     },
-    [moderation],
+    [moderation, onActionError, t],
   );
   const handleBlockAuthor = useCallback(
     (subject: ModerationSubject) => setPendingBlock(subject),
@@ -1341,29 +1351,29 @@ export const MessageList = memo(function MessageList({
   const unreadKey = `${channelId ?? ""}::${unreadSince ?? "none"}`;
   const [unreadDismissedKey, setUnreadDismissedKey] = useState<string | null>(null);
   const unreadDismissed = unreadDismissedKey === unreadKey;
+  const unreadTallyRef = useRef<UnreadTally | null>(null);
   const unreadStrip = useMemo(() => {
-    if (!redesign || !firstUnreadId) {
+    if (!redesign || !firstUnreadId || unreadDismissed) {
+      unreadTallyRef.current = null;
       return null;
     }
-    const start = rows.findIndex((row) => row.message.id === firstUnreadId);
-    if (start < 0) {
-      return null;
-    }
-    let count = 0;
-    let mentions = 0;
-    for (let index = start; index < rows.length; index += 1) {
-      if (rows[index].message.authorId === currentUserId) {
-        continue;
-      }
-      count += 1;
-      if (mentionMask[index]) {
-        mentions += 1;
-      }
-    }
-    return count > 0
-      ? { count, mentions, since: formatTime(rows[start].message.createdAt) }
+    // Extended on an append, recounted otherwise (`unread-tally.ts`).
+    const tally = extendUnreadTally(
+      unreadTallyRef.current,
+      rows,
+      mentionMask,
+      firstUnreadId,
+      currentUserId,
+    );
+    unreadTallyRef.current = tally;
+    return tally && tally.count > 0
+      ? {
+          count: tally.count,
+          mentions: tally.mentions,
+          since: formatTime(rows[tally.start].message.createdAt),
+        }
       : null;
-  }, [redesign, firstUnreadId, rows, mentionMask, currentUserId]);
+  }, [redesign, firstUnreadId, unreadDismissed, rows, mentionMask, currentUserId]);
   // A forum post's opening message is its first: known only once nothing
   // older is left to page in.
   const forumOpeningId =
@@ -2987,7 +2997,9 @@ export const MessageList = memo(function MessageList({
           moderation.onRolesChanged?.();
           const deleteId = pendingModeration?.deleteMessageId;
           if (deleteId && pendingModeration?.action === "ban" && onDeleteMessage) {
-            void onDeleteMessage(deleteId);
+            void onDeleteMessage(deleteId).catch(() =>
+              onActionError?.(t("chat.menu.banDoneDeleteFailed")),
+            );
           }
         }}
         onClose={() => setPendingModeration(null)}

@@ -6,7 +6,7 @@ import {
   type Report,
   type ReportReason,
 } from "@pqp/shared";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
@@ -66,7 +66,8 @@ interface ReportDialogProps {
   target: ReportTarget | null;
   onClose: () => void;
   /** Under the redesign the sent screen offers this, for the reported person. */
-  onBlock?: (userId: string) => void;
+  /** Resolves true once the block landed; false when it failed. */
+  onBlock?: (userId: string) => Promise<boolean>;
   /** Whether that person is already blocked, so the offer is not made twice. */
   isBlocked?: (userId: string) => boolean;
   /** The server the report was filed from, for "Foi pra staff do …". */
@@ -92,6 +93,8 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
   const [filed, setFiled] = useState<Report | null>(null);
   const [confirmBlock, setConfirmBlock] = useState(false);
   const [blocked, setBlocked] = useState(false);
+  const [blocking, setBlocking] = useState(false);
+  const [blockFailed, setBlockFailed] = useState(false);
   const [reason, setReason] = useState<ReportReason | null>(null);
   const [details, setDetails] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -124,7 +127,12 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
     setFiled(null);
     setConfirmBlock(false);
     setBlocked(false);
+    setBlocking(false);
+    setBlockFailed(false);
   }, [targetKey]);
+  // A block that resolves after the dialog moved to another report says nothing.
+  const targetKeyRef = useRef(targetKey);
+  targetKeyRef.current = targetKey;
 
   if (!target) {
     return null;
@@ -245,9 +253,21 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
                     {t("report.blockedNamed", { name: name ?? t("report.thisAccount") })}
                   </p>
                 ) : (
-                  <Button variant="secondary" size="sm" onClick={() => setConfirmBlock(true)}>
-                    {t("report.blockNamed", { name: name ?? t("report.thisAccount") })}
-                  </Button>
+                  <>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={blocking}
+                      onClick={() => setConfirmBlock(true)}
+                    >
+                      {t("report.blockNamed", { name: name ?? t("report.thisAccount") })}
+                    </Button>
+                    {blockFailed && (
+                      <p role="alert" className="text-danger">
+                        {t("report.blockFailed")}
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -260,11 +280,26 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
           confirmLabel={t("profile.block")}
           destructive
           onConfirm={() => {
-            if (blockUserId && onBlock) {
-              onBlock(blockUserId);
-              setBlocked(true);
-            }
             setConfirmBlock(false);
+            if (!blockUserId || !onBlock) {
+              return;
+            }
+            const key = targetKey;
+            setBlocking(true);
+            setBlockFailed(false);
+            void onBlock(blockUserId)
+              .catch(() => false)
+              .then((ok) => {
+                if (targetKeyRef.current !== key) {
+                  return;
+                }
+                setBlocking(false);
+                if (ok) {
+                  setBlocked(true);
+                } else {
+                  setBlockFailed(true);
+                }
+              });
           }}
           onClose={() => setConfirmBlock(false)}
         />
