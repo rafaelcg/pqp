@@ -850,6 +850,9 @@ export function createChatController(
   function inSendOrder(target: string, wait: Promise<unknown>, go: () => boolean | void) {
     const prior = sendTails.get(target) ?? Promise.resolve();
     const epoch = accountEpoch;
+    // Read now, while `target` is the open channel: after a switch only this
+    // copy knows its slow mode.
+    const queuedGap = slowModeGapMs(target);
     const mine = prior
       .then(() => wait)
       .catch(() => undefined)
@@ -858,7 +861,7 @@ export function createChatController(
           return undefined;
         }
         const sent = go() !== false;
-        const gap = sent ? slowModeGapMs(target) : 0;
+        const gap = sent ? (channelId === target ? slowModeGapMs(target) : queuedGap) : 0;
         return gap > 0 ? new Promise<void>((resolve) => setTimeout(resolve, gap)) : undefined;
       })
       .catch(() => undefined);
@@ -2328,6 +2331,10 @@ export function createChatController(
       heldUploadSends.clear();
       sendTails.clear();
       queuedBehind.clear();
+      // Nothing will send what these uploads were for: stop them.
+      for (const aborts of uploadAborts.values()) {
+        aborts.forEach((abort) => abort());
+      }
       uploadAborts.clear();
       disposed = true;
       if (typingSweep) {

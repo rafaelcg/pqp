@@ -232,7 +232,6 @@ function writeJoined(channelId: string | null, joined: boolean): void {
       sessionStorage.setItem(JOINED_KEY, channelId);
     } else if (sessionStorage.getItem(JOINED_KEY) === channelId) {
       sessionStorage.removeItem(JOINED_KEY);
-    sessionStorage.removeItem(JOIN_INTENT_KEY);
     }
   } catch {
     // per-tab convenience only

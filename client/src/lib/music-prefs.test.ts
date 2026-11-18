@@ -205,6 +205,21 @@ describe("music prefs store", () => {
     }
   });
 
+  it("keeps the join intent for a new channel when leaving a joined one", () => {
+    vi.stubGlobal("sessionStorage", fakeLocalStorage());
+    try {
+      const other = "22222222-2222-4222-8222-222222222222";
+      applyMusicJoinGate(CHANNEL, null, false, { listening: true });
+      applyMusicJoinGate(CHANNEL, "t1", false, { listening: true });
+      // Entrar na Rádio here, then Entrar on another channel's music card.
+      applyMusicJoinGate(CHANNEL, "t1", false, { listening: true });
+      markRadioJoinIntent(other);
+      expect(applyMusicJoinGate(other, "t2", false, { listening: true })).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps a joined seat in the Rádio when the queue runs dry and refills", () => {
     applyMusicJoinGate(CHANNEL, null, false, { listening: true });
     // Somebody else starts the Rádio: this seat gets the invite.

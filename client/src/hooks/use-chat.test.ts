@@ -2688,3 +2688,51 @@ describe("sends queued behind an upload", () => {
     expect(creates(second.sent)).toEqual([]);
   });
 });
+
+describe("queued sends, review follow-ups", () => {
+  const OTHER = "c0000000-0000-4000-8000-000000000002";
+
+  function upload(pending: Promise<{ attachmentId: string; width: null; height: null }>, abort?: () => void) {
+    return {
+      attachmentId: "local-1",
+      filename: "mapa.png",
+      contentType: "image/png",
+      byteSize: 10,
+      width: null,
+      height: null,
+      previewUrl: "blob:local",
+      pending,
+      abort,
+    };
+  }
+
+  function creates(sent: unknown[]) {
+    return sent
+      .filter((frame) => (frame as { type: string }).type === "message-create")
+      .map((frame) => (frame as { body: string }).body);
+  }
+
+  it("stops the uploads of a queued send on dispose", () => {
+    const { chat } = setup();
+    const abort = vi.fn();
+    chat.sendMessage("foto", null, [upload(new Promise(() => {}), abort)]);
+    chat.dispose();
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the slow-mode gap of the channel a queued send came from after a switch", async () => {
+    const { chat, sent } = setup();
+    chat.setSlowMode({ seconds: 5, bypass: false });
+    let land!: (value: { attachmentId: string; width: null; height: null }) => void;
+    chat.sendMessage("foto", null, [upload(new Promise((resolve) => (land = resolve)))]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    chat.sendMessage("legenda");
+    chat.joinChannel(OTHER);
+    chat.setSlowMode({ seconds: 0, bypass: false });
+    land({ attachmentId: "11111111-1111-4111-8111-111111111111", width: null, height: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(creates(sent)).toEqual(["foto"]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(creates(sent)).toEqual(["foto", "legenda"]);
+  });
+});
