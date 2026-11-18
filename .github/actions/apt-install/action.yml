@@ -46,6 +46,7 @@ runs:
 
     - name: Restore apt archive
       id: restore
+      continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.dir.outputs.path }}
@@ -63,13 +64,14 @@ runs:
       shell: bash
       env:
         ARCHIVE: ${{ steps.dir.outputs.path }}
-      run: echo "sum=$(ls "$ARCHIVE" | grep '\.deb$' | sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      run: echo "sum=$(find "$ARCHIVE" -type f ! -name lock -printf '%P %s\n' | sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
     - name: Install
       shell: bash
       env:
         BROWSERS: ${{ inputs.browsers }}
         PACKAGES: ${{ inputs.packages }}
+        ARCHIVE: ${{ steps.dir.outputs.path }}
         ATTEMPTS: ${{ inputs.attempts }}
         ATTEMPT_SECONDS: ${{ inputs.attempt-seconds }}
       run: |
@@ -89,15 +91,24 @@ runs:
         # packages, refresh the indexes here.
         inner='set -e
           if [ -n "$BROWSERS" ]; then $PW install-deps $BROWSERS; else apt-get update -qq; fi
-          if [ -n "$PACKAGES" ]; then apt-get install -y -qq $PACKAGES; fi'
+          if [ -n "$PACKAGES" ]; then
+            "$PREFETCH" "$ARCHIVE" $PACKAGES
+            apt-get install -y -qq $PACKAGES
+          fi
+          # Drop .deb files for versions the index no longer offers, so a
+          # saved cache does not grow with every package update.
+          apt-get autoclean -qq || true'
         what="$(echo "$BROWSERS $PACKAGES" | xargs)"
+        # Root gets the system directories plus the directory node lives in
+        # (the Playwright shim needs it), not the runner's whole PATH.
+        root_path="$(dirname "$(command -v node)"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         for attempt in $(seq 1 "$ATTEMPTS"); do
           echo "::group::install $what, attempt $attempt of $ATTEMPTS"
           # A try killed while dpkg was unpacking would leave it half done.
           sudo dpkg --configure -a || true
           # Run as root under `timeout`: a timeout started by the runner user
           # cannot signal the root apt-get that actually holds the download.
-          if sudo timeout --kill-after=15 "$ATTEMPT_SECONDS" env "PATH=$PATH" "PW=$pw" "BROWSERS=$BROWSERS" "PACKAGES=$PACKAGES" bash -c "$inner"; then
+          if sudo timeout --kill-after=15 "$ATTEMPT_SECONDS" env "PATH=$root_path" "PW=$pw" "BROWSERS=$BROWSERS" "PACKAGES=$PACKAGES" "ARCHIVE=$ARCHIVE" "PREFETCH=$GITHUB_ACTION_PATH/prefetch.sh" bash -c "$inner"; then
             echo "::endgroup::"
             exit 0
           fi
@@ -118,7 +129,7 @@ runs:
         # read them, which fails the whole save.
         sudo chown -R "$(id -u):$(id -g)" "$ARCHIVE" || true
         chmod -R a+rwX "$ARCHIVE" || true
-        echo "sum=$(ls "$ARCHIVE" | grep '\.deb$' | sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        echo "sum=$(find "$ARCHIVE" -type f ! -name lock -printf '%P %s\n' | sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
     # Saved only when this run downloaded something new, under a key of its
     # own: an exact key is immutable once written, so a partial archive saved
@@ -126,6 +137,7 @@ runs:
     # archive is complete nothing new is downloaded and nothing more is saved.
     - name: Save apt archive
       if: always() && steps.after.outputs.sum != steps.before.outputs.sum
+      continue-on-error: true
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.dir.outputs.path }}
