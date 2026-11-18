@@ -294,6 +294,30 @@ const TYPING_THROTTLE_MS = 2_500;
 /** A send with no broadcast back within this window is treated as failed. */
 const SEND_TIMEOUT_MS = 10_000;
 /**
+ * The longest a send waits for its own uploads. The upload itself has no
+ * timer, and a later send in the channel queues behind this one, so a stalled
+ * file must fail the send rather than hold the channel until a reload.
+ */
+const UPLOAD_SEND_MAX_WAIT_MS = 5 * 60_000;
+
+type UploadDone = Awaited<NonNullable<OutgoingAttachment["pending"]>>;
+
+function withUploadDeadline(pending: Promise<UploadDone>): Promise<UploadDone> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("upload-timeout")), UPLOAD_SEND_MAX_WAIT_MS);
+    pending.then(
+      (done) => {
+        clearTimeout(timer);
+        resolve(done);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+/**
  * A reconnect replays the outbox in paced chunks, the way the transport
  * drains its own queue: one burst, then a few frames every half second, so
  * two hundred queued messages do not land on the server's per-connection
@@ -797,6 +821,38 @@ export function createChatController(
    * each row carries its own `channelId`, and `applyPage` puts it back.
    */
   const heldUploadSends = new Map<string, ChatMessage>();
+
+  /**
+   * Per channel, the sends still waiting to go on the wire, chained in the
+   * order Enter was pressed. A message typed after one whose files are still
+   * uploading waits behind it, so the server stores them in the order the
+   * bubbles show.
+   */
+  const sendTails = new Map<string, Promise<void>>();
+
+  function inSendOrder(target: string, wait: Promise<unknown>, go: () => void) {
+    const prior = sendTails.get(target) ?? Promise.resolve();
+    const mine = prior
+      .then(() => wait)
+      .catch(() => undefined)
+      .then(() => go())
+      .catch(() => undefined);
+    sendTails.set(target, mine);
+    void mine.then(() => {
+      if (sendTails.get(target) === mine) {
+        sendTails.delete(target);
+      }
+    });
+  }
+
+  /** Sends now, or after the channel's queued sends when there are any. */
+  function transmitInOrder(target: string, go: () => void) {
+    if (sendTails.has(target)) {
+      inSendOrder(target, Promise.resolve(), go);
+    } else {
+      go();
+    }
+  }
 
   function updateUploadSend(nonce: string, patch: (message: ChatMessage) => ChatMessage): ChatMessage | null {
     let found: ChatMessage | null = null;
@@ -1530,74 +1586,94 @@ export function createChatController(
       }
       emit();
       const waiting = attachments.filter((item) => item.pending);
-      if (waiting.length === 0) {
+      const targetChannelId = channelId;
+      if (waiting.length === 0 && !sendTails.has(targetChannelId)) {
         transmit(
           nonce,
           clamped,
-          channelId,
+          targetChannelId,
           replyTo?.id,
           optimisticAttachments.map((attachment) => attachment.id),
         );
         return;
       }
       // The bubble is already up with the local files; the server only hears
-      // about it once each file has a real id. Held here, in memory: a reload
-      // in the middle loses it, like the upload itself.
-      const targetChannelId = channelId;
-      void Promise.all(waiting.map((item) => item.pending!)).then(
-        (done) => {
-          const real = new Map(waiting.map((item, index) => [item.attachmentId, done[index]!]));
-          const resolved = optimisticAttachments.map((attachment) => {
-            const uploaded = real.get(attachment.id);
-            return uploaded
-              ? {
-                  ...attachment,
-                  id: uploaded.attachmentId,
-                  width: uploaded.width ?? attachment.width,
-                  height: uploaded.height ?? attachment.height,
-                }
-              : attachment;
-          });
-          const sent = updateUploadSend(nonce, (message) => ({
-            ...message,
-            uploading: false,
-            attachments: resolved,
-          }));
-          const held = heldUploadSends.get(nonce);
-          if (held) {
-            // Sent from a channel the reader has left: the server keeps it,
-            // and that channel's next page shows it.
-            heldUploadSends.delete(nonce);
-            revokeLocalPreviews(held);
+      // about it once each file has a real id, and after any send before it in
+      // this channel. Held here, in memory: a reload in the middle loses it,
+      // like the upload itself.
+      let settled: PromiseSettledResult<UploadDone>[] = [];
+      const uploads = Promise.allSettled(
+        waiting.map((item) => withUploadDeadline(item.pending!)),
+      ).then((results) => {
+        settled = results;
+      });
+      inSendOrder(targetChannelId, uploads, () => {
+        const real = new Map<string, UploadDone>();
+        settled.forEach((result, index) => {
+          if (result.status === "fulfilled") {
+            real.set(waiting[index]!.attachmentId, result.value);
           }
-          emit();
-          if (!sent) {
-            return;
-          }
-          // The server's slow-mode clock starts now, not when Enter was
-          // pressed, so the local hold starts over with it.
-          if (channelId === targetChannelId && !bypassSlowMode && slowModeSeconds > 0) {
-            startSlowModeHold(nonce, slowModeSeconds * 1000);
-          }
-          transmit(
-            nonce,
-            clamped,
-            targetChannelId,
-            replyTo?.id,
-            resolved.map((attachment) => attachment.id),
-          );
-        },
-        () => {
+        });
+        const resolved = optimisticAttachments.map((attachment) => {
+          const uploaded = real.get(attachment.id);
+          return uploaded
+            ? {
+                ...attachment,
+                id: uploaded.attachmentId,
+                width: uploaded.width ?? attachment.width,
+                height: uploaded.height ?? attachment.height,
+              }
+            : attachment;
+        });
+        if (settled.some((result) => result.status === "rejected")) {
+          // The files that did land keep their real ids on the bubble (an
+          // unclaimed upload is swept by the server after an hour), and the
+          // local slow-mode hold goes: nothing reached the server.
           updateUploadSend(nonce, (message) => ({
             ...message,
             pending: false,
             uploading: false,
             failed: true,
             uploadFailed: true,
+            attachments: resolved,
           }));
+          if (slowModeHolds.get(targetChannelId)?.nonce === nonce) {
+            clearSlowModeHold(targetChannelId);
+          }
           emit();
-        },
-      );
+          return;
+        }
+        const sent = updateUploadSend(nonce, (message) => ({
+          ...message,
+          uploading: false,
+          attachments: resolved,
+        }));
+        const held = heldUploadSends.get(nonce);
+        if (held) {
+          // Sent from a channel the reader has left: the server keeps it,
+          // and that channel's next page shows it.
+          heldUploadSends.delete(nonce);
+          revokeLocalPreviews(held);
+        }
+        emit();
+        // A bubble the reader discarded while its files uploaded is not sent.
+        // A text send that only queued behind another goes regardless.
+        if (!sent && waiting.length > 0) {
+          return;
+        }
+        // The server's slow-mode clock starts now, not when Enter was
+        // pressed, so the local hold starts over with it.
+        if (channelId === targetChannelId && !bypassSlowMode && slowModeSeconds > 0) {
+          startSlowModeHold(nonce, slowModeSeconds * 1000);
+        }
+        transmit(
+          nonce,
+          clamped,
+          targetChannelId,
+          replyTo?.id,
+          resolved.map((attachment) => attachment.id),
+        );
+      });
     },
 
     retryMessage(nonce: string) {
@@ -1629,12 +1705,15 @@ export function createChatController(
       emit();
       // The rows are still unclaimed — a claim only happens on a message that
       // was actually stored — so the same ids are still the right ones to send.
-      transmit(
-        nonce,
-        failed.body,
-        channelId,
-        failed.replyTo?.id,
-        (failed.attachments ?? []).map((attachment) => attachment.id),
+      const retryChannelId = channelId;
+      transmitInOrder(retryChannelId, () =>
+        transmit(
+          nonce,
+          failed.body,
+          retryChannelId,
+          failed.replyTo?.id,
+          (failed.attachments ?? []).map((attachment) => attachment.id),
+        ),
       );
     },
 
@@ -1820,7 +1899,8 @@ export function createChatController(
         return;
       }
       const nonce = createNonce();
-      transmit(nonce, "", channelId, undefined, [], { chance: request });
+      const target = channelId;
+      transmitInOrder(target, () => transmit(nonce, "", target, undefined, [], { chance: request }));
     },
 
     sendPoll(request: PollRequest) {
@@ -1828,7 +1908,8 @@ export function createChatController(
         return;
       }
       const nonce = createNonce();
-      transmit(nonce, "", channelId, undefined, [], { poll: request });
+      const target = channelId;
+      transmitInOrder(target, () => transmit(nonce, "", target, undefined, [], { poll: request }));
     },
 
     votePoll(messageId: string, optionId: string) {
@@ -2174,6 +2255,7 @@ export function createChatController(
         revokeLocalPreviews(held);
       }
       heldUploadSends.clear();
+      sendTails.clear();
       if (typingSweep) {
         clearInterval(typingSweep);
         typingSweep = null;

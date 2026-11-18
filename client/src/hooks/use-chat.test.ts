@@ -252,6 +252,109 @@ describe("optimistic sending", () => {
     expect(outgoing.attachmentIds).toEqual(["11111111-1111-4111-8111-111111111111"]);
   });
 
+  it("sends a message typed after an uploading one only after it, in order", async () => {
+    const { chat, sent } = setup();
+    let land!: (value: { attachmentId: string; width: null; height: null }) => void;
+    const pending = new Promise<{ attachmentId: string; width: null; height: null }>((resolve) => {
+      land = resolve;
+    });
+    chat.sendMessage("primeiro", null, [
+      {
+        attachmentId: "attachment-1",
+        filename: "mapa.png",
+        contentType: "image/png",
+        byteSize: 10,
+        width: null,
+        height: null,
+        previewUrl: "blob:local",
+        pending,
+      },
+    ]);
+    const before = sent.length;
+    chat.sendMessage("segundo");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.length).toBe(before);
+
+    land({ attachmentId: "11111111-1111-4111-8111-111111111111", width: null, height: null });
+    await vi.advanceTimersByTimeAsync(0);
+    const bodies = sent
+      .slice(before)
+      .filter((frame) => (frame as { type: string }).type === "message-create")
+      .map((frame) => (frame as { body: string }).body);
+    expect(bodies).toEqual(["primeiro", "segundo"]);
+  });
+
+  it("keeps the files that landed when one upload fails, and frees slow mode", async () => {
+    const { chat, sent } = setup();
+    chat.setSlowMode({ seconds: 30, bypass: false });
+    let refuse!: (error: Error) => void;
+    const failing = new Promise<{ attachmentId: string; width: null; height: null }>((_, reject) => {
+      refuse = reject;
+    });
+    const landed = Promise.resolve({
+      attachmentId: "22222222-2222-4222-8222-222222222222",
+      width: 10,
+      height: 10,
+    });
+    chat.sendMessage("dois arquivos", null, [
+      {
+        attachmentId: "local-a",
+        filename: "a.png",
+        contentType: "image/png",
+        byteSize: 10,
+        width: null,
+        height: null,
+        previewUrl: "blob:a",
+        pending: landed,
+      },
+      {
+        attachmentId: "local-b",
+        filename: "b.png",
+        contentType: "image/png",
+        byteSize: 10,
+        width: null,
+        height: null,
+        previewUrl: "blob:b",
+        pending: failing,
+      },
+    ]);
+    expect(chat.getSlowModeHeldUntil()).toBeGreaterThan(0);
+    const before = sent.length;
+    refuse(new Error("put 500"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.length).toBe(before);
+    const [message] = chat.getMessages();
+    expect(message?.uploadFailed).toBe(true);
+    expect(message?.attachments?.map((attachment) => attachment.id)).toEqual([
+      "22222222-2222-4222-8222-222222222222",
+      "local-b",
+    ]);
+    expect(chat.getSlowModeHeldUntil()).toBe(0);
+  });
+
+  it("fails a send whose upload never finishes instead of holding the channel", async () => {
+    const { chat, sent } = setup();
+    chat.sendMessage("travou", null, [
+      {
+        attachmentId: "attachment-1",
+        filename: "mapa.png",
+        contentType: "image/png",
+        byteSize: 10,
+        width: null,
+        height: null,
+        previewUrl: "blob:local",
+        pending: new Promise(() => {}),
+      },
+    ]);
+    chat.sendMessage("depois");
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    const stuck = chat.getMessages().find((message) => message.body === "travou");
+    expect(stuck?.uploadFailed).toBe(true);
+    const last = sent.at(-1) as { type: string; body: string };
+    expect(last.type).toBe("message-create");
+    expect(last.body).toBe("depois");
+  });
+
   it("shows the message immediately as pending and sends a nonce", () => {
     const { chat, sent } = setup();
     chat.sendMessage("hi there");
