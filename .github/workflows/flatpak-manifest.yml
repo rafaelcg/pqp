@@ -226,6 +226,9 @@ jobs:
           name: flatpak-manifest
           path: flatpak/
 
+      - name: Bound apt stalls
+        uses: ./.github/actions/bound-apt
+
       - name: Install flatpak and flatpak-builder
         run: |
           set -euo pipefail

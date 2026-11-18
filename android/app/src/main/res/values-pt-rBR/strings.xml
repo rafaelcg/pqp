@@ -334,6 +334,7 @@
     <string name="voice_participants">%1$d na chamada</string>
     <string name="voice_peer_unreachable">Não foi possível alcançar todo mundo na chamada</string>
     <string name="voice_notification_sharing">Compartilhando tua tela</string>
+    <string name="voice_notification_mic_paused">Microfone pausado até tu abrir o app</string>
     <string name="voice_share_screen">Compartilhar tela</string>
     <string name="voice_stop_sharing">Parar de compartilhar</string>
     <string name="voice_share_hint_audio">Com o som do jogo</string>

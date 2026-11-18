@@ -348,6 +348,7 @@
     <string name="voice_participants">%1$d in this call</string>
     <string name="voice_peer_unreachable">Cannot reach everyone in this call</string>
     <string name="voice_notification_sharing">Sharing your screen</string>
+    <string name="voice_notification_mic_paused">Microphone paused until you open the app</string>
     <string name="voice_share_screen">Share screen</string>
     <string name="voice_stop_sharing">Stop sharing</string>
     <string name="voice_share_hint_audio">With the game\'s sound</string>
