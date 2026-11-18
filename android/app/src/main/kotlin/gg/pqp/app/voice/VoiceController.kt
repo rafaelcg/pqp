@@ -788,7 +788,7 @@ class VoiceController(
      * would desync the microphone from every other client's roster view of
      * it with nothing on screen explaining why.
      */
-    fun setMuted(muted: Boolean) {
+    fun setMuted(muted: Boolean, reaskForeground: Boolean = true) {
         // Neither a moderator's mute nor a listen-only seat is ours to lift.
         // The server would refuse the frame anyway; refusing here keeps the
         // control honest and saves the round trip that would otherwise flicker
@@ -799,7 +799,14 @@ class VoiceController(
         _state.value = _state.value.copy(muted = muted)
         engine.setMuted(muted || _state.value.deafened)
         pushVoiceState()
+        // A toggle in the app is a moment Android counts the microphone as
+        // usable, so a call held on a rung without it asks for the full set.
+        // The notification's own toggle asks for it itself and passes false.
+        if (reaskForeground) VoiceService.onMuteToggled(context)
     }
+
+    /** The app came to the foreground; see [VoiceService.onAppForeground]. */
+    fun onAppForeground() = VoiceService.onAppForeground(context)
 
     fun toggleDeafen() {
         val deafened = !_state.value.deafened
@@ -853,6 +860,18 @@ class VoiceController(
         // `startForeground` has returned. Doing it here would race that call
         // and lose. See the class comment on [VoiceService].
         VoiceService.startProjection(context, permission)
+    }
+
+    /**
+     * Called by [VoiceService] when Android would not let it take the
+     * projection type, so the share never starts. Said the same way as a
+     * capture that failed to start, for the same reason: the person granted
+     * the system dialog and silence would read as a broken button.
+     */
+    internal fun screenCaptureRefused() {
+        _state.value = _state.value.copy(
+            notice = context.getString(R.string.voice_screen_share_failed),
+        )
     }
 
     /**

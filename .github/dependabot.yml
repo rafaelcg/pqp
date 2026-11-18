@@ -32,13 +32,16 @@ updates:
       default-days: 3
     ignore:
       # Moves only together with @livekit/rtc-node, never alone. The load
-      # harness (tools/watch-party-load) pins rtc-node 0.13.34, whose own
-      # dependency is the exact 0.12.73, and passes this package's enums to
+      # harness (tools/watch-party-load) pins rtc-node 1.2.2, whose own
+      # dependency is the exact 0.13.2, and passes this package's enums to
       # it. A bump of this one copy puts two protobuf generations side by
       # side and CI only typechecks the harness, it never joins a room. It
-      # came back in the weekly group twice (#1526, #1626). Remove
-      # this when rtc-node is bumped by hand (it is a major now) and take
-      # both in one PR.
+      # came back in the weekly group twice (#1526, #1626), and the rtc-node
+      # 1.x bump (#1655) did the same from the other side: it moved rtc-node
+      # and left this copy on 0.12.73. Both were taken by hand in one PR.
+      # Keep this ignore: when a rtc-node bump changes its exact pin (see
+      # `npm view @livekit/rtc-node@<version> dependencies`), move both
+      # versions in tools/watch-party-load/package.json together.
       - dependency-name: "@livekit/rtc-ffi-bindings"
       # 1.65.x fails two e2e lanes on Chrome 158: the sandboxed Locadora frame
       # logs "Permissions policy violation: focus-without-user-activation",

@@ -1,5 +1,6 @@
 package gg.pqp.app.voice
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,11 +8,15 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import gg.pqp.app.MainActivity
 import gg.pqp.app.PqpApplication
 import gg.pqp.app.R
@@ -71,9 +76,14 @@ class VoiceService : Service() {
         }
 
         if (intent?.action == ACTION_TOGGLE_MUTE) {
-            voice.toggleMute()
-            ensureChannel()
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), foregroundTypes())
+            // This path asks for the full set itself, one line below.
+            voice.setMuted(!voice.state.value.muted, reaskForeground = false)
+            goForeground()
+            return START_NOT_STICKY
+        }
+
+        if (intent?.action == ACTION_REASK) {
+            reaskForeground(voice.state.value.isActive)
             return START_NOT_STICKY
         }
 
@@ -82,18 +92,24 @@ class VoiceService : Service() {
             ACTION_STOP_PROJECTION -> projecting = false
         }
 
-        ensureChannel()
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            buildNotification(),
-            foregroundTypes(),
-        )
+        val granted = goForeground()
 
         if (intent?.action == ACTION_START_PROJECTION) {
             val permission = intentExtra(intent)
             if (permission == null) {
                 projecting = false
+            } else if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                (granted and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION) == 0
+            ) {
+                // Android refused the projection type and the call was kept on
+                // a lesser rung. A capture started now would only fail inside
+                // the capturer, so say so the way a failed capture does.
+                projecting = false
+                voice.screenCaptureRefused()
+                // The notification above was built while `projecting` was
+                // still true and says "sharing". Post it again without that.
+                goForeground()
             } else {
                 // Safe here and nowhere earlier: this service is foreground with
                 // the `mediaProjection` type as of the call above.
@@ -124,10 +140,71 @@ class VoiceService : Service() {
 
     override fun onDestroy() {
         projecting = false
+        rung.clear()
         super.onDestroy()
     }
 
-    private fun foregroundTypes(): Int = voiceForegroundTypes(Build.VERSION.SDK_INT, projecting)
+    /**
+     * `startForeground` with the best type set Android will accept right now,
+     * and the set it accepted. See [voiceForegroundTypeLadder] for why the
+     * first choice can be refused and what a lesser one costs.
+     */
+    private fun goForeground(): Int {
+        ensureChannel()
+        val ladder = currentLadder()
+        val wanted = ladder.first()
+        val accepted = startForegroundOnLadder(
+            ladder,
+            start = { types -> startForegroundAs(types, microphonePaused(wanted, types)) },
+            onRefused = { types, error -> Log.w(TAG, "foreground types $types refused: ${error.message}") },
+        )
+        rung.record(wanted, accepted)
+        return accepted
+    }
+
+    /**
+     * Ask for the full set again while the call sits on a lesser rung.
+     *
+     * Android accepts the microphone type only while the app is on screen or
+     * was started by a tap on its own notification, so the first
+     * `startForeground` can land on a rung without it, and that rung stays until
+     * something asks again. This is the something: it is sent when the app comes
+     * to the foreground and on an in-app mute toggle, and it can only get better.
+     * See [reaskForegroundOnLadder] for why a refusal changes nothing.
+     *
+     * [callActive] is for the one case where this arrives at a service the
+     * system had already torn down (the call ended in between): the start
+     * still owes `startForeground`, so it is made, and the service stops.
+     */
+    private fun reaskForeground(callActive: Boolean) {
+        val running = rung.running
+        if (running == null) {
+            goForeground()
+            if (!callActive) stopSelf()
+            return
+        }
+        ensureChannel()
+        val ladder = currentLadder()
+        val wanted = ladder.first()
+        val accepted = reaskForegroundOnLadder(
+            ladder,
+            running,
+            start = { types -> startForegroundAs(types, microphonePaused(wanted, types)) },
+            onRefused = { types, error -> Log.w(TAG, "foreground re-ask for $types refused: ${error.message}") },
+        )
+        rung.record(wanted, accepted)
+    }
+
+    private fun currentLadder(): List<Int> {
+        val microphoneGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        return voiceForegroundTypeLadder(Build.VERSION.SDK_INT, projecting, microphoneGranted)
+    }
+
+    /** One `startForeground` with a notification that matches the rung it is for. */
+    private fun startForegroundAs(types: Int, microphonePaused: Boolean) {
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(microphonePaused), types)
+    }
 
     @Suppress("DEPRECATION")
     private fun intentExtra(intent: Intent): Intent? =
@@ -148,7 +225,7 @@ class VoiceService : Service() {
      * the hang-up action does: the notification is what is on screen once the
      * app itself is backgrounded, on a lock screen, or on a watch.
      */
-    private fun buildNotification(): Notification {
+    private fun buildNotification(microphonePaused: Boolean = false): Notification {
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -183,6 +260,12 @@ class VoiceService : Service() {
             title = getString(R.string.voice_notification_title),
         )
 
+        // On a rung without the microphone type Android silences the recording
+        // whenever the app is not on screen, while the call and the mute button
+        // look ordinary. Say it, in the line a person reads, and drop it the
+        // moment the full set is granted again.
+        val pausedLine = if (microphonePaused) getString(R.string.voice_notification_mic_paused) else null
+
         val muteAction = NotificationCompat.Action(
             0,
             getString(if (voiceState.muted) R.string.voice_unmute else R.string.voice_mute),
@@ -203,10 +286,11 @@ class VoiceService : Service() {
             builder
                 .addPerson(person)
                 .setStyle(NotificationCompat.CallStyle.forOngoingCall(person, hangUp))
+            if (pausedLine != null) builder.setContentText(pausedLine)
         } else {
             builder
                 .setContentTitle(getString(R.string.voice_notification_title))
-                .setContentText(text)
+                .setContentText(pausedLine ?: text)
                 .addAction(0, getString(R.string.voice_notification_hang_up), hangUp)
         }
 
@@ -229,12 +313,14 @@ class VoiceService : Service() {
     }
 
     companion object {
+        private const val TAG = "VoiceService"
         private const val CHANNEL_ID = "voice"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_HANG_UP = "gg.pqp.app.HANG_UP"
         private const val ACTION_TOGGLE_MUTE = "gg.pqp.app.TOGGLE_MUTE"
         private const val ACTION_START_PROJECTION = "gg.pqp.app.START_PROJECTION"
         private const val ACTION_STOP_PROJECTION = "gg.pqp.app.STOP_PROJECTION"
+        private const val ACTION_REASK = "gg.pqp.app.REASK_FOREGROUND"
         private const val EXTRA_PROJECTION_PERMISSION = "gg.pqp.app.PROJECTION_PERMISSION"
 
         /**
@@ -247,6 +333,32 @@ class VoiceService : Service() {
          * projection it no longer holds.
          */
         @Volatile private var projecting = false
+
+        /**
+         * What the running service holds against what the call wants. Static for
+         * the reason [projecting] is: it is the process's foreground state.
+         */
+        private val rung = ForegroundRung()
+
+        /** The app came to the foreground: get the full set back if the call lacks it. */
+        fun onAppForeground(context: Context) = rung.onAppForeground { reask(context) }
+
+        /** The person muted or unmuted in the app: same ask, same guard. */
+        fun onMuteToggled(context: Context) = rung.onMuteToggled { reask(context) }
+
+        private fun reask(context: Context) {
+            try {
+                context.startForegroundService(
+                    Intent(context, VoiceService::class.java).setAction(ACTION_REASK),
+                )
+            } catch (error: IllegalStateException) {
+                // ForegroundServiceStartNotAllowedException: Android would not
+                // let this start from here. The call keeps the rung it had.
+                Log.w(TAG, "foreground re-ask not allowed: ${error.message}")
+            } catch (error: SecurityException) {
+                Log.w(TAG, "foreground re-ask refused: ${error.message}")
+            }
+        }
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, VoiceService::class.java))

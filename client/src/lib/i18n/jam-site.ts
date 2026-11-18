@@ -63,6 +63,6 @@ export async function loadJamLocale(locale: Locale): Promise<void> {
 }
 
 export function jt(key: JamKey, vars?: JamVars): string {
-  const result = instance.t(String(key), vars);
+  const result = instance.t(String(key), vars ?? {});
   return typeof result === "string" ? result : String(result);
 }
