@@ -40,6 +40,16 @@ export function placeHeaderPopover(
   return { left, top, maxHeight: Math.max(160, viewport.height - top - EDGE) };
 }
 
+/** The open popovers' close callbacks, so another header control can close them. */
+const openPopoverClosers = new Set<() => void>();
+
+/** Closes every open header popover (pins, notifications). */
+export function closeHeaderPopovers(): void {
+  for (const close of [...openPopoverClosers]) {
+    close();
+  }
+}
+
 export function HeaderPopover({
   open,
   anchorSelector,
@@ -110,6 +120,7 @@ export function HeaderPopover({
     if (!open) {
       return;
     }
+    openPopoverClosers.add(onClose);
     const insideMenu = (target: EventTarget | null) =>
       target instanceof Element && target.closest("[role='menu']") !== null;
     const onKey = (event: KeyboardEvent) => {
@@ -134,6 +145,7 @@ export function HeaderPopover({
     document.addEventListener("keydown", onKey, true);
     document.addEventListener("pointerdown", onPointer, true);
     return () => {
+      openPopoverClosers.delete(onClose);
       document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("pointerdown", onPointer, true);
     };

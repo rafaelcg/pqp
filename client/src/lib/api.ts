@@ -2139,6 +2139,10 @@ export const searchServerMessages = (
       params.set(key, value);
     }
   }
+  // A day chip is the viewer's local day: say how far local midnight is from UTC.
+  if (options.filters?.since || options.filters?.until) {
+    params.set("tz", String(-new Date().getTimezoneOffset()));
+  }
   if (options.limit) {
     params.set("limit", String(options.limit));
   }

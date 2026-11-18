@@ -115,10 +115,27 @@ export interface SearchFilters {
   /** Messages that mention this person. */
   mentionsId?: string;
   has?: SearchHas;
-  /** On or after this UTC day, `YYYY-MM-DD`. */
+  /** On or after this day (the viewer's, see `tz`), `YYYY-MM-DD`. */
   since?: string;
-  /** Before this UTC day, `YYYY-MM-DD`. */
+  /** Before this day (the viewer's, see `tz`), `YYYY-MM-DD`. */
   until?: string;
+  /**
+   * The viewer's UTC offset in minutes, east positive (`-getTimezoneOffset()`).
+   * Puts the day boundary at the viewer's midnight. Absent is UTC.
+   */
+  tz?: number;
+}
+
+/** Whether a search has at least one filter, which lets it run with no words. */
+export function hasSearchFilter(filters: SearchFilters): boolean {
+  return Boolean(
+    filters.channelId ||
+      filters.authorId ||
+      filters.mentionsId ||
+      filters.has ||
+      filters.since ||
+      filters.until,
+  );
 }
 
 export const SEARCH_HAS = ["link", "image", "file"] as const;
@@ -147,6 +164,8 @@ export function parseSearchFilters(params: URLSearchParams): SearchFilters {
     return value && DAY.test(value) && isRealDay(value) ? value : undefined;
   };
   const has = params.get("has");
+  const rawTz = params.get("tz");
+  const tz = rawTz !== null && /^-?\d{1,3}$/.test(rawTz) ? Number(rawTz) : undefined;
   return {
     channelId: id("channelId"),
     authorId: id("authorId"),
@@ -154,6 +173,7 @@ export function parseSearchFilters(params: URLSearchParams): SearchFilters {
     has: (SEARCH_HAS as readonly string[]).includes(has ?? "") ? (has as SearchHas) : undefined,
     since: day("since"),
     until: day("until"),
+    tz: tz !== undefined && tz >= -840 && tz <= 840 ? tz : undefined,
   };
 }
 
@@ -199,11 +219,15 @@ export async function searchMessages(
     SEARCH_HIGHLIGHT_OPEN,
   ];
 
+  // No words: the filters are the search, newest first, no text match.
+  const textless = query.trim() === "";
+  const rankExpr = textless ? "0::real" : "ts_rank_cd(m.search_tsv, q.query)";
+
   let cursorClause = "";
   if (cursor) {
     // Row comparison against the same expression the ordering uses: comparing
     // rank alone would drop every equally-ranked message after the first page.
-    cursorClause = `AND (ts_rank_cd(m.search_tsv, q.query), m.created_at, m.id)
+    cursorClause = `AND (${rankExpr}, m.created_at, m.id)
         < ($7::real, $8::timestamptz, $9::uuid)`;
     params.push(cursor.rank, cursor.createdAt, cursor.id);
   }
@@ -238,11 +262,14 @@ export async function searchMessages(
       `AND EXISTS (SELECT 1 FROM message_attachments a WHERE a.message_id = m.id AND a.content_type NOT LIKE 'image/%')`,
     );
   }
+  // The viewer's midnight: the day's UTC midnight minus their offset.
+  const localMidnight = (day: string) =>
+    `(${bind(day)}::date)::timestamp AT TIME ZONE 'UTC' - ${bind(filters.tz ?? 0)}::int * interval '1 minute'`;
   if (filters.since) {
-    filterClauses.push(`AND m.created_at >= (${bind(filters.since)}::date)::timestamp AT TIME ZONE 'UTC'`);
+    filterClauses.push(`AND m.created_at >= ${localMidnight(filters.since)}`);
   }
   if (filters.until) {
-    filterClauses.push(`AND m.created_at < (${bind(filters.until)}::date)::timestamp AT TIME ZONE 'UTC'`);
+    filterClauses.push(`AND m.created_at < ${localMidnight(filters.until)}`);
   }
 
   // `hits` is limited before the outer select runs, so ts_headline — which
@@ -262,14 +289,14 @@ export async function searchMessages(
               u.username AS author_username,
               u.discriminator AS author_discriminator,
               u.avatar_url AS author_avatar_url,
-              ts_rank_cd(m.search_tsv, q.query) AS rank
+              ${rankExpr} AS rank
        FROM messages m
        CROSS JOIN q
        JOIN channels c ON c.id = m.channel_id
        JOIN users u ON u.id = m.author_id
        JOIN server_members sm ON sm.server_id = c.server_id AND sm.user_id = $2
        WHERE c.server_id = $1
-         AND m.search_tsv @@ q.query
+         ${textless ? "" : "AND m.search_tsv @@ q.query"}
          AND ${VISIBLE_CHANNEL}
          ${cursorClause}
          ${filterClauses.join("\n         ")}
@@ -285,7 +312,8 @@ export async function searchMessages(
             -- because that one renders in the session's TimeZone.
             to_char(h.created_at AT TIME ZONE 'UTC',
                     'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_cursor,
-            pqp_search_headline(h.body, q.query, $5, $6) AS snippet
+            CASE WHEN $3 = '' THEN left(h.body, 160)
+                 ELSE pqp_search_headline(h.body, q.query, $5, $6) END AS snippet
      FROM hits h
      CROSS JOIN q
      ORDER BY h.rank DESC, h.created_at DESC, h.id DESC`,

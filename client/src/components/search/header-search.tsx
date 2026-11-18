@@ -2,7 +2,7 @@ import { SEARCH_QUERY_MIN_LENGTH, type MessageSearchResult } from "@pqp/shared";
 import { Hash, MagnifyingGlass, X } from "@phosphor-icons/react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { HeaderPopover } from "@/components/chat/header-popover";
+import { closeHeaderPopovers, HeaderPopover } from "@/components/chat/header-popover";
 import { Snippet } from "@/components/search/search-dialog";
 import { Icon } from "@/components/ui/icon";
 import { Spinner } from "@/components/ui/spinner";
@@ -87,6 +87,9 @@ export function HeaderSearch({
       ) {
         event.preventDefault();
         event.stopPropagation();
+        // A sibling header popover (pins, notifications) closes first, so
+        // two never stack.
+        closeHeaderPopovers();
         setOpen(true);
         inputRef.current?.select();
       }
@@ -199,7 +202,10 @@ function SearchPanel({
     [chips, scope, channel.id],
   );
   const filterKey = JSON.stringify(filters);
-  const searchable = queryText.length >= SEARCH_QUERY_MIN_LENGTH;
+  // Words, or a chip with no words: the chip is the search. The channel
+  // scope alone is not a filter, so a bare empty field stays idle.
+  const searchable =
+    queryText.length >= SEARCH_QUERY_MIN_LENGTH || (queryText.length === 0 && chips.length > 0);
 
   useEffect(() => {
     if (!searchable) {

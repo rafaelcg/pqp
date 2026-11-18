@@ -17,7 +17,7 @@ if (DATABASE_URL) {
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
 const { createServer } = await import("./servers.js");
-const { parseSearchFilters, searchMessages } = await import("./search.js");
+const { hasSearchFilter, parseSearchFilters, searchMessages } = await import("./search.js");
 
 describeDb("search filters", () => {
   let ana: { id: string };
@@ -104,6 +104,29 @@ describeDb("search filters", () => {
     expect(await find({ since: "2026-10-02", until: "2026-10-30" })).toEqual([mid]);
   });
 
+  it("puts the day boundary at the viewer's midnight", async () => {
+    // 02:00Z on the 15th is 23:00 on the 14th in UTC-3, and 05:00 on the 15th in UTC+3.
+    const night = await post(general, ana.id, "mapa noite", "2026-10-15T02:00:00Z");
+    const day = await post(general, ana.id, "mapa dia", "2026-10-15T12:00:00Z");
+    expect(await find({ since: "2026-10-15" })).toEqual([night, day].sort());
+    expect(await find({ since: "2026-10-15", tz: -180 })).toEqual([day]);
+    expect(await find({ until: "2026-10-15", tz: -180 })).toEqual([night]);
+    expect(await find({ since: "2026-10-15", tz: 180 })).toEqual([night, day].sort());
+    expect(await find({ until: "2026-10-15", tz: 180 })).toEqual([]);
+  });
+
+  it("runs a filter with no words, newest first", async () => {
+    const old = await post(general, bia.id, "um", "2026-10-01T10:00:00Z");
+    const mid = await post(general, bia.id, "dois", "2026-10-02T10:00:00Z");
+    await post(general, ana.id, "três", "2026-10-03T10:00:00Z");
+    const page = await searchMessages(serverId, ana.id, "", 1, undefined, { authorId: bia.id });
+    expect(page.results.map((r) => r.messageId)).toEqual([mid]);
+    expect(page.results[0]!.snippet).toBe("dois");
+    expect(page.hasMore).toBe(true);
+    const all = await searchMessages(serverId, ana.id, "", 20, undefined, { authorId: bia.id });
+    expect(all.results.map((r) => r.messageId)).toEqual([mid, old]);
+  });
+
   it("finds the messages that mention someone", async () => {
     const mention = await post(general, ana.id, "mapa pra ti");
     await post(general, ana.id, "mapa pra ninguém");
@@ -128,7 +151,26 @@ describe("parseSearchFilters", () => {
       has: undefined,
       since: undefined,
       until: "2026-10-30",
+      tz: undefined,
     });
+  });
+
+  it("keeps the offset only as a whole number of minutes in range", () => {
+    const tz = (value: string) => parseSearchFilters(new URLSearchParams({ tz: value })).tz;
+    expect(tz("-180")).toBe(-180);
+    expect(tz("840")).toBe(840);
+    expect(tz("841")).toBeUndefined();
+    expect(tz("-841")).toBeUndefined();
+    expect(tz("1.5")).toBeUndefined();
+    expect(tz("abc")).toBeUndefined();
+    expect(parseSearchFilters(new URLSearchParams()).tz).toBeUndefined();
+  });
+
+  it("knows when a search has a filter", () => {
+    expect(hasSearchFilter({})).toBe(false);
+    expect(hasSearchFilter({ tz: -180 })).toBe(false);
+    expect(hasSearchFilter({ has: "link" })).toBe(true);
+    expect(hasSearchFilter({ until: "2026-10-30" })).toBe(true);
   });
 
   it("accepts a real day and drops one the calendar does not have", () => {

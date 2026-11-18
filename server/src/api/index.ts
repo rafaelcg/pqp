@@ -949,7 +949,7 @@ import {
   findUserIdByHandle,
   getPublicProfileByHandle,
 } from "../services/profiles.js";
-import { decodeSearchCursor, parseSearchFilters, searchMessages } from "../services/search.js";
+import { decodeSearchCursor, hasSearchFilter, parseSearchFilters, searchMessages } from "../services/search.js";
 // --- threads ---
 import { SIDEBAR_THREADS_PER_CHANNEL } from "@pqp/shared";
 import {
@@ -11554,9 +11554,13 @@ router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
     throw new HttpError(429, "Slow down");
   }
 
-  const query = messageSearchQuerySchema.safeParse(
-    (url.searchParams.get("q") ?? "").trim(),
-  );
+  const filters = parseSearchFilters(url.searchParams);
+  const rawQuery = (url.searchParams.get("q") ?? "").trim();
+  // Empty words are fine when a filter narrows the search; bare, they are not.
+  const query =
+    rawQuery === "" && hasSearchFilter(filters)
+      ? { success: true as const, data: "" }
+      : messageSearchQuerySchema.safeParse(rawQuery);
   if (!query.success) {
     throw new HttpError(400, "Invalid search query");
   }
@@ -11579,7 +11583,7 @@ router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
     query.data,
     limit,
     cursor ?? undefined,
-    parseSearchFilters(url.searchParams),
+    filters,
   );
 });
 
