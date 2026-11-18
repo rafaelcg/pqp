@@ -5121,6 +5121,7 @@
   "search.countMore_one": "{count}+ result",
   "search.countMore_other": "{count}+ results",
   "search.typeMore": "Type at least two letters.",
+  "search.needScope": "Pick a channel or an author to search by filters alone.",
   "search.failed": "Couldn't search right now.",
   "search.nothing": "Nothing found. Try another word or drop a filter.",
   "search.footer": "Enter opens the first one · ↑ ↓ between results",

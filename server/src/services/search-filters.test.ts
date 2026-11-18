@@ -17,7 +17,7 @@ if (DATABASE_URL) {
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
 const { createServer } = await import("./servers.js");
-const { hasSearchFilter, parseSearchFilters, searchMessages } = await import("./search.js");
+const { canSearchWithoutWords, decodeSearchCursor, parseSearchFilters, searchMessages } = await import("./search.js");
 
 describeDb("search filters", () => {
   let ana: { id: string };
@@ -127,6 +127,59 @@ describeDb("search filters", () => {
     expect(all.results.map((r) => r.messageId)).toEqual([mid, old]);
   });
 
+  it("pages a channel search with no words through the window", async () => {
+    const ids: string[] = [];
+    for (let i = 1; i <= 5; i++) {
+      ids.push(await post(general, bia.id, `m${i}`, `2026-10-0${i}T10:00:00Z`));
+    }
+    // A thread under the channel is part of the scope.
+    const thread = await getPool().query<{ id: string }>(
+      `INSERT INTO channels (server_id, name, type, parent_id, position) VALUES ($1, 't', 'thread', $2, 10) RETURNING id`,
+      [serverId, general],
+    );
+    const inThread = await post(thread.rows[0]!.id, bia.id, "fio", "2026-10-06T10:00:00Z");
+    await post(offTopic, bia.id, "fora", "2026-10-07T10:00:00Z");
+    const seen: string[] = [];
+    let cursor: ReturnType<typeof decodeSearchCursor> | undefined;
+    let pages = 0;
+    for (;;) {
+      const page = await searchMessages(serverId, ana.id, "", 20, cursor ?? undefined, { channelId: general, has: undefined }, 2);
+      seen.push(...page.results.map((r) => r.messageId));
+      pages++;
+      if (!page.hasMore) break;
+      cursor = decodeSearchCursor(page.nextCursor!);
+      expect(pages).toBeLessThan(10);
+    }
+    expect(seen).toEqual([inThread, ...ids.slice().reverse()]);
+    // 6 candidates through a window of 2: three full windows, then an empty one.
+    expect(pages).toBe(4);
+  });
+
+  it("pages an author search with no words, and filters inside the window", async () => {
+    const a = await post(general, bia.id, "https://a.example", "2026-10-01T10:00:00Z");
+    await post(general, bia.id, "sem link", "2026-10-02T10:00:00Z");
+    const c = await post(offTopic, bia.id, "https://c.example", "2026-10-03T10:00:00Z");
+    await post(general, ana.id, "https://ana.example", "2026-10-04T10:00:00Z");
+    const first = await searchMessages(serverId, ana.id, "", 20, undefined, { authorId: bia.id, has: "link" }, 2);
+    expect(first.results.map((r) => r.messageId)).toEqual([c]);
+    expect(first.hasMore).toBe(true);
+    const second = await searchMessages(
+      serverId,
+      ana.id,
+      "",
+      20,
+      decodeSearchCursor(first.nextCursor!)!,
+      { authorId: bia.id, has: "link" },
+      2,
+    );
+    expect(second.results.map((r) => r.messageId)).toEqual([a]);
+    expect(second.hasMore).toBe(false);
+  });
+
+  it("refuses to run with no words and no channel or author", async () => {
+    await expect(searchMessages(serverId, ana.id, "", 20, undefined, { has: "link" })).rejects.toThrow();
+  });
+
   it("finds the messages that mention someone", async () => {
     const mention = await post(general, ana.id, "mapa pra ti");
     await post(general, ana.id, "mapa pra ninguém");
@@ -166,11 +219,14 @@ describe("parseSearchFilters", () => {
     expect(parseSearchFilters(new URLSearchParams()).tz).toBeUndefined();
   });
 
-  it("knows when a search has a filter", () => {
-    expect(hasSearchFilter({})).toBe(false);
-    expect(hasSearchFilter({ tz: -180 })).toBe(false);
-    expect(hasSearchFilter({ has: "link" })).toBe(true);
-    expect(hasSearchFilter({ until: "2026-10-30" })).toBe(true);
+  it("allows no words only with a channel or an author", () => {
+    expect(canSearchWithoutWords({})).toBe(false);
+    expect(canSearchWithoutWords({ tz: -180 })).toBe(false);
+    expect(canSearchWithoutWords({ has: "link" })).toBe(false);
+    expect(canSearchWithoutWords({ until: "2026-10-30" })).toBe(false);
+    expect(canSearchWithoutWords({ mentionsId: "x" })).toBe(false);
+    expect(canSearchWithoutWords({ channelId: "x" })).toBe(true);
+    expect(canSearchWithoutWords({ authorId: "x" })).toBe(true);
   });
 
   it("accepts a real day and drops one the calendar does not have", () => {

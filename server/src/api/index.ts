@@ -949,7 +949,7 @@ import {
   findUserIdByHandle,
   getPublicProfileByHandle,
 } from "../services/profiles.js";
-import { decodeSearchCursor, hasSearchFilter, parseSearchFilters, searchMessages } from "../services/search.js";
+import { decodeSearchCursor, canSearchWithoutWords, parseSearchFilters, searchMessages } from "../services/search.js";
 // --- threads ---
 import { SIDEBAR_THREADS_PER_CHANNEL } from "@pqp/shared";
 import {
@@ -11556,9 +11556,9 @@ router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
 
   const filters = parseSearchFilters(url.searchParams);
   const rawQuery = (url.searchParams.get("q") ?? "").trim();
-  // Empty words are fine when a filter narrows the search; bare, they are not.
+  // Empty words are fine when a channel or an author narrows the search; bare, they are not.
   const query =
-    rawQuery === "" && hasSearchFilter(filters)
+    rawQuery === "" && canSearchWithoutWords(filters)
       ? { success: true as const, data: "" }
       : messageSearchQuerySchema.safeParse(rawQuery);
   if (!query.success) {

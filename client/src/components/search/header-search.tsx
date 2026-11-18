@@ -202,10 +202,11 @@ function SearchPanel({
     [chips, scope, channel.id],
   );
   const filterKey = JSON.stringify(filters);
-  // Words, or a chip with no words: the chip is the search. The channel
-  // scope alone is not a filter, so a bare empty field stays idle.
+  // Words, or a chip with no words when that chip scope is a channel or an
+  // author (the server only runs a wordless search through those indexes).
   const searchable =
-    queryText.length >= SEARCH_QUERY_MIN_LENGTH || (queryText.length === 0 && chips.length > 0);
+    queryText.length >= SEARCH_QUERY_MIN_LENGTH ||
+    (queryText.length === 0 && Boolean(filters.channelId || filters.authorId) && chips.length > 0);
 
   useEffect(() => {
     if (!searchable) {
@@ -495,7 +496,10 @@ function SearchPanel({
           </p>
         )}
         {status === "idle" && (
-          <p className="px-3.5 py-5 text-center text-[13px] text-text-tertiary">{t("search.typeMore")}</p>
+          <p className="px-3.5 py-5 text-center text-[13px] text-text-tertiary">
+            {/* Chips but no words and no channel or author: a filter alone cannot search here. */}
+            {t(queryText.length === 0 && chips.length > 0 ? "search.needScope" : "search.typeMore")}
+          </p>
         )}
         {status === "error" && (
           <p role="alert" className="px-3.5 py-5 text-center text-[13px] text-danger">
