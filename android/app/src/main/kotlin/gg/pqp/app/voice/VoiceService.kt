@@ -101,6 +101,9 @@ class VoiceService : Service() {
                 // the capturer, so say so the way a failed capture does.
                 projecting = false
                 voice.screenCaptureRefused()
+                // The notification above was built while `projecting` was
+                // still true and says "sharing". Post it again without that.
+                goForeground()
             } else {
                 // Safe here and nowhere earlier: this service is foreground with
                 // the `mediaProjection` type as of the call above.
