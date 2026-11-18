@@ -150,8 +150,8 @@ importers:
         specifier: 1.7.4
         version: 1.7.4
       i18next:
-        specifier: ^26.4.0
-        version: 26.4.0(typescript@5.9.3)
+        specifier: ^27.1.1
+        version: 27.1.2(typescript@5.9.3)
       livekit-client:
         specifier: ^2.24.1
         version: 2.24.1(@types/dom-mediacapture-record@1.0.22)
@@ -256,8 +256,8 @@ importers:
         specifier: ^6.8.11
         version: 6.8.11
       i18next:
-        specifier: ^26.4.0
-        version: 26.4.0(typescript@5.9.3)
+        specifier: ^27.1.1
+        version: 27.1.2(typescript@5.9.3)
       uiohook-napi:
         specifier: ^1.5.5
         version: 1.5.5
@@ -4079,8 +4079,9 @@ packages:
     resolution: {integrity: sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==}
     engines: {node: '>= 14'}
 
-  i18next@26.4.0:
-    resolution: {integrity: sha512-rsmK5bFqsD1AetSFSIa43wtNR4WpvvH4p0tLEsTxkC7QTrfdFm06nbQ95bh8Og4wwaCnUEcm9DVYL2cgxitiQg==}
+  i18next@27.1.2:
+    resolution: {integrity: sha512-851D6dY9vuhn9hF0p5KpY7FPeYnm3P73tqyX2nxfsjeEYVg7Du0Fflw0rJtv7nFnZcDQS0+Hqn0UP6+SPx8mew==}
+    engines: {node: '>=22'}
     peerDependencies:
       typescript: ^5 || ^6 || ^7
     peerDependenciesMeta:
@@ -10064,7 +10065,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  i18next@26.4.0(typescript@5.9.3):
+  i18next@27.1.2(typescript@5.9.3):
     optionalDependencies:
       typescript: 5.9.3
 
