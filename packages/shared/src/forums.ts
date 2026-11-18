@@ -232,7 +232,7 @@ export type ForumErrorCode = (typeof FORUM_ERRORS)[keyof typeof FORUM_ERRORS];
 // eslint-disable-next-line no-control-regex
 const FORUM_CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 
 /** A post title: trimmed, 1 to 100, no control characters, one line. */
 export const forumTitleSchema = z

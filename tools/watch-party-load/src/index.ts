@@ -36,8 +36,10 @@ import {
 
 // Bound the HTTP keep-alive pool per process. Fly's per-machine concurrency
 // limit counts every TCP connection, and undici's default is unbounded, so an
-// idle pool would eat the budget the WebSockets need.
-setGlobalDispatcher(new Agent({ connections: 16, keepAliveTimeout: 1000 }));
+// idle pool would eat the budget the WebSockets need. undici 8 negotiates HTTP/2
+// by default; `allowH2: false` keeps the HTTP/1.1 request pattern every earlier
+// rehearsal was measured with.
+setGlobalDispatcher(new Agent({ connections: 16, keepAliveTimeout: 1000, allowH2: false }));
 
 const STAGING_API = "https://pqp-api-staging.fly.dev";
 const STAGING_WS = "wss://pqp-api-staging.fly.dev/ws";

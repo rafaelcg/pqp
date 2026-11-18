@@ -84,7 +84,7 @@ export interface VoiceConfig {
   messageListWindowing: boolean;
 }
 
-const serverIdSchema = z.string().uuid();
+const serverIdSchema = z.string().guid();
 
 export function voiceConfigForServer(rawServerId: string | null): VoiceConfig {
   const parsed = serverIdSchema.safeParse(rawServerId);

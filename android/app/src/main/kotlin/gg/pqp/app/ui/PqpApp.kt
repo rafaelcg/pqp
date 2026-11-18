@@ -82,6 +82,7 @@ import gg.pqp.app.ui.components.ConnectionBanner
 import gg.pqp.app.ui.components.ConnectionDoctorDialog
 import gg.pqp.app.ui.components.IncomingCallBanner
 import gg.pqp.app.ui.components.rememberMicrophoneGate
+import gg.pqp.app.ui.screens.AgeGateBlockedScreen
 import gg.pqp.app.ui.screens.AgeGateScreen
 import gg.pqp.app.ui.screens.ChannelsScreen
 import gg.pqp.app.ui.screens.ChatScreen
@@ -297,10 +298,7 @@ fun PqpApp(
                     reason = (phase as? SessionPhase.Failed)?.reason.orEmpty(),
                     onRetry = session::restore,
                 )
-                PhaseKey.Blocked -> FailedScreen(
-                    reason = (phase as? SessionPhase.Blocked)?.reason.orEmpty(),
-                    onRetry = null,
-                )
+                PhaseKey.Blocked -> AgeGateBlockedScreen()
                 PhaseKey.Ready -> SignedInNav(session, voice, push, calls, watch, watchPartyHost)
             }
         }

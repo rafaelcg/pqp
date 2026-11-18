@@ -45,7 +45,7 @@ import { accessibleChannelIds, canAccessChannel, getMemberRole } from "../servic
  * The summaries are the `channel-app` frame's, so a client keeps one shape.
  */
 
-const serverIdSchema = z.string().uuid();
+const serverIdSchema = z.string().guid();
 const startBodySchema = z.object({
   appId: z.string().regex(/^[a-z][a-z0-9-]{1,30}[a-z0-9]$/),
 });

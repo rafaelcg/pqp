@@ -97,12 +97,12 @@ export function serverEmojiPath(emojiId: string, version: string): string {
 }
 
 export const serverEmojiSchema = z.object({
-  id: z.string().uuid(),
-  serverId: z.string().uuid(),
+  id: z.string().guid(),
+  serverId: z.string().guid(),
   name: serverEmojiNameSchema,
   /** Root-relative; each client prefixes its own API base. */
   url: z.string(),
-  createdBy: z.string().uuid().nullable(),
+  createdBy: z.string().guid().nullable(),
   /** The uploader's display name. Null once their account is gone. */
   createdByName: z.string().nullable(),
   /** ISO 8601. */

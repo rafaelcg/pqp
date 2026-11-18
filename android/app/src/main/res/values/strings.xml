@@ -25,6 +25,22 @@
     <string name="age_gate_saving">Saving…</string>
     <string name="age_gate_error_bad_date">That is not a date we can read. Check the day, month and year.</string>
     <string name="age_gate_error_save">Could not save that. Check your connection and try again.</string>
+    <string name="age_gate_error_check_year">Check the year. That date of birth does not look right.</string>
+    <!-- Read-back and blocked screen: same wording as the web's ageGate.readback.* and ageGate.blocked.* keys. -->
+    <string name="age_gate_readback_title">Check your date of birth</string>
+    <string name="age_gate_readback_born">You were born on %1$s.</string>
+    <string name="age_gate_readback_check">Check the day, the month and the year.</string>
+    <string name="age_gate_readback_confirm">That is right</string>
+    <string name="age_gate_readback_edit">Change it</string>
+    <string name="age_gate_blocked_eyebrow">Age check</string>
+    <string name="age_gate_blocked_title">pqp is for %1$d and over</string>
+    <string name="age_gate_blocked_body">Thanks for answering honestly. The date of birth you gave is under %1$d, so this account is closed. That is a rule about the service, not a judgement about you, pqp is built for adults and we are not able to make exceptions to it.</string>
+    <string name="age_gate_blocked_contact_before">Entered the wrong date by mistake? Write to</string>
+    <string name="age_gate_blocked_contact_after">from this account\'s email address.</string>
+    <string name="age_gate_blocked_appeal_before">How appeals work, and how to ask us to delete the account and the data attached to it, is on our</string>
+    <string name="age_gate_blocked_appeal_link">Terms page</string>
+    <string name="age_gate_blocked_appeal_after">.</string>
+    <string name="age_gate_blocked_wait">Please do not open another account in the meantime, we would rather settle this one.</string>
 
 
     <!-- Servers -->

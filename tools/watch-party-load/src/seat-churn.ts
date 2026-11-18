@@ -81,7 +81,7 @@ import {
  */
 
 // Bound the HTTP keep-alive pool per process, same reasoning as index.ts.
-setGlobalDispatcher(new Agent({ connections: 16, keepAliveTimeout: 1000 }));
+setGlobalDispatcher(new Agent({ connections: 16, keepAliveTimeout: 1000, allowH2: false }));
 
 const STAGING_API = "https://pqp-api-staging.fly.dev";
 const STAGING_WS = "wss://pqp-api-staging.fly.dev/ws";

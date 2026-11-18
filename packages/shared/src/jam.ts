@@ -383,7 +383,7 @@ export type JamErrorCode = (typeof JAM_ERRORS)[keyof typeof JAM_ERRORS];
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 
 /** One line, whitespace collapsed, trimmed, 1 to `max`, no control characters. */
 function oneLine(max: number) {

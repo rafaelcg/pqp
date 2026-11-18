@@ -59,7 +59,7 @@ class ForwardContractTest {
         // A target is `{ channelId }` or `{ userId }`, each its own strict object.
         val text = source()
         for (key in ForwardTargetRef.serializer().descriptor.elementNames) {
-            assertTrue("forwardTargetSchema has no `$key`", text.contains("z.object({ $key: z.string().uuid() })"))
+            assertTrue("forwardTargetSchema has no `$key`", text.contains("z.object({ $key: z.string().guid() })"))
         }
     }
 

@@ -130,8 +130,8 @@ android {
         // Bump this for every upload, forever. A version code is not a version,
         // it is a monotonic upload counter, and the day it stops moving is the
         // day a fix silently cannot ship.
-        versionCode = 40
-        versionName = "0.4.33"
+        versionCode = 41
+        versionName = "0.4.34"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -435,8 +435,9 @@ val nativeJniClasses = listOf(
     "Lorg/jni_zero/JniInit;",
     "Lorg/webrtc/PeerConnectionFactory;",
     "Lorg/webrtc/audio/JavaAudioDeviceModule;",
-    // io.github.webrtc-sdk:android-prefixed, LiveKit's.
-    "Llivekit/org/jni_zero/JniInit;",
+    // io.github.webrtc-sdk:android-prefixed, LiveKit's. Since livekit-android
+    // 2.30 (prefixed 150) native code resolves `JniZero`; `JniInit` is gone.
+    "Llivekit/org/jni_zero/JniZero;",
     "Llivekit/org/webrtc/PeerConnectionFactory;",
     "Llivekit/org/webrtc/audio/JavaAudioDeviceModule;",
 )

@@ -41,16 +41,16 @@ export const bauFollowPausedReasonSchema = z.enum(["permissions", "banned"]);
 export type BauFollowPausedReason = z.infer<typeof bauFollowPausedReasonSchema>;
 
 export const bauFollowSchema = z.object({
-  id: z.string().uuid(),
-  sourceServerId: z.string().uuid(),
+  id: z.string().guid(),
+  sourceServerId: z.string().guid(),
   sourceServerName: z.string(),
   sourceServerIconUrl: z.string().nullable(),
-  targetServerId: z.string().uuid(),
+  targetServerId: z.string().guid(),
   targetServerName: z.string(),
-  targetChannelId: z.string().uuid(),
+  targetChannelId: z.string().guid(),
   targetChannelName: z.string(),
   /** Always null: a delivery never pings. Kept so an older client still parses it. */
-  rolePingId: z.string().uuid().nullable(),
+  rolePingId: z.string().guid().nullable(),
   rolePingName: z.string().nullable(),
   status: bauFollowStatusSchema,
   pausedReason: bauFollowPausedReasonSchema.nullable(),
@@ -77,14 +77,14 @@ export type BauFollowState = z.infer<typeof bauFollowStateSchema>;
 
 /** A role of a destination server a follow may ping. Deprecated: a delivery never pings, so `roles` is always empty. */
 export const bauFollowRoleOptionSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string(),
   color: z.string().nullable(),
 });
 export type BauFollowRoleOption = z.infer<typeof bauFollowRoleOptionSchema>;
 
 export const bauFollowChannelOptionSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string(),
   /** An active or paused follow of this source already points here. */
   following: z.boolean(),
@@ -92,7 +92,7 @@ export const bauFollowChannelOptionSchema = z.object({
 export type BauFollowChannelOption = z.infer<typeof bauFollowChannelOptionSchema>;
 
 export const bauFollowDestinationSchema = z.object({
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   serverName: z.string(),
   serverIconUrl: z.string().nullable(),
   channels: z.array(bauFollowChannelOptionSchema),
@@ -118,16 +118,16 @@ export type BauFollowDestinations = z.infer<typeof bauFollowDestinationsSchema>;
 
 /** `POST /api/servers/:serverId/home/follow` */
 export const createBauFollowSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /** Ignored: a delivery never pings. Accepted so an older client's request still validates. */
-  rolePingId: z.string().uuid().nullable().optional(),
+  rolePingId: z.string().guid().nullable().optional(),
 });
 export type CreateBauFollowRequest = z.infer<typeof createBauFollowSchema>;
 
 /** `PATCH /api/bau-follows/:followId`: resume a paused follow (`rolePingId` is accepted and ignored). */
 export const updateBauFollowSchema = z
   .object({
-    rolePingId: z.string().uuid().nullable().optional(),
+    rolePingId: z.string().guid().nullable().optional(),
     /** `true` resumes a paused follow; deliveries start from the moment of the resume. */
     resume: z.boolean().optional(),
   })
@@ -148,8 +148,8 @@ export type ChannelBauFollows = z.infer<typeof channelBauFollowsSchema>;
  * channel is named because that is where the cards land.
  */
 export const bauFollowerSchema = z.object({
-  id: z.string().uuid(),
-  targetServerId: z.string().uuid(),
+  id: z.string().guid(),
+  targetServerId: z.string().guid(),
   targetServerName: z.string(),
   targetServerIconUrl: z.string().nullable(),
   targetChannelName: z.string(),
@@ -159,7 +159,7 @@ export const bauFollowerSchema = z.object({
 export type BauFollower = z.infer<typeof bauFollowerSchema>;
 
 export const bauFollowBlockSchema = z.object({
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   serverName: z.string(),
   createdAt: z.string(),
 });

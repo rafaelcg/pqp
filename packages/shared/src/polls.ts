@@ -55,7 +55,7 @@ export const pollRequestSchema = z.object({
 export type PollRequest = z.infer<typeof pollRequestSchema>;
 
 export const pollVoterSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   displayName: z.string().min(1),
   avatarUrl: z.string().nullable(),
 });
@@ -63,7 +63,7 @@ export const pollVoterSchema = z.object({
 export type PollVoter = z.infer<typeof pollVoterSchema>;
 
 export const pollOptionSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   label: z.string().min(1).max(POLL_OPTION_MAX_LENGTH),
   votes: z.number().int().nonnegative(),
   /** Whether *this viewer* voted for the option. Per-read, not on the wire for everyone. */

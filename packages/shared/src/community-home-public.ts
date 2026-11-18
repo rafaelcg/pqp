@@ -75,7 +75,7 @@ export const BAU_PUBLIC_REDACTED_CHANNEL_ID =
  * a URL longer than a signature lasts (an unfurl card).
  */
 export const publicBauPostSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   title: z.string().nullable(),
   /** Channel references redacted, see `BAU_PUBLIC_REDACTED_CHANNEL_ID`. */
   body: z.string().nullable(),
@@ -112,7 +112,7 @@ export const publicBauPostSchema = z.object({
    * absent here, so a staff-only channel's name is never published.
    */
   channels: z
-    .array(z.object({ id: z.string().uuid(), name: z.string() }))
+    .array(z.object({ id: z.string().guid(), name: z.string() }))
     .default([]),
   /**
    * This post's own address, from the same function that hands `publicUrl` to
