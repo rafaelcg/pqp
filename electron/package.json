@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
-    "i18next": "^26.4.0",
+    "i18next": "^27.1.1",
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
