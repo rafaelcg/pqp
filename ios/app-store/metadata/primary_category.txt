@@ -1,1 +1,1 @@
-Social Networking
+SOCIAL_NETWORKING

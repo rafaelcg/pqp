@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
+  PARTY_PASS_REVOCATION_CACHE_MAX_ENTRIES,
   PARTY_PASS_REVOCATION_CACHE_TTL_MS,
   PartyPassRevocationGate,
   partyPassRequiresKvInProduction,
@@ -15,7 +16,7 @@ import {
  */
 function fakeKv(keyNames = []) {
   return {
-    async list({ prefix }) {
+    async list({ prefix = "" } = {}) {
       return { keys: keyNames.filter((name) => name.startsWith(prefix)).map((name) => ({ name })) };
     },
   };
@@ -37,7 +38,7 @@ function throwingKv(error = new Error("kv unavailable")) {
  */
 function pagedFakeKv(keyNames, pageSize) {
   return {
-    async list({ prefix, cursor }) {
+    async list({ prefix = "", cursor } = {}) {
       const matching = keyNames.filter((name) => name.startsWith(prefix));
       const start = cursor ? Number(cursor) : 0;
       const page = matching.slice(start, start + pageSize);
@@ -173,10 +174,11 @@ test("a KV error is not cached -- the next call re-lists once the namespace reco
 test("caches the max timestamp for PARTY_PASS_REVOCATION_CACHE_TTL_MS, reused correctly across two different issuedAt values", async () => {
   const gate = new PartyPassRevocationGate();
   let listCalls = 0;
+  const inner = fakeKv([`user-1:chan-1:${ISSUED_AT + 500}`]);
   const kv = {
-    async list({ prefix }) {
+    async list(opts) {
       listCalls += 1;
-      return prefix === "user-1:chan-1:" ? { keys: [{ name: `user-1:chan-1:${ISSUED_AT + 500}` }] } : { keys: [] };
+      return inner.list(opts);
     },
   };
   const now = 1_000_000;
@@ -185,24 +187,30 @@ test("caches the max timestamp for PARTY_PASS_REVOCATION_CACHE_TTL_MS, reused co
     (await gate.check(kv, "user-1", "chan-1", ISSUED_AT + 1_000, now + 1)).revoked,
     false,
   );
-  assert.equal(listCalls, 2); // one per distinct prefix, not per call
+  assert.equal(listCalls, 1); // one namespace listing, not one per prefix or per call
   // Still within the window: no new list calls.
   await gate.check(kv, "user-1", "chan-1", ISSUED_AT, now + PARTY_PASS_REVOCATION_CACHE_TTL_MS - 1);
-  assert.equal(listCalls, 2);
-  // Past the window: re-lists both prefixes.
+  assert.equal(listCalls, 1);
+  // Past the window: lists the namespace again, once.
   await gate.check(kv, "user-1", "chan-1", ISSUED_AT, now + PARTY_PASS_REVOCATION_CACHE_TTL_MS + 1);
-  assert.equal(listCalls, 4);
+  assert.equal(listCalls, 2);
 });
 
-test("evicts the oldest entry once the cache is full, rather than growing without bound", async () => {
+test("evicts the oldest per-prefix entry once the overflow fallback's cache is full, rather than growing without bound", async () => {
   const gate = new PartyPassRevocationGate();
-  const kv = fakeKv([]);
+  // 11 pages of unrelated keys: the namespace listing overflows, so every
+  // check falls back to the per-prefix read and its bounded `_cache`.
+  const kv = pagedFakeKv(
+    Array.from({ length: 11 }, (_, i) => `unrelated-${i}`),
+    1,
+  );
   const now = 1_000_000;
-  const CAP = 10_000;
+  const CAP = PARTY_PASS_REVOCATION_CACHE_MAX_ENTRIES;
   for (let i = 0; i < CAP; i++) {
     await gate.check(kv, `user-${i}`, "chan-1", ISSUED_AT, now);
   }
   await gate.check(kv, "user-overflow", "chan-1", ISSUED_AT, now);
+  assert.ok(gate._cache.size > 0);
   assert.ok(gate._cache.size <= CAP);
 });
 

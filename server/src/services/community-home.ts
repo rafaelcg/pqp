@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  BASELINE_REJECTION_MESSAGE,
   bauPublicPostPath,
   COMMUNITY_HOME_COMMENTS_LIMIT,
   COMMUNITY_HOME_COVER_CONTENT_TYPES,
@@ -33,6 +34,7 @@ import {
 import type { PoolClient } from "pg";
 import { isEnabled } from "../lib/flags.js";
 import { getPool } from "../db.js";
+import { checkBaselineText } from "./automod.js";
 import {
   copyObject,
   deleteObject,
@@ -1523,6 +1525,25 @@ export type CreateHomePostInput = {
   scheduleTimezone: string | null;
 };
 
+/**
+ * pqp's built-in text filter over the words of a Baú post or comment. The
+ * owner's switch for the server is honoured; staff are not exempt, because
+ * the baseline is the instance's rule and not the owner's list. Refused with
+ * `invalid`, which the routes answer as a 400 carrying this sentence.
+ */
+async function assertBaselineClean(
+  serverId: string,
+  ...texts: Array<string | null | undefined>
+): Promise<void> {
+  const text = texts.filter((part): part is string => Boolean(part)).join("\n");
+  if (!text) {
+    return;
+  }
+  if (await checkBaselineText(serverId, text)) {
+    throw new CommunityHomeError("invalid", BASELINE_REJECTION_MESSAGE);
+  }
+}
+
 export async function createCommunityHomePost(
   serverId: string,
   authorId: string,
@@ -1541,6 +1562,7 @@ export async function createCommunityHomePost(
     throw new CommunityHomeError("invalid", "Pick one media source");
   }
   assertVisibilityAllowed(serverId, input.visibility);
+  await assertBaselineClean(serverId, input.title, input.body, input.teaser);
 
   const status = input.status;
   if (status === "scheduled") {
@@ -1720,6 +1742,7 @@ export async function updateCommunityHomePost(
   if (!canManage) {
     throw new CommunityHomeError("forbidden", "Staff only");
   }
+  await assertBaselineClean(serverId, input.title, input.body, input.teaser);
 
   const pool = getPool();
   const client = await pool.connect();
@@ -2181,6 +2204,7 @@ export async function addCommunityHomeComment(
   if (!post.commentsEnabled) {
     throw new CommunityHomeError("forbidden", "Comments are off on this post");
   }
+  await assertBaselineClean(serverId, body);
   const result = await getPool().query<CommentRow>(
     `WITH inserted AS (
        INSERT INTO community_home_comments (post_id, author_id, body)

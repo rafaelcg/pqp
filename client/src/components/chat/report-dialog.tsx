@@ -14,6 +14,7 @@ import { useTranslation } from "@/lib/i18n";
 import { ApiError, createReport } from "@/lib/api";
 import { useRedesign } from "@/lib/redesign";
 import { reportReasonKey } from "@/lib/report-reasons";
+import { reportPublicJam } from "@/lib/jam-public-api";
 
 /**
  * What is being reported, in the two shapes the API accepts.
@@ -54,7 +55,12 @@ export type ReportTarget =
    * is reportable only by those it is open to).
    */
   | { kind: "bau_post"; postId: string; subjectName: string | null }
-  | { kind: "bau_comment"; commentId: string; subjectName: string | null };
+  | { kind: "bau_comment"; commentId: string; subjectName: string | null }
+  /**
+   * A public jam, or one part of it (`trackId`). Goes to the instance queue,
+   * never to a server owner (`docs/JAM_PUBLIC.md`, "Reports").
+   */
+  | { kind: "jam_public"; songId: string; trackId: string | null; subjectName: string | null };
 
 interface ReportDialogProps {
   target: ReportTarget | null;
@@ -105,7 +111,9 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
             ? `bau_post:${target.postId}`
             : target.kind === "bau_comment"
               ? `bau_comment:${target.commentId}`
-              : `user:${target.userId}`;
+              : target.kind === "jam_public"
+                ? `jam_public:${target.songId}:${target.trackId ?? ""}`
+                : `user:${target.userId}`;
 
   useEffect(() => {
     setReason(null);
@@ -129,6 +137,16 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
     setSubmitting(true);
     setError(null);
     try {
+      if (target.kind === "jam_public") {
+        await reportPublicJam({
+          songId: target.songId,
+          ...(target.trackId ? { trackId: target.trackId } : {}),
+          reason,
+          ...(details.trim() ? { details: details.trim() } : {}),
+        });
+        setDone(true);
+        return;
+      }
       const body: CreateReportRequest =
         target.kind === "message"
           ? {
@@ -272,9 +290,11 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
           <p>
             {t("report.thanks")}
           </p>
-          <p>
-            {t("report.blockHint")}
-          </p>
+          {target.kind !== "jam_public" && (
+            <p>
+              {t("report.blockHint")}
+            </p>
+          )}
         </div>
       </Dialog>
     );
@@ -288,7 +308,9 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
         ? t("report.thisPost")
         : target.kind === "bau_comment"
           ? t("report.thisComment")
-          : t("report.thisAccount"));
+          : target.kind === "jam_public"
+            ? t(target.trackId ? "report.thisJamPart" : "report.thisJam")
+            : t("report.thisAccount"));
 
   return (
     <Dialog
@@ -303,7 +325,11 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
                   ? "report.title.bauPost"
                   : target.kind === "bau_comment"
                     ? "report.title.bauComment"
-                    : "report.title.user",
+                    : target.kind === "jam_public"
+                      ? target.trackId
+                        ? "report.title.jamPart"
+                        : "report.title.jam"
+                      : "report.title.user",
             )
       }
       eyebrow={t("report.eyebrow")}
@@ -317,7 +343,9 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
                   ? "report.body.bauPost"
                   : target.kind === "bau_comment"
                     ? "report.body.bauComment"
-                    : "report.body.user",
+                    : target.kind === "jam_public"
+                      ? "report.body.jam"
+                      : "report.body.user",
             )
       }
       onClose={onClose}

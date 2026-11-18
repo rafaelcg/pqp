@@ -71,9 +71,15 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   user_stats: offWords,
   // New with the flag, so there was no old reader: this is its definition.
+  default_text_filter: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
   voice_audio_self_heal: offWords,
   // New with the flag, so there was no old reader: this is its definition.
+  voice_calm_detector: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
   clean_voice_default: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  voice_gate: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   raised_hand_sticky: offWords,
   // New with the flag, so there was no old reader: this is its definition.
@@ -116,6 +122,10 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   linux_desktop_system_audio: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  mac_desktop_system_audio: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  share_sound_promotion: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
   audience_mode: (raw) => raw === "true",
   watch_now_banner: (raw) => raw === "true",
   stream_start_notifications: (raw) => raw === "true",
@@ -144,6 +154,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   forum_channels: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   forum_announcement: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  jam_channels: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   report_attachment_preview: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
@@ -185,6 +197,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flags, so there was no old reader: this is their definition.
   locadora_guest: (raw) => raw === "true",
   locadora_saves_announced: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  jam_public: (raw) => raw === "true",
 };
 
 const SAMPLES = [
@@ -599,6 +613,42 @@ describeDb("runtime flags against Postgres", () => {
     });
     expect(isCommunityHomeVipEnabled(otherServerId)).toBe(false);
     expect(isCommunityHomeVipEnabled(serverId)).toBe(true);
+  });
+
+  it("Mac desktop system audio is ON by default, and is switched off from the dashboard", async () => {
+    const { shareConfigForServer } = await import("./share-config.js");
+    await flags.startFeatureFlags();
+    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(true);
+    // Independent of the Linux switch, which ships dark.
+    expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(false);
+
+    // The operator's row is the kill switch, with no deploy and no variable.
+    await flags.setGlobalFlag("mac_desktop_system_audio", false, { kind: "dashboard" });
+    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(false);
+    expect(shareConfigForServer(serverId).macDesktopSystemAudio).toBe(false);
+
+    // A row beats a variable that says the opposite.
+    process.env.MAC_DESKTOP_SYSTEM_AUDIO = "true";
+    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(false);
+    await flags.setGlobalFlag("mac_desktop_system_audio", true, { kind: "dashboard" });
+    process.env.MAC_DESKTOP_SYSTEM_AUDIO = "false";
+    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(true);
+
+    const entry = (await flags.listFeatureFlags()).flags.find(
+      (flag) => flag.key === "mac_desktop_system_audio",
+    )!;
+    expect(entry).toMatchObject({
+      env: "MAC_DESKTOP_SYSTEM_AUDIO",
+      perServer: false,
+      codeDefault: true,
+      clientVia: "GET /api/share/config (macDesktopSystemAudio)",
+    });
+
+    await expect(
+      flags.setServerFlagOverride("mac_desktop_system_audio", serverId, true, {
+        kind: "dashboard",
+      }),
+    ).rejects.toMatchObject({ status: 400 });
   });
 
   it("Linux desktop system audio is switched from the dashboard and served by the share config", async () => {

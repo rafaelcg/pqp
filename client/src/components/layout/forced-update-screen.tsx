@@ -80,7 +80,7 @@ export function ForcedUpdateScreen({
         <p
           role="alert"
           data-testid="forced-update-error"
-          className="border-t border-border px-5 py-3 text-sm text-danger"
+          className="border-t border-border px-5 py-3 text-sm text-danger redesign:border-[color:var(--dialog-footer-rule)]"
         >
           {state.reason === "offline"
             ? t("update.error.offline")

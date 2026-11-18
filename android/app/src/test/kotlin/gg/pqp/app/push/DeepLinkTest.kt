@@ -34,6 +34,19 @@ class DeepLinkTest {
     }
 
     @Test
+    fun `a jam song link carries the server, the jam channel and the song`() {
+        val target = DeepLinkTarget.JamSong("srv-1", "jam-2", "song-3")
+        assertEquals(target, DeepLink.target("/app/server/srv-1/channel/jam-2/song/song-3"))
+        assertEquals(target, DeepLink.target("https://pqp.gg/app/server/srv-1/channel/jam-2/song/song-3"))
+        assertEquals("jam-2", target.channelId)
+        // A dangling "/song" with no id is still the channel's wall.
+        assertEquals(
+            DeepLinkTarget.Channel("srv-1", "jam-2"),
+            DeepLink.target("/app/server/srv-1/channel/jam-2/song"),
+        )
+    }
+
+    @Test
     fun `dm path is a conversation`() {
         assertEquals(
             DeepLinkTarget.Conversation("chan-9"),

@@ -109,7 +109,7 @@ export function SettingsChoiceGrid<T extends string>({
               "redesign:focus-visible:ring-accent",
               checked
                 ? "redesign:bg-[color:var(--card-row-hover)] redesign:shadow-[inset_0_0_0_1px_var(--color-accent)]"
-                : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:border-[color:color-mix(in_oklab,var(--color-text)_18%,transparent)]",
+                : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:border-[color:var(--card-border-hover)]",
             )}
           >
             <span aria-hidden className="block">

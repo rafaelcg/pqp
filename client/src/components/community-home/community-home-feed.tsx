@@ -1271,15 +1271,8 @@ export function PostCard({
               {t("communityHome.lockedBadge")}
             </span>
           )}
-          {!locked && post.visibility === "members" && vipEnabled && (
-            // The reader holds VIP (or staff): say so, so a paid post never
-            // looks like any other.
-            <Badge variant="accent" data-home-vip-chip>
-              {t("communityHome.vipChip")}
-            </Badge>
-          )}
           {/* The owner's sign that a post is members-only; the old look
-              shows it only in the menu. */}
+              shows it only in the menu. With VIP on, the VIP chip below says it. */}
           {post.visibility === "members" && !locked && !vipEnabled && (
             <span
               className={cn("hidden", badgeRedesignClasses("neutral", "tag"), "redesign:gap-1")}
@@ -1288,6 +1281,13 @@ export function PostCard({
               <Lock className="h-3 w-3" aria-hidden />
               {t("communityHome.visibility.members")}
             </span>
+          )}
+          {!locked && post.visibility === "members" && vipEnabled && (
+            // The reader holds VIP (or staff): say so, so a paid post never
+            // looks like any other.
+            <Badge variant="accent" data-home-vip-chip>
+              {t("communityHome.vipChip")}
+            </Badge>
           )}
           {post.pinned && (
             <span

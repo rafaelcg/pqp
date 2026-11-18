@@ -43,6 +43,8 @@ struct ChannelRow: View {
     /// People in a voice room. Zero draws nothing; the room under it is
     /// dimmer instead.
     var occupantCount: Int = 0
+    /// A jam's song count, drawn where a voice room draws its headcount.
+    var jam: JamRowSummary?
 
     /// The clapperboard is what the web sidebar draws for a watch party
     /// (`ChannelIcon`); build 21 drew the speaker and nobody could tell them
@@ -51,6 +53,7 @@ struct ChannelRow: View {
         if channel.isWatchParty { return "movieclapper" }
         // The web's `MessagesSquare`: conversations, not a `#`.
         if channel.isForum { return "bubble.left.and.bubble.right" }
+        if channel.isJam { return "music.note.list" }
         return channel.isVoice ? "speaker.wave.2" : "number"
     }
 
@@ -144,11 +147,21 @@ struct ChannelRow: View {
                 .font(.system(size: 13, weight: .medium).monospacedDigit())
                 .foregroundStyle(Palette.paperMuted)
                 .accessibilityHidden(true)
+        } else if channel.isJam, let jam, jam.songCount > 0 {
+            Text(verbatim: jam.countText)
+                .font(.system(size: 13, weight: .medium).monospacedDigit())
+                .foregroundStyle(mark.isUnread ? Palette.paper : Palette.paperMuted)
+                .accessibilityHidden(true)
         }
     }
 
     private var accessibilityValue: Text {
         if mark.mentions > 0 { return Text("\(mark.mentions) mentions") }
+        if channel.isJam, let jam, jam.songCount > 0 {
+            return mark.isUnread
+                ? Text("\(jam.songCount) songs, new activity")
+                : Text("\(jam.songCount) songs")
+        }
         if mark.isUnread { return Text("Unread") }
         return Text(verbatim: "")
     }

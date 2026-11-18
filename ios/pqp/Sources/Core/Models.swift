@@ -219,6 +219,11 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
     /// A forum: a list of titled posts, each its own thread. Opens the forum
     /// screen, never a chat (a forum carries no messages of its own).
     var isForum: Bool { type == "forum" }
+    /// A jam: a channel of songs, each a stack of recorded stems. Opens the
+    /// jam wall, never a chat. NOT part of `isListed`: a jam row is drawn only
+    /// when the server's flag says so (`JamListModel.isEnabled`), so a server
+    /// without the feature looks exactly as it always did.
+    var isJam: Bool { type == "jam" }
     /// A row this build can open as a chat. `type` decodes as a plain string, so
     /// a type added server-side later arrives here as an unknown one: it is
     /// hidden rather than drawn as a dead "#" row.
@@ -401,6 +406,10 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     /// Client-only. A message sent optimistically has not been acknowledged by
     /// the server yet; the `nonce` echo on `message-broadcast` replaces it.
     var isPending: Bool = false
+    /// Client-only. This copy arrived as a `message-broadcast` frame, which the
+    /// server shares between readers and so cannot stamp `blocked` for any one
+    /// of them. Held back until the block list has loaded (`BlockRules.hides`).
+    var arrivedLive: Bool = false
     /// Client-only. The correlation id sent with `message-create` — the only
     /// way to match a broadcast back to the row we drew ahead of it.
     var pendingNonce: String?
@@ -524,6 +533,16 @@ struct DmLastMessage: Codable, Hashable, Sendable {
     /// `"nudge"` when the newest message is a nudge: the row says what happened
     /// instead of the stored `📳` body. Absent from a server older than nudges.
     var systemKind: String? = nil
+}
+
+extension Sequence where Element == DmSummary {
+    /// The one-to-one conversation with this person, if the list holds one.
+    ///
+    /// A one-to-one, not a group: the participant list the server sends
+    /// excludes us, so it is exactly this person and nobody else.
+    func oneToOne(with userId: String) -> DmSummary? {
+        first { $0.participants.count == 1 && $0.participants[0].id == userId }
+    }
 }
 
 struct DmSummary: Codable, Identifiable, Hashable, Sendable {

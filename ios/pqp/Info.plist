@@ -46,21 +46,10 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-		<key>NSExceptionDomains</key>
-		<dict>
-			<key>localhost</key>
-			<dict>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-			</dict>
-		</dict>
-	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>pqp uses your camera for video calls and to shoot stories.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>pqp uses the local network to find the best path for voice and video calls with people on the same network as you.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>pqp uses your microphone for voice calls, voice messages and the sound of your story videos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -70,7 +59,6 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
-		<string>voip</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict>

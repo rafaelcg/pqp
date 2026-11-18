@@ -21,7 +21,8 @@ import { cn } from "@/lib/utils";
  * `mascot` draws Breu in place of the icon, in both looks: for the empty
  * states a person meets early and rarely (a new channel, no DMs yet, a forum
  * with no posts, a search that found nothing). Not for compact lists, where
- * Breu would take over the row.
+ * Breu would take over the row. A page failure with an icon draws the warning
+ * disc; with `mascot` (the sad face) there is no disc, the face carries it.
  */
 export type EmptyStateSize = "page" | "inline";
 
@@ -35,9 +36,22 @@ const ICON: Record<EmptyStateSize, string> = {
   inline: "redesign:mb-2 redesign:text-text-tertiary",
 };
 
+/**
+ * Breu's drawing sits inside its box with room around it (about 13px at the
+ * page size, 9px inline), so the box's own margin is cut under the redesign
+ * to land the drawing as far from the title as the icon disc is.
+ */
+const MASCOT: Record<EmptyStateSize, string> = {
+  // 4px under the 80px box (12px with the toggle off).
+  page: "redesign:mb-1",
+  // 0px under the 56px box (12px with the toggle off).
+  inline: "redesign:mb-0",
+};
+
 const TITLE: Record<EmptyStateSize, string> = {
   page: "redesign:font-[family-name:var(--type-title-font)] redesign:text-[length:var(--empty-title-size)] redesign:leading-tight redesign:font-bold redesign:text-text redesign:text-balance",
-  inline: "redesign:font-sans redesign:text-sm redesign:font-medium redesign:text-text-secondary",
+  // A query with no spaces (a link, "kkkkkk") breaks instead of spilling.
+  inline: "redesign:font-sans redesign:text-sm redesign:font-medium redesign:text-text-secondary redesign:[overflow-wrap:anywhere]",
 };
 
 const BODY: Record<EmptyStateSize, string> = {
@@ -54,8 +68,10 @@ export function EmptyState({
   actions,
   role,
   className,
+  redesignClassName,
   iconClassName,
   titleClassName,
+  titleHeading,
   bodyClassName,
   actionsClassName,
   ...data
@@ -63,7 +79,10 @@ export function EmptyState({
   size?: EmptyStateSize;
   /** A glyph, drawn on a soft disc under the redesign. */
   icon?: ReactNode;
-  /** Breu in place of the icon, with this face. */
+  /**
+   * Breu in place of the icon, with this face. It wins: `icon` and
+   * `iconClassName` are not drawn when it is set.
+   */
   mascot?: BreuMood;
   title: ReactNode;
   body?: ReactNode;
@@ -72,8 +91,20 @@ export function EmptyState({
   role?: "alert" | "status";
   /** The toggle-off look, per caller. */
   className?: string;
+  /**
+   * `redesign:` classes applied after the primitive's own, for a screen whose
+   * room differs (the phone's Conversas tab clears its floating button).
+   */
+  redesignClassName?: string;
+  /** The icon's own classes. Not applied to a mascot. */
   iconClassName?: string;
   titleClassName?: string;
+  /**
+   * The title is a heading at this level. It stays a `p` with the heading
+   * role: a real `h2` takes the unlayered `h1, h2` rule in `index.css`,
+   * whose font and tracking outrank the title's utilities.
+   */
+  titleHeading?: 2 | 3;
   bodyClassName?: string;
   actionsClassName?: string;
 } & { [key: `data-${string}`]: string | undefined }) {
@@ -87,10 +118,10 @@ export function EmptyState({
       role={role}
       data-empty-state={size}
       {...data}
-      className={cn("flex flex-col items-center text-center", className, ROOT[size])}
+      className={cn("flex flex-col items-center text-center", className, ROOT[size], redesignClassName)}
     >
       {mascot ? (
-        <div aria-hidden="true" data-empty-mascot={mascot} className="mb-3 flex justify-center">
+        <div aria-hidden="true" data-empty-mascot={mascot} className={cn("mb-3 flex justify-center", MASCOT[size])}>
           <Breu mood={mascot} size={size === "page" ? "md" : "sm"} />
         </div>
       ) : glyph ? (
@@ -108,7 +139,13 @@ export function EmptyState({
           {glyph}
         </div>
       ) : null}
-      <p className={cn(titleClassName, TITLE[size])}>{title}</p>
+      <p
+        role={titleHeading ? "heading" : undefined}
+        aria-level={titleHeading}
+        className={cn(titleClassName, TITLE[size])}
+      >
+        {title}
+      </p>
       {body ? <p className={cn(bodyClassName, BODY[size])}>{body}</p> : null}
       {actions ? (
         <div

@@ -205,12 +205,12 @@ flag key does), never as `/api/admin/apps/:id`.
 
 | Route | What it does |
 |---|---|
-| `GET /api/admin/apps` | every app: publisher, status, `globalEnabled`, `communityUnlocked`, `currentVersion`, its versions (manifest summary, review status, checklist, reviewer, date, note), how many servers have it on, how many live sessions, and the last 20 audit rows |
-| `PUT /api/admin/apps` `{appId, status?, globalEnabled?, communityUnlocked?, currentVersion?}` | the app's own switches. `status: "live"` and `globalEnabled: true` need an approved current version, otherwise **409 `not-reviewed`** (the switch disabled with the reason written) |
+| `GET /api/admin/apps` | every app: publisher, status, `globalEnabled`, `communityUnlocked`, `defaultOperatorEnabled`, `currentVersion`, its versions (manifest summary, review status, checklist, reviewer, date, note), how many servers have it on, how many live sessions, and the last 20 audit rows |
+| `PUT /api/admin/apps` `{appId, status?, globalEnabled?, communityUnlocked?, defaultOperatorEnabled?, currentVersion?}` | the app's own switches. `defaultOperatorEnabled: true` releases the app on every server that has not decided (new servers included; an explicit OFF for a server wins; a public community stays locked until `communityUnlocked`), audited as `default-operator`, and "Desligar em todos" clears it. The dashboard shows it as "Padrão em todos" beside Global. `status: "live"` and `globalEnabled: true` need an approved current version, otherwise **409 `not-reviewed`** (the switch disabled with the reason written) |
 | `PUT /api/admin/app-review` `{appId, version, reviewStatus, checklist, note?}` | a version's review. `approved` needs every checklist line (`sandbox`, `noNetwork`, `license`, `i18n`, `presence`, plus `romPolicy` for an emulator app), otherwise **409 `checklist-incomplete`**. The approval of the version a live app stands on cannot be taken away (**409 `version-in-use`**) |
-| `GET /api/admin/app-servers?appId=&q=&on=1&limit=&offset=` | one app's servers: search by name or id, only the ones switched on, paged (what is on first, then by name, so a page is cut before anything is counted). Each row has member count, `isCommunity`, the operator and owner switches and `locked` |
+| `GET /api/admin/app-servers?appId=&q=&on=1&limit=&offset=` | one app's servers: search by name or id, only the ones switched on, paged (what is on first, then by name, so a page is cut before anything is counted). Each row has member count, `isCommunity`, the operator and owner switches, `released` (whether the operator's release reaches it, the app's default included) and `locked`; `enabledCount` counts released servers |
 | `PUT /api/admin/server-apps` `{serverId, appId, operatorEnabled: true \| false \| null}` | the operator's switch for one server. A public community (`servers.is_community`) needs the app's `communityUnlocked` first, otherwise **409 `community-locked`**. Switching a server OFF also ends that server's live sessions of the app (`app-disabled`), and the answer says how many (`sessionsEnded`) |
-| `POST /api/admin/app-disable-everywhere` `{appId}` | the master switch off and **every live session of the app ended** with `app-disabled`: `{app, sessionsEnded}`. The switch goes first, so nothing new starts meanwhile; the per server switches are left alone, so the master back on brings the same servers back. Audited, with the count written back on the row. Safe to repeat |
+| `POST /api/admin/app-disable-everywhere` `{appId}` | the master switch off and **every live session of the app ended** with `app-disabled`: `{app, sessionsEnded}`. The switch goes first, so nothing new starts meanwhile; the per server switches are left alone, so the master back on brings the same servers back, but the app's default release (`defaultOperatorEnabled`) is cleared with it and stays off until somebody turns it on again. Audited, with the count written back on the row. Safe to repeat |
 | `POST /api/admin/app-session-end` `{sessionId}` | one session ended by the operator, reason `operator`, not behind the server's `apps` flag. Idempotent (`ended: false` when it was already over). The session row carries the record (`end_reason`, `ended_by`, NULL for the token) |
 
 Every write adds one `app_admin_audit` row per field that actually changed, in
@@ -222,6 +222,30 @@ availability (`server/src/apps/changed.ts`). Turning an app on for one server,
 as an operator does tomorrow: review the version (`app-review`, `approved`), set
 the app `live` and `globalEnabled`, then `server-apps` for the server, and turn
 the `apps` flag on for that server (`PUT /api/admin/flag-overrides`).
+
+### jams públicas: the list, the review queue and the takedowns
+
+Public jams (`docs/JAM_PUBLIC.md`, contract in `packages/shared/src/jam-public.ts`)
+are dark until the global flag `jam_public` is on. Six routes on the same
+machine token (and the same instance-moderator session), in
+`server/src/api/jam-public-routes.ts` and `server/src/services/jam-public.ts`.
+Exact pathnames: every id travels in the body or the query. No page draws them
+yet; they are here so a takedown never waits for one.
+
+| Route | What it does |
+|---|---|
+| `GET /api/admin/jam-public/songs?status=live\|review\|hidden\|removed\|unpublished\|all&cursor=` | published songs, newest first, 50 a page: status, `listed`, the starter (id, name, handle, whether blocked), the origin server, plays, likes, distinct reporters in the auto-hide window, public parts, `hiddenAt`, `removedReason`. Names people, like the feedback queue |
+| `GET /api/admin/jam-public/queue` | what waits for a human: songs in `review` (a new account's first) or `hidden` (reports), takes in review, and parts whose video the scanner flagged or rejected |
+| `PUT /api/admin/jam-public/unpublish` `{songId, reason}` | takes a song down (`removed`): out of every public read at once, the starter is told with the reason (`jam-public-notice`, kind `removed`) and cannot republish it (409 `jam_public_removed`) |
+| `PUT /api/admin/jam-public/review` `{kind: "song" \| "track", id, decision: "approve" \| "reject", reason?}` | a queued item. `song` approve lists it (and clears a report hide, and restores a `removed` song); reject removes it with the reason. `track` approve makes a new account's take public; reject keeps it out (the track itself stays in its song) |
+| `PUT /api/admin/jam-public/remove-part` `{trackId, reason}` | one part out of the public version; the track stays in its song and channel. Its author is told |
+| `PUT /api/admin/jam-public/block` `{userId, blocked, reason?}` | blocks (or unblocks) an account from publishing and recording publicly; every song and part of theirs leaves the public reads at once |
+
+Every write adds a `jam_public_audit` row (action, song, track, user, actor:
+`dashboard` with a NULL id for the token, `operator` and the id for a session,
+reason). `GET /api/admin/metrics` carries a `jamPublic` block (published, in
+review, hidden by reports, removed, plays, likes, verdicts by status,
+quarantined objects, and per-process refusals by limit).
 
 ### lista de espera: turning "somebody asked" into "somebody can now stream"
 
@@ -1146,6 +1170,8 @@ Test the API side directly, with the token:
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" https://api.pqp.gg/api/admin/metrics | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/voice-occupancy?days=30" | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/user-activity?days=90&weeks=12" | jq .
+# signups by source in the last 3 hours (aggregate counts; ?hours= is 1 to 168, ?days= up to 90)
+curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/acquisition?hours=3" | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/servers?q=cine" | jq .
 # without it: 404
 ```

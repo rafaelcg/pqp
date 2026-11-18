@@ -44,6 +44,11 @@ import gg.pqp.app.ui.screens.channels.channelLayoutConfig
 import gg.pqp.app.ui.screens.channels.createChannel
 import gg.pqp.app.ui.screens.channels.layoutToPayload
 import gg.pqp.app.ui.screens.channels.mixedLayoutOf
+import androidx.compose.ui.res.pluralStringResource
+import gg.pqp.app.jam.JamListModel
+import gg.pqp.app.jam.JamRowSummary
+import gg.pqp.app.jam.JamSeenStore
+import gg.pqp.app.jam.SessionJamBackend
 import gg.pqp.app.ui.screens.channels.renameChannel
 import gg.pqp.app.ui.theme.Sizes
 import androidx.compose.foundation.lazy.LazyColumn
@@ -364,6 +369,36 @@ fun ChannelsScreen(
     }
     LaunchedEffect(serverId, retryTick) { refreshLayoutConfig() }
     val mixed = layoutConfig.mixed
+
+    // Jam. A server with no jam channel never asks anything; one that has some asks
+    // `GET /api/jam/config` once per visit, and only when that says `enabled` is the
+    // row drawn (with its song count and unread mark). Flag off: the list is exactly
+    // what it was, and nothing was requested beyond that one read.
+    val jamSeen = remember(appContext) { JamSeenStore(appContext) }
+    val jamList = remember(session) { JamListModel(SessionJamBackend(session), seen = { jamSeen.lastSeenMs(it) }) }
+    var jamRows by remember(serverId) { mutableStateOf(JamListModel.Rows()) }
+    val jamChannelIds = remember(channels) { channels.orEmpty().filter { it.isJam }.map { it.id } }
+    LaunchedEffect(serverId, jamChannelIds, retryTick) {
+        jamRows = jamList.read(serverId, jamChannelIds, jamRows)
+    }
+    val jamOn = jamRows.config.enabled
+
+    // Activities (docs/APPS.md). Asked once per visit, and only when the server's config says `enabled` is
+    // anything drawn: a live one marks its channel's row. Flag off: the list is exactly what it was.
+    val activitiesStore = remember(session) { gg.pqp.app.activities.ActivitiesStore.of(session) }
+    LaunchedEffect(serverId, retryTick) { activitiesStore.watch(serverId) }
+    LaunchedEffect(serverId, channels) { channels?.let { activitiesStore.knowChannels(serverId, it.map { c -> c.id }) } }
+    val activitySessions by activitiesStore.sessions.collectAsStateWithLifecycle()
+    val activityConfigs by activitiesStore.configs.collectAsStateWithLifecycle()
+    val activityLocale = gg.pqp.app.activities.ui.activityLocale()
+    val activityRows = remember(activitySessions, activityConfigs, channels, activityLocale) {
+        gg.pqp.app.activities.ActivityRules.rowSummaries(
+            config = activityConfigs[serverId] ?: gg.pqp.app.activities.ActivitiesConfig.Off,
+            sessions = activitySessions,
+            channelIds = channels.orEmpty().map { it.id },
+            locale = activityLocale,
+        )
+    }
     // Reorder, create in a category, Criar categoria: MANAGE_CHANNELS
     // server-wide, the same permission the PUT checks.
     val canManageChannels = permissionsConfirmed &&
@@ -564,9 +599,9 @@ fun ChannelsScreen(
     // not regroup and sort every channel again.
     val textTitle = stringResource(R.string.channels_section_text)
     val voiceTitle = stringResource(R.string.channels_section_voice)
-    val sections = remember(list, textTitle, voiceTitle, mixed, canManageChannels) {
+    val sections = remember(list, textTitle, voiceTitle, mixed, canManageChannels, jamOn) {
         list?.let {
-            sectionsOf(it, textTitle, voiceTitle, mixed = mixed, keepEmptyCategories = canManageChannels)
+            sectionsOf(it, textTitle, voiceTitle, mixed = mixed, keepEmptyCategories = canManageChannels, includeJam = jamOn)
         }.orEmpty()
     }
 
@@ -584,7 +619,7 @@ fun ChannelsScreen(
      * taken, so a fetch still in flight may land.
      */
     fun rollbackOrder(before: List<Channel>) {
-        val order = mixedLayoutOf(before)
+        val order = mixedLayoutOf(before, includeJam = jamOn)
         channels = channels?.let { applyLayoutToChannels(it, order) } ?: before
     }
 
@@ -637,7 +672,7 @@ fun ChannelsScreen(
                 is ChannelLayoutSaveResult.Stale -> {
                     writeChannels(result.channels)
                     adoptLayout(ChannelLayoutConfig(mixed = true, version = result.version))
-                    ChannelLayoutSaveOutcome.Stale(mixedLayoutOf(result.channels), result.version)
+                    ChannelLayoutSaveOutcome.Stale(mixedLayoutOf(result.channels, includeJam = jamOn), result.version)
                 }
                 ChannelLayoutSaveResult.Off -> {
                     rollbackOrder(before)
@@ -774,6 +809,8 @@ fun ChannelsScreen(
                     callParticipants = voiceState.participants,
                     speakingPeers = speakingPeers,
                     myUserId = me?.id,
+                    jamRows = jamRows.rows,
+                    activityRows = activityRows,
                     onOpenChannel = onOpenChannel,
                     onOpenBau = onOpenBau,
                     onToggleCategory = { categoryId ->
@@ -823,7 +860,7 @@ fun ChannelsScreen(
     }
     if (organizing && list != null) {
         ChannelOrganizerDialog(
-            layout = mixedLayoutOf(list),
+            layout = mixedLayoutOf(list, includeJam = jamOn),
             baseVersion = layoutConfig.version,
             onDismiss = { organizing = false },
             save = ::saveLayout,
@@ -1028,6 +1065,8 @@ private fun LazyListScope.channelListItems(
     callParticipants: List<VoiceParticipant>,
     speakingPeers: Set<String>,
     myUserId: String?,
+    jamRows: Map<String, JamRowSummary>,
+    activityRows: Map<String, gg.pqp.app.activities.ActivityRowSummary>,
     onOpenChannel: (Channel) -> Unit,
     onOpenBau: () -> Unit,
     onToggleCategory: (String) -> Unit,
@@ -1084,9 +1123,20 @@ private fun LazyListScope.channelListItems(
         // people in it, worked out when the item is drawn.
         items(shown, key = { it.id }, contentType = { "channel" }) { channel ->
             val inCall = channel.id == callChannelId
+            val jam = jamRows[channel.id]
             ChannelEntry(
                 channel = channel,
-                badge = rowBadge(unread[channel.id], channel.id in muted),
+                jam = jam,
+                activity = activityRows[channel.id],
+                badge = rowBadge(unread[channel.id], channel.id in muted).let { base ->
+                    // A jam channel carries no messages, so the ordinary cursor never moves for it:
+                    // its mark is "a song, or a track on one, somebody else made since you looked".
+                    if (jam?.isUnread == true && base.emphasis == gg.pqp.app.ui.screens.channels.RowEmphasis.Quiet) {
+                        base.copy(emphasis = gg.pqp.app.ui.screens.channels.RowEmphasis.Unread)
+                    } else {
+                        base
+                    }
+                },
                 live = liveChannels[channel.id]?.live == true,
                 people = when {
                     !channel.isVoice -> emptyList()
@@ -1153,6 +1203,8 @@ private fun CreateCategoryRow(onClick: () -> Unit, modifier: Modifier = Modifier
 @Composable
 private fun ChannelEntry(
     channel: Channel,
+    jam: JamRowSummary?,
+    activity: gg.pqp.app.activities.ActivityRowSummary?,
     badge: gg.pqp.app.ui.screens.channels.RowBadge,
     live: Boolean,
     people: List<VoiceParticipant>,
@@ -1177,6 +1229,18 @@ private fun ChannelEntry(
             // Opening a voice channel shows its transcript; it does not ask
             // for the microphone. The chat header owns the explicit join.
             onClick = { onOpenChannel(channel) },
+            trailingText = jam?.countText,
+            activityLabel = activity?.appName,
+            activityDescription = activity?.let {
+                pluralStringResource(R.plurals.activities_row_description, it.inside, channel.name, it.appName, it.inside)
+            },
+            trailingDescription = jam?.let {
+                if (it.hasMore) {
+                    stringResource(R.string.jam_row_description_more, channel.name, it.songCount)
+                } else {
+                    pluralStringResource(R.plurals.jam_row_description, it.songCount, channel.name, it.songCount)
+                }
+            },
         )
         summary.listed.forEach { person ->
             key(person.userId) {

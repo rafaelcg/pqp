@@ -21,7 +21,7 @@ describe("Voz limpa copy", () => {
     // The Settings line used to carry "(RNNoise)". The approved copy says what
     // it does and what it costs instead.
     expect(ptBR["settings.voice.processing.noise.advancedHint"]).toBe(
-      "Voz limpa: filtro avançado, tira até teclado e cachorro. Usa mais processador e pode cortar o começo de algumas palavras.",
+      "Voz limpa: filtro avançado, tira até teclado e cachorro e baixa o fundo entre uma frase e outra. Usa mais processador e pode cortar o começo de algumas palavras.",
     );
   });
 

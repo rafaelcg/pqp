@@ -226,6 +226,12 @@ export async function cropImageToRect(
   width: number,
   height: number,
   region: CropRegion | null = null,
+  /**
+   * What a transparent pixel becomes. A JPEG has no alpha, and the canvas
+   * default is black, so a PNG logo with a clear background came out as a logo
+   * on black. Left out, nothing changes (the avatar and the banner).
+   */
+  background: string | null = null,
 ): Promise<Blob> {
   const bitmap = await decodeForCrop(source);
   try {
@@ -240,6 +246,10 @@ export async function cropImageToRect(
       throw new Error("Could not prepare the image");
     }
     context.imageSmoothingQuality = "high";
+    if (background) {
+      context.fillStyle = background;
+      context.fillRect(0, 0, width, height);
+    }
     context.drawImage(
       bitmap,
       crop.x,

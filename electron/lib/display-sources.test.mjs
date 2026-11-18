@@ -14,6 +14,9 @@ const {
   windowsNtBuild,
   windowsBuildAllowsOwnAudioExclude,
   pickerAudioState,
+  parseMacVersion,
+  macVersionAllowsSystemAudio,
+  MAC_AUDIO_SETTINGS_URL,
 } = require("./display-sources.js");
 
 /** A `NativeImage` as far as this module is concerned. */
@@ -303,8 +306,10 @@ describe("windowsNtBuild", () => {
 });
 
 describe("pickerAudioState", () => {
-  it("hides the row on macOS and Linux: no loopback tap to talk about", () => {
+  it("hides the row on Linux, and on a Mac whose version could not be read", () => {
     assert.equal(pickerAudioState("darwin", "10.0.22631"), "hidden");
+    assert.equal(pickerAudioState("darwin", "23.2.0", { version: "" }), "hidden");
+    assert.equal(pickerAudioState("darwin", "23.2.0", { version: undefined }), "hidden");
     assert.equal(pickerAudioState("linux", "10.0.22631"), "hidden");
   });
 
@@ -373,5 +378,79 @@ describe("captureResponse", () => {
   it("returns null when there is no source", () => {
     assert.equal(captureResponse(null, "win32", true, win11), null);
     assert.equal(captureResponse(undefined, "darwin", false), null);
+  });
+});
+
+describe("macOS system audio", () => {
+  const source = { id: "screen:1:0", name: "Screen 1" };
+
+  it("reads the macOS version, never the Darwin kernel number", () => {
+    assert.deepEqual(parseMacVersion("14.2.1"), { major: 14, minor: 2 });
+    assert.deepEqual(parseMacVersion("15"), { major: 15, minor: 0 });
+    assert.deepEqual(parseMacVersion("26.0"), { major: 26, minor: 0 });
+    for (const bad of ["", "x.y", null, undefined, 14]) {
+      assert.equal(parseMacVersion(bad), null);
+    }
+  });
+
+  it("opens the CoreAudio Tap gate at 14.2 exactly", () => {
+    for (const ok of ["14.2", "14.2.1", "14.7", "15.0", "26.0", "27.0.1"]) {
+      assert.equal(macVersionAllowsSystemAudio(ok), true, ok);
+    }
+    // 14.1 and earlier have no tap: Chromium returns no stream and the whole
+    // capture fails if asked, so these must never get loopback.
+    for (const no of ["13.6.9", "14.0", "14.1", "14.1.2", "12.7.6", "10.15", "", undefined, "garbage"]) {
+      assert.equal(macVersionAllowsSystemAudio(no), false, String(no));
+    }
+  });
+
+  it("answers loopback only for a wanted request on a Mac that has the tap", () => {
+    assert.deepEqual(captureResponse(source, "darwin", true, "", "14.2"), {
+      video: source,
+      audio: "loopback",
+    });
+    assert.deepEqual(captureResponse(source, "darwin", true, "", "15.1"), {
+      video: source,
+      audio: "loopback",
+    });
+  });
+
+  it("stays video-only everywhere else on a Mac, so a capture can never be rejected", () => {
+    // Not wanted.
+    assert.deepEqual(captureResponse(source, "darwin", false, "", "15.1"), { video: source });
+    // Too old: loopback would fail the whole capture.
+    assert.deepEqual(captureResponse(source, "darwin", true, "", "13.6"), { video: source });
+    assert.deepEqual(captureResponse(source, "darwin", true, "", "14.1"), { video: source });
+    // A caller that never passes the version (every call site before this).
+    assert.deepEqual(captureResponse(source, "darwin", true, ""), { video: source });
+    assert.deepEqual(captureResponse(source, "darwin", true), { video: source });
+  });
+
+  it("never lets a macOS version turn Linux or Windows 10 into loopback", () => {
+    assert.deepEqual(captureResponse(source, "linux", true, "", "15.1"), { video: source });
+    assert.deepEqual(captureResponse(source, "win32", true, "10.0.19045", "15.1"), {
+      video: source,
+    });
+  });
+
+  it("gives the picker a Mac row of its own, in three states", () => {
+    assert.equal(pickerAudioState("darwin", "", { version: "15.1", armed: true }), "checkbox");
+    assert.equal(pickerAudioState("darwin", "", { version: "14.2", armed: true }), "checkbox");
+    // Nobody armed: the flag is off or the page is older than the shell.
+    assert.equal(pickerAudioState("darwin", "", { version: "15.1", armed: false }), "explain-mac");
+    assert.equal(pickerAudioState("darwin", "", { version: "15.1" }), "explain-mac");
+    // Too old, armed or not: no API at all.
+    assert.equal(pickerAudioState("darwin", "", { version: "13.6", armed: true }), "explain-mac-old");
+    assert.equal(pickerAudioState("darwin", "", { version: "14.1", armed: false }), "explain-mac-old");
+  });
+
+  it("does not change the Windows rows", () => {
+    assert.equal(pickerAudioState("win32", "10.0.22631", { version: "15.1", armed: true }), "checkbox");
+    assert.equal(pickerAudioState("win32", "10.0.19045", { version: "15.1", armed: true }), "explain");
+  });
+
+  it("points at the System Audio Recording pane, not Screen Recording", () => {
+    assert.match(MAC_AUDIO_SETTINGS_URL, /^x-apple\.systempreferences:/);
+    assert.match(MAC_AUDIO_SETTINGS_URL, /Privacy_AudioCapture$/);
   });
 });

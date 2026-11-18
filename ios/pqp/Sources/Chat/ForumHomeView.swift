@@ -348,9 +348,26 @@ struct ForumHomeView: View {
         }
     }
 
+    /// Posts are not drawn until the block list is known: a post that arrives
+    /// over the socket is not stamped per reader, so before the list it could be
+    /// a blocked person's (the same gate `ChatModel.visibleMessages` has).
     @ViewBuilder
     private var posts: some View {
-        let state = model.state
+        if session.blocked.hasLoaded {
+            loadedPosts
+        } else {
+            ProgressView()
+                .tint(Palette.paperMuted)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+        }
+    }
+
+    @ViewBuilder
+    private var loadedPosts: some View {
+        // Without posts by anybody the reader blocked, live: the server leaves
+        // a forum's list whole (paging counts rows), so the hiding is here.
+        let state = hidingBlocked(model.state)
         if !state.pinned.isEmpty {
             HStack(spacing: 6) {
                 Image(systemName: "pin")
@@ -405,6 +422,15 @@ struct ForumHomeView: View {
         } else {
             footer
         }
+    }
+
+    private func hidingBlocked(_ list: ForumListState) -> ForumListState {
+        let blocked = session.blocked.ids
+        guard !blocked.isEmpty else { return list }
+        var next = list
+        next.pinned = list.pinned.filter { !blocked.contains($0.authorId ?? "") }
+        next.posts = list.posts.filter { !blocked.contains($0.authorId ?? "") }
+        return next
     }
 
     private func open(_ post: ForumPostSummary) {

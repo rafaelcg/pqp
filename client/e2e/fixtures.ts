@@ -207,6 +207,26 @@ export async function waitUntilVoiceConnected(page: Page): Promise<void> {
  * skips `pagehide`, so a voice-resume orphan can sit in the lobby for 90s
  * and poison the next spec (two share tiles, or Share disabled).
  */
+/**
+ * Make `window.screen` bigger than the window, for the page's whole life.
+ *
+ * Playwright reports the viewport as the screen, and `page.setViewportSize`
+ * resets any `screen` the context was created with, so the config's
+ * `DESKTOP_SCREEN` does not survive a spec that resizes. With the window as
+ * big as its screen the whole-screen self-preview guard
+ * (`lib/share-self-capture.ts`) is on from the start and a presenter's own
+ * share shows its still card, not the picture the spec measures. A real
+ * desktop is bigger than the window. Call before the page navigates.
+ */
+export async function keepScreenLargerThanWindow(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "screen", {
+      configurable: true,
+      value: { width: 3840, height: 2160, availWidth: 3840, availHeight: 2160 },
+    });
+  });
+}
+
 export async function leaveVoiceIfConnected(page: Page): Promise<void> {
   // Two controls hang up: "Leave" on the call bar (on the stage, or docked
   // in the composer) and "Disconnect from voice" on the sidebar strip.

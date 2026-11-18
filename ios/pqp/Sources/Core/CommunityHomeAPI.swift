@@ -83,4 +83,31 @@ extension APIClient {
         )
         return response.comment
     }
+
+    /// `subjectType: "bau_post"`: id only, the server reads the rest from the
+    /// post. 201 first time, 200 for a duplicate; both succeed.
+    func reportBauPost(postId: String, reason: String, details: String?) async throws {
+        struct Body: Encodable {
+            let subjectType = "bau_post"
+            let postId: String
+            let reason: String
+            let details: String?
+        }
+        let _: EmptyResponse = try await post(
+            "/api/reports", body: Body(postId: postId, reason: reason, details: details)
+        )
+    }
+
+    /// `subjectType: "bau_comment"`: id only, like the post.
+    func reportBauComment(commentId: String, reason: String, details: String?) async throws {
+        struct Body: Encodable {
+            let subjectType = "bau_comment"
+            let commentId: String
+            let reason: String
+            let details: String?
+        }
+        let _: EmptyResponse = try await post(
+            "/api/reports", body: Body(commentId: commentId, reason: reason, details: details)
+        )
+    }
 }

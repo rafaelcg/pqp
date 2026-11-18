@@ -401,7 +401,7 @@ export function CommunitiesView({
             </ul>
           ) : error && redesign ? (
             // Under the redesign the failure is the page empty state's alert:
-            // the warning disc, a title, the reason and a retry.
+            // Breu's sad face (no warning disc), a title, the reason and a retry.
             <EmptyState
               role="alert"
               mascot="sad"

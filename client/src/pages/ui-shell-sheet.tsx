@@ -1398,10 +1398,12 @@ export function ShellSheet() {
       {/* App states: the shell while the app boots, and the page when it
           cannot reach the API. Each in a fixed desktop-sized frame. */}
       <div data-testid="qa-shell-states" className="flex flex-col gap-6">
-        <div className="h-[560px] w-[1100px] overflow-hidden rounded-[var(--radius-card)] border border-border">
+        {/* 960px wide so the whole frame fits the sheet beside its nav,
+            Breu and his bubble included. */}
+        <div className="h-[560px] w-[960px] overflow-hidden rounded-[var(--radius-card)] border border-border">
           <AppLoadingShell />
         </div>
-        <div className="h-[420px] w-[1100px] overflow-hidden rounded-[var(--radius-card)] border border-border bg-[color:var(--color-pane-main)]">
+        <div className="h-[420px] w-[960px] overflow-hidden rounded-[var(--radius-card)] border border-border bg-[color:var(--color-pane-main)]">
           <AppBootstrapError message="Não deu pra falar com o servidor (502)." onRetry={noop} />
         </div>
       </div>

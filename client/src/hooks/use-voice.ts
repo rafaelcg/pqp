@@ -94,6 +94,15 @@ import {
   attachLinuxShellShareAudio,
   ensureLinuxShellShareAudio,
 } from "@/lib/linux-shell-share-audio";
+import {
+  armMacShellShareAudio,
+  ensureMacShellShareAudio,
+  settleMacShareAudio,
+} from "@/lib/mac-shell-share-audio";
+import {
+  clearMacShareAudioPermission,
+  raiseMacShareAudioPermission,
+} from "@/lib/mac-share-audio-permission";
 import { rememberShareAudioTrack } from "@/lib/share-audio-probe";
 import {
   canControlShareCursor,
@@ -135,6 +144,7 @@ import {
   createRnnoiseNode,
   loadRnnoiseBinary,
 } from "../lib/noise-suppression";
+import { createVoiceGate } from "../lib/voice-gate/voice-gate-node";
 import {
   isOptimisticVoiceEntry,
   markOptimisticVoiceEntry,
@@ -196,7 +206,13 @@ import {
   readAnalyserLevel,
   SPEAKING_HANGOVER_MS,
   SPEAKING_THRESHOLD,
+  tuneAnalyserForPoll,
 } from "@/lib/voice-audio";
+import { calmDetectorEnabled } from "@/lib/calm-detector-flag";
+import {
+  createGateClock,
+  createSpeakingScheduler,
+} from "@/lib/speaking-clock";
 import { playCue, stopAllSoundLoops, whenCueSettled } from "@/lib/sounds";
 import {
   createMicRecoveryBudget,
@@ -416,6 +432,16 @@ export interface VoiceState {
    * complaint: nothing was refused, nothing was asked.
    */
   isAudienceSeat: boolean;
+  /**
+   * Why this seat has no microphone, in words, when the join could not open
+   * one (permission refused, no device, another app holding it); null
+   * otherwise. The same sentence the join's notice carries, kept here
+   * because the notice strip is drawn only over the call stage, and an
+   * audio-only call has none: the call bar reads this one, so a seat that is
+   * listening only says so, and says why, wherever the person is looking.
+   * Optional so a state built by hand (tests) need not name it.
+   */
+  micUnavailableReason?: string | null;
   /**
    * Whether the room's rules let this person present: `Permission.STREAM`.
    * False hides camera and screen share. Absent on an older server is
@@ -824,6 +850,11 @@ interface MicPipeline {
    * thread; closing the context alone leaves that to the collector.
    */
   noiseSuppressor: { destroy(): void } | null;
+  /**
+   * The voice gate after the suppressor (`lib/voice-gate/`), when Voz limpa
+   * built one. Held so teardown unregisters it from the kill switch.
+   */
+  voiceGate?: { destroy(): void } | null;
 }
 
 interface IceServerConfig {
@@ -1183,7 +1214,27 @@ async function createMicPipeline(
   // Suppressor first, then gain, then the meter and the published stream —
   // which is also the stream the watch-party mix carries, so one insertion
   // here covers the room and the audience both.
-  connectMicChain({ source, suppressor: noiseSuppressor, gain: gainNode });
+  // The gate only ever follows a suppressor that loaded: its sidechain's head
+  // start is that suppressor's own delay. It fails open to `null`, which is
+  // the chain exactly as it was before the gate existed.
+  const voiceGate = noiseSuppressor ? await createVoiceGate(audioContext) : null;
+  if (noiseSuppressor && isCancelled?.()) {
+    voiceGate?.destroy();
+    try {
+      noiseSuppressor?.destroy();
+    } catch {
+      // Already gone with the context; nothing left to free.
+    }
+    stopStreamTracks(rawStream);
+    void audioContext.close().catch(() => {});
+    throw new MicSetupCancelledError();
+  }
+  connectMicChain({
+    source,
+    suppressor: noiseSuppressor,
+    gain: gainNode,
+    gate: voiceGate?.node ?? null,
+  });
   gainNode.connect(analyser);
   gainNode.connect(destination);
 
@@ -1194,6 +1245,7 @@ async function createMicPipeline(
     gainNode,
     analyser,
     noiseSuppressor,
+    voiceGate,
   };
 }
 
@@ -1212,6 +1264,11 @@ function stopMicTracks(pipeline: MicPipeline | null) {
 function closeMicContext(pipeline: MicPipeline | null) {
   if (!pipeline) {
     return;
+  }
+  try {
+    pipeline.voiceGate?.destroy();
+  } catch {
+    // Already gone with the context; nothing left to free.
   }
   try {
     pipeline.noiseSuppressor?.destroy();
@@ -1730,7 +1787,20 @@ export function createVoiceController(transport: RealtimeTransport) {
   let screenPublishMisses = 0;
   let republishingScreen = false;
   let joinTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  let speakingRaf = 0;
+  // The speaking ring's loop: a frame callback as it always was, or a timer
+  // while `voice_calm_detector` is on (`lib/speaking-clock.ts`).
+  const speakingScheduler = createSpeakingScheduler(calmDetectorEnabled);
+  // The transmit gate's own fast clock, only live while that flag is on.
+  const gateClock = createGateClock({
+    calm: calmDetectorEnabled,
+    eligible: () =>
+      state.inputMode === "voice-activity" &&
+      pipeline != null &&
+      state.canSpeak &&
+      !state.isMuted &&
+      !state.isDeafened,
+    run: () => syncVoiceActivityGate(),
+  });
   let voiceActivityPollId = 0;
   let iceServers: RTCIceServer[] = getDefaultIceServers();
   const remoteAnalysers = new Map<
@@ -2006,6 +2076,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     canUseSoundboard: false,
     canManageSoundboard: false,
     isAudienceSeat: false,
+    micUnavailableReason: null,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
     isTransmitting: false,
@@ -2591,6 +2662,58 @@ export function createVoiceController(transport: RealtimeTransport) {
       startMuted: options?.startMuted ?? false,
       audienceOnly: false,
     });
+  }
+
+  /**
+   * An unmute pressed on a seat that has no microphone: the button, the
+   * keyboard shortcut and the desktop menu all end here.
+   *
+   * Two kinds of seat have none, and they are not the same request.
+   *
+   * AN AUDIENCE SEAT (watch party viewer, "modo plateia") is listen-only on
+   * purpose; the unmute is a request to take the stage and is honoured only
+   * when the room lets this person speak. Unchanged.
+   *
+   * A LISTEN-ONLY JOIN (`micUnavailable`) is a seat whose microphone could not
+   * be opened when the person came in: permission refused, no device, another
+   * app holding it. Nothing in the room made that choice, so a press on
+   * unmute is a person who has since fixed it and wants to be heard. It goes
+   * through the same leave-and-rejoin as the card's "Arrumar" button
+   * (`retakeSeatWithMicrophone`), so the permission prompt, the device
+   * fallbacks, the SFU publish grant and the mesh offers are the join's own,
+   * on both transports. If the microphone still will not open, the join says
+   * why in the notice (`micErrorMessage`: blocked, missing, unreadable) and
+   * the seat lands listen-only again.
+   *
+   * Only a seat that is already connected: during a join the pipeline is
+   * missing because it is still being opened, and a press then must not tear
+   * that join down. A seat the room does not let speak keeps its locked
+   * button.
+   *
+   * A share or camera in progress ends with the rejoin, so a seat that is
+   * presenting is told how to proceed instead of losing the picture on a
+   * single press.
+   */
+  function askForMissingMicrophone(): void {
+    const channelId = state.voiceChannelId;
+    if (!channelId) {
+      return;
+    }
+    if (audienceSeat) {
+      if (state.canSpeak) {
+        void retakeSeatWithMicrophone(channelId);
+      }
+      return;
+    }
+    if (!micUnavailable || state.status !== "connected" || !state.canSpeak) {
+      return;
+    }
+    if (state.isSharingScreen || state.isCameraOn) {
+      state.notice = translateMessage("voice.notice.micRetryEndsShare");
+      emit();
+      return;
+    }
+    void retakeSeatWithMicrophone(channelId);
   }
 
   /**
@@ -3371,10 +3494,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   function stopSpeakingLoop() {
-    if (speakingRaf) {
-      cancelAnimationFrame(speakingRaf);
-      speakingRaf = 0;
-    }
+    speakingScheduler.cancel();
+    gateClock.stop();
     stopAudioHealth();
     stopVoiceActivityPoll();
     speakingTracker.clear();
@@ -3390,11 +3511,20 @@ export function createVoiceController(transport: RealtimeTransport) {
     stopSpeakingLoop();
     startVoiceActivityPoll();
     startAudioHealth();
+    gateClock.start();
     const tick = () => {
+      gateClock.sync();
       const next: string[] = [];
+      // How often the ring's analysers are read from here on: null is the
+      // per-frame loop they were tuned for, a number is the calm timer, and
+      // their smoothing follows it so the ring rises as fast as it did.
+      const pollMs = speakingScheduler.intervalMs();
       // The interval keeps the gate alive on a hidden tab. This rAF path is
-      // the low-latency one while the tab is visible.
-      syncVoiceActivityGate();
+      // the low-latency one while the tab is visible; on the calm timer the
+      // gate has its own clock (`gateClock`) and is not read from here.
+      if (pollMs === null) {
+        syncVoiceActivityGate();
+      }
       // `isTransmitting`, not `!isMuted`: in push-to-talk between presses the
       // mic is live and the analyser still reads a level, but nobody can hear
       // it. Lighting the speaking ring then would be the panel claiming you are
@@ -3409,6 +3539,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
 
       for (const [peerId, entry] of remoteAnalysers) {
+        tuneAnalyserForPoll(entry.analyser, pollMs);
         const level = readAnalyserLevel(entry.analyser);
         // A server-muted peer's audio may still be arriving (on a mesh it
         // always is), and the analyser still reads a level. Nobody hears it,
@@ -3431,9 +3562,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.speakingPeerIds = next;
         emit();
       }
-      speakingRaf = requestAnimationFrame(tick);
+      speakingScheduler.next(tick);
     };
-    speakingRaf = requestAnimationFrame(tick);
+    speakingScheduler.next(tick);
   }
 
   function toIdentity(participant: VoiceParticipant) {
@@ -5349,6 +5480,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       canUseSoundboard: false,
       canManageSoundboard: false,
       isAudienceSeat: false,
+      micUnavailableReason: null,
       inputMode: state.inputMode,
       isTransmitting: false,
       error: null,
@@ -6667,6 +6799,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           sendJoin(voiceChannelId);
           return;
         }
+        // Per join, not per controller: the flag from a previous call must
+        // not make this seat look like one whose microphone failed.
+        micUnavailable = false;
+        state.micUnavailableReason = null;
         if (options?.audienceOnly) {
           // The audience seat. No prompt, no device, no notice: see
           // `audienceOnly` above. Muted is the truthful state, not a
@@ -6735,6 +6871,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         resolveMicFallback(requestedDeviceId, fellBack, fellBackLabel, next.rawStream);
         pipeline = next;
         micUnavailable = false;
+        state.micUnavailableReason = null;
         watchCurrentMic(next);
         applyMuteToPipeline();
         sendJoin(voiceChannelId);
@@ -6765,9 +6902,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           muteBeforeDeafen = true;
         }
         applyMuteToPipeline();
-        state.notice = translateMessage("voice.notice.listenOnly", {
-          reason: micErrorMessage(err),
-        });
+        const reason = micErrorMessage(err);
+        state.micUnavailableReason = reason;
+        state.notice = translateMessage("voice.notice.listenOnly", { reason });
         sendJoin(voiceChannelId);
       }
     },
@@ -7123,8 +7260,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!pipeline) {
         // Same rule as `toggleMute`: only an explicit unmute asks for a
         // device, and only for a seat the room already lets speak.
-        if (!muted && audienceSeat && state.canSpeak && state.voiceChannelId) {
-          void retakeSeatWithMicrophone(state.voiceChannelId);
+        if (!muted) {
+          askForMissingMicrophone();
         }
         return;
       }
@@ -7140,14 +7277,13 @@ export function createVoiceController(transport: RealtimeTransport) {
     toggleMute() {
       if (!pipeline) {
         // THE BUTTON THAT SAYS UNMUTE HAS TO UNMUTE. A seat with no
-        // microphone (an audience seat, or a join whose device could not be
-        // opened) used to swallow this silently, which is what an invited
+        // microphone used to swallow this silently, which is what an invited
         // guest pressing the on-air strip's mic button experienced: a
-        // control that did nothing, for ever. The room already says they may
-        // speak, so ask for the device.
-        if (audienceSeat && state.canSpeak && state.voiceChannelId) {
-          void retakeSeatWithMicrophone(state.voiceChannelId);
-        }
+        // control that did nothing, for ever. Two seats have none, an
+        // audience seat and a join whose device could not be opened, and
+        // `askForMissingMicrophone` asks for the device for both, when the
+        // room already says this person may speak.
+        askForMissingMicrophone();
         return;
       }
       preservedSelfVoice = null;
@@ -7258,6 +7394,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       // A share that succeeds supersedes the last one that failed, and the
       // offer to retry without sound has to go with it.
       state.screenShareAudioFailed = false;
+      // Same for the macOS "no sound, allow System Audio Recording" card.
+      clearMacShareAudioPermission();
 
       // The standing "leave my mouse out of it" preference, read from its own
       // store rather than passed down four components (it is remembered per
@@ -7266,6 +7404,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       await Promise.all([
         ensureOsCanExcludeCallAudio(),
         ensureLinuxShellShareAudio(),
+        ensureMacShellShareAudio(),
       ]);
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
       const captureIntent = { ...intent, hideCursor };
@@ -7301,6 +7440,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       // already opened.
       if (captureEnv.shellLinuxShareAudio && askedForAudio && !intent.stream) {
         await armLinuxShellShareAudio();
+      }
+      // MACOS DESKTOP: same rule. The shell answers the display request with
+      // loopback only after this arm; without it the request is video-only,
+      // which is also what an old page gets.
+      if (captureEnv.shellMacShareAudio && askedForAudio && !intent.stream) {
+        await armMacShellShareAudio();
       }
 
       let stream: MediaStream;
@@ -7389,7 +7534,23 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       // Fail closed before anyone else hears the mixer. Strip only when
       // exclude is known not to have applied; undefined settings stay.
-      if (stripLeakedSystemAudioTracks(stream)) {
+      //
+      // NOT on the macOS shell: there the exclusion is Chromium's tap leaving
+      // its own audio process out, and what `getSettings().restrictOwnAudio`
+      // says about that tap is not something this code can lean on (the
+      // setting was written for the Windows device). The settings are logged
+      // instead, so a leak report comes with the facts.
+      if (captureEnv.shellMacShareAudio && stream.getAudioTracks().length > 0) {
+        try {
+          console.warn(
+            "[share] mac system audio settings",
+            stream.getAudioTracks()[0]?.getSettings?.(),
+          );
+        } catch {
+          // Diagnostics only.
+        }
+      }
+      if (!captureEnv.shellMacShareAudio && stripLeakedSystemAudioTracks(stream)) {
         // A second, separate UA-CH read from `ensureOsCanExcludeCallAudio`
         // above: that one answers "can I offer computer sound", this one
         // answers "do I actually KNOW this is old Windows" -- see
@@ -7428,7 +7589,23 @@ export function createVoiceController(transport: RealtimeTransport) {
         !intent.appAudio &&
         (sharedWithoutSoundAfterFailure || lostSoundToFailure(intent.stream));
       if (lostSound && intent.watchParty !== true) {
-        state.notice = translateMessage("voice.notice.shareAudioFallback");
+        if (captureEnv.shellMacShareAudio) {
+          // On a Mac the usual reason the sound would not open is the System
+          // Audio Recording permission, so the card that opens that pane
+          // replaces the generic line.
+          raiseMacShareAudioPermission();
+        } else {
+          state.notice = translateMessage("voice.notice.shareAudioFallback");
+        }
+      }
+      // MACOS DESKTOP: the capture came back with a sound track that is dead
+      // (`ended`, never a sample): Electron's documented silent failure when
+      // System Audio Recording is not granted. Taken off the stream before it
+      // is published, and the presenter is told why.
+      if (captureEnv.shellMacShareAudio && askedForAudio && !intent.stream) {
+        settleMacShareAudio(stream, () => {
+          raiseMacShareAudioPermission();
+        });
       }
       // The shell's capture joins the stream here, after the strip (it is
       // not the mixer, so there is nothing in it to strip) and before

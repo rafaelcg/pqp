@@ -12,7 +12,7 @@ export const termsEn: LegalDocument = {
   description:
     "Terms for using the hosted pqp.gg service: what pqp actually is, eligibility (18+), acceptable use, moderation, reporting and takedowns.",
   heading: "Terms of Service",
-  updated: "27 September 2026",
+  updated: "5 November 2026",
   sections: [
     {
       id: "intro",
@@ -35,8 +35,12 @@ export const termsEn: LegalDocument = {
           <p>
             pqp is a personal project, built for fun by one person in their
             spare time, with family helping on the product. There is no
-            company, no paid product, and no support team. The person who
-            reads your email is the person who wrote the code. People can send
+            company, no paid product, and no call centre or service desk. The
+            person who reads your email is the person who wrote the code, and
+            that same person reviews every abuse report within 24 hours (see
+            Acceptable use and Reporting abuse below). That promise is about
+            reports; the &quot;as is&quot; language further down is about
+            uptime and features. People can send
             a gift toward hosting via GitHub Sponsors or Pix, on{" "}
             <Link to="/apoie">/apoie</Link>. That unlocks nothing: no badge, no
             extra features, no refunds. It is provided{" "}
@@ -135,6 +139,16 @@ export const termsEn: LegalDocument = {
       heading: "Acceptable use",
       body: (
         <>
+          <p>
+            <strong>
+              pqp has zero tolerance for objectionable content and abusive
+              users.
+            </strong>{" "}
+            Anyone can report content or a person from inside the app, and
+            anyone can block a person. We review every report within 24 hours.
+            When a violation is confirmed, we remove the content and we remove
+            the account that posted it.
+          </p>
           <p>Do not use pqp.gg to:</p>
           <ul>
             <li>
@@ -179,6 +193,57 @@ export const termsEn: LegalDocument = {
             Server owners and admins are responsible for the communities they
             run. Running a server whose apparent purpose is to break these rules
             is itself a violation.
+          </p>
+        </>
+      ),
+    },
+    {
+      id: "filtering",
+      heading: "What we filter automatically",
+      body: (
+        <>
+          <p>
+            pqp checks what you post before other people see it. When a check
+            refuses something, you are told at that moment and it is not
+            posted.
+          </p>
+          <ul>
+            <li>
+              <strong>Text.</strong> pqp has a built-in text filter, and it is
+              an optional setting: it does not run unless it has been switched
+              on, by a server&apos;s owner in that server&apos;s AutoMod
+              settings or by pqp for a particular server. Where it is on, messages
+              and edits in server channels, forum posts, stories, Baú comments
+              and posts are read against a built-in list of slurs and threats
+              (including telling someone to kill themselves, rape threats, and
+              sexual content about children), in English, Portuguese and
+              Spanish. A match is not sent, and you see: &quot;This message was
+              not sent: it breaks pqp&apos;s rules on abusive language.&quot;
+              Insults and everyday swearing are not on the list. Direct
+              messages and group messages are never read by this filter. A
+              server&apos;s owner can also add their own blocked words, links
+              and mention limits.
+            </li>
+            <li>
+              <strong>Images.</strong> A new image attached to a message, or
+              posted to a community&apos;s Baú, is checked by an automated
+              image-safety service before anyone else can see it. If it fails
+              the check it is dropped.
+            </li>
+            <li>
+              <strong>What is not checked by a program.</strong> Video, audio
+              and PDF files, profile pictures and banners, and server icons are
+              not scanned automatically today; reports are how those are dealt
+              with. Voice calls are not listened to. A name that comes from your
+              sign-in account when you first register is not read by the text
+              filter.
+            </li>
+          </ul>
+          <p>
+            Automatic filters are a first line, not a moderator. They miss
+            things, and sometimes they catch something harmless. They do not
+            replace reporting: if something gets through, report it, and we
+            review every report within 24 hours.
           </p>
         </>
       ),
@@ -230,9 +295,10 @@ export const termsEn: LegalDocument = {
             and history, that can mean: removing specific content, restricting
             an account&apos;s ability to post, removing a server from the hosted
             service, suspending an account, or terminating an account
-            permanently. We aim to take the narrowest action that fixes the
-            problem — but for content involving minors, credible threats of
-            violence, or CSAM, the first action is termination.
+            permanently. A confirmed violation of the acceptable use
+            rules above ends with the content removed and the account that
+            posted it removed. For content involving minors, credible threats of
+            violence, or CSAM, that happens first and without a warning.
           </p>
           <p>
             We can also suspend accounts or servers that put the service or
@@ -250,7 +316,8 @@ export const termsEn: LegalDocument = {
             If you have an account, use the <strong>Report</strong> action on a
             message, a member, or a community card. That is the reporting
             channel. It sends a snapshot of the reported content to the people
-            who can act on it.
+            who can act on it. You can also block a person from inside the app,
+            which hides their messages from you.
           </p>
           <p>
             You can also email <strong>contato@pqp.gg</strong>. That is how to
@@ -267,16 +334,11 @@ export const termsEn: LegalDocument = {
             <li>Screenshots if you have them, and roughly when it happened</li>
           </ul>
           <p>
-            <strong>What happens next, honestly.</strong> One person reads the
-            reports. There is no moderation team, no rota and no out-of-hours
-            cover, so we are not going to publish response times we cannot keep.
-            What is true is this: reports are read and acted on as fast as one
-            person reasonably can, usually within a few days, and reports
-            involving minors, imminent physical danger, or non-consensual
-            intimate images go to the front of the queue. If we are away or
-            swamped it takes longer. That is not a target we are quietly missing
-            — it is the shape of a one-person project, and you should know it
-            before you rely on us.
+            <strong>What happens next.</strong> We review every report within
+            24 hours. Reports involving minors, imminent physical danger, or
+            non-consensual intimate images go to the front of the queue. If the
+            report is right, the content is removed and so is the account that
+            posted it.
           </p>
           <p>
             <strong>One thing has no caveat.</strong> Content that sexualises a

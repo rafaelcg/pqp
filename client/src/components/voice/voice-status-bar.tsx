@@ -63,6 +63,12 @@ interface VoiceStatusBarProps {
    */
   listenOnly?: boolean;
   /**
+   * Why a seat that may speak has no microphone (blocked, missing, another
+   * app holding it), as the hover text of the badge. The strip is the only
+   * place an audio-only call shows the state, so the reason rides on it.
+   */
+  listenOnlyReason?: string;
+  /**
    * Locked by audience mode rather than by the channel: the strip says
    * "Modo plateia" instead of "Só ouvindo" (`docs/plans/AUDIENCE_MODE.md`).
    */
@@ -134,6 +140,7 @@ export function VoiceStatusBar({
   inputMode = "voice-activity",
   isTransmitting = true,
   listenOnly = false,
+  listenOnlyReason,
   audienceLocked = false,
   peerQualities = [],
   canStream = true,
@@ -294,6 +301,7 @@ export function VoiceStatusBar({
           {connected && listenOnly && (
             <span
               data-listen-only
+              title={listenOnlyReason}
               className="ml-1.5 min-w-0 truncate text-[10px] font-normal normal-case tracking-normal text-warning redesign:text-[11px] redesign:font-medium"
             >
               {audienceLocked ? t("voice.audience.badge") : t("voice.bar.listenOnly")}

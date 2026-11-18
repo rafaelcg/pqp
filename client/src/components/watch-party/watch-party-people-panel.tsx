@@ -7,7 +7,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { CohostCandidate } from "@/components/watch-party/watch-party-cohosts";
-import { visibleRaisedHands } from "@/components/watch-party/watch-party-panel";
+import { visibleRaisedHands } from "@/components/watch-party/raised-hands-cap";
 
 export interface PeoplePanelPerson {
   userId: string;

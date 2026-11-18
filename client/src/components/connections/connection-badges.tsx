@@ -70,7 +70,7 @@ export function ConnectionGlyph({
         "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm p-0.5",
         PROVIDER_CHROME[provider],
         // The near-black marks keep an edge on a dark pane.
-        DARK_TILE.has(provider) && "redesign:ring-1 redesign:ring-inset redesign:ring-[color:color-mix(in_oklab,var(--color-text)_14%,transparent)]",
+        DARK_TILE.has(provider) && "redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--connection-tile-edge)]",
         className,
       )}
     >

@@ -119,11 +119,14 @@ export function FeatureHint({
   actionLabel,
   onAction,
   actionBusy = false,
+  hero,
 }: {
   id: FeatureHintId;
   enabled: boolean;
   title?: string;
   body: string;
+  /** A picture above the copy (the Jam's lanes); the close button floats on it. */
+  hero?: ReactNode;
   /** Replaces the default "Got it" when this hint has a real next step. */
   actionLabel?: string;
   /**
@@ -174,6 +177,7 @@ export function FeatureHint({
       label={title ?? body}
       dismissLabel={t("featureHint.dismiss")}
       dataAttribute={id}
+      hero={hero}
       title={title}
       body={body}
       footer={

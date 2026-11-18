@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 
 /** A choice card at rest (its edge firms on hover), and chosen: the 2px accent edge (border plus inset ring), the row tint. */
 export const BOT_CARD_REDESIGN =
-  "redesign:relative redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:border-[color:color-mix(in_oklab,var(--color-text)_18%,transparent)]";
+  "redesign:relative redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:border-[color:var(--card-border-hover)]";
 export const BOT_CARD_CHOSEN_REDESIGN =
   "redesign:relative redesign:border-accent redesign:bg-[color:var(--card-row-hover)] redesign:text-text redesign:shadow-[inset_0_0_0_1px_var(--color-accent)]";
 

@@ -57,7 +57,7 @@ function tokenFor(userId, channelId, startedAt, issuedAt = NOW - 1_000) {
 /** Same shape `party-pass-revocation.test.mjs` uses for its KV fake. */
 function fakeKv(keyNames = []) {
   return {
-    async list({ prefix }) {
+    async list({ prefix = "" } = {}) {
       return { keys: keyNames.filter((name) => name.startsWith(prefix)).map((name) => ({ name })) };
     },
   };

@@ -3562,6 +3562,36 @@ describeDb("API authorization", () => {
       ).toBe(404);
     });
 
+    it("tells the operators: a new block opens one instance-queue ticket, a repeat opens none", async () => {
+      const open = async () =>
+        (
+          await getPool().query(
+            `SELECT reported_user_id, reporter_id, reason, channel_label, content_snapshot
+               FROM reports
+              WHERE status = 'open' AND server_id IS NULL
+                AND channel_label = 'Bloqueio'`,
+          )
+        ).rows;
+      expect(await open()).toHaveLength(0);
+
+      await call(member, "POST", "/api/blocks", {
+        userId: outsider.id,
+        surface: "message",
+      });
+      const rows = await open();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        reported_user_id: outsider.id,
+        reporter_id: null,
+        reason: "other",
+        content_snapshot: null,
+      });
+
+      // Blocking again changes nothing, so it says nothing.
+      await call(member, "POST", "/api/blocks", { userId: outsider.id });
+      expect(await open()).toHaveLength(1);
+    });
+
     it("shows a block only to the person who made it", async () => {
       await call(member, "POST", "/api/blocks", { userId: outsider.id });
       const theirs = await call<{ blocked: unknown[] }>(
