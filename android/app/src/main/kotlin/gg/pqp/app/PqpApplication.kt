@@ -187,6 +187,7 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
             requestFn = { id -> gg.pqp.app.attachments.AttachmentApi(session.api).requestTranscript(id) },
         )
         registerActivityLifecycleCallbacks(BackgroundPause { voiceNotes.onAppBackgrounded() })
+        registerActivityLifecycleCallbacks(ForegroundEntry { voice.onAppForeground() })
     }
 
     /**
@@ -247,6 +248,34 @@ private class BackgroundPause(private val onBackground: () -> Unit) :
     override fun onActivityStopped(activity: android.app.Activity) {
         started = (started - 1).coerceAtLeast(0)
         if (started == 0 && !activity.isChangingConfigurations) onBackground()
+    }
+
+    override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) = Unit
+    override fun onActivityResumed(activity: android.app.Activity) = Unit
+    override fun onActivityPaused(activity: android.app.Activity) = Unit
+    override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) = Unit
+    override fun onActivityDestroyed(activity: android.app.Activity) = Unit
+}
+
+/**
+ * Calls [onForeground] each time the app goes from no visible Activity to one.
+ *
+ * A call held on a foreground type without the microphone gets the full set
+ * back here, because a visible app is the state Android grants it in. A
+ * rotation restarts the Activity and also lands here, which costs nothing: the
+ * ask is a no-op unless the call is on a lesser rung.
+ */
+private class ForegroundEntry(private val onForeground: () -> Unit) :
+    android.app.Application.ActivityLifecycleCallbacks {
+    private var started = 0
+
+    override fun onActivityStarted(activity: android.app.Activity) {
+        started += 1
+        if (started == 1) onForeground()
+    }
+
+    override fun onActivityStopped(activity: android.app.Activity) {
+        started = (started - 1).coerceAtLeast(0)
     }
 
     override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) = Unit
