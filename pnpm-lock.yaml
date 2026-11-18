@@ -383,8 +383,8 @@ importers:
         specifier: 0.12.73
         version: 0.12.73
       '@livekit/rtc-node':
-        specifier: 0.13.34
-        version: 0.13.34
+        specifier: 1.2.2
+        version: 1.2.2
       pg:
         specifier: ^8.23.1
         version: 8.23.1
@@ -1864,14 +1864,33 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
+  '@livekit/rtc-ffi-bindings-darwin-arm64@0.13.2':
+    resolution: {integrity: sha512-XPdp00ZHM5kiCRdKNxGer5eDrlq1KO4ck7CAisX+fWENUxTXzMhOPzbIxfjH28fMVw24Ajs8ViMJwvIUIKuBQA==}
+    engines: {node: '>= 18'}
+    cpu: [arm64]
+    os: [darwin]
+
   '@livekit/rtc-ffi-bindings-darwin-x64@0.12.73':
     resolution: {integrity: sha512-esPwYCbUnDD/KxBo0YU8awTFglRG7SvOT/sfiP19KChS5SH8TgXc7JwfSvnjRx1PndUqHFzQAbQDcYaeL9PFTg==}
     engines: {node: '>= 18'}
     cpu: [x64]
     os: [darwin]
 
+  '@livekit/rtc-ffi-bindings-darwin-x64@0.13.2':
+    resolution: {integrity: sha512-36R0qqV7JeECWPp68uJtHy46gPfDl+xlGabnUiSz2sSutmrjtNK0bTpzX2OgoP7HPqMDep0bBySTnkv/8RCPtg==}
+    engines: {node: '>= 18'}
+    cpu: [x64]
+    os: [darwin]
+
   '@livekit/rtc-ffi-bindings-linux-arm64-gnu@0.12.73':
     resolution: {integrity: sha512-2YBatXjuaumnaNVqRC63flX5XZTvHcQWRsABw6e2yp+Hlxl3ocjVVyk5PrAsRzCdeyxbHLduqV9ctqGbpTA27Q==}
+    engines: {node: '>= 18'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@livekit/rtc-ffi-bindings-linux-arm64-gnu@0.13.2':
+    resolution: {integrity: sha512-flYJL65NG+o1tNisPXY3Mhx0+fGb7DlBgvTaMzwYsc+KHhefEUgIRSSo78JEF/IM1MQVEneLQsGPqXuqEMC3aA==}
     engines: {node: '>= 18'}
     cpu: [arm64]
     os: [linux]
@@ -1884,8 +1903,21 @@ packages:
     os: [linux]
     libc: [glibc]
 
+  '@livekit/rtc-ffi-bindings-linux-x64-gnu@0.13.2':
+    resolution: {integrity: sha512-acxG8CXMCN4Dgx+nl/1n4CP2G1c8YgmYBs2cA/BpUwYUXsCf9nlnJKRa1i/PIQlTFshdnbgq31RJtz4b3cdGNA==}
+    engines: {node: '>= 18'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
   '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.12.73':
     resolution: {integrity: sha512-2RnKXMTnNfvjJ3kbuhE1jqFNAQNmqSrxy3GlEnByY61tbtY14QPFn8X/0lh+Mjst8pZdfxkXvtbRyPt5KYHvMA==}
+    engines: {node: '>= 18'}
+    cpu: [x64]
+    os: [win32]
+
+  '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.13.2':
+    resolution: {integrity: sha512-ho3Q6T5kdvaXEVMvvLl+RmuStlDXzwqg3rY7hm95eZXeRwSCAmkfRz+cHuUDzztCiYNAey4zI1jPkHSRK5lTGg==}
     engines: {node: '>= 18'}
     cpu: [x64]
     os: [win32]
@@ -1894,8 +1926,12 @@ packages:
     resolution: {integrity: sha512-ZxkCQlsfTG7Eqi6KBXulEWJBUxeRVRYqCc795CsmKsGfqmBX5gE5CnTiynN8fFdzSGwApaVogeGSB6JszCf/Xw==}
     engines: {node: '>= 18'}
 
-  '@livekit/rtc-node@0.13.34':
-    resolution: {integrity: sha512-22EWklyNUGJ5EamOcC/eUnLy0Gu3SpzxzUkuXCixCequwNDmj8PGjKgtpWThlqTWkzvh9xsAKmQoDWhlXhkrzA==}
+  '@livekit/rtc-ffi-bindings@0.13.2':
+    resolution: {integrity: sha512-0JrZABVvpQt/PcCR51udLxm0JAPF3jt8ncQOBu/H8qlNTLAqW00qTVhYp7hrtJ7REd7MKxIkgv+zThLQVpXXzQ==}
+    engines: {node: '>= 18'}
+
+  '@livekit/rtc-node@1.2.2':
+    resolution: {integrity: sha512-OiSB0d+2xuYarQktFVbVUA0BnhgALEf2Qg52EwNriMGDbua/1Pmw4793+FuN+zTXG0b7ntGFHdy1rRqu0+GHqA==}
     engines: {node: '>= 18'}
 
   '@livekit/typed-emitter@3.0.0':
@@ -3598,8 +3634,8 @@ packages:
   electron-to-chromium@1.5.389:
     resolution: {integrity: sha512-cEto7aeOqBfU1D+c5py5pE+ooscKE75JifxLBdFUZsqAxRS6y7kebtxAZvICszSl05gPjYHDTjY+lXpyGvpJbg==}
 
-  electron-to-chromium@1.5.485:
-    resolution: {integrity: sha512-m3uadzR0Z+sR19HGWgfxoZcKv9hE/edVM9OZ+FJ4wNRyfuFtkwZJIDoehEty5sisYVwmge8lKV1tenWOyClVgw==}
+  electron-to-chromium@1.5.486:
+    resolution: {integrity: sha512-rpybw4Ac4ak/An6G1Me2+61xzwobowDGyuJe71QHHOVpkZv4fPVobsLl7WH6zHSKusAMpaHxGKTpOvpy7+r3dQ==}
 
   electron-updater@6.8.11:
     resolution: {integrity: sha512-12U/mbzaIKQS3Q543aQ7DjyAZMXeVJy1Wpu0qdq5ne4RXpIQDpWYm25zRjgXngAoo6swMrm4C4owGyiIipelsg==}
@@ -3793,8 +3829,8 @@ packages:
   extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
 
-  fast-copy@4.1.1:
-    resolution: {integrity: sha512-A4QTJmuiztpGtr6AMeJts9R4hbj2ZBUwtOaKrG6rw2y7t6+IaJKjz5M3XDs8BUznxDH43FVc6A0y/gWlMl4UtA==}
+  fast-copy@4.3.1:
+    resolution: {integrity: sha512-CRzQaTFOFUs6PuhsAq7lk9Zqr995soJBcFNZlfJS/5keTSl1awREV9dZW4xS2nX4pWbhIIR0xp4h+J8PQxCkvg==}
 
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
@@ -4933,8 +4969,8 @@ packages:
   pino-abstract-transport@3.0.0:
     resolution: {integrity: sha512-wlfUczU+n7Hy/Ha5j9a/gZNy7We5+cXp8YL+X+PG8S0KXxw7n/JXA3c46Y0zQznIJ83URJiwy7Lh56WLokNuxg==}
 
-  pino-pretty@13.1.3:
-    resolution: {integrity: sha512-ttXRkkOz6WWC95KeY9+xxWL6AtImwbyMHrL1mSwqwW9u+vLp/WIElvHvCSDg0xO/Dzrggz1zv3rN5ovTRVowKg==}
+  pino-pretty@13.2.0:
+    resolution: {integrity: sha512-jjghD1ML+Di/WxjJDz6j6Y4FT7hIXOlb8h27AyJ+ohtAXJXH4PS/xkv7si+RCCIW59HMgZsMKTDgzdr0RhuRrg==}
     hasBin: true
 
   pino-std-serializers@7.1.0:
@@ -5022,8 +5058,8 @@ packages:
   process-nextick-args@2.0.1:
     resolution: {integrity: sha512-3ouUOpQhtgrbOa17J7+uxOTpITYWaGP7/AhoR3+A+/1e9skrzelGi/dXzEYyvbxubEF6Wn2ypscTKiKJFFn1ag==}
 
-  process-warning@5.1.0:
-    resolution: {integrity: sha512-jQSaVHsPgtyw60e1rQ/A+/ArPEj/S8pS/vFnyGa/gYFXrKk/6RuDkoqVDQ5NI5MmS01698ltlAk0NoDBNLujRw==}
+  process-warning@5.1.1:
+    resolution: {integrity: sha512-oCkNVj4OKnKEcocVBcDfiIugN1/cE6rgfT3nCtzeqZPA8+rIxMaQ0xXzIkGP8Gj2qUaP1UR7uhJ1VD8lUCpzCg==}
 
   progress@2.0.3:
     resolution: {integrity: sha512-7PiHtLll5LdnKIMw100I+8xJXR5gW2QwWYkT6iJva0bXitZKa/XMrSbdmg3r2Xnaidz9Qumd0VPaMrZlF9V9sA==}
@@ -5292,8 +5328,8 @@ packages:
   search-insights@2.17.3:
     resolution: {integrity: sha512-RQPdCYTa8A68uM2jwxoY842xDhvx3E5LFL1LxvxCNMev4o5mLuokczhzjAgGwUZBAmOKZknArSxLKmXtIi2AxQ==}
 
-  secure-json-parse@4.1.0:
-    resolution: {integrity: sha512-l4KnYfEyqYJxDwlNVyRfO2E4NTHfMKAWdUuA8J0yve2Dz/E/PdBepY03RvyJpssIpRFwJoCD55wA+mEDs6ByWA==}
+  secure-json-parse@4.1.1:
+    resolution: {integrity: sha512-lnd81MQEZKjhW/Gd2TQqdd4XP6QYNdDW/EP+I7nTrFHP9y2LmaGPIHk9xsnzcOiEr1c39c/e84xFgGviQKBTRw==}
 
   semver-compare@1.0.0:
     resolution: {integrity: sha512-YM3/ITh2MJ5MtzaM429anh+x2jiLVjqILF4m4oyQB18W7Ggea7BfqdH/wGMK7dDiMghv/6WG7znWMwUDzJiXow==}
@@ -5394,6 +5430,9 @@ packages:
   sonic-boom@4.2.1:
     resolution: {integrity: sha512-w6AxtubXa2wTXAUsZMMWERrsIRAdrK0Sc+FUytWvYAhBJLyuI4llrMIC1DtlNSdI99EI86KZum2MMq3EAZlF9Q==}
 
+  sonic-boom@5.0.2:
+    resolution: {integrity: sha512-/JEruzo6yhNVhsLblTRchgTQHIt7SsdJP0YyrfWaNKjIOQDfrdZv9gwYraYCAsmKV39/LAdV31FLL5NCDpoL/A==}
+
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
@@ -5489,9 +5528,9 @@ packages:
     resolution: {integrity: sha512-6fPc+R4ihwqP6N/aIv2f1gMH8lOVtWQHoqC4yK6oSDVVocumAsfCqjkXnqiYMhmMwS/mEHLp7Vehlt3ql6lEig==}
     engines: {node: '>=8'}
 
-  strip-json-comments@5.0.3:
-    resolution: {integrity: sha512-1tB5mhVo7U+ETBKNf92xT4hrQa3pm0MZ0PQvuDnWgAAGHDsfp4lPSpiS6psrSiet87wyGPh9ft6wmhOMQ0hDiw==}
-    engines: {node: '>=14.16'}
+  strip-json-comments@5.1.0:
+    resolution: {integrity: sha512-ErcwpJBYr8EfX/Br7JauOIGXoRE92w0hVtuS9j92UFgbATxA+WRSIZksSUDzEeItfWB/0QCEprTZT55RSINUHQ==}
+    engines: {node: '>=22'}
 
   style-to-js@1.1.21:
     resolution: {integrity: sha512-RjQetxJrrUJLQPHbLku6U/ocGtzyjbJMP9lCNK7Ag0CNh690nSH8woqWH9u16nMjYBAok+i7JO1NP2pOy8IsPQ==}
@@ -7678,16 +7717,31 @@ snapshots:
   '@livekit/rtc-ffi-bindings-darwin-arm64@0.12.73':
     optional: true
 
+  '@livekit/rtc-ffi-bindings-darwin-arm64@0.13.2':
+    optional: true
+
   '@livekit/rtc-ffi-bindings-darwin-x64@0.12.73':
+    optional: true
+
+  '@livekit/rtc-ffi-bindings-darwin-x64@0.13.2':
     optional: true
 
   '@livekit/rtc-ffi-bindings-linux-arm64-gnu@0.12.73':
     optional: true
 
+  '@livekit/rtc-ffi-bindings-linux-arm64-gnu@0.13.2':
+    optional: true
+
   '@livekit/rtc-ffi-bindings-linux-x64-gnu@0.12.73':
     optional: true
 
+  '@livekit/rtc-ffi-bindings-linux-x64-gnu@0.13.2':
+    optional: true
+
   '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.12.73':
+    optional: true
+
+  '@livekit/rtc-ffi-bindings-win32-x64-msvc@0.13.2':
     optional: true
 
   '@livekit/rtc-ffi-bindings@0.12.73':
@@ -7700,14 +7754,24 @@ snapshots:
       '@livekit/rtc-ffi-bindings-linux-x64-gnu': 0.12.73
       '@livekit/rtc-ffi-bindings-win32-x64-msvc': 0.12.73
 
-  '@livekit/rtc-node@0.13.34':
+  '@livekit/rtc-ffi-bindings@0.13.2':
+    dependencies:
+      '@bufbuild/protobuf': 1.10.1
+    optionalDependencies:
+      '@livekit/rtc-ffi-bindings-darwin-arm64': 0.13.2
+      '@livekit/rtc-ffi-bindings-darwin-x64': 0.13.2
+      '@livekit/rtc-ffi-bindings-linux-arm64-gnu': 0.13.2
+      '@livekit/rtc-ffi-bindings-linux-x64-gnu': 0.13.2
+      '@livekit/rtc-ffi-bindings-win32-x64-msvc': 0.13.2
+
+  '@livekit/rtc-node@1.2.2':
     dependencies:
       '@datastructures-js/deque': 1.0.8
       '@livekit/mutex': 1.1.1
-      '@livekit/rtc-ffi-bindings': 0.12.73
+      '@livekit/rtc-ffi-bindings': 0.13.2
       '@livekit/typed-emitter': 3.0.0
       pino: 9.14.0
-      pino-pretty: 13.1.3
+      pino-pretty: 13.2.0
 
   '@livekit/typed-emitter@3.0.0': {}
 
@@ -9090,7 +9154,7 @@ snapshots:
     dependencies:
       baseline-browser-mapping: 2.11.37
       caniuse-lite: 1.0.30001826
-      electron-to-chromium: 1.5.485
+      electron-to-chromium: 1.5.486
       node-releases: 2.0.64
       update-browserslist-db: 1.3.4(browserslist@4.29.5)
 
@@ -9422,7 +9486,7 @@ snapshots:
 
   electron-to-chromium@1.5.389: {}
 
-  electron-to-chromium@1.5.485: {}
+  electron-to-chromium@1.5.486: {}
 
   electron-updater@6.8.11:
     dependencies:
@@ -9761,7 +9825,7 @@ snapshots:
 
   extend@3.0.2: {}
 
-  fast-copy@4.1.1: {}
+  fast-copy@4.3.1: {}
 
   fast-deep-equal@3.1.3: {}
 
@@ -11099,11 +11163,11 @@ snapshots:
     dependencies:
       split2: 4.2.0
 
-  pino-pretty@13.1.3:
+  pino-pretty@13.2.0:
     dependencies:
       colorette: 2.0.20
       dateformat: 4.6.3
-      fast-copy: 4.1.1
+      fast-copy: 4.3.1
       fast-safe-stringify: 2.1.1
       help-me: 5.0.0
       joycon: 3.1.1
@@ -11111,9 +11175,9 @@ snapshots:
       on-exit-leak-free: 2.1.2
       pino-abstract-transport: 3.0.0
       pump: 3.0.4
-      secure-json-parse: 4.1.0
-      sonic-boom: 4.2.1
-      strip-json-comments: 5.0.3
+      secure-json-parse: 4.1.1
+      sonic-boom: 5.0.2
+      strip-json-comments: 5.1.0
 
   pino-std-serializers@7.1.0: {}
 
@@ -11124,7 +11188,7 @@ snapshots:
       on-exit-leak-free: 2.1.2
       pino-abstract-transport: 2.0.0
       pino-std-serializers: 7.1.0
-      process-warning: 5.1.0
+      process-warning: 5.1.1
       quick-format-unescaped: 4.0.4
       real-require: 0.2.0
       safe-stable-stringify: 2.5.0
@@ -11195,7 +11259,7 @@ snapshots:
 
   process-nextick-args@2.0.1: {}
 
-  process-warning@5.1.0: {}
+  process-warning@5.1.1: {}
 
   progress@2.0.3: {}
 
@@ -11560,7 +11624,7 @@ snapshots:
 
   search-insights@2.17.3: {}
 
-  secure-json-parse@4.1.0: {}
+  secure-json-parse@4.1.1: {}
 
   semver-compare@1.0.0:
     optional: true
@@ -11676,6 +11740,10 @@ snapshots:
     dependencies:
       atomic-sleep: 1.0.0
 
+  sonic-boom@5.0.2:
+    dependencies:
+      atomic-sleep: 1.0.0
+
   source-map-js@1.2.1: {}
 
   source-map-js@1.2.2: {}
@@ -11785,7 +11853,7 @@ snapshots:
 
   strip-json-comments@3.1.1: {}
 
-  strip-json-comments@5.0.3: {}
+  strip-json-comments@5.1.0: {}
 
   style-to-js@1.1.21:
     dependencies:
