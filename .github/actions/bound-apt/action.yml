@@ -1,0 +1,36 @@
+name: Bound apt stalls
+description: >-
+  Gives apt a per-fetch timeout and retries, so a mirror that stalls one
+  package turns into a retry instead of a step that waits it out. Optionally
+  moves apt's package archive (`Dir::Cache::archives`) to a directory the
+  runner user owns, which is what lets `actions/cache` save and restore the
+  downloaded .deb files. Run it after checkout and before any apt-get.
+inputs:
+  archives-dir:
+    description: >-
+      A directory for apt's downloaded .deb files. Empty leaves apt's archive
+      where it is.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Write apt config
+      shell: bash
+      env:
+        ARCHIVES_DIR: ${{ inputs.archives-dir }}
+      run: |
+        set -euo pipefail
+        {
+          echo 'Acquire::http::Timeout "20";'
+          echo 'Acquire::https::Timeout "20";'
+          echo 'Acquire::Retries "5";'
+          if [ -n "$ARCHIVES_DIR" ]; then
+            mkdir -p "$ARCHIVES_DIR/partial"
+            # apt runs as root and downloads as _apt; both must be able to
+            # write here, and a restored cache comes back owned by the runner.
+            chmod -R a+rwX "$ARCHIVES_DIR"
+            echo "Dir::Cache::archives \"$ARCHIVES_DIR\";"
+            echo 'APT::Keep-Downloaded-Packages "true";'
+          fi
+        } | sudo tee /etc/apt/apt.conf.d/99ci-bounded > /dev/null
