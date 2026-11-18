@@ -242,10 +242,18 @@ describe("verifyAuthHeader through the real @clerk/backend", () => {
     expect(await verifyAuthHeader(`Bearer ${token}`)).toBeNull();
   });
 
-  it("rejects a token with no azp while authorized parties are configured", async () => {
-    // Behaviour that CHANGED across the major bump: 1.x let a missing azp
-    // through. Pinned so the next bump cannot silently flip it back.
+  it("accepts a token with no azp while authorized parties are configured (native apps)", async () => {
+    // @clerk/backend 3.11.1 rejects this when handed `authorizedParties`, and
+    // it is exactly what clerk-ios and clerk-android tokens look like. So the
+    // SDK is not handed the list; `authorizedPartyAllowed` applies it.
     const token = mint({ omit: ["azp"] });
+    const result = await verifyAuthHeader(`Bearer ${token}`);
+    expect(result?.clerkId).toBe("user_real_sdk_1");
+  });
+
+  it("rejects an empty azp while authorized parties are configured", async () => {
+    // Absent is a native token. Present but empty is not absent.
+    const token = mint({ claims: { azp: "" } });
     expect(await verifyAuthHeader(`Bearer ${token}`)).toBeNull();
   });
 
@@ -286,6 +294,92 @@ describe("verifyAuthHeader through the real @clerk/backend", () => {
   it("keeps an unknown profile out when the Backend API lookup fails (never invents one)", async () => {
     userStatus = 500;
     expect(await verifyAuthHeader(`Bearer ${mint()}`)).toBeNull();
+  });
+});
+
+/**
+ * One token per client platform, shaped exactly like the real session tokens
+ * the staging (development) Clerk instance issued to each SDK on 2026-11-18,
+ * decoded header and claims with only ids and times replaced:
+ *
+ * - web: clerk-js in a browser on the site's origin. Has `azp` = that origin.
+ * - Electron: the shell loads the same site and the same clerk-js in its
+ *   renderer, so its token is the web token (`azp` = the site's origin).
+ * - iOS (clerk-ios 1.7.x) and Android (clerk-android 1.4.x): the Frontend API
+ *   is called with `_is_native=true`, a device token and no `Origin`, and the
+ *   token has NO `azp` claim. `fva` differs between the two and means nothing
+ *   to us.
+ *
+ * Every one carries `cat: cl_B7d4PD111AAA` (the session token category), which
+ * is what @clerk/backend 3.28 requires.
+ */
+describe("every client platform's token shape, under our options", () => {
+  const SESSION_CAT = "cl_B7d4PD111AAA";
+  const now = () => Math.floor(Date.now() / 1000);
+  const shape = (claims: Record<string, unknown>, omit: string[] = []) =>
+    mint({
+      header: { cat: SESSION_CAT, oiat: now() },
+      claims: {
+        iss: "https://clerk.pqp.example",
+        sts: "active",
+        v: 2,
+        iat: now(),
+        nbf: now() - 10,
+        exp: now() + 60,
+        ...claims,
+      },
+      omit,
+    });
+
+  const platforms: Array<[string, () => string]> = [
+    ["web (clerk-js, azp = site origin)", () => shape({ azp: AUTHORIZED, fva: [0, 0] })],
+    ["Electron (same clerk-js, same origin)", () => shape({ azp: AUTHORIZED, fva: [0, 0] })],
+    ["iOS (clerk-ios, no azp)", () => shape({ fva: [0, -1] }, ["azp"])],
+    ["Android (clerk-android, no azp)", () => shape({ fva: [0, 0] }, ["azp"])],
+  ];
+
+  for (const [name, token] of platforms) {
+    it(`accepts ${name}`, async () => {
+      const result = await verifyAuthHeader(`Bearer ${token()}`);
+      expect(result?.clerkId).toBe("user_real_sdk_1");
+    });
+  }
+
+  it("still rejects a browser token minted for an origin that is not ours", async () => {
+    const token = shape({ azp: "https://staging.pqp-3yr.pages.dev", fva: [0, 0] });
+    expect(await verifyAuthHeader(`Bearer ${token}`)).toBeNull();
+  });
+
+  it("rejects an M2M token signed by the same instance key (cat cl_B7d4PD333AAA)", async () => {
+    const token = mint({ header: { cat: "cl_B7d4PD333AAA" } });
+    expect(await verifyAuthHeader(`Bearer ${token}`)).toBeNull();
+  });
+
+  it("rejects the retired legacy session category (cat cl_I7d4PD111III)", async () => {
+    const token = mint({ header: { cat: "cl_I7d4PD111III" } });
+    expect(await verifyAuthHeader(`Bearer ${token}`)).toBeNull();
+  });
+});
+
+describe("authorizedPartyAllowed", () => {
+  let authorizedPartyAllowed: typeof import("./clerk.js").authorizedPartyAllowed;
+  beforeAll(async () => {
+    ({ authorizedPartyAllowed } = await import("./clerk.js"));
+  });
+
+  it("enforces nothing when no list is configured", () => {
+    expect(authorizedPartyAllowed(undefined, undefined)).toBe(true);
+    expect(authorizedPartyAllowed("https://anything.example", undefined)).toBe(true);
+  });
+
+  it("accepts a listed origin and an absent claim, refuses everything else", () => {
+    const list = ["https://pqp-3yr.pages.dev", "https://pqp.gg"];
+    expect(authorizedPartyAllowed("https://pqp.gg", list)).toBe(true);
+    expect(authorizedPartyAllowed(undefined, list)).toBe(true);
+    expect(authorizedPartyAllowed("https://evil.example", list)).toBe(false);
+    expect(authorizedPartyAllowed("", list)).toBe(false);
+    expect(authorizedPartyAllowed(null, list)).toBe(false);
+    expect(authorizedPartyAllowed(["https://pqp.gg"], list)).toBe(false);
   });
 });
 
