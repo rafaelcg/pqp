@@ -4813,6 +4813,18 @@ const MessageRow = memo(function MessageRow({
               {message.pending && message.queued && (
                 <QueuedSendFooter tabIndex={controlTabIndex} onDiscard={onDiscard} />
               )}
+              {message.uploading && !message.failed && (
+                <div className="mt-1.5 grid max-w-[8rem] grid-cols-1 gap-2" data-send-uploading="">
+                  <button
+                    type="button"
+                    tabIndex={controlTabIndex}
+                    onClick={onDiscard}
+                    className={FAILED_ACTION_TILE}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              )}
 
               {isReal && !stream && (
                 <ReactionBar

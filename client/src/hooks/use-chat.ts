@@ -829,13 +829,38 @@ export function createChatController(
    * bubbles show.
    */
   const sendTails = new Map<string, Promise<void>>();
+  /** Sends waiting in a tail. Held over a channel switch, and not replayed by `flushOutbox`. */
+  const queuedBehind = new Set<string>();
+  /** Per send, the aborts of the uploads it took over from the composer. */
+  const uploadAborts = new Map<string, (() => void)[]>();
+  let disposed = false;
+  /** Bumped when the account changes: a queued send never goes out as somebody else. */
+  let accountEpoch = 0;
 
-  function inSendOrder(target: string, wait: Promise<unknown>, go: () => void) {
+  /** The gap the server keeps between two sends in a slow-mode channel. */
+  function slowModeGapMs(target: string): number {
+    return channelId === target && !bypassSlowMode && slowModeSeconds > 0 ? slowModeSeconds * 1000 : 0;
+  }
+
+  /**
+   * `go` returns false when it sent nothing. After a send in a slow-mode
+   * channel the next queued one waits out the gap, so two sends that were
+   * held behind the same upload are not refused for going back to back.
+   */
+  function inSendOrder(target: string, wait: Promise<unknown>, go: () => boolean | void) {
     const prior = sendTails.get(target) ?? Promise.resolve();
+    const epoch = accountEpoch;
     const mine = prior
       .then(() => wait)
       .catch(() => undefined)
-      .then(() => go())
+      .then(() => {
+        if (disposed || epoch !== accountEpoch) {
+          return undefined;
+        }
+        const sent = go() !== false;
+        const gap = sent ? slowModeGapMs(target) : 0;
+        return gap > 0 ? new Promise<void>((resolve) => setTimeout(resolve, gap)) : undefined;
+      })
       .catch(() => undefined);
     sendTails.set(target, mine);
     void mine.then(() => {
@@ -846,7 +871,7 @@ export function createChatController(
   }
 
   /** Sends now, or after the channel's queued sends when there are any. */
-  function transmitInOrder(target: string, go: () => void) {
+  function transmitInOrder(target: string, go: () => boolean | void) {
     if (sendTails.has(target)) {
       inSendOrder(target, Promise.resolve(), go);
     } else {
@@ -1042,8 +1067,9 @@ export function createChatController(
     typing.clear();
     botNotice = null;
     for (const message of messages) {
-      if (message.uploading && message.nonce) {
-        // Still uploading: keep it, previews and all, for its channel.
+      if (message.nonce && (message.uploading || queuedBehind.has(message.nonce))) {
+        // Still uploading, or queued behind an upload: keep it, previews and
+        // all, for its channel.
         heldUploadSends.set(message.nonce, message);
         continue;
       }
@@ -1162,7 +1188,10 @@ export function createChatController(
       return;
     }
     const due = outbox.filter(
-      (entry) => sentOnGeneration.get(entry.nonce) !== socketGeneration,
+      (entry) =>
+        sentOnGeneration.get(entry.nonce) !== socketGeneration &&
+        // Its tail sends it, after the upload ahead of it.
+        !queuedBehind.has(entry.nonce),
     );
     if (due.length === 0) {
       return;
@@ -1220,6 +1249,18 @@ export function createChatController(
       const previousUserId = currentUserId;
       currentUserId = user?.id ?? null;
       currentUsername = user?.username ?? null;
+      if (currentUserId !== previousUserId) {
+        accountEpoch += 1;
+        for (const aborts of uploadAborts.values()) {
+          aborts.forEach((abort) => abort());
+        }
+        uploadAborts.clear();
+        queuedBehind.clear();
+        for (const held of heldUploadSends.values()) {
+          revokeLocalPreviews(held);
+        }
+        heldUploadSends.clear();
+      }
       if (ownsOutbox && currentUserId !== previousUserId) {
         // The rows belong to an account, not to the tab. A sign-out drops
         // them from memory (storage keeps them for that person's next
@@ -1600,7 +1641,22 @@ export function createChatController(
       // The bubble is already up with the local files; the server only hears
       // about it once each file has a real id, and after any send before it in
       // this channel. Held here, in memory: a reload in the middle loses it,
-      // like the upload itself.
+      // like the upload itself. A plain text send queued behind one is also
+      // written to the outbox now, so a reload still sends it.
+      queuedBehind.add(nonce);
+      const aborts = waiting.flatMap((item) => (item.abort ? [item.abort] : []));
+      if (aborts.length > 0) {
+        uploadAborts.set(nonce, aborts);
+      }
+      if (ownsOutbox && optimisticAttachments.length === 0) {
+        rememberInOutbox({
+          nonce,
+          channelId: targetChannelId,
+          body: clamped,
+          replyToId: replyTo?.id ?? null,
+          createdAt: optimistic.createdAt,
+        });
+      }
       let settled: PromiseSettledResult<UploadDone>[] = [];
       const uploads = Promise.allSettled(
         waiting.map((item) => withUploadDeadline(item.pending!)),
@@ -1608,6 +1664,9 @@ export function createChatController(
         settled = results;
       });
       inSendOrder(targetChannelId, uploads, () => {
+        queuedBehind.delete(nonce);
+        const abortUploads = uploadAborts.get(nonce);
+        uploadAborts.delete(nonce);
         const real = new Map<string, UploadDone>();
         settled.forEach((result, index) => {
           if (result.status === "fulfilled") {
@@ -1626,6 +1685,8 @@ export function createChatController(
             : attachment;
         });
         if (settled.some((result) => result.status === "rejected")) {
+          // A deadline leaves the request running: stop it.
+          abortUploads?.forEach((abort) => abort());
           // The files that did land keep their real ids on the bubble (an
           // unclaimed upload is swept by the server after an hour), and the
           // local slow-mode hold goes: nothing reached the server.
@@ -1641,7 +1702,7 @@ export function createChatController(
             clearSlowModeHold(targetChannelId);
           }
           emit();
-          return;
+          return false;
         }
         const sent = updateUploadSend(nonce, (message) => ({
           ...message,
@@ -1656,10 +1717,11 @@ export function createChatController(
           revokeLocalPreviews(held);
         }
         emit();
-        // A bubble the reader discarded while its files uploaded is not sent.
-        // A text send that only queued behind another goes regardless.
-        if (!sent && waiting.length > 0) {
-          return;
+        // A bubble the reader discarded while it waited is not sent. Queued
+        // sends are held over a channel switch, so missing means discarded.
+        if (!sent) {
+          forgetInOutbox(nonce);
+          return false;
         }
         // The server's slow-mode clock starts now, not when Enter was
         // pressed, so the local hold starts over with it.
@@ -1721,6 +1783,15 @@ export function createChatController(
       clearSendTimer(nonce);
       clearRetryUnlock(nonce);
       forgetInOutbox(nonce);
+      // A send still waiting on its uploads: stop them. Its queue entry
+      // finds no bubble and sends nothing.
+      uploadAborts.get(nonce)?.forEach((abort) => abort());
+      uploadAborts.delete(nonce);
+      const held = heldUploadSends.get(nonce);
+      if (held) {
+        heldUploadSends.delete(nonce);
+        revokeLocalPreviews(held);
+      }
       for (const message of messages) {
         if (message.nonce === nonce) {
           revokeLocalPreviews(message);
@@ -2256,6 +2327,9 @@ export function createChatController(
       }
       heldUploadSends.clear();
       sendTails.clear();
+      queuedBehind.clear();
+      uploadAborts.clear();
+      disposed = true;
       if (typingSweep) {
         clearInterval(typingSweep);
         typingSweep = null;

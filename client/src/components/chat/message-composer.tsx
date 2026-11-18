@@ -1092,12 +1092,18 @@ export function MessageComposer({
   }
 
   /** Past the limit: the text goes out as a .txt instead. */
-  const overLimit = redesign && body.length > MESSAGE_MAX_LENGTH;
+  // Only the main composer has the count, the paste offer and send as file.
+  // The forum and watch party composers keep the hard cap.
+  const liftsLimit = redesign && !embedded && variant !== "stream";
+  const overLimit = liftsLimit && body.length > MESSAGE_MAX_LENGTH;
   function sendBodyAsFile() {
     if (!body) {
       return;
     }
-    addFiles([textAsFile(body, t("composer.pastedFileName"))]);
+    // Refused (the attachment cap, say): the text stays, and the strip says why.
+    if (addFiles([textAsFile(body, t("composer.pastedFileName"))]) === 0) {
+      return;
+    }
     setBody("");
     setCaret(0);
     setPasteOffer(null);
@@ -1269,12 +1275,13 @@ export function MessageComposer({
       });
   }
 
-  function addFiles(files: File[], folders: string[] = []) {
+  /** Starts the uploads it can and returns how many it took. */
+  function addFiles(files: File[], folders: string[] = []): number {
     if (!channelId || !attachmentLimits?.enabled) {
-      return;
+      return 0;
     }
     if (files.length === 0 && folders.length === 0) {
-      return;
+      return 0;
     }
     const { accepted, rejected } = selectAttachments(files, {
       existingCount: pendingRef.current.length,
@@ -1298,6 +1305,7 @@ export function MessageComposer({
     for (const selected of accepted) {
       startUpload(channelId, selected);
     }
+    return accepted.length;
   }
 
   /**
@@ -1335,7 +1343,7 @@ export function MessageComposer({
    * into the textarea alongside the upload.
    */
   function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
-    if (redesign) {
+    if (liftsLimit) {
       const text = event.clipboardData.getData("text/plain");
       const input = event.currentTarget;
       const replaced = (input.selectionEnd ?? 0) - (input.selectionStart ?? 0);
@@ -1499,6 +1507,10 @@ export function MessageComposer({
     commitSend();
   }
 
+  function abortOf(controller: AbortController | undefined): (() => void) | undefined {
+    return controller ? () => controller.abort() : undefined;
+  }
+
   function commitSend() {
     const trimmed = body.trim();
     const ready = pending.filter(
@@ -1531,6 +1543,7 @@ export function MessageComposer({
           height: item.height,
           previewUrl: item.previewUrl,
           pending: uploadDoneRef.current.get(item.localId),
+          abort: abortOf(uploadsRef.current.get(item.localId)),
         })),
       ],
     );
@@ -2131,7 +2144,7 @@ export function MessageComposer({
             disabled={disabled || isRunningSlash}
             // Under the redesign the limit is a count and a refusal, never a
             // paste cut short without a word.
-            maxLength={redesign ? undefined : MESSAGE_MAX_LENGTH}
+            maxLength={liftsLimit ? undefined : MESSAGE_MAX_LENGTH}
             placeholder={inputPlaceholder}
             style={{
               resize: "none",

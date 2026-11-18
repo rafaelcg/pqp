@@ -531,4 +531,6 @@ export interface OutgoingAttachment {
    * one. The bubble shows at once; the send waits for every one of these.
    */
   pending?: Promise<{ attachmentId: string; width: number | null; height: number | null }>;
+  /** Stops a `pending` upload: the bubble's Cancel, or a send that gave up waiting. */
+  abort?: () => void;
 }

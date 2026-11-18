@@ -2577,3 +2577,114 @@ describe("offline outbox, review follow-ups", () => {
     expect(creates()).toBe(50);
   });
 });
+
+describe("sends queued behind an upload", () => {
+  const store = new Map<string, string>();
+  const OTHER = "c0000000-0000-4000-8000-000000000002";
+
+  beforeEach(() => {
+    store.clear();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function upload(pending: Promise<{ attachmentId: string; width: null; height: null }>, abort?: () => void) {
+    return {
+      attachmentId: "local-1",
+      filename: "mapa.png",
+      contentType: "image/png",
+      byteSize: 10,
+      width: null,
+      height: null,
+      previewUrl: "blob:local",
+      pending,
+      abort,
+    };
+  }
+
+  function creates(sent: unknown[]) {
+    return sent
+      .filter((frame) => (frame as { type: string }).type === "message-create")
+      .map((frame) => (frame as { body: string }).body);
+  }
+
+  it("keeps a queued text in the outbox and on screen over a channel switch", async () => {
+    const { chat, sent } = setup();
+    let land!: (value: { attachmentId: string; width: null; height: null }) => void;
+    chat.sendMessage("foto", null, [upload(new Promise((resolve) => (land = resolve)))]);
+    chat.sendMessage("olha isso");
+    const raw = store.get(`pqp:outbox:${ME.id}`) ?? "[]";
+    expect((JSON.parse(raw) as { body: string }[]).map((entry) => entry.body)).toEqual(["olha isso"]);
+
+    chat.joinChannel(OTHER);
+    chat.joinChannel(CHANNEL);
+    chat.setMessages([]);
+    expect(chat.getMessages().map((message) => message.body)).toEqual(["foto", "olha isso"]);
+
+    land({ attachmentId: "11111111-1111-4111-8111-111111111111", width: null, height: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(creates(sent)).toEqual(["foto", "olha isso"]);
+  });
+
+  it("spaces two queued sends by the slow-mode gap", async () => {
+    const { chat, sent } = setup();
+    chat.setSlowMode({ seconds: 5, bypass: false });
+    let land!: (value: { attachmentId: string; width: null; height: null }) => void;
+    chat.sendMessage("foto", null, [upload(new Promise((resolve) => (land = resolve)))]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    chat.sendMessage("legenda");
+    land({ attachmentId: "11111111-1111-4111-8111-111111111111", width: null, height: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(creates(sent)).toEqual(["foto"]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(creates(sent)).toEqual(["foto", "legenda"]);
+  });
+
+  it("cancels the upload when the uploading bubble is discarded, and sends nothing", async () => {
+    const { chat, sent } = setup();
+    let refuse!: (error: Error) => void;
+    const abort = vi.fn(() => refuse(new Error("aborted")));
+    chat.sendMessage("foto", null, [upload(new Promise((_, reject) => (refuse = reject)), abort)]);
+    const nonce = chat.getMessages()[0]!.nonce!;
+    chat.discardMessage(nonce);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(chat.getMessages()).toEqual([]);
+    expect(creates(sent)).toEqual([]);
+  });
+
+  it("aborts a stalled upload at the deadline", async () => {
+    const { chat } = setup();
+    const abort = vi.fn();
+    chat.sendMessage("foto", null, [upload(new Promise(() => {}), abort)]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(chat.getMessages()[0]?.uploadFailed).toBe(true);
+  });
+
+  it("sends nothing queued after dispose or under another account", async () => {
+    const first = setup();
+    let land!: (value: { attachmentId: string; width: null; height: null }) => void;
+    first.chat.sendMessage("foto", null, [upload(new Promise((resolve) => (land = resolve)))]);
+    first.chat.sendMessage("depois");
+    first.chat.dispose();
+    land({ attachmentId: "11111111-1111-4111-8111-111111111111", width: null, height: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(creates(first.sent)).toEqual([]);
+
+    const second = setup();
+    let land2!: (value: { attachmentId: string; width: null; height: null }) => void;
+    second.chat.sendMessage("foto", null, [upload(new Promise((resolve) => (land2 = resolve)))]);
+    second.chat.setCurrentUser(null);
+    land2({ attachmentId: "11111111-1111-4111-8111-111111111111", width: null, height: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(creates(second.sent)).toEqual([]);
+  });
+});
