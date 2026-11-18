@@ -986,16 +986,14 @@
   --empty-title-size: 1.25rem;
 
   /* Message rows (chat/message-list.tsx): inset with a corner, a faint
-     tint of the text on hover, the accent's soft fill when you are named. */
+     tint of the text on hover, amber when you are named. */
   --message-row-radius: 0.5rem;
   --message-hover: color-mix(in oklab, var(--color-text) 4.5%, transparent);
   /* The same hover laid on the pane, for the presence dot's cutout. */
   --message-hover-solid: color-mix(in oklab, var(--color-text) 4.5%, var(--color-pane-main));
-  /* The system's mention row, tuned per appearance so a mention never reads
-     as the selected channel; the hover one step toward the accent. */
   /* A row that names you is amber with an amber edge (text channels canvas):
      lime stays for primary, on and yours, and a mention must not read as
-     selected. */
+     selected. The hover steps a little toward the text color. */
   --message-mention-bg: var(--color-warning-soft);
   --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 94%, var(--color-text));
   --message-mention-edge: var(--color-warning);
@@ -3420,7 +3418,7 @@ h2,
   background: color-mix(in oklch, var(--color-accent) 20%, transparent);
 }
 
-/* Under the redesign a mention is the accent's soft fill, as in the mockup. */
+/* Under the redesign a mention row is amber with an amber edge, as in the mockup. */
 @media (max-width: 767px) {
   :root[data-redesign] {
     --message-avatar: 2.25rem;

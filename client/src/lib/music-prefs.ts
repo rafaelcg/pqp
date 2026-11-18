@@ -230,7 +230,12 @@ let joinGate = {
   trackId: null as string | null,
   joined: false,
   listening: true,
-  /** The opened track already counted once: a reconnect replaying it is not a new open. */
+  /**
+   * The opened track already counted once: a reconnect replaying the same id is
+   * not a new open. Ids are minted per add (`mintTrack`), so the same song
+   * started again is a new id and a new open. Not reset when the track goes null,
+   * or every API restart would put a person who pressed Sair back in the Rádio.
+   */
   openedTrackId: null as string | null,
 };
 

@@ -210,6 +210,24 @@ describe("music prefs store", () => {
     expect(applyMusicJoinGate(CHANNEL, "t1", false, { listening: false, openedHere: true })).toBe(true);
   });
 
+  it("counts the same song started again as a new open, because its id is new", () => {
+    applyMusicJoinGate(CHANNEL, null, false, { listening: true });
+    applyMusicJoinGate(CHANNEL, "t1", false, { listening: true, openedHere: true });
+    // Sair da Rádio, then the queue ends.
+    applyMusicJoinGate(CHANNEL, "t1", false, { listening: false });
+    applyMusicJoinGate(CHANNEL, null, false, { listening: false });
+    // The same video added again is a new track id: a new open, not declined.
+    expect(applyMusicJoinGate(CHANNEL, "t2", false, { listening: false, openedHere: true })).toBe(false);
+  });
+
+  it("declines the same track id replayed after null once the person left", () => {
+    applyMusicJoinGate(CHANNEL, null, false, { listening: true });
+    applyMusicJoinGate(CHANNEL, "t1", false, { listening: true, openedHere: true });
+    applyMusicJoinGate(CHANNEL, "t1", false, { listening: false });
+    applyMusicJoinGate(CHANNEL, null, false, { listening: false });
+    expect(applyMusicJoinGate(CHANNEL, "t1", false, { listening: false, openedHere: true })).toBe(true);
+  });
+
   it("gives the invite to somebody sitting down where their own earlier pick plays", () => {
     expect(applyMusicJoinGate(CHANNEL, "t1", false, { listening: true, openedHere: false })).toBe(true);
   });
