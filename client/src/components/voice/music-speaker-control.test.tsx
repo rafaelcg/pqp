@@ -53,16 +53,22 @@ const rootEl = () =>
   host!.querySelector<HTMLElement>("[data-music-speaker-root]")!;
 const flyout = () => host!.querySelector("[data-music-volume-flyout]");
 
-/** jsdom has no focus-visible heuristic, so a keyboard focus is stood in for. */
-function keyboardFocus() {
+/**
+ * jsdom has no pointer-versus-keyboard history, so what `:focus-visible` says for a
+ * script `focus()` is its own call (jsdom 31 says yes, like a browser with no pointer
+ * interaction yet; jsdom 30 said no). Both kinds of focus are stood in for explicitly.
+ */
+function stubFocusVisible(visible: boolean) {
   const real = Element.prototype.matches;
   vi.spyOn(Element.prototype, "matches").mockImplementation(function (
     this: Element,
     selector: string,
   ) {
-    return selector === ":focus-visible" ? true : real.call(this, selector);
+    return selector === ":focus-visible" ? visible : real.call(this, selector);
   });
 }
+const keyboardFocus = () => stubFocusVisible(true);
+const mouseFocus = () => stubFocusVisible(false);
 
 function key(target: Element, name: string) {
   target.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true }));
@@ -144,6 +150,7 @@ describe("MusicSpeakerControl on a mouse", () => {
   });
 
   it("does not hold the slider open after a mouse click leaves focus on the speaker", async () => {
+    mouseFocus();
     await mount();
     await act(async () => speaker().focus());
     expect(flyout()).toBeNull();

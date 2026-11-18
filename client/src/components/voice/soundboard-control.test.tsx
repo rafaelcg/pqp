@@ -746,7 +746,8 @@ describe("the board on a phone", () => {
     expect(panel()!.getAttribute("data-presentation")).toBe("popover");
     expect(panel()!.querySelector("[data-soundboard-close]")).toBeNull();
     expect(panel()!.querySelector<HTMLElement>(".grid")!.style.gridTemplateColumns).toBe(
-      "repeat(3, minmax(0, 1fr))",
+      // jsdom 31 serializes the track size as a browser does: `0px`, not `0`.
+      "repeat(3, minmax(0px, 1fr))",
     );
   });
 
@@ -756,7 +757,7 @@ describe("the board on a phone", () => {
     open();
     expect(panel()!.getAttribute("data-presentation")).toBe("sheet");
     expect(panel()!.querySelector<HTMLElement>(".grid")!.style.gridTemplateColumns).toBe(
-      "repeat(4, minmax(0, 1fr))",
+      "repeat(4, minmax(0px, 1fr))",
     );
     const close = panel()!.querySelector<HTMLButtonElement>("[data-soundboard-close]")!;
     expect(close.className).toContain("h-10");
@@ -778,7 +779,7 @@ describe("the board on a phone", () => {
     open();
     expect(panel()!.getAttribute("data-presentation")).toBe("sheet");
     expect(panel()!.querySelector<HTMLElement>(".grid")!.style.gridTemplateColumns).toBe(
-      "repeat(6, minmax(0, 1fr))",
+      "repeat(6, minmax(0px, 1fr))",
     );
   });
 

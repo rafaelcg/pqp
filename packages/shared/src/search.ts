@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { safeTextSchema } from "./api.js";
+import { minUtf16Length, safeTextSchema } from "./api.js";
 
 /**
  * Message search: the wire contract for `GET /api/servers/:serverId/search`.
@@ -20,7 +20,7 @@ export const SEARCH_PAGE_MAX = 50;
  */
 export const messageSearchQuerySchema = z
   .string()
-  .min(SEARCH_QUERY_MIN_LENGTH)
+  .refine(minUtf16Length(SEARCH_QUERY_MIN_LENGTH), `Use at least ${SEARCH_QUERY_MIN_LENGTH} characters.`)
   .max(SEARCH_QUERY_MAX_LENGTH)
   .pipe(safeTextSchema);
 
@@ -37,8 +37,8 @@ export const SEARCH_HIGHLIGHT_OPEN = "\u0002";
 export const SEARCH_HIGHLIGHT_CLOSE = "\u0003";
 
 export const searchResultSchema = z.object({
-  messageId: z.string().uuid(),
-  channelId: z.string().uuid(),
+  messageId: z.string().guid(),
+  channelId: z.string().guid(),
   channelName: z.string(),
   /**
    * The channel `channelId` sits under when it is a thread or a forum post
@@ -46,8 +46,8 @@ export const searchResultSchema = z.object({
    * forum with the post on top. Optional until the search route sends it
    * (forum PR 2); a missing value reads as "not a thread".
    */
-  parentChannelId: z.string().uuid().nullable().optional(),
-  authorId: z.string().uuid(),
+  parentChannelId: z.string().guid().nullable().optional(),
+  authorId: z.string().guid(),
   authorName: z.string(),
   authorTag: z.string().nullable(),
   authorAvatarUrl: z.string().nullable(),

@@ -228,7 +228,7 @@ export const createCallRatingSchema = z.object({
   transport: z.enum(CALL_TRANSPORTS),
   /** Whether a screen was being shared, which is the feature most likely to be what they are rating. */
   hadScreenShare: z.boolean(),
-  channelId: z.string().uuid().optional(),
+  channelId: z.string().guid().optional(),
   /**
    * Sent with EVERY score. It used to ride only on 3 or below, which left the
    * table unable to say what a good call looks like: a bad call cannot be

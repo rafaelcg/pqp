@@ -65,7 +65,7 @@ export type LocadoraSaveUsage = z.infer<typeof locadoraSaveUsageSchema>;
 /** One save as the routes describe it. Never carries an object key or a user id. */
 export const locadoraSaveRowSchema = z
   .object({
-    id: z.string().uuid(),
+    id: z.string().guid(),
     kind: locadoraSaveKindSchema,
     slot: locadoraSaveSlotSchema,
     rev: z.number().int().min(1),
@@ -108,7 +108,7 @@ export const locadoraSaveListSchema = z
 /** `POST /api/apps/pqp-locadora/saves/upload`. Strict: it comes from a client. */
 export const locadoraSaveUploadBodySchema = z
   .object({
-    sessionId: z.string().uuid(),
+    sessionId: z.string().guid(),
     gameKey: locadoraGameKeySchema,
     kind: locadoraSaveKindSchema,
     slot: locadoraSaveSlotSchema,
@@ -134,7 +134,7 @@ export type LocadoraSaveUploadBody = z.infer<typeof locadoraSaveUploadBodySchema
 /** The presigned PUTs, signed with these exact headers. */
 export const locadoraSaveUploadSchema = z
   .object({
-    uploadId: z.string().uuid(),
+    uploadId: z.string().guid(),
     put: z.object({ url: z.string().url(), contentType: z.string() }).strip(),
     thumbPut: z.object({ url: z.string().url(), contentType: z.string() }).strip().nullable(),
   })
@@ -142,7 +142,7 @@ export const locadoraSaveUploadSchema = z
 export type LocadoraSaveUpload = z.infer<typeof locadoraSaveUploadSchema>;
 
 /** `POST /api/apps/pqp-locadora/saves/uploads/:uploadId/commit` */
-export const locadoraSaveCommitBodySchema = z.object({ sessionId: z.string().uuid() }).strict();
+export const locadoraSaveCommitBodySchema = z.object({ sessionId: z.string().guid() }).strict();
 export const locadoraSaveCommitSchema = z
   .object({ save: locadoraSaveRowSchema, usage: locadoraSaveUsageSchema })
   .strip();
@@ -154,7 +154,7 @@ export const locadoraSaveDownloadSchema = z
 
 /** `POST /api/apps/pqp-locadora/saves/:saveId/restore` `{ sessionId, baseRev }`: the newest older battery save comes back. */
 export const locadoraSaveRestoreBodySchema = z
-  .object({ sessionId: z.string().uuid(), baseRev: z.number().int().min(1) })
+  .object({ sessionId: z.string().guid(), baseRev: z.number().int().min(1) })
   .strict();
 
 /** The DELETE routes answer what is left. */

@@ -3,7 +3,7 @@
 # build time, not read at runtime, so there is no environment variable that
 # turns it on in an image built from the root Dockerfile — this harness needs
 # its own build. Build context is the repo root (see docker-compose.yml).
-FROM node:22-alpine AS base
+FROM node:24-alpine AS base
 RUN corepack enable
 WORKDIR /app
 
@@ -27,7 +27,7 @@ COPY . .
 ENV VITE_DEV_AUTH_BYPASS=true
 RUN pnpm run build
 
-FROM node:22-alpine AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 RUN corepack enable

@@ -181,7 +181,7 @@ export const bridgeFilesSaveLocalSchema = request("files.saveLocal", {
  */
 const syncGameSchema = z.string().regex(/^[0-9a-f]{64}$/);
 /** A save on the account. Named `save`, never `id`, in a request: `id` is the request's own. */
-const syncIdSchema = z.string().uuid();
+const syncIdSchema = z.string().guid();
 const syncTagSchema = z.string().regex(/^[A-Za-z0-9._+-]{1,32}$/);
 const syncKindSchema = z.enum(["sram", "state"]);
 const syncSlotSchema = z.number().int().min(0).max(4);
@@ -468,7 +468,7 @@ export const bridgeResultSchemas = {
   "share.audio": z.null(),
   "session.end": z.null(),
   "ui.activity": z.null(),
-} as const satisfies Record<BridgeRequestType, z.ZodTypeAny>;
+} as const satisfies Record<BridgeRequestType, z.ZodType>;
 
 /** One successful response schema per request type. */
 function okResponse<T extends BridgeRequestType>(type: T) {

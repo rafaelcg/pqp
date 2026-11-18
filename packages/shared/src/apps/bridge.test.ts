@@ -827,49 +827,54 @@ describe("host to app messages", () => {
 const FORBIDDEN_KEYS = new Set(["userId", "user_id", "email", "token", "serverId", "channelId"]);
 
 /** Every property name reachable in a zod schema, with the path to it. */
-function collectKeys(schema: z.ZodTypeAny, path: string, seen: Set<z.ZodTypeAny>): string[] {
+function collectKeys(schema: z.ZodType, path: string, seen: Set<z.ZodType>): string[] {
   if (seen.has(schema)) return [];
   seen.add(schema);
-  const def = schema._def as { typeName: string } & Record<string, unknown>;
-  switch (def.typeName) {
-    case z.ZodFirstPartyTypeKind.ZodObject: {
-      const shape = (schema as z.AnyZodObject).shape as Record<string, z.ZodTypeAny>;
+  const def = schema._zod.def as { type: string } & Record<string, unknown>;
+  switch (def.type) {
+    case "object": {
+      const shape = (schema as z.ZodObject).shape as Record<string, z.ZodType>;
       return Object.entries(shape).flatMap(([key, child]) => [
         `${path}.${key}`,
         ...collectKeys(child, `${path}.${key}`, seen),
       ]);
     }
-    case z.ZodFirstPartyTypeKind.ZodUnion:
-    case z.ZodFirstPartyTypeKind.ZodDiscriminatedUnion: {
-      const options = def.options as z.ZodTypeAny[] | Map<unknown, z.ZodTypeAny>;
-      const list = Array.isArray(options) ? options : [...options.values()];
-      return list.flatMap((option, i) => collectKeys(option, `${path}|${i}`, seen));
+    case "union": {
+      // A discriminated union is a union with a discriminator in zod 4.
+      const options = def.options as z.ZodType[];
+      return options.flatMap((option, i) => collectKeys(option, `${path}|${i}`, seen));
     }
-    case z.ZodFirstPartyTypeKind.ZodArray:
-      return collectKeys(def.type as z.ZodTypeAny, `${path}[]`, seen);
-    case z.ZodFirstPartyTypeKind.ZodRecord:
+    case "array":
+      return collectKeys(def.element as z.ZodType, `${path}[]`, seen);
+    case "record":
       return [
-        ...collectKeys(def.keyType as z.ZodTypeAny, `${path}{key}`, seen),
-        ...collectKeys(def.valueType as z.ZodTypeAny, `${path}{value}`, seen),
+        ...collectKeys(def.keyType as z.ZodType, `${path}{key}`, seen),
+        ...collectKeys(def.valueType as z.ZodType, `${path}{value}`, seen),
       ];
-    case z.ZodFirstPartyTypeKind.ZodOptional:
-    case z.ZodFirstPartyTypeKind.ZodNullable:
-      return collectKeys(def.innerType as z.ZodTypeAny, path, seen);
-    case z.ZodFirstPartyTypeKind.ZodEffects:
-      return collectKeys(def.schema as z.ZodTypeAny, path, seen);
+    case "optional":
+    case "nullable":
+    case "default":
+    case "catch":
+    case "readonly":
+      return collectKeys(def.innerType as z.ZodType, path, seen);
+    case "pipe":
+      return [
+        ...collectKeys(def.in as z.ZodType, path, seen),
+        ...collectKeys(def.out as z.ZodType, path, seen),
+      ];
     default:
       return [];
   }
 }
 
 describe("the bridge never names a pqp identity", () => {
-  const roots: Array<[string, z.ZodTypeAny]> = [
+  const roots: Array<[string, z.ZodType]> = [
     ["app-hello", bridgeAppHelloSchema],
     ["app-port", bridgeAppPortSchema],
     ["bridgeAppMessageSchema", bridgeAppMessageSchema],
     ["bridgeHostMessageSchema", bridgeHostMessageSchema],
     ...Object.entries(bridgeResultSchemas).map(
-      ([name, schema]) => [`result ${name}`, schema] as [string, z.ZodTypeAny],
+      ([name, schema]) => [`result ${name}`, schema] as [string, z.ZodType],
     ),
   ];
 

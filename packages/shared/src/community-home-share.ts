@@ -88,8 +88,8 @@ export const BAU_CARD_TEASER_MAX = 220;
  * the feed itself shows a locked reader.
  */
 export const communityHomePostCardSchema = z.object({
-  postId: z.string().uuid(),
-  serverId: z.string().uuid(),
+  postId: z.string().guid(),
+  serverId: z.string().guid(),
   serverName: z.string(),
   title: z.string().nullable(),
   teaser: z.string().nullable(),
@@ -99,7 +99,7 @@ export const communityHomePostCardSchema = z.object({
    */
   author: z
     .object({
-      id: z.string().uuid(),
+      id: z.string().guid(),
       displayName: z.string(),
       avatarUrl: z.string().nullable(),
     })
@@ -179,7 +179,7 @@ export type CommunityHomeLatestResponse = z.infer<
 
 /** `POST /api/servers/:id/home/posts/:postId/share` */
 export const shareCommunityHomePostSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /** Optional words above the link. */
   message: z.string().max(1500).optional().nullable(),
   /**
@@ -197,7 +197,7 @@ export type ShareCommunityHomePostRequest = z.infer<
 /** Optional body of `POST …/home/posts/:postId/publish`. */
 export const publishCommunityHomePostSchema = z.object({
   /** Also post the card into this channel of the same server. */
-  announceChannelId: z.string().uuid().optional().nullable(),
+  announceChannelId: z.string().guid().optional().nullable(),
 });
 
 /** Whether a message body is nothing but the link (so the card can stand alone). */

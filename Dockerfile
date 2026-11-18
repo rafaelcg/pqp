@@ -1,7 +1,7 @@
 # Docker Hub rate-limits anonymous pulls from shared CI runners (a 429 on this
 # line blocked two API deploys on 2026-10-09). mirror.gcr.io is Google's public
 # pull-through cache of the same official image: no account, no limit we hit.
-FROM mirror.gcr.io/library/node:22-alpine AS base
+FROM mirror.gcr.io/library/node:24-alpine AS base
 # pnpm version comes from the root package.json "packageManager" field.
 RUN corepack enable
 WORKDIR /app
@@ -23,7 +23,7 @@ COPY . .
 RUN pnpm run build
 
 # The application, shared by the two images below. Not built on its own.
-FROM mirror.gcr.io/library/node:22-alpine AS app
+FROM mirror.gcr.io/library/node:24-alpine AS app
 WORKDIR /app
 ENV NODE_ENV=production
 RUN corepack enable
@@ -47,8 +47,10 @@ CMD ["node", "server/dist/index.js"]
 # (server/src/speech/video-transcode.ts, which needs the package's libx264 and
 # checks for it at boot). Only the worker runs those jobs, so only the
 # worker pays for ffmpeg: about 131 MB uncompressed, 49 MB compressed, on
-# linux/amd64 (node:22-alpine, 2026-10). A process without ffmpeg never claims
-# a transcode job, so an API image doing a worker's job just leaves them queued.
+# linux/amd64 (node:22-alpine, 2026-10; node:24-alpine ships the same Alpine
+# 3.24 and the same ffmpeg 8.1.3, checked 2026-11). A process without ffmpeg
+# never claims a transcode job, so an API image doing a worker's job just
+# leaves them queued.
 FROM app AS worker
 USER root
 RUN apk add --no-cache ffmpeg

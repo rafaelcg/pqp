@@ -199,8 +199,10 @@ describe("the stage's mosaic", () => {
   });
 
   it("is 16:9 on a wide panel, 4:3 on a narrow one and square on a phone", () => {
+    // `style.aspectRatio` is serialized the way a browser does it, to six significant
+    // digits ("1.77778 / 1"), so the ratio is compared to four decimals.
     const wide = render(2).stage.querySelector<HTMLElement>("[data-jam-stage-grid]")!;
-    expect(parseFloat(wide.style.aspectRatio)).toBeCloseTo(16 / 9, 6);
+    expect(parseFloat(wide.style.aspectRatio)).toBeCloseTo(16 / 9, 4);
     for (const [width, ratio] of [
       [540, 4 / 3],
       [366, 1],
@@ -208,7 +210,7 @@ describe("the stage's mosaic", () => {
       remount();
       vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(width);
       const grid = render(2).stage.querySelector<HTMLElement>("[data-jam-stage-grid]")!;
-      expect(parseFloat(grid.style.aspectRatio)).toBeCloseTo(ratio, 6);
+      expect(parseFloat(grid.style.aspectRatio)).toBeCloseTo(ratio, 4);
       vi.restoreAllMocks();
     }
   });

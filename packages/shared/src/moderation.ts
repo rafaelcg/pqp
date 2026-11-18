@@ -128,7 +128,7 @@ export function canManageMessages(actorRole: MemberRole | null): boolean {
  */
 export const serverRemovedSchema = z.object({
   type: z.literal("server-removed"),
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   reason: z.enum(["kicked", "banned", "deleted"]),
 });
 export type ServerRemoved = z.infer<typeof serverRemovedSchema>;

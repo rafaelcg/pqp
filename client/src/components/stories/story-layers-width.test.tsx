@@ -29,7 +29,9 @@ const baseDisplay: StoryDisplay = {
 };
 
 describe("a layer's width does not depend on where it sits", () => {
-  // jsdom has no layout, so this pins the CSS that makes the width independent of `left`; the real
+  // jsdom has no layout, so this pins the CSS that makes the width independent of `left` by reading
+  // the declared (inline) values, which is what `layerBoxStyle` writes; a detached node has no
+  // computed style in jsdom 31, as in a browser, and an attached one resolves `cqw` to pixels. The real
   // geometry at 390x844 and 1440x900 is `e2e/stories-editor.spec.ts`. The bug it guards: an
   // absolutely positioned box with an auto width shrinks to the room left before the container's
   // right edge, so a photo at x = 0.8 drew at 0.20 of the canvas instead of 0.40.
@@ -48,11 +50,11 @@ describe("a layer's width does not depend on where it sits", () => {
       const box = host.querySelector<HTMLElement>(`[data-story-layer="${id}"]`)!;
       const inner = box.firstElementChild as HTMLElement;
       out[id] = {
-        box: getComputedStyle(box).width,
-        inner: getComputedStyle(inner).width,
-        maxWidth: getComputedStyle(inner).maxWidth,
+        box: box.style.width,
+        inner: inner.style.width,
+        maxWidth: inner.style.maxWidth,
       };
-      expect(getComputedStyle(box).left).toBe(`${x * 100}%`);
+      expect(box.style.left).toBe(`${x * 100}%`);
     }
     return out;
   };

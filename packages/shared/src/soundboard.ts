@@ -158,7 +158,7 @@ export const soundboardVolumeSchema = z.number().min(0).max(1);
 /** Client to server. `channelId` is checked against the seat, not trusted. */
 export const soundboardPlayMessageSchema = z.object({
   type: z.literal("soundboard-play"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   soundId: soundboardSoundIdSchema,
 });
 
@@ -170,9 +170,9 @@ export type SoundboardPlayMessage = z.infer<typeof soundboardPlayMessageSchema>;
  */
 export const soundboardPlayedMessageSchema = z.object({
   type: z.literal("soundboard-play"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   soundId: soundboardSoundIdSchema,
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   displayName: z.string().min(1).max(64),
   emoji: z.string().min(1).max(32),
   playedAt: z.number().int().nonnegative(),
@@ -183,7 +183,7 @@ export type SoundboardPlayedMessage = z.infer<
 >;
 
 export const soundboardSoundSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: soundboardNameSchema,
   emoji: soundboardEmojiSchema,
   contentType: soundboardContentTypeSchema,
@@ -196,7 +196,7 @@ export const soundboardSoundSchema = z.object({
    * Who added it. Sent only to people who manage the board (Discord shows
    * the uploader to the same people); null once that account is gone.
    */
-  addedBy: z.object({ id: z.string().uuid(), name: z.string() }).nullable().optional(),
+  addedBy: z.object({ id: z.string().guid(), name: z.string() }).nullable().optional(),
 });
 
 export type SoundboardSound = z.infer<typeof soundboardSoundSchema>;

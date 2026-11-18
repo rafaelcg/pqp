@@ -41,6 +41,14 @@ updates:
       # this when rtc-node is bumped by hand (it is a major now) and take
       # both in one PR.
       - dependency-name: "@livekit/rtc-ffi-bindings"
+      # 1.65.x fails two e2e lanes on Chrome 158: the sandboxed Locadora frame
+      # logs "Permissions policy violation: focus-without-user-activation",
+      # which apps/locadora/e2e/locadora.spec.mts asserts never happens, and the
+      # app-frame file-picker spec reads "cancelled". It turned #1626 and #1637
+      # red. Only this minor is skipped; 1.66 and later still flow. Remove this
+      # once the Locadora frame or that spec is fixed and 1.65 can be taken by hand.
+      - dependency-name: "@playwright/test"
+        versions: ["1.65.x"]
     groups:
       npm-minor-patch:
         update-types:
@@ -96,8 +104,10 @@ updates:
     cooldown:
       default-days: 3
     ignore:
-      # The runtime major is a decision (Node 22 is what CI and prod run),
-      # not a weekly chore. Minor and patch of the same major still flow.
+      # The runtime major is a decision (Node 24 is what CI and the API image
+      # run; the support-bot and ambient images are still on 22 until somebody
+      # moves them by hand), not a weekly chore. Minor and patch of the same
+      # major still flow.
       - dependency-name: "node"
         update-types:
           - version-update:semver-major

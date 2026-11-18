@@ -123,11 +123,11 @@ export type RemuxKeyframePolicy = z.infer<typeof remuxKeyframePolicySchema>;
  */
 export const remuxStartSessionRequestSchema = z.object({
   /** This process's id for the session. Idempotency key for a retried start. */
-  sessionId: z.string().uuid(),
+  sessionId: z.string().guid(),
   /** The LiveKit room to subscribe to — this codebase's voice channel id. */
   room: z.string().min(1),
   /** Carried through for the box's own logs; not interpreted by the contract. */
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /**
    * THE API'S OWN `started_at`, AND THEREFORE THE R2 KEY PREFIX BOTH SIDES
    * MUST AGREE ON.
@@ -180,9 +180,9 @@ export type RemuxStartSessionRequest = z.infer<
  * surfaces them.
  */
 export const remuxSessionInfoSchema = z.object({
-  sessionId: z.string().uuid(),
+  sessionId: z.string().guid(),
   room: z.string().min(1),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /** Whether the subscriber has found and bound the presenter's screen track. */
   subscribed: z.boolean(),
   startedAtMs: z.number().int().nonnegative(),
@@ -277,7 +277,7 @@ export const remuxRebindResultSchema = z.enum([
 export type RemuxRebindResult = z.infer<typeof remuxRebindResultSchema>;
 
 export const remuxRebindResponseSchema = z.object({
-  sessionId: z.string().uuid(),
+  sessionId: z.string().guid(),
   presenterIdentity: z.string().min(1),
   result: remuxRebindResultSchema,
 });

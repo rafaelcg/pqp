@@ -148,7 +148,7 @@ async function permissionsFor(
 export const WATCH_PARTY_STATE_TOPIC = "watchParty.state";
 
 const watchPartyStateFrameSchema = z.object({
-  sessionId: z.string().uuid(),
+  sessionId: z.string().guid(),
 });
 
 /**
