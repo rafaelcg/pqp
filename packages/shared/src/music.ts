@@ -119,7 +119,7 @@ export type SetMusicMessage = z.infer<typeof setMusicMessageSchema>;
 
 export const musicMessageSchema = z.object({
   type: z.literal("music"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   state: musicStateSchema.nullable(),
   /**
    * The server is handing back what it holds because the sender's write
@@ -150,7 +150,7 @@ export type ChannelMusicTrack = z.infer<typeof channelMusicTrackSchema>;
 
 export const channelMusicMessageSchema = z.object({
   type: z.literal("channel-music"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   track: channelMusicTrackSchema.nullable(),
 });
 

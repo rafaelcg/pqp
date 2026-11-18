@@ -34,7 +34,7 @@ import { APP_MAX_PARTICIPANTS } from "./limits.js";
  * later does not make an older client reject the whole frame.
  */
 
-const uuid = z.string().uuid();
+const uuid = z.string().guid();
 const isoDate = z.string().datetime({ offset: true });
 
 // ---------------------------------------------------------------------------

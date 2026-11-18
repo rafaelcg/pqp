@@ -77,7 +77,7 @@ const timeoutReasonSchema = z
  * to the database's clock, the same clock every read compares against.
  */
 export const issueTimeoutSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   minutes: timeoutMinutesSchema,
   reason: timeoutReasonSchema,
 });
@@ -91,11 +91,11 @@ export type IssueTimeoutRequest = z.infer<typeof issueTimeoutSchema>;
  * ends. A sanction whose history nobody can see is how a moderator loses track.
  */
 export const memberTimeoutSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   displayName: z.string(),
   tag: z.string().nullable(),
   /** Null once the moderator's own account is gone — `ON DELETE SET NULL`. */
-  issuedById: z.string().uuid().nullable(),
+  issuedById: z.string().guid().nullable(),
   issuedByName: z.string().nullable(),
   reason: z.string().nullable(),
   createdAt: z.string(),
@@ -127,10 +127,10 @@ export type MemberTimeoutList = z.infer<typeof memberTimeoutListSchema>;
 export const sanctionNoticeSchema = z.object({
   type: z.literal("sanction-notice"),
   sanction: z.literal("timeout"),
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   /** Where they tried to act. Lets a client attach the notice to the composer
    * they are actually looking at rather than to the app as a whole. */
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   expiresAt: z.string(),
   reason: z.string().nullable(),
   /** The whole sentence, already written. A client that renders nothing but

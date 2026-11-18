@@ -23,15 +23,15 @@ export const CHANNEL_SESSION_STATUSES = [
 export type ChannelSessionStatus = (typeof CHANNEL_SESSION_STATUSES)[number];
 
 export const channelSessionSchema = z.object({
-  id: z.string().uuid(),
-  channelId: z.string().uuid(),
-  serverId: z.string().uuid().nullable(),
+  id: z.string().guid(),
+  channelId: z.string().guid(),
+  serverId: z.string().guid().nullable(),
   title: z.string(),
   description: z.string().nullable(),
   coverImageUrl: z.string().nullable(),
   startsAt: z.string(),
   status: z.enum(CHANNEL_SESSION_STATUSES),
-  createdBy: z.string().uuid(),
+  createdBy: z.string().guid(),
   createdAt: z.string(),
   updatedAt: z.string(),
   /** Whether the requesting user has an active reminder for this session. */

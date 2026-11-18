@@ -65,9 +65,9 @@ const THREAD_CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
  * and the anchor column is ON DELETE SET NULL for exactly that reason.
  */
 export const threadSummarySchema = z.object({
-  channelId: z.string().uuid(),
-  parentChannelId: z.string().uuid(),
-  rootMessageId: z.string().uuid().nullable(),
+  channelId: z.string().guid(),
+  parentChannelId: z.string().guid(),
+  rootMessageId: z.string().guid().nullable(),
   name: z.string(),
   /** Messages in the thread. The origin message lives in the parent channel,
    * so a fresh thread reads 0 — every message in the thread is a reply. */
@@ -91,7 +91,7 @@ export const threadSummarySchema = z.object({
   participants: z
     .array(
       z.object({
-        id: z.string().uuid(),
+        id: z.string().guid(),
         displayName: z.string(),
         avatarUrl: z.string().nullable(),
       }),
@@ -160,7 +160,7 @@ export function isThreadArchived(
  */
 export const threadJoinMessageSchema = z.object({
   type: z.literal("thread-join"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
 });
 
 export const threadLeaveMessageSchema = z.object({
@@ -176,9 +176,9 @@ export const threadLeaveMessageSchema = z.object({
 export const threadUpdateBroadcastSchema = z.object({
   type: z.literal("thread-update"),
   /** The parent channel — where the origin message (and its chip) lives. */
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /** The origin message the chip hangs off. */
-  messageId: z.string().uuid(),
+  messageId: z.string().guid(),
   thread: threadSummarySchema,
 });
 

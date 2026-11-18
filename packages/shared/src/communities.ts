@@ -803,7 +803,7 @@ export type UpdateCommunityRequest = z.infer<typeof updateCommunitySchema>;
  * would immediately see.
  */
 export const communitySummarySchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string(),
   /**
    * The public address, or null on a community listed before slugs existed and
@@ -967,7 +967,7 @@ export const DIRECTORY_RECENT_WINDOW_DAYS = 7;
 export const communityListingNudgeSchema = z.object({
   listingNudge: z
     .object({
-      serverId: z.string().uuid(),
+      serverId: z.string().guid(),
       name: z.string(),
       iconUrl: z.string().nullable(),
     })

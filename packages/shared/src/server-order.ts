@@ -24,7 +24,7 @@ export const MAX_SERVER_ORDER_IDS = 500;
 
 export const updateServerOrderSchema = z.object({
   serverIds: z
-    .array(z.string().uuid())
+    .array(z.string().guid())
     .max(MAX_SERVER_ORDER_IDS)
     .refine((ids) => new Set(ids).size === ids.length, {
       message: "serverIds must not repeat",
@@ -40,7 +40,7 @@ export type UpdateServerOrderRequest = z.infer<typeof updateServerOrderSchema>;
  */
 export const serverOrderUpdateSchema = z.object({
   type: z.literal("server-order-update"),
-  serverIds: z.array(z.string().uuid()),
+  serverIds: z.array(z.string().guid()),
   origin: z.string().max(64).optional(),
 });
 export type ServerOrderUpdate = z.infer<typeof serverOrderUpdateSchema>;

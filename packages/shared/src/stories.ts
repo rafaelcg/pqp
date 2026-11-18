@@ -419,7 +419,7 @@ export type StoriesConfig = z.infer<typeof storiesConfigSchema>;
 
 /** Who posted it, or who watched it. No tag, no email, no presence. */
 export const storyAuthorSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   displayName: z.string(),
   avatarUrl: z.string().nullable(),
   handle: z.string().nullable().default(null),
@@ -436,8 +436,8 @@ export type StoryAuthor = z.infer<typeof storyAuthorSchema>;
  */
 export const storyCallStickerSchema = z.object({
   type: z.literal("call"),
-  serverId: z.string().uuid(),
-  channelId: z.string().uuid(),
+  serverId: z.string().guid(),
+  channelId: z.string().guid(),
 });
 
 export const storyStickerSchema = z.discriminatedUnion("type", [storyCallStickerSchema]);
@@ -462,8 +462,8 @@ export type StorySticker = z.infer<typeof storyStickerSchema>;
  * `joinable` is `state === "live"` and the viewer may connect to the channel.
  */
 export const storyCallLiveSchema = z.object({
-  serverId: z.string().uuid(),
-  channelId: z.string().uuid(),
+  serverId: z.string().guid(),
+  channelId: z.string().guid(),
   channelName: z.string(),
   /** Up to five faces, the author first when they are in. */
   participants: z.array(storyAuthorSchema).max(5),
@@ -478,7 +478,7 @@ export type StoryCallLive = z.infer<typeof storyCallLiveSchema>;
 
 const layerGeometry = {
   /** A uuid the client makes, unique inside the story. Stable across edits. */
-  id: z.string().uuid(),
+  id: z.string().guid(),
   /** Center, 0..1 of the canvas width. */
   x: z.number().finite().min(0).max(1),
   /** Center, 0..1 of the canvas height. */
@@ -515,15 +515,15 @@ const textLayerFields = {
 const callLayerFields = {
   ...layerGeometry,
   type: z.literal("call"),
-  serverId: z.string().uuid(),
-  channelId: z.string().uuid(),
+  serverId: z.string().guid(),
+  channelId: z.string().guid(),
 };
 
 const mentionLayerFields = {
   ...layerGeometry,
   type: z.literal("mention"),
   /** Must be somebody who can see the story. Tapping it opens their profile. */
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
 };
 
 /**
@@ -532,7 +532,7 @@ const mentionLayerFields = {
  * declared `contentType` and `byteSize` must be the ones the upload was made
  * with; the server checks the stored object against them before it accepts.
  */
-const eagerUploadIdSchema = z.string().uuid().optional();
+const eagerUploadIdSchema = z.string().guid().optional();
 
 const imageDims = {
   width: z.number().int().positive().max(STORY_MAX_DIMENSION),
@@ -656,7 +656,7 @@ export const storyLayersSchema = z
 export const storyAudienceSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("server"),
-    serverId: z.string().uuid(),
+    serverId: z.string().guid(),
     serverName: z.string(),
   }),
   z.object({ kind: z.literal("friends") }),
@@ -694,13 +694,13 @@ export const storyViewerStateSchema = z.object({
    * The servers (among `audiences`) where this viewer may remove the story
    * ("Tirar do servidor"): MANAGE_MESSAGES there. Empty for most people.
    */
-  canModerate: z.array(z.string().uuid()),
+  canModerate: z.array(z.string().guid()),
   /**
    * The author holds MANAGE_SERVER in these servers (among `audiences`), so
    * "Salvar no Baú" may be offered for them. Empty for everybody but the
    * author.
    */
-  canSaveToBau: z.array(z.string().uuid()).default([]),
+  canSaveToBau: z.array(z.string().guid()).default([]),
 });
 export type StoryViewerState = z.infer<typeof storyViewerStateSchema>;
 
@@ -716,7 +716,7 @@ export const storyOwnStateSchema = z.object({
 export type StoryOwnState = z.infer<typeof storyOwnStateSchema>;
 
 export const storySchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   author: storyAuthorSchema,
   kind: storyKindSchema,
   /** Image and video only. */
@@ -760,7 +760,7 @@ export type Story = z.infer<typeof storySchema>;
  */
 export const storyStripItemSchema = z.object({
   author: storyAuthorSchema,
-  storyIds: z.array(z.string().uuid()).min(1),
+  storyIds: z.array(z.string().guid()).min(1),
   latestAt: z.string(),
   expiresAt: z.string(),
   unseen: z.boolean(),
@@ -810,7 +810,7 @@ export type StoryAudienceBlockedReason = z.infer<typeof storyAudienceBlockedReas
 export const storyAudienceOptionsSchema = z.object({
   servers: z.array(
     z.object({
-      serverId: z.string().uuid(),
+      serverId: z.string().guid(),
       serverName: z.string(),
       iconUrl: z.string().nullable(),
       memberCount: z.number().int().nonnegative(),
@@ -852,7 +852,7 @@ export type StoryMediaInput = z.infer<typeof storyMediaInputSchema>;
 export const storyAudienceTargetsSchema = z
   .object({
     serverIds: z
-      .array(z.string().uuid())
+      .array(z.string().guid())
       .max(STORY_MAX_SERVER_AUDIENCES)
       .default([]),
     friends: z.boolean().default(false),
@@ -923,7 +923,7 @@ export const createStorySchema = z
      * story (with fresh upload URLs while it is still waiting for its bytes)
      * instead of posting a second one. Optional; strongly recommended.
      */
-    requestId: z.string().uuid().optional(),
+    requestId: z.string().guid().optional(),
     /**
      * Create AND publish in one call, for a story whose every file is already
      * uploaded (`uploadId` on the media and on each photo or drawing layer):
@@ -938,7 +938,7 @@ export const createStorySchema = z
   })
   .superRefine((value, ctx) => {
     const fail = (message: string, path: string) =>
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [path] });
+      ctx.addIssue({ code: "custom", message, path: [path] });
     if (value.publish) {
       const everyFileUploaded =
         (value.kind === "text" || Boolean(value.media?.uploadId)) &&
@@ -1023,7 +1023,7 @@ export type StoryUpload = z.infer<typeof storyUploadSchema>;
 
 /** One layer image's upload, `layerId` naming the image or drawing layer it is for. */
 export const storyLayerUploadSchema = storyUploadSchema.extend({
-  layerId: z.string().uuid(),
+  layerId: z.string().guid(),
 });
 export type StoryLayerUpload = z.infer<typeof storyLayerUploadSchema>;
 
@@ -1056,14 +1056,14 @@ export const createStoryUploadSchema = z
     }
     if (!(STORY_LAYER_IMAGE_TYPES as readonly string[]).includes(value.contentType)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "A layer is a photo or a drawing",
         path: ["contentType"],
       });
     }
     if (value.byteLength > STORY_LAYER_MAX_BYTES) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "Layer image too large",
         path: ["byteLength"],
       });
@@ -1074,7 +1074,7 @@ export type CreateStoryUploadParsed = z.output<typeof createStoryUploadSchema>;
 
 export const createStoryUploadResponseSchema = storyUploadSchema.extend({
   /** Put this in `media.uploadId` or a layer's `upload.uploadId` when creating the story. */
-  uploadId: z.string().uuid(),
+  uploadId: z.string().guid(),
 });
 export type CreateStoryUploadResponse = z.infer<typeof createStoryUploadResponseSchema>;
 
@@ -1108,7 +1108,7 @@ export type StoriesResponse = z.infer<typeof storiesResponseSchema>;
  * `{ recorded }`, how many were new.
  */
 export const storyViewsBatchSchema = z.object({
-  storyIds: z.array(z.string().uuid()).min(1).max(STORY_VIEWS_BATCH_MAX),
+  storyIds: z.array(z.string().guid()).min(1).max(STORY_VIEWS_BATCH_MAX),
 });
 export type StoryViewsBatch = z.infer<typeof storyViewsBatchSchema>;
 
@@ -1135,8 +1135,8 @@ export const storyReplySchema = z.object({
 export type StoryReplyRequest = z.infer<typeof storyReplySchema>;
 
 export const storyReplyResponseSchema = z.object({
-  conversationId: z.string().uuid(),
-  messageId: z.string().uuid(),
+  conversationId: z.string().guid(),
+  messageId: z.string().guid(),
 });
 export type StoryReplyResponse = z.infer<typeof storyReplyResponseSchema>;
 
@@ -1165,9 +1165,9 @@ export type StoryViewersPage = z.infer<typeof storyViewersPageSchema>;
  * expirou"), which is how the 24 h promise holds inside DMs too.
  */
 export const storyCardSchema = z.object({
-  storyId: z.string().uuid(),
+  storyId: z.string().guid(),
   state: z.enum(["live", "expired", "removed"]),
-  authorId: z.string().uuid(),
+  authorId: z.string().guid(),
   kind: storyKindSchema.nullable(),
   posterUrl: z.string().nullable(),
   caption: z.string().nullable(),
@@ -1194,10 +1194,10 @@ export type StoryModRemoveRequest = z.infer<typeof storyModRemoveSchema>;
  * teu story do X"). `POST /api/stories/notices/:noticeId/ack` dismisses one.
  */
 export const storyNoticeSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   kind: z.literal("removed"),
-  storyId: z.string().uuid().nullable(),
-  serverId: z.string().uuid().nullable(),
+  storyId: z.string().guid().nullable(),
+  serverId: z.string().guid().nullable(),
   serverName: z.string().nullable(),
   reason: z.string().nullable(),
   createdAt: z.string(),
@@ -1217,12 +1217,12 @@ export type StoryNoticesResponse = z.infer<typeof storyNoticesResponseSchema>;
  * DRAFT. The copy is server side; staff still edit and publish it.
  */
 export const storySaveToBauSchema = z.object({
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
 });
 export type StorySaveToBauRequest = z.infer<typeof storySaveToBauSchema>;
 
 export const storySaveToBauResponseSchema = z.object({
-  postId: z.string().uuid(),
+  postId: z.string().guid(),
 });
 export type StorySaveToBauResponse = z.infer<typeof storySaveToBauResponseSchema>;
 
@@ -1254,14 +1254,14 @@ export const storiesUpdateFrameSchema = z.object({
   type: z.literal("stories-update"),
   scope: z.enum(["server", "friends", "own"]),
   /** Present exactly when `scope` is `server`. */
-  serverId: z.string().uuid().optional(),
-  removedStoryIds: z.array(z.string().uuid()).max(STORY_VIEWS_BATCH_MAX).optional(),
+  serverId: z.string().guid().optional(),
+  removedStoryIds: z.array(z.string().guid()).max(STORY_VIEWS_BATCH_MAX).optional(),
 });
 
 export const storiesUpdateSchema = storiesUpdateFrameSchema.superRefine((frame, ctx) => {
   if ((frame.scope === "server") !== (frame.serverId !== undefined)) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       message: "serverId is present exactly when scope is server",
       path: ["serverId"],
     });

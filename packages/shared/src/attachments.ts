@@ -211,7 +211,7 @@ export const VOICE_NOTE_RECEIPTS_MAX_PARTICIPANTS = 10;
 
 /** One person who has played a note, as the author's copy lists them. */
 export const voiceNoteListenSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   /** ISO 8601, the first time that person played it. */
   listenedAt: z.string(),
 });
@@ -257,10 +257,10 @@ export type VoiceNote = z.infer<typeof voiceNoteSchema>;
  */
 export const voiceNoteListenedSchema = z.object({
   type: z.literal("voice-note-listened"),
-  channelId: z.string().uuid(),
-  messageId: z.string().uuid(),
-  attachmentId: z.string().uuid(),
-  userId: z.string().uuid(),
+  channelId: z.string().guid(),
+  messageId: z.string().guid(),
+  attachmentId: z.string().guid(),
+  userId: z.string().guid(),
   listenedAt: z.string(),
 });
 
@@ -301,7 +301,7 @@ export const createAttachmentSchema = z.object({
 export type CreateAttachmentRequest = z.infer<typeof createAttachmentSchema>;
 
 export const createAttachmentResponseSchema = z.object({
-  attachmentId: z.string().uuid(),
+  attachmentId: z.string().guid(),
   /** Presigned PUT. The upload must send exactly the signed `Content-Type`. */
   uploadUrl: z.string().url(),
   expiresAt: z.string(),
@@ -323,7 +323,7 @@ export type CreateAttachmentResponse = z.infer<
  * `url` is minted per read and expires, which is why it is not stored anywhere.
  */
 export const attachmentSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   filename: z.string(),
   contentType: z.string(),
   byteSize: z.number().int().nonnegative(),

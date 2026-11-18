@@ -180,7 +180,7 @@ export interface BauOffer {
 }
 
 export const bauCheckoutBodySchema = z.object({
-  planId: z.string().uuid(),
+  planId: z.string().guid(),
   method: bauPaymentMethodSchema.default("pix"),
 });
 export type BauCheckoutBody = z.infer<typeof bauCheckoutBodySchema>;
@@ -231,10 +231,10 @@ export const BAU_UPDATE_REASONS = [
 ] as const;
 export const bauPlusUpdateSchema = z.object({
   type: z.literal("bau-plus-update"),
-  serverId: z.string().uuid(),
-  membershipId: z.string().uuid(),
+  serverId: z.string().guid(),
+  membershipId: z.string().guid(),
   status: bauMembershipStatusSchema,
-  attemptId: z.string().uuid().nullable(),
+  attemptId: z.string().guid().nullable(),
   reason: z.enum(BAU_UPDATE_REASONS),
 });
 export type BauPlusUpdateMessage = z.infer<typeof bauPlusUpdateSchema>;
