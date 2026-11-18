@@ -1,5 +1,6 @@
 package gg.pqp.app.voice
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,11 +8,15 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import gg.pqp.app.MainActivity
 import gg.pqp.app.PqpApplication
 import gg.pqp.app.R
@@ -72,8 +77,7 @@ class VoiceService : Service() {
 
         if (intent?.action == ACTION_TOGGLE_MUTE) {
             voice.toggleMute()
-            ensureChannel()
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), foregroundTypes())
+            goForeground()
             return START_NOT_STICKY
         }
 
@@ -82,18 +86,24 @@ class VoiceService : Service() {
             ACTION_STOP_PROJECTION -> projecting = false
         }
 
-        ensureChannel()
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            buildNotification(),
-            foregroundTypes(),
-        )
+        val granted = goForeground()
 
         if (intent?.action == ACTION_START_PROJECTION) {
             val permission = intentExtra(intent)
             if (permission == null) {
                 projecting = false
+            } else if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                (granted and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION) == 0
+            ) {
+                // Android refused the projection type and the call was kept on
+                // a lesser rung. A capture started now would only fail inside
+                // the capturer, so say so the way a failed capture does.
+                projecting = false
+                voice.screenCaptureRefused()
+                // The notification above was built while `projecting` was
+                // still true and says "sharing". Post it again without that.
+                goForeground()
             } else {
                 // Safe here and nowhere earlier: this service is foreground with
                 // the `mediaProjection` type as of the call above.
@@ -127,7 +137,23 @@ class VoiceService : Service() {
         super.onDestroy()
     }
 
-    private fun foregroundTypes(): Int = voiceForegroundTypes(Build.VERSION.SDK_INT, projecting)
+    /**
+     * `startForeground` with the best type set Android will accept right now,
+     * and the set it accepted. See [voiceForegroundTypeLadder] for why the
+     * first choice can be refused and what a lesser one costs.
+     */
+    private fun goForeground(): Int {
+        ensureChannel()
+        val notification = buildNotification()
+        val microphoneGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        val ladder = voiceForegroundTypeLadder(Build.VERSION.SDK_INT, projecting, microphoneGranted)
+        return startForegroundOnLadder(
+            ladder,
+            start = { types -> ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, types) },
+            onRefused = { types, error -> Log.w(TAG, "foreground types $types refused: ${error.message}") },
+        )
+    }
 
     @Suppress("DEPRECATION")
     private fun intentExtra(intent: Intent): Intent? =
@@ -229,6 +255,7 @@ class VoiceService : Service() {
     }
 
     companion object {
+        private const val TAG = "VoiceService"
         private const val CHANNEL_ID = "voice"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_HANG_UP = "gg.pqp.app.HANG_UP"

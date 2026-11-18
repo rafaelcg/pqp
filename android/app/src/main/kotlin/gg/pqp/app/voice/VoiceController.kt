@@ -856,6 +856,18 @@ class VoiceController(
     }
 
     /**
+     * Called by [VoiceService] when Android would not let it take the
+     * projection type, so the share never starts. Said the same way as a
+     * capture that failed to start, for the same reason: the person granted
+     * the system dialog and silence would read as a broken button.
+     */
+    internal fun screenCaptureRefused() {
+        _state.value = _state.value.copy(
+            notice = context.getString(R.string.voice_screen_share_failed),
+        )
+    }
+
+    /**
      * Called by [VoiceService] once it is foreground with the projection type.
      *
      * Not public: the ordering rule above is the whole reason this is a
