@@ -603,18 +603,18 @@ export default defineConfig(({ command }) => ({
         // request. (`experimentalMinChunkSize` was tried first and folded the chat
         // client into an unrelated panel's chunk, which silently drops the `/app`
         // preload in `deferEntry`.)
-        manualChunks(id) {
-          if (id.includes("/node_modules/lucide-react/")) {
-            return "icons";
-          }
-          // React's own runtime, apart from the icons. Rollup had hoisted it
-          // INTO the icons chunk (lucide imports it first), so the public jam
-          // site, which needs React and none of the app's icons, downloaded
-          // every icon the app uses (about 29 kB gzipped) to get 7 kB of React.
-          if (/\/node_modules\/(?:\.pnpm\/[^/]+\/node_modules\/)?(?:react|scheduler)\//.test(id)) {
-            return "react-core";
-          }
-          return undefined;
+        //
+        // React's own runtime is a chunk apart from the icons, so the public jam
+        // site, which needs React and none of the app's icons, does not download
+        // every icon the app uses (about 28 kB gzipped) to get 7 kB of React.
+        // Under Vite 8 this has to be `codeSplitting.groups`: the same split as
+        // a `manualChunks` function left React's CommonJS wrapper in the icons
+        // chunk (measured: the jam site's first load was 22 kB gzipped larger).
+        codeSplitting: {
+          groups: [
+            { name: "react-core", test: /node_modules[\\/](?:\.pnpm[\\/][^\\/]+[\\/]node_modules[\\/])?(?:react|scheduler)[\\/]/, priority: 20 },
+            { name: "icons", test: /node_modules[\\/]lucide-react[\\/]/, priority: 10 },
+          ],
         },
       },
     },

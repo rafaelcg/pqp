@@ -29,6 +29,52 @@ describe("deferEntryScript", () => {
   });
 });
 
+describe("the entry's own preloads (Vite 8 splits the shared code out of it)", () => {
+  const A = '<link rel="modulepreload" crossorigin href="/assets/react-dom-aaa.js">';
+  const B = '<link rel="modulepreload" crossorigin href="/assets/api-bbb.js">';
+
+  it("takes them out of the head, where the browser would fetch them first", () => {
+    const out = deferEntryScript(`<head>\n    ${ENTRY}\n    ${A}\n    ${B}\n</head>`);
+    expect(out).not.toContain("<link");
+    expect(out).toContain("/assets/react-dom-aaa.js");
+    expect(out).toContain("/assets/api-bbb.js");
+  });
+
+  const source = scriptBody(
+    deferEntryLoader("/assets/index-abc123.js", undefined, [
+      "/assets/react-dom-aaa.js",
+      "/assets/api-bbb.js",
+    ]),
+  );
+
+  it("requests them together with the entry, ahead of it, on every route but the home page", () => {
+    const env = inlineEnv({ route: "other", path: "/vem" });
+    env.run(source);
+    expect(env.appended.map((node) => node.href ?? node.src)).toEqual([
+      "/assets/react-dom-aaa.js",
+      "/assets/api-bbb.js",
+      "/assets/index-abc123.js",
+    ]);
+    expect(env.appended.map((node) => node.rel ?? node.type)).toEqual([
+      "modulepreload",
+      "modulepreload",
+      "module",
+    ]);
+  });
+
+  it("requests nothing on the home page until the first screen has settled", () => {
+    const env = inlineEnv({ route: "home" });
+    env.run(source);
+    expect(env.appended).toHaveLength(0);
+    env.fire("pointerdown");
+    expect(env.appended).toHaveLength(3);
+  });
+
+  it("changes nothing for a build that has none", () => {
+    expect(deferEntryLoader("/assets/index-abc123.js")).not.toContain("deps");
+  });
+});
+
 describe("the chat client preload", () => {
   const APP = "assets/App-xyz789.js";
 
