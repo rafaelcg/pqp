@@ -23,6 +23,15 @@ const SECRET_KEY = "sk_test_throwaway_for_unit_tests_only";
 const KID = "ins_test_kid";
 const AUTHORIZED = "https://pqp.gg";
 
+// Put back in afterAll: a worker can run another file after this one.
+const ENV_KEYS = [
+  "CLERK_SECRET_KEY",
+  "CLERK_AUTHORIZED_PARTIES",
+  "DEV_AUTH_BYPASS",
+  "CHARACTER_ACCOUNTS_ENABLED",
+] as const;
+const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+
 process.env.CLERK_SECRET_KEY = SECRET_KEY;
 process.env.CLERK_AUTHORIZED_PARTIES = AUTHORIZED;
 delete process.env.DEV_AUTH_BYPASS;
@@ -214,6 +223,14 @@ afterEach(() => {
 afterAll(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  for (const key of ENV_KEYS) {
+    const value = savedEnv[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
 });
 
 describe("verifyAuthHeader through the real @clerk/backend", () => {
