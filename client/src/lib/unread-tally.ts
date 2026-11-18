@@ -3,11 +3,10 @@
  * of recounted from the first unread row on every arrival.
  *
  * The common change to the log is an append at the bottom. A tally is reused
- * when its first row and its last counted row are still the same row objects
- * at the same positions, and only the rows after it are scanned. Anything
- * else (an older page above, a delete, a replaced row at either end, a new
- * first unread) recounts from scratch. Row objects are reused for unchanged
- * messages, so an edited message is a new object.
+ * only when no row it counted was rebuilt (`changedFrom`, the lowest index
+ * whose row object is new: an edit, a delete, an older page above all
+ * rebuild a row at or before it) and the mention rule (`maskKey`) is the
+ * same. Then only the rows after it are scanned. Anything else recounts.
  */
 
 interface TallyRow {
@@ -16,21 +15,28 @@ interface TallyRow {
 
 export interface UnreadTally {
   firstId: string;
+  maskKey: string;
   start: number;
   /** Rows counted so far, from index 0: the next scan starts here. */
   scanned: number;
-  startRow: TallyRow;
-  lastRow: TallyRow;
   count: number;
   mentions: number;
 }
 
+export interface UnreadTallyInput {
+  rows: readonly TallyRow[];
+  mentionMask: readonly boolean[];
+  firstId: string;
+  selfId: string | null | undefined;
+  /** The lowest index whose row was rebuilt since the last call. */
+  changedFrom: number;
+  /** What the mention mask was computed against (the viewer's names). */
+  maskKey: string;
+}
+
 export function extendUnreadTally(
   prev: UnreadTally | null,
-  rows: readonly TallyRow[],
-  mentionMask: readonly boolean[],
-  firstId: string,
-  selfId: string | null | undefined,
+  { rows, mentionMask, firstId, selfId, changedFrom, maskKey }: UnreadTallyInput,
 ): UnreadTally | null {
   let start: number;
   let from: number;
@@ -39,9 +45,10 @@ export function extendUnreadTally(
   const reusable =
     prev !== null &&
     prev.firstId === firstId &&
+    prev.maskKey === maskKey &&
     prev.scanned <= rows.length &&
-    rows[prev.start] === prev.startRow &&
-    rows[prev.scanned - 1] === prev.lastRow;
+    changedFrom >= prev.scanned &&
+    rows[prev.start]?.message.id === firstId;
   if (reusable) {
     start = prev.start;
     from = prev.scanned;
@@ -63,13 +70,5 @@ export function extendUnreadTally(
       mentions += 1;
     }
   }
-  return {
-    firstId,
-    start,
-    scanned: rows.length,
-    startRow: rows[start],
-    lastRow: rows[rows.length - 1],
-    count,
-    mentions,
-  };
+  return { firstId, maskKey, start, scanned: rows.length, count, mentions };
 }

@@ -10108,32 +10108,36 @@ function MainAppContent({
 
   const handleBlockUser = useCallback(
     async (userId: string): Promise<boolean> => {
-      // True once the block itself landed, even if a refresh after it fails:
-      // the report dialog says "blocked" only on that.
-      let blocked = false;
       try {
         await blockUser(userId);
-        blocked = true;
-        await loadBlocks();
-        // A blocked author's messages stop counting towards unread on the
-        // server, so the conversation's badge is now wrong by however much they
-        // had said. Refetching is what settles it — the row itself stays, since
-        // blocking somebody does not erase what was already said to you.
-        await loadConversations({ trustSnapshot: true });
-        // A BLOCK ALSO ENDED A FRIENDSHIP, if there was one: the schema's
-        // trigger deletes the pair's row the moment the block lands, in both
-        // directions and including a pending request. Nothing tells us that
-        // happened, so every surface drawing the friends list — the badge, the
-        // list itself, any open profile card — kept showing a friendship the
-        // database no longer has. Re-reading here is what makes the trigger's
-        // effect visible everywhere at once.
-        await friendsRef.current.refresh();
       } catch (error) {
         setAppError(
           error instanceof Error ? error.message : "Failed to block that person",
         );
+        return false;
       }
-      return blocked;
+      // The block landed: say so now. The refreshes below run on their own,
+      // so a slow one never holds the report dialog's confirmation.
+      void (async () => {
+        try {
+          await loadBlocks();
+          // A blocked author's messages stop counting towards unread on the
+          // server, so the conversation's badge is now wrong by however much
+          // they had said. Refetching is what settles it. The row itself
+          // stays, since blocking somebody does not erase what was said.
+          await loadConversations({ trustSnapshot: true });
+          // A block also ended a friendship, if there was one: the schema's
+          // trigger deletes the pair's row in both directions, a pending
+          // request included. Nothing tells us, so re-read the friends list
+          // to make that visible on every surface at once.
+          await friendsRef.current.refresh();
+        } catch (error) {
+          setAppError(
+            error instanceof Error ? error.message : "Failed to block that person",
+          );
+        }
+      })();
+      return true;
     },
     [loadBlocks, loadConversations],
   );

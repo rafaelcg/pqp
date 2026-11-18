@@ -660,12 +660,16 @@ interface RowCacheEntry {
  * is every row except the new one. An edit or a reaction still gets a fresh
  * `Row`, correctly, because the message object itself is a new reference.
  */
+/** Per `buildRows` result: the lowest index whose `Row` was rebuilt, or its length. */
+const firstRebuiltRow = new WeakMap<readonly Row[], number>();
+
 function buildRows(
   messages: readonly ChatMessage[],
   cache: Map<string, RowCacheEntry>,
 ): Row[] {
   const rows: Row[] = new Array(messages.length);
   const seen = new Set<string>();
+  let firstRebuilt = messages.length;
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     const previous = index > 0 ? messages[index - 1] : undefined;
@@ -681,6 +685,9 @@ function buildRows(
       continue;
     }
 
+    if (index < firstRebuilt) {
+      firstRebuilt = index;
+    }
     const newDay =
       !previous || !isSameDay(previous.createdAt, message.createdAt);
     const withinWindow =
@@ -710,6 +717,7 @@ function buildRows(
     }
   }
 
+  firstRebuiltRow.set(rows, firstRebuilt);
   return rows;
 }
 
@@ -1358,13 +1366,14 @@ export const MessageList = memo(function MessageList({
       return null;
     }
     // Extended on an append, recounted otherwise (`unread-tally.ts`).
-    const tally = extendUnreadTally(
-      unreadTallyRef.current,
+    const tally = extendUnreadTally(unreadTallyRef.current, {
       rows,
       mentionMask,
-      firstUnreadId,
-      currentUserId,
-    );
+      firstId: firstUnreadId,
+      selfId: currentUserId,
+      changedFrom: firstRebuiltRow.get(rows) ?? 0,
+      maskKey: `${currentUsername ?? ""}\u0000${currentUserId ?? ""}`,
+    });
     unreadTallyRef.current = tally;
     return tally && tally.count > 0
       ? {
@@ -1373,7 +1382,7 @@ export const MessageList = memo(function MessageList({
           since: formatTime(rows[tally.start].message.createdAt),
         }
       : null;
-  }, [redesign, firstUnreadId, unreadDismissed, rows, mentionMask, currentUserId]);
+  }, [redesign, firstUnreadId, unreadDismissed, rows, mentionMask, currentUserId, currentUsername]);
   // A forum post's opening message is its first: known only once nothing
   // older is left to page in.
   const forumOpeningId =

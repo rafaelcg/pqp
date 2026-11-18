@@ -379,8 +379,9 @@ function SearchPanel({
                 autoFocus
                 onChange={(event) => {
                   const day = event.target.value;
-                  // Typing a year fires change at its first digit (0002-..), so wait for a real one.
-                  if (day && day >= "2015-01-01") {
+                  // Typing a year fires change at each digit (0002, 0020, 0202), so
+                  // wait for all four: every partial year is below 1000.
+                  if (day && day >= "1000-01-01") {
                     const shown = new Date(`${day}T12:00:00`).toLocaleDateString(locale, {
                       day: "numeric",
                       month: "short",
