@@ -5,7 +5,8 @@
     "outDir": "dist",
     "rootDir": "src",
     "declaration": true,
-    "sourceMap": false
+    "sourceMap": false,
+    "types": []
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/**/*.fixture.ts"]

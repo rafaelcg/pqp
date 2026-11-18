@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron } from "@playwright/test";
 import { createServer } from "node:http";
-import { createRequire } from "node:module";
+import { stripTypeScriptTypes } from "node:module";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -36,20 +36,17 @@ const root = path.join(here, "..");
  * Chromium, but it was only run on macOS (see the PR).
  */
 
-const requireFromClient = createRequire(
-  path.join(root, "..", "client", "package.json"),
-);
-
-/** `client/src/lib/file-drop.ts` as the browser would run it. It has no imports. */
+/**
+ * `client/src/lib/file-drop.ts` as the browser would run it. It has no imports
+ * and only type annotations, so stripping the types is the whole compile (Node
+ * does it; TypeScript 7 no longer ships a JS API to transpile with).
+ */
 function compiledGuard() {
-  const ts = requireFromClient("typescript");
   const source = readFileSync(
     path.join(root, "..", "client", "src", "lib", "file-drop.ts"),
     "utf8",
   );
-  return ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  return stripTypeScriptTypes(source);
 }
 
 const BARE = `<!doctype html><html><head><meta charset="utf-8"><title>bare</title></head>

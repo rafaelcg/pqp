@@ -33,7 +33,7 @@ const GUEST_USER_ID = "guest";
 const SEAT_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /** 22 random base64url characters, the shape of a real seat id. */
-export function randomGuestSeatId(random: (bytes: Uint8Array) => Uint8Array = (b) => crypto.getRandomValues(b)): string {
+export function randomGuestSeatId(random: (bytes: Uint8Array<ArrayBuffer>) => Uint8Array = (b) => crypto.getRandomValues(b)): string {
   const bytes = random(new Uint8Array(22));
   let out = "";
   for (const byte of bytes) out += SEAT_ALPHABET[byte & 63];

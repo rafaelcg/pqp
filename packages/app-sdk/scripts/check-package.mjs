@@ -129,7 +129,7 @@ void main();
       files: ["consumer.ts"],
     }),
   );
-  const tsc = createRequire(import.meta.url).resolve("typescript/bin/tsc");
+  const tsc = join(dirname(createRequire(import.meta.url).resolve("typescript/package.json")), "bin", "tsc");
   try {
     execFileSync(process.execPath, [tsc, "-p", scratch], { stdio: "pipe", encoding: "utf8" });
   } catch (error) {
