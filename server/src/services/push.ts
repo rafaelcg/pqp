@@ -1,4 +1,4 @@
-import webPush from "web-push";
+import { sendNotification } from "web-push";
 import { z } from "zod";
 import type { ChannelKind, UserPreferences } from "@pqp/shared";
 import { getPool } from "../db.js";
@@ -534,7 +534,7 @@ const CALL_DELIVERY: PushDeliveryOptions = {
 };
 
 const realSender: PushSender = async (subscription, payload, config, delivery) => {
-  await webPush.sendNotification(
+  await sendNotification(
     {
       endpoint: subscription.endpoint,
       keys: { p256dh: subscription.p256dh, auth: subscription.auth },
