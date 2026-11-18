@@ -322,7 +322,9 @@ jobs:
       # copy is pinned by finding a flash and a click again in the output
       # (`speech/video-transcode.test.ts`); without ffmpeg those tests skip.
       - name: Install ffmpeg
-        run: command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+        uses: ./.github/actions/apt-install
+        with:
+          packages: ffmpeg
 
       - name: Test server (shard ${{ matrix.shard }}/3)
         run: pnpm --filter @pqp/server test --shard=${{ matrix.shard }}/3
@@ -537,22 +539,24 @@ jobs:
       # libraries for Firefox), so this step took 4 to 8 minutes and timed out
       # twice in 24 hours (runs 44215705483 and 44387025255, both in the
       # Firefox deps step), failing main CI and so skipping the production
-      # deploys that wait on it. The action caches the .deb files, kills a
+      # deploys that wait on it. The apt-install action caches the .deb files, kills a
       # download that crawls and restarts it (apt resumes), and saves what it
       # got even when it fails. It carries its own bounds, so the step has no
       # `timeout-minutes` (a step killed by the runner cannot save the cache);
       # the job's budget is the backstop.
       - name: Playwright system deps (Chromium and Firefox)
         if: matrix.stale || matrix.appframe
-        uses: ./.github/actions/playwright-system-deps
+        uses: ./.github/actions/apt-install
         with:
           browsers: chromium firefox
 
-      - name: Playwright system deps (Chromium)
+      # The camera sync and jam legs also need a real ffmpeg to make their media.
+      - name: Playwright system deps (Chromium, plus ffmpeg for the camera leg)
         if: ${{ !(matrix.stale || matrix.appframe) }}
-        uses: ./.github/actions/playwright-system-deps
+        uses: ./.github/actions/apt-install
         with:
           browsers: chromium
+          packages: ${{ matrix.camera && 'ffmpeg' || '' }}
 
       - name: E2E (${{ matrix.suite }} ${{ matrix.label }})
         if: matrix.shards
@@ -606,9 +610,7 @@ jobs:
       # H.264), and ffmpeg to make the media. The quick run, about 3 minutes.
       - name: E2E camera sync (real Chrome, synthetic live HLS)
         if: matrix.camera
-        run: |
-          command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
-          pnpm --filter @pqp/client e2e:camera-sync
+        run: pnpm --filter @pqp/client e2e:camera-sync
 
       # The jam audio engine (client/playwright.jam.config.ts): a take recorded
       # over a backing through a fake microphone must land on the backing,
