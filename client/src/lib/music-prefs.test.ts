@@ -9,6 +9,7 @@ import {
 import {
   applyMusicJoinGate,
   getMusicPrefs,
+  markRadioJoinIntent,
   musicPictureMode,
   musicStagePictureActive,
   resetMusicPrefsForTests,
@@ -82,6 +83,8 @@ describe("shouldAutoDeclineListen", () => {
 describe("music prefs store", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", fakeLocalStorage());
+    // The new look, whose auto-join key and default differ from the old one.
+    localStorage.setItem("pqp-redesign", "on");
     resetMusicPrefsForTests();
     resetMusicStoreForTests();
   });
@@ -111,6 +114,14 @@ describe("music prefs store", () => {
     setMusicPlacement("hidden");
     expect(getMusicPrefs().placement).toBe("hidden");
     expect(localStorage.getItem("pqp:music-placement")).toBe("hidden");
+  });
+
+  it("keeps the old look on its own key and its default of on", () => {
+    localStorage.setItem("pqp-redesign", "off");
+    expect(getMusicPrefs().autoJoin).toBe(true);
+    setMusicAutoJoin(false);
+    expect(localStorage.getItem("pqp:music-auto-join")).toBe("0");
+    expect(localStorage.getItem("pqp:music-auto-join-v2")).toBeNull();
   });
 
   it("treats the stage as the only picture", () => {
@@ -161,6 +172,37 @@ describe("music prefs store", () => {
     expect(
       applyMusicJoinGate(CHANNEL, "t1", false, { listening: true, openedHere: true }),
     ).toBe(false);
+  });
+
+  it("turns listening back on for whoever adds the track here", () => {
+    setMusicSession({
+      channelId: CHANNEL,
+      peerId: "peer-a",
+      userId: "u1",
+      displayName: "Ana",
+      send: () => {},
+    });
+    setListening(false);
+    applyMusicJoinGate(CHANNEL, null, false, { listening: false });
+    expect(
+      applyMusicJoinGate(CHANNEL, "t1", false, { listening: false, openedHere: true }),
+    ).toBe(false);
+    expect(getMusicSnapshot().listening).toBe(true);
+  });
+
+  it("honours a join intent only for a short while", () => {
+    vi.stubGlobal("sessionStorage", fakeLocalStorage());
+    try {
+      const other = "22222222-2222-4222-8222-222222222222";
+      markRadioJoinIntent(CHANNEL, Date.now() - 60_000);
+      applyMusicJoinGate(CHANNEL, null, false, { listening: true });
+      expect(applyMusicJoinGate(CHANNEL, "t1", false, { listening: true })).toBe(true);
+      markRadioJoinIntent(other);
+      applyMusicJoinGate(other, null, false, { listening: true });
+      expect(applyMusicJoinGate(other, "t2", false, { listening: true })).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps a joined seat in the Rádio when the queue runs dry and refills", () => {

@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
+import { isRedesignOn } from "@/lib/redesign";
 import {
   getMusicSnapshot,
   musicOpenedHereTrackId,
@@ -33,6 +34,8 @@ const DUCKING_KEY = "pqp:music-duck";
  * reach almost nobody.
  */
 const AUTO_JOIN_KEY = "pqp:music-auto-join-v2";
+// The old look keeps its own key and its default of on.
+const AUTO_JOIN_KEY_OLD = "pqp:music-auto-join";
 
 const DEFAULTS: MusicPrefs = {
   placement: "hidden",
@@ -44,6 +47,15 @@ const listeners = new Set<() => void>();
 
 let snapshot: MusicPrefs = { ...DEFAULTS };
 let loaded = false;
+let loadedRedesign = false;
+
+function autoJoinKey(redesign: boolean): string {
+  return redesign ? AUTO_JOIN_KEY : AUTO_JOIN_KEY_OLD;
+}
+
+function readAutoJoin(redesign: boolean): boolean {
+  return parseFlag(readStored(autoJoinKey(redesign)), redesign ? DEFAULTS.autoJoin : true);
+}
 
 function readStored(key: string): string | null {
   try {
@@ -76,14 +88,22 @@ function parseFlag(raw: string | null, fallback: boolean): boolean {
 }
 
 function load(): MusicPrefs {
+  const redesign = isRedesignOn();
   if (loaded) {
+    // The look can change under a running page: re-read only the one pref
+    // whose key and default depend on it.
+    if (redesign !== loadedRedesign) {
+      loadedRedesign = redesign;
+      snapshot = { ...snapshot, autoJoin: readAutoJoin(redesign) };
+    }
     return snapshot;
   }
   loaded = true;
+  loadedRedesign = redesign;
   snapshot = {
     placement: parsePlacement(readStored(PLACEMENT_KEY)),
     ducking: parseFlag(readStored(DUCKING_KEY), DEFAULTS.ducking),
-    autoJoin: parseFlag(readStored(AUTO_JOIN_KEY), DEFAULTS.autoJoin),
+    autoJoin: readAutoJoin(redesign),
   };
   return snapshot;
 }
@@ -107,7 +127,7 @@ function setPrefs(partial: Partial<MusicPrefs>): void {
   snapshot = next;
   writeStored(PLACEMENT_KEY, next.placement);
   writeStored(DUCKING_KEY, next.ducking ? "1" : "0");
-  writeStored(AUTO_JOIN_KEY, next.autoJoin ? "1" : "0");
+  writeStored(autoJoinKey(isRedesignOn()), next.autoJoin ? "1" : "0");
   emit();
 }
 
@@ -192,6 +212,8 @@ export function shouldAutoDeclineListen(input: {
  * deploy, keeps you in the Rádio instead of handing you the invite again.
  */
 const JOINED_KEY = "pqp:music-joined";
+const JOIN_INTENT_KEY = "pqp:music-join-intent";
+const JOIN_INTENT_TTL_MS = 30_000;
 
 function readJoined(channelId: string | null): boolean {
   if (!channelId) {
@@ -210,6 +232,7 @@ function writeJoined(channelId: string | null, joined: boolean): void {
       sessionStorage.setItem(JOINED_KEY, channelId);
     } else if (sessionStorage.getItem(JOINED_KEY) === channelId) {
       sessionStorage.removeItem(JOINED_KEY);
+    sessionStorage.removeItem(JOIN_INTENT_KEY);
     }
   } catch {
     // per-tab convenience only
@@ -221,8 +244,38 @@ function writeJoined(channelId: string | null, joined: boolean): void {
  * sidebar's music card, outside the call). Recorded as already joined, so
  * the seat change that follows honours it instead of showing the invite.
  */
-export function markRadioJoinIntent(channelId: string): void {
-  writeJoined(channelId, true);
+export function markRadioJoinIntent(channelId: string, now: number = Date.now()): void {
+  try {
+    sessionStorage.setItem(JOIN_INTENT_KEY, `${channelId}|${now}`);
+  } catch {
+    // per-tab convenience only
+  }
+}
+
+/**
+ * The intent is read once, by the seat change it was meant for. A join that
+ * failed or was cancelled leaves it behind, so it counts only for a short
+ * while: a seat taken much later is a new decision, not this one.
+ */
+function consumeJoinIntent(channelId: string | null, now: number = Date.now()): boolean {
+  if (!channelId) {
+    return false;
+  }
+  try {
+    const raw = sessionStorage.getItem(JOIN_INTENT_KEY);
+    if (raw === null) {
+      return false;
+    }
+    const [id, stamp] = raw.split("|");
+    if (id !== channelId) {
+      return false;
+    }
+    sessionStorage.removeItem(JOIN_INTENT_KEY);
+    const age = now - Number(stamp);
+    return Number.isFinite(age) && age >= 0 && age <= JOIN_INTENT_TTL_MS;
+  } catch {
+    return false;
+  }
 }
 
 let joinGate = {
@@ -252,10 +305,14 @@ export function applyMusicJoinGate(
     if (joinGate.channelId !== null) {
       writeJoined(joinGate.channelId, false);
     }
+    const intended = consumeJoinIntent(channelId);
+    if (intended) {
+      writeJoined(channelId, true);
+    }
     joinGate = {
       channelId,
       trackId: null,
-      joined: readJoined(channelId),
+      joined: intended || readJoined(channelId),
       listening: true,
       openedTrackId: null,
     };
@@ -287,9 +344,15 @@ export function applyMusicJoinGate(
     writeJoined(channelId, true);
   }
   joinGate.trackId = trackId;
-  joinGate.listening = declined ? false : listening;
+  // Whoever adds the track here is in its Rádio, even from a tab that was
+  // not listening: turn listening on, or they would see the invite for
+  // their own song and hear nothing.
+  const turnOn = opened && !listening;
+  joinGate.listening = declined ? false : turnOn ? true : listening;
   if (declined) {
     setListening(false);
+  } else if (turnOn) {
+    setListening(true);
   }
   return declined;
 }

@@ -230,7 +230,7 @@ export function MusicStagePanel({
             {player}
           </div>
         )}
-        {music.open && (music.listening || !hasPlayer) && (
+        {music.open && (music.listening || !hasPlayer || current === null) && (
           <div
             className={cn(
               PANEL,

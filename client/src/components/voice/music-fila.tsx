@@ -152,7 +152,16 @@ export function MusicFila({
     const onKey = (event: KeyboardEvent) => {
       // Escape out of a menu or a dialog closes that one first; the queue
       // is the next Escape, not the same one.
-      if (event.key === "Escape" && !document.querySelector("[role='menu'], [role='dialog']")) {
+      // Escape in the search field (results or link preview) is the picker's:
+      // it clears them, and the queue closes on the next Escape.
+      const inPicker = (event.target as Element | null)?.closest?.(
+        "[data-music-search], [data-music-link-preview]",
+      );
+      if (
+        event.key === "Escape" &&
+        !inPicker &&
+        !document.querySelector("[role='menu'], [role='dialog']")
+      ) {
         setMusicOpen(false);
       }
     };

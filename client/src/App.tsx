@@ -11690,10 +11690,14 @@ function MainAppContent({
         compact={compact}
         chrome={!musicInComposer}
         embed={false}
-        onOpenRadio={() => {
-          setMusicOpen(true);
-          void openVoiceChannel();
-        }}
+        onOpenRadio={
+          redesign
+            ? () => {
+                setMusicOpen(true);
+                void openVoiceChannel();
+              }
+            : undefined
+        }
       />
       {voiceState.status !== "idle" && !seatedInLiveParty && (
         <VoiceStatusBar

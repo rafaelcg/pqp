@@ -1225,7 +1225,7 @@ function StagePlayer({
             data-music-previous=""
             className={transportIcon}
             aria-label={t("music.previous")}
-            disabled={!canManage}
+            disabled={!canManage || !onPrevious}
             onClick={onPrevious}
           >
             <SkipBack className="h-5 w-5" fill="currentColor" aria-hidden="true" />
