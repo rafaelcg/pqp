@@ -10106,19 +10106,20 @@ function MainAppContent({
     setMembersOpen(true);
   }
 
-  const handleBlockUser = useCallback(
-    async (userId: string): Promise<boolean> => {
-      try {
-        await blockUser(userId);
-      } catch (error) {
-        setAppError(
-          error instanceof Error ? error.message : "Failed to block that person",
-        );
-        return false;
-      }
-      // The block landed: say so now. The refreshes below run on their own,
-      // so a slow one never holds the report dialog's confirmation.
-      void (async () => {
+  // After a block: re-read blocks, conversations and friends. One run at a
+  // time; a block during a run asks for one more pass after it, so an older
+  // read can never land after a newer one.
+  const blockRefreshRef = useRef({ running: false, again: false });
+  const refreshAfterBlock = useCallback(async () => {
+    const state = blockRefreshRef.current;
+    if (state.running) {
+      state.again = true;
+      return;
+    }
+    state.running = true;
+    try {
+      do {
+        state.again = false;
         try {
           await loadBlocks();
           // A blocked author's messages stop counting towards unread on the
@@ -10136,10 +10137,27 @@ function MainAppContent({
             error instanceof Error ? error.message : "Failed to block that person",
           );
         }
-      })();
+      } while (state.again);
+    } finally {
+      state.running = false;
+    }
+  }, [loadBlocks, loadConversations]);
+  const handleBlockUser = useCallback(
+    async (userId: string): Promise<boolean> => {
+      try {
+        await blockUser(userId);
+      } catch (error) {
+        setAppError(
+          error instanceof Error ? error.message : "Failed to block that person",
+        );
+        return false;
+      }
+      // The block landed: say so now. A slow refresh never holds the report
+      // dialog's confirmation.
+      void refreshAfterBlock();
       return true;
     },
-    [loadBlocks, loadConversations],
+    [refreshAfterBlock],
   );
   // Stable, so the memoized message list keeps its memo: the row's Bloquear
   // and the channel intro's two buttons (`channel-intro.tsx`).
