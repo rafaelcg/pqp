@@ -68,7 +68,8 @@ runs:
         # Resolve the CLI as the runner user (pnpm may not be on root's PATH),
         # then run it as root under `timeout`: a timeout started by the runner
         # user cannot signal the root apt-get that actually holds the download.
-        pw="$(pnpm --filter @pqp/client exec sh -c 'command -v playwright' | tail -n1)"
+        # pnpm runs it from client/ and the PATH entry is relative, so make it absolute.
+        pw="$(pnpm --filter @pqp/client exec sh -c 'cd "$(dirname "$(command -v playwright)")" && printf "%s/playwright" "$PWD"' | tail -n1)"
         echo "playwright cli: $pw"
         if [ ! -x "$pw" ]; then
           echo "::error::could not resolve the playwright CLI (got '$pw')"
