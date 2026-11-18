@@ -80,6 +80,20 @@ describeDb("search filters", () => {
     expect(await find({ channelId: general, authorId: bia.id })).toEqual([b]);
   });
 
+  it("never returns another server's messages for an author filter", async () => {
+    // Bia also posts in a server Ana shares with her; neither filter may reach it.
+    const elsewhere = await createServer("Outro", bia.id);
+    const otherGeneral = elsewhere.channels.find((c) => c.type === "text")!.id;
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING`,
+      [elsewhere.server.id, ana.id],
+    );
+    const here = await post(general, bia.id, "o mapa daqui");
+    await post(otherGeneral, bia.id, "o mapa de lá");
+    expect(await find({ authorId: bia.id })).toEqual([here]);
+    expect(await find({ authorId: bia.id, channelId: otherGeneral })).toEqual([]);
+  });
+
   it("finds links, images and files apart", async () => {
     const link = await post(general, ana.id, "mapa: https://drive.example/x");
     const image = await post(general, ana.id, "mapa em foto");
