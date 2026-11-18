@@ -98,7 +98,7 @@ export async function loadLocale(locale: Locale): Promise<void> {
 }
 
 export function translateMessage(key: MessageKey, vars?: MessageVars): string {
-  const result = i18n.t(String(key), vars);
+  const result = i18n.t(String(key), vars ?? {});
   return typeof result === "string" ? result : String(result);
 }
 
