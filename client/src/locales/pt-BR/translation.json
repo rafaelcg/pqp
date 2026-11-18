@@ -5121,7 +5121,7 @@
   "search.countMore_one": "{count}+ resultado",
   "search.countMore_other": "{count}+ resultados",
   "search.typeMore": "Escreve pelo menos duas letras.",
-  "search.needScope": "Escolhe um canal ou um autor pra buscar só pelos filtros.",
+  "search.needWords": "Escreve uma palavra pra buscar com esses filtros.",
   "search.failed": "Não deu pra buscar agora.",
   "search.nothing": "Nada achado. Tenta outra palavra ou tira um filtro.",
   "search.footer": "Enter abre o primeiro · ↑ ↓ entre os resultados",

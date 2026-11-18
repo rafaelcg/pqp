@@ -126,18 +126,6 @@ export interface SearchFilters {
   tz?: number;
 }
 
-/**
- * Whether a search may run with no words. Only a channel or an author, the two
- * scopes with an index to seek, so a bare filter such as `has=link` cannot scan
- * a server's whole history.
- */
-export function canSearchWithoutWords(filters: SearchFilters): boolean {
-  return Boolean(filters.channelId || filters.authorId);
-}
-
-/** How many newest messages a search with no words looks at per page. */
-export const SEARCH_WINDOW = 2000;
-
 export const SEARCH_HAS = ["link", "image", "file"] as const;
 export type SearchHas = (typeof SEARCH_HAS)[number];
 
@@ -206,7 +194,6 @@ export async function searchMessages(
   limit: number,
   cursor?: SearchCursor,
   filters: SearchFilters = {},
-  windowSize: number = SEARCH_WINDOW,
 ): Promise<MessageSearchResponse> {
   const params: unknown[] = [
     serverId,
@@ -220,66 +207,13 @@ export async function searchMessages(
     SEARCH_HIGHLIGHT_OPEN,
   ];
 
-  // No words: the filters are the search, newest first, no text match.
-  const textless = query.trim() === "";
-  const rankExpr = textless ? "0::real" : "ts_rank_cd(m.search_tsv, q.query)";
-
   let cursorClause = "";
   if (cursor) {
     // Row comparison against the same expression the ordering uses: comparing
     // rank alone would drop every equally-ranked message after the first page.
-    cursorClause = `AND (${rankExpr}, m.created_at, m.id)
+    cursorClause = `AND (ts_rank_cd(m.search_tsv, q.query), m.created_at, m.id)
         < ($7::real, $8::timestamptz, $9::uuid)`;
     params.push(cursor.rank, cursor.createdAt, cursor.id);
-  }
-
-  // No words: read a bounded window of the newest candidates through the
-  // channel or author index first, then filter only those.
-  let windowIds: string[] | null = null;
-  let windowOldest: { createdAt: string; id: string } | null = null;
-  if (textless) {
-    if (!canSearchWithoutWords(filters)) {
-      throw new Error("A search with no words needs a channel or an author");
-    }
-    const wp: unknown[] = [windowSize];
-    const wbind = (value: unknown) => {
-      wp.push(value);
-      return `$${wp.length}`;
-    };
-    const seek = cursor
-      ? `AND (m.created_at, m.id) < (${wbind(cursor.createdAt)}::timestamptz, ${wbind(cursor.id)}::uuid)`
-      : "";
-    const windowSql = filters.channelId
-      ? `SELECT t.id, to_char(t.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_cursor
-         FROM (
-           SELECT x.id, x.created_at
-           FROM channels ch
-           CROSS JOIN LATERAL (
-             SELECT m.id, m.created_at FROM messages m
-             WHERE m.channel_id = ch.id ${seek}
-             ORDER BY m.created_at DESC, m.id DESC
-             LIMIT $1
-           ) x
-           WHERE ch.server_id = ${wbind(serverId)}
-             AND (ch.id = ${wbind(filters.channelId)}::uuid
-                  OR (ch.type = 'thread' AND ch.parent_id = ${wbind(filters.channelId)}::uuid))
-         ) t
-         ORDER BY t.created_at DESC, t.id DESC
-         LIMIT $1`
-      : `SELECT m.id, to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_cursor
-         FROM messages m
-         WHERE m.author_id = ${wbind(filters.authorId)}::uuid ${seek}
-         ORDER BY m.created_at DESC, m.id DESC
-         LIMIT $1`;
-    const win = await getPool().query<{ id: string; created_at_cursor: string }>(windowSql, wp);
-    windowIds = win.rows.map((row) => row.id);
-    if (win.rows.length >= windowSize) {
-      const oldest = win.rows[win.rows.length - 1]!;
-      windowOldest = { createdAt: oldest.created_at_cursor, id: oldest.id };
-    }
-    if (windowIds.length === 0) {
-      return { hasMore: false, nextCursor: null, results: [] };
-    }
   }
 
   // Each filter appends its own parameter, so the numbering follows whatever
@@ -289,9 +223,6 @@ export async function searchMessages(
     params.push(value);
     return `$${params.length}`;
   };
-  if (windowIds) {
-    filterClauses.push(`AND m.id = ANY(${bind(windowIds)}::uuid[])`);
-  }
   if (filters.channelId) {
     const id = bind(filters.channelId);
     filterClauses.push(`AND (m.channel_id = ${id}::uuid OR (c.type = 'thread' AND c.parent_id = ${id}::uuid))`);
@@ -342,14 +273,14 @@ export async function searchMessages(
               u.username AS author_username,
               u.discriminator AS author_discriminator,
               u.avatar_url AS author_avatar_url,
-              ${rankExpr} AS rank
+              ts_rank_cd(m.search_tsv, q.query) AS rank
        FROM messages m
        CROSS JOIN q
        JOIN channels c ON c.id = m.channel_id
        JOIN users u ON u.id = m.author_id
        JOIN server_members sm ON sm.server_id = c.server_id AND sm.user_id = $2
        WHERE c.server_id = $1
-         ${textless ? "" : "AND m.search_tsv @@ q.query"}
+         AND m.search_tsv @@ q.query
          AND ${VISIBLE_CHANNEL}
          ${cursorClause}
          ${filterClauses.join("\n         ")}
@@ -365,26 +296,21 @@ export async function searchMessages(
             -- because that one renders in the session's TimeZone.
             to_char(h.created_at AT TIME ZONE 'UTC',
                     'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_cursor,
-            CASE WHEN $3 = '' THEN left(h.body, 160)
-                 ELSE pqp_search_headline(h.body, q.query, $5, $6) END AS snippet
+            pqp_search_headline(h.body, q.query, $5, $6) AS snippet
      FROM hits h
      CROSS JOIN q
      ORDER BY h.rank DESC, h.created_at DESC, h.id DESC`,
     params,
   );
 
-  const overflow = result.rows.length > limit;
+  const hasMore = result.rows.length > limit;
   const rows = result.rows.slice(0, limit);
   const last = rows[rows.length - 1];
-  // A full window with no more results than a page: the next window may hold more.
-  const nextWindow = !overflow && windowOldest !== null;
-  const hasMore = overflow || nextWindow;
 
   return {
     hasMore,
-    nextCursor: nextWindow
-      ? encodeCursor({ rank: 0, createdAt: windowOldest!.createdAt, id: windowOldest!.id })
-      : overflow && last
+    nextCursor:
+      hasMore && last
         ? encodeCursor({
             rank: last.rank,
             // NOT `last.created_at.toISOString()`: that is a `Date`, and a
