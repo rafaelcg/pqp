@@ -178,6 +178,7 @@ function SearchPanel({
   const [hasMore, setHasMore] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
   const [active, setActive] = useState(0);
+  const [suggestionActive, setSuggestionActive] = useState(0);
   const dateId = useId();
 
   const prefixes: SearchChipPrefixes = useMemo(
@@ -250,6 +251,8 @@ function SearchPanel({
     return [...byChannel.entries()];
   }, [results]);
   const ordered = useMemo(() => groups.flatMap(([, group]) => group.rows), [groups]);
+  // While a newer query loads, the old page is not on screen: nothing to open.
+  const shown = status === "ready" ? ordered : [];
 
   const openResult = useCallback(
     (result: MessageSearchResult) => {
@@ -307,6 +310,9 @@ function SearchPanel({
       return [];
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [token?.kind, token?.partial, members, channels, t]);
+  useEffect(() => {
+    setSuggestionActive(0);
+  }, [token?.kind, token?.partial]);
   const dateToken = token && (token.kind === "antes" || token.kind === "depois") ? token.kind : null;
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
@@ -317,16 +323,22 @@ function SearchPanel({
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       const step = event.key === "ArrowDown" ? 1 : -1;
-      setActive((current) => Math.max(0, Math.min(ordered.length - 1, current + step)));
+      // A half-typed filter's list comes first: the arrows pick among it.
+      if (suggestions.length > 0) {
+        setSuggestionActive((current) => Math.max(0, Math.min(suggestions.length - 1, current + step)));
+        return;
+      }
+      setActive((current) => Math.max(0, Math.min(shown.length - 1, current + step)));
       return;
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      if (suggestions[0]) {
-        placeChip(suggestions[0].chip);
+      const suggestion = suggestions[suggestionActive] ?? suggestions[0];
+      if (suggestion) {
+        placeChip(suggestion.chip);
         return;
       }
-      const target = ordered[active];
+      const target = shown[active];
       if (target) {
         openResult(target);
       }
@@ -338,7 +350,12 @@ function SearchPanel({
   const optionClass =
     "inline-flex h-7 items-center rounded-full border border-[color:var(--input-border)] px-2.5 text-xs font-medium text-text-secondary hover:border-[color:var(--input-hover-border)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
 
-  const activeId = ordered[active] ? `header-search-${ordered[active]!.messageId}` : undefined;
+  const activeSuggestion = suggestions[suggestionActive];
+  const activeId = activeSuggestion
+    ? `header-search-suggestion-${activeSuggestion.key}`
+    : shown[active]
+      ? `header-search-${shown[active]!.messageId}`
+      : undefined;
 
   return (
     <>
@@ -365,7 +382,7 @@ function SearchPanel({
           placeholder={chips.length ? undefined : t("chrome.searchMessages")}
           aria-label={t("chrome.searchMessages")}
           role="combobox"
-          aria-expanded={ordered.length > 0}
+          aria-expanded={shown.length > 0 || suggestions.length > 0}
           aria-controls={LIST_ID}
           aria-activedescendant={activeId}
           className="min-w-[8rem] flex-1 bg-transparent text-sm text-text placeholder:text-text-tertiary focus-visible:outline-none"
@@ -400,11 +417,13 @@ function SearchPanel({
             suggestions.map((item, index) => (
               <button
                 key={item.key}
+                id={`header-search-suggestion-${item.key}`}
                 type="button"
                 onClick={() => placeChip(item.chip)}
+                onMouseEnter={() => setSuggestionActive(index)}
                 className={cn(
                   "flex w-full items-center gap-2.5 px-3.5 py-1.5 text-left text-sm hover:bg-[color:var(--list-row-hover)]",
-                  index === 0 && "bg-[color:var(--list-row-hover)]",
+                  index === suggestionActive && "bg-[color:var(--list-row-hover)]",
                 )}
               >
                 {item.avatar ? (
