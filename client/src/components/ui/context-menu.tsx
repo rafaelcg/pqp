@@ -9,7 +9,9 @@ import {
   type ComponentType,
   type ReactNode,
 } from "react";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 import { horizontalShiftIntoView } from "@/lib/context-menu-placement";
+import { isRedesignOn } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 import {
   MENU_SURFACE,
@@ -88,7 +90,29 @@ interface ContextMenuProps {
   moreReactionsLabel?: string;
   children: ReactNode;
   disabled?: boolean;
+  /**
+   * The menu stays mounted but its trigger hears nothing: no right-click and
+   * no long-press timer. For a menu nested in another menu's trigger that
+   * must let a press through to the outer one (an image inside a message row,
+   * for a finger). Unlike `disabled` it does not change the tree, so it can
+   * flip in the middle of a press without remounting the child.
+   */
+  triggerDisabled?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Under the redesign, below `sm`, the menu rises from the bottom edge as a
+   * sheet instead of floating at the finger (the text channels canvas,
+   * "Segurando uma mensagem"). The rule lives in index.css, on
+   * `[data-sheet-on-phone]`, because Radix positions the wrapper inline.
+   */
+  sheetOnPhone?: boolean;
+  /**
+   * The thing the sheet acts on, lifted above it on a phone (the canvas's
+   * held message). Drawn only by the sheet rule; the caller passes it only
+   * when the sheet applies. A copy of what is on the page, so hidden from
+   * assistive tech.
+   */
+  phonePreview?: ReactNode;
 }
 
 /** Keeps the menu clear of the very edge of the window on every side. */
@@ -102,7 +126,10 @@ export function ContextMenu({
   moreReactionsLabel,
   children,
   disabled = false,
+  triggerDisabled = false,
   onOpenChange,
+  sheetOnPhone = false,
+  phonePreview,
 }: ContextMenuProps) {
   // Radix anchors the menu to a zero-size rect at the pointer, which is right —
   // but it hardcodes `side="right" align="start"`, so floating-ui handles
@@ -185,6 +212,26 @@ export function ContextMenu({
     setAlignOffset(openAbove ? -height : 0);
   }, []);
 
+  // The sheet rises under the cursor that asked for it, where a floating menu
+  // opens beside it. Radix selects whatever item a button is let go over, so
+  // on a narrow window the release of the right-click that opened the sheet
+  // chose a row nobody pressed ("Excluir" sits in that list). The press that
+  // opened the sheet is spent: its release selects nothing. A finger never
+  // gets here, since its release goes to the row it went down on.
+  const openingPressRef = useRef(false);
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      openingPressRef.current =
+        open &&
+        sheetOnPhone &&
+        isRedesignOn() &&
+        typeof window !== "undefined" &&
+        (window.matchMedia?.(BELOW_SM_QUERY).matches ?? false);
+      onOpenChange?.(open);
+    },
+    [onOpenChange, sheetOnPhone],
+  );
+
   const strip = reactions ?? [];
   const hasStrip = strip.length > 0;
   if (disabled || (items.length === 0 && !hasStrip)) {
@@ -192,12 +239,13 @@ export function ContextMenu({
   }
 
   return (
-    <ContextMenuPrimitive.Root onOpenChange={onOpenChange}>
+    <ContextMenuPrimitive.Root onOpenChange={handleOpenChange}>
       {/* Radix composes these with its own handlers, so the coordinates
           recorded here are exactly the ones it anchors to — for a right-click
           and for the touch long-press alike. */}
       <ContextMenuPrimitive.Trigger
         asChild
+        disabled={triggerDisabled}
         onContextMenu={recordPointer}
         onPointerDown={recordPointer}
       >
@@ -212,6 +260,7 @@ export function ContextMenu({
           // Named so a test can address the open menu and its rows without
           // matching on translated labels.
           data-context-menu=""
+          data-sheet-on-phone={sheetOnPhone ? "" : undefined}
           // `animate-fade-in` rather than `animate-rise`: the latter animates
           // `translateY(14px)` over 650ms, so the menu spends half a second
           // visibly detached from the point it is anchored to.
@@ -224,7 +273,23 @@ export function ContextMenu({
             hasStrip ? "min-w-[16.5rem]" : "min-w-[11.5rem]",
           )}
           onCloseAutoFocus={(e) => e.preventDefault()}
+          // A press that starts inside the sheet is a new one, and counts.
+          onPointerDownCapture={() => {
+            openingPressRef.current = false;
+          }}
+          onPointerUpCapture={(event) => {
+            if (openingPressRef.current) {
+              openingPressRef.current = false;
+              // Radix's own handler on the item skips a prevented event.
+              event.preventDefault();
+            }
+          }}
         >
+          {sheetOnPhone && phonePreview && (
+            <div data-sheet-preview="" aria-hidden className="hidden">
+              {phonePreview}
+            </div>
+          )}
           {hasStrip && (
             <>
               {/* ONE ROW. `flex` with no wrapping and equal-basis cells is the

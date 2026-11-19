@@ -13,6 +13,8 @@ import {
   MoreHorizontal,
   PhoneOff,
   PictureInPicture2,
+  Pin,
+  PinOff,
   ScreenShare,
   ScreenShareOff,
   Music,
@@ -31,6 +33,8 @@ import {
   MusicNotes,
   PhoneDisconnect,
   PictureInPicture,
+  PushPin,
+  PushPinSlash,
   ShieldSlash,
   VideoCamera,
   VideoCameraSlash,
@@ -190,6 +194,8 @@ import {
   listenersOf,
   listenerStripSlots,
   planRoomStage,
+  planRoomFocus,
+  MUSIC_SHRUNK_PIN,
   planStage,
   screensDrawnOnStage,
   stageGridColumns,
@@ -210,7 +216,7 @@ import {
   type StageOccupantModeration,
 } from "@/components/voice/room-card-menu";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
-import { MusicStagePanel } from "@/components/voice/music-stage-panel";
+import { MusicRoomCard, MusicStagePanel } from "@/components/voice/music-stage-panel";
 import {
   showsVideoQualityControl,
   videoQualityMenuOpen,
@@ -286,7 +292,7 @@ import {
   requestSettingsSection,
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
-import { toggleMusicOpen, useMusicDock } from "@/lib/music-store";
+import { setMusicOpen, toggleMusicOpen, useMusicDock } from "@/lib/music-store";
 import { isAutomatedBrowser } from "@/lib/hints";
 import { SoundboardControl } from "@/components/voice/soundboard-control";
 import {
@@ -1966,22 +1972,115 @@ function ActiveCall({
   // and its mount tells App to leave the composer's bar out. Not collapsed or
   // hidden, where the composer is the only place left to show it. A share
   // keeps the space, so with one on the stage the music stays in the
-  // composer's bar (no strip beside the share yet). The clip on the stage
-  // (`placement: "stage"`) is not this: `roomView` already hands it the stage.
+  // composer's bar (no strip beside the share yet). The video on the stage
+  // (`placement: "stage"`) is the panel too, with the video where the cover
+  // was: drawn as a picture of its own it sent the controls to the chat.
   const stageMusic = useMusicDock();
-  const musicPanel =
+  const musicShown =
     roomStage &&
     !collapsed &&
     !stageHidden &&
-    roomPlan.screens.length === 0 &&
-    (stageMusic.on || stageMusic.open);
+    (stageMusic.on || stageMusic.open || musicOnStage);
+  // The shares only: the music is its own candidate below, never a grid tile.
+  const roomShares = roomPlan.screens.filter((tile) => tile.kind === "screen");
+  // WHICH TILE IS THE MAIN ONE. Any camera, share or the music can be pinned
+  // to the space above the cards, for this viewer; the rest become cards in
+  // the row. Unpinned: a share, then the music, then the room of cards.
+  const roomFocus = planRoomFocus({
+    pinnedTileId,
+    shareIds: roomShares.map((tile) => tile.id),
+    cameraIds: allPeople
+      .filter((person) => person.stream != null)
+      .map((person) => cameraSoloId(person.key)),
+    music: musicShown,
+    musicId: MUSIC_STAGE_TILE_ID,
+  });
+  const musicPanel = roomStage && roomFocus.kind === "music";
+  // The music in the row, as a card, while something else is the main one.
+  const musicCard = musicShown && !musicPanel;
+  const focusedCamera =
+    roomFocus.kind === "camera"
+      ? (allPeople.find(
+          (person) => cameraSoloId(person.key) === roomFocus.id,
+        ) ?? null)
+      : null;
+  // Shares that are not the main one go in the row too, as cards.
+  const rowShares =
+    roomFocus.kind === "share"
+      ? roomShares.filter(
+          (tile) => roomFocus.id !== null && tile.id !== roomFocus.id,
+        )
+      : roomShares;
+  const stageShares =
+    roomFocus.kind === "share"
+      ? roomFocus.id === null
+        ? roomShares
+        : roomShares.filter((tile) => tile.id === roomFocus.id)
+      : [];
   // Our own camera beside exactly one other picture is the floating preview
   // on the ordinary stage (`selfPreview`). The room stage has no floating
-  // preview: our camera is our card, like everybody else's.
-  const roomCameraKeys =
+  // preview: our camera is our card, like everybody else's. The pinned
+  // camera is on the stage, so its owner's card is a plain card.
+  const roomCameraKeys = new Set(
     stage.selfPreview && self?.stream
-      ? new Set([...roomPlan.cameraKeys, self.key])
-      : roomPlan.cameraKeys;
+      ? [...roomPlan.cameraKeys, self.key]
+      : roomPlan.cameraKeys,
+  );
+  if (focusedCamera) {
+    roomCameraKeys.delete(focusedCamera.key);
+  }
+  // The first real camera in the row carries the stage's primary video
+  // (iPhone fullscreen hands that one over). Not RoomCards' `first`: the
+  // music card and row shares come before the people.
+  const firstRowCameraKey =
+    stageShares.length === 0 && !focusedCamera
+      ? (allPeople.find((person) => roomCameraKeys.has(person.key))?.key ?? null)
+      : null;
+  // A shrunk player stays shrunk across songs, like any pin, until the card
+  // is pressed or the queue is opened. Opening the queue (the dock's music
+  // button, or the sidebar player before this stage mounted) is asking to see
+  // it, so the music takes the stage back from whatever was pinned. Pinning
+  // something else over an open queue closes it, so the dock button never
+  // spends a press closing a queue nobody can see. Closing the queue gives
+  // the stage back to what it took it from (a share, a pinned camera), unless
+  // the viewer pinned something else meanwhile.
+  const queueOpen = stageMusic.open;
+  const pinnedForQueue = useRef(false);
+  // The pin the queue replaced, or undefined when it replaced nothing.
+  const pinBeforeQueue = useRef<string | null | undefined>(undefined);
+  const musicPanelWas = useRef(musicPanel);
+  useEffect(() => {
+    const panelLeft = musicPanelWas.current && !musicPanel;
+    musicPanelWas.current = musicPanel;
+    if (!queueOpen) {
+      const before = pinBeforeQueue.current;
+      pinnedForQueue.current = false;
+      pinBeforeQueue.current = undefined;
+      if (before !== undefined && pinnedTileId === MUSIC_STAGE_TILE_ID) {
+        setPin(before);
+      }
+      return;
+    }
+    if (!roomStage) {
+      return;
+    }
+    if (!pinnedForQueue.current) {
+      pinnedForQueue.current = true;
+      if (!musicPanel) {
+        // A shrunk player is not given back: opening the queue ends the shrink.
+        pinBeforeQueue.current =
+          pinnedTileId === MUSIC_SHRUNK_PIN ? undefined : pinnedTileId;
+        setPin(MUSIC_STAGE_TILE_ID);
+      }
+      return;
+    }
+    // Only a pin of something else: a share taking the space keeps the queue,
+    // which then lives in the composer's bar.
+    if (panelLeft && pinnedTileId !== null && pinnedTileId !== MUSIC_STAGE_TILE_ID) {
+      setMusicOpen(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queueOpen, roomStage, musicPanel, pinnedTileId]);
   const stripDrawn =
     !roomStage &&
     showStrip &&
@@ -2311,10 +2410,12 @@ function ActiveCall({
 
   // A pin is now "make that tile the wide one", not a second layout: the
   // stage is a grid either way, and the pinned tile takes the whole first row.
+  const setPin = (tileId: string | null) => {
+    setPinnedTileId(tileId);
+    rememberStagePinnedKey(channelId, tileId);
+  };
   const togglePin = (tileId: string) => {
-    const next = pinnedTileId === tileId ? null : tileId;
-    setPinnedTileId(next);
-    rememberStagePinnedKey(channelId, next);
+    setPin(pinnedTileId === tileId ? null : tileId);
   };
   const toggleCameraFullscreen = (key: string) => {
     fullscreen.toggleScreen(cameraSoloId(key));
@@ -2675,7 +2776,13 @@ function ActiveCall({
    * redesign's room stage draws only the shares here and keeps cameras in
    * their owners' cards (`planRoomStage`).
    */
-  const stageGrid = (gridTiles: typeof staged.tiles, gridFeatured: boolean) => {
+  const stageGrid = (
+    gridTiles: typeof staged.tiles,
+    gridFeatured: boolean,
+    // The room stage: a share can be pinned over the music and the cameras
+    // even when it is the only picture, and a pinned one can be unpinned.
+    roomPins = false,
+  ) => {
     const columns = stageGridColumns(gridTiles.length, wide);
     const clickFull = tileClickFullscreens(gridTiles.length);
     return (
@@ -2760,7 +2867,7 @@ function ActiveCall({
                     fullscreen.toggleScreen(screenTile.peerId);
                   }}
                   onPin={
-                    gridTiles.length > 1
+                    gridTiles.length > 1 || roomPins
                       ? () => togglePin(tile.id)
                       : undefined
                   }
@@ -3080,16 +3187,90 @@ function ActiveCall({
               youLabel={t("voice.tile.you")}
               menuFor={roomCardMenuFor}
               stage={
-                roomPlan.screens.length > 0 ? (
-                  stageGrid(roomPlan.screens, false)
-                ) : musicPanel ? (
-                  <MusicStagePanel channelId={channelId} voiceState={voiceState} />
+                musicPanel ? (
+                  <MusicStagePanel
+                    channelId={channelId}
+                    voiceState={voiceState}
+                    onToggleFullscreen={() => fullscreen.toggleScreen(MUSIC_STAGE_TILE_ID)}
+                    onShrink={() => setPin(MUSIC_SHRUNK_PIN)}
+                  />
+                ) : focusedCamera ? (
+                  <ul className="h-full w-full">
+                    <CameraTile
+                      person={focusedCamera}
+                      videoRef={primaryVideoRef}
+                      youLabel={t("voice.tile.you")}
+                      rounded
+                      onToggleFullscreen={() => toggleCameraFullscreen(focusedCamera.key)}
+                      onPin={() => togglePin(cameraSoloId(focusedCamera.key))}
+                      pinned
+                      hidden={cameraHideControl(focusedCamera)}
+                      className="h-full w-full"
+                    />
+                  </ul>
+                ) : stageShares.length > 0 ? (
+                  stageGrid(stageShares, false, true)
                 ) : undefined
               }
-              people={allPeople.map((person) =>
-                roomCardEntry(person, roomCameraKeys.has(person.key)),
-              )}
-              renderCamera={(entry, style, className, first) => {
+              people={[
+                ...(musicCard ? [roomTileEntry(MUSIC_STAGE_TILE_ID)] : []),
+                ...rowShares.map((tile) => roomTileEntry(roomShareKey(tile.id))),
+                ...allPeople.map((person) =>
+                  roomCardEntry(person, roomCameraKeys.has(person.key)),
+                ),
+              ]}
+              renderCamera={(entry, style, className) => {
+                if (entry.key === MUSIC_STAGE_TILE_ID) {
+                  return (
+                    <MusicRoomCard
+                      key={entry.key}
+                      channelId={channelId}
+                      voiceState={voiceState}
+                      style={style}
+                      className={className}
+                      onExpand={() => setPin(MUSIC_STAGE_TILE_ID)}
+                    />
+                  );
+                }
+                const shareId = roomShareId(entry.key);
+                if (shareId !== null) {
+                  const screenTile = screenTiles.find(
+                    (candidate) => candidate.peerId === shareId,
+                  );
+                  if (!screenTile) {
+                    return null;
+                  }
+                  return (
+                    <li
+                      key={entry.key}
+                      style={style}
+                      className={cn(
+                        className,
+                        "relative min-h-0 overflow-hidden rounded-xl bg-black",
+                        CALL_TILE_REDESIGN.rounded,
+                      )}
+                    >
+                      <ScreenTileFrame
+                        tile={screenTile}
+                        isFullscreen={false}
+                        showName
+                        onToggleFullscreen={() => {
+                          onFocusScreenShare?.(screenTile.peerId);
+                          fullscreen.toggleScreen(screenTile.peerId);
+                        }}
+                        onPin={() => togglePin(shareId)}
+                        pinned={false}
+                        registerPipVideo={registerPipVideo}
+                        audio={shareAudioControl(screenTile)}
+                        dismissed={shareDismissControl(screenTile)}
+                        className="h-full w-full"
+                        mediaTitle={title}
+                        communityName={serverName}
+                        coverUrl={serverIconUrl}
+                      />
+                    </li>
+                  );
+                }
                 const person = allPeople.find(
                   (candidate) => candidate.key === entry.key,
                 );
@@ -3103,13 +3284,12 @@ function ActiveCall({
                     // The first picture is the stage's primary video when
                     // no share took that slot.
                     videoRef={
-                      first && roomPlan.screens.length === 0
-                        ? primaryVideoRef
-                        : undefined
+                      person.key === firstRowCameraKey ? primaryVideoRef : undefined
                     }
                     youLabel={t("voice.tile.you")}
                     rounded
                     onToggleFullscreen={() => toggleCameraFullscreen(person.key)}
+                    onPin={() => togglePin(cameraSoloId(person.key))}
                     hidden={cameraHideControl(person)}
                     style={style}
                     className={className}
@@ -4790,6 +4970,7 @@ function TileOverlay({
   insets?: VideoInsets;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const [moreOpen, setMoreOpen] = useState(false);
   useReportTileMenu(moreOpen);
   const isWakePress = useContext(WakePressContext);
@@ -4801,7 +4982,7 @@ function TileOverlay({
   const moreItems = cameraTileMoreItems(t, {
     name,
     fit,
-    pin: onPin ? { pinned, onToggle: onPin } : undefined,
+    pin: onPin && !redesign ? { pinned, onToggle: onPin } : undefined,
     soundboard: audio?.soundboardUserId
       ? {
           muted: soundboardMuted,
@@ -4860,6 +5041,7 @@ function TileOverlay({
           revealed,
         )}
       >
+        {onPin && redesign && <TilePinButton name={name} pinned={pinned} onToggle={onPin} />}
         {moreItems.length > 0 && (
           <Menu
             items={moreItems}
@@ -4904,6 +5086,47 @@ function TileOverlay({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Pin, as its own button beside "⋯" on a camera or a share: making a picture
+ * the main one is the thing people come to a tile for, so it is one press,
+ * the way Google Meet puts it on the tile. Pressed while pinned, it unpins.
+ */
+function TilePinButton({
+  name,
+  pinned,
+  onToggle,
+}: {
+  name: string;
+  pinned: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useTranslation();
+  const label = pinned ? t("call.stage.unpin") : t("call.stage.pin", { name });
+  return (
+    <Tooltip label={label} side="top" align="end">
+      <button
+        type="button"
+        data-testid="tile-pin"
+        aria-label={label}
+        aria-pressed={pinned}
+        className={cn(
+          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
+          pinned && "text-signal",
+          TILE_BUTTON_REDESIGN,
+          pinned && "redesign:text-accent",
+        )}
+        onClick={onToggle}
+      >
+        {pinned ? (
+          <IconSwap off={PinOff} on={PushPinSlash} offClassName="h-3.5 w-3.5" className="h-4 w-4" />
+        ) : (
+          <IconSwap off={Pin} on={PushPin} offClassName="h-3.5 w-3.5" className="h-4 w-4" />
+        )}
+      </button>
+    </Tooltip>
   );
 }
 
@@ -5211,6 +5434,36 @@ function TileClickTarget({
  * so a lobby of 200 is still one screen.
  */
 /** A stage person as a room card (`room-cards.tsx`). */
+/** A share in the card row: its own key, never a person's (`peerId`). */
+const ROOM_SHARE_PREFIX = "room-share:";
+function roomShareKey(tileId: string): string {
+  return `${ROOM_SHARE_PREFIX}${tileId}`;
+}
+function roomShareId(key: string): string | null {
+  return key.startsWith(ROOM_SHARE_PREFIX) ? key.slice(ROOM_SHARE_PREFIX.length) : null;
+}
+
+/**
+ * A tile that is not a person (the music, a share) as a cell in the card row.
+ * `camera` sends it through `renderCamera`, so it takes a card's size and
+ * place like a camera does.
+ */
+function roomTileEntry(key: string): RoomCardEntry {
+  return {
+    key,
+    name: "",
+    avatarUrl: null,
+    speaking: false,
+    muted: false,
+    deafened: false,
+    serverMuted: false,
+    handPosition: null,
+    connecting: false,
+    isSelf: false,
+    camera: true,
+  };
+}
+
 function roomCardEntry(person: StagePerson, camera: boolean): RoomCardEntry {
   return {
     key: person.key,
@@ -5888,6 +6141,7 @@ export function ScreenTileFrame({
   coverUrl?: string | null;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const [moreOpen, setMoreOpen] = useState(false);
   useReportTileMenu(moreOpen);
   const isWakePress = useContext(WakePressContext);
@@ -5994,7 +6248,7 @@ export function ScreenTileFrame({
     // An HLS player carries its own fill switch beside its quality and
     // volume, so the tile's "⋯" does not offer a second one.
     fit: hideSelfPreview || useHls ? undefined : fit,
-    pin: onPin ? { pinned, onToggle: onPin } : undefined,
+    pin: onPin && !redesign ? { pinned, onToggle: onPin } : undefined,
     soundboard:
       audio?.soundboardUserId && !tile.isSelf
         ? {
@@ -6025,6 +6279,13 @@ export function ScreenTileFrame({
       </button>
     </Menu>
   );
+  const pinButton = onPin && redesign ? (
+    <TilePinButton
+      name={tile.isSelf ? t("voice.share.yourScreen") : tile.presenterName}
+      pinned={pinned}
+      onToggle={onPin}
+    />
+  ) : null;
   const pipButton = pip.available ? (
     <Tooltip label={t("voice.hls.pip")} side="top" align="end">
       <button
@@ -6118,6 +6379,7 @@ export function ScreenTileFrame({
               data-call-chrome="tile"
               className={cn("flex items-center gap-1", revealed, TILE_CONTROLS_FADE)}
             >
+              {pinButton}
               {moreButton}
               {fullscreenButton}
             </span>
@@ -6193,6 +6455,7 @@ export function ScreenTileFrame({
             data-tile-fit={fit.fit}
             className={cn("pointer-events-auto flex shrink-0 items-center gap-1.5", revealed)}
           >
+            {pinButton}
             {moreButton}
             {pipButton}
             {fullscreenButton}

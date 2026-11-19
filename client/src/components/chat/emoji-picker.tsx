@@ -6,6 +6,7 @@ import {
   EMOJI_PICKER_SIZE,
   placeAnchoredPanel,
 } from "@/lib/anchored-panel";
+import { isRedesignOn } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 import { POPOVER_SURFACE } from "@/components/ui/popover";
 
@@ -70,6 +71,12 @@ export function EmojiPickerPanel({
     }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        // This Escape is spent: the unread strip and other layers skip it.
+        // Only under the redesign, where the strip is; the old look's layers
+        // each still hear it.
+        if (isRedesignOn()) {
+          event.preventDefault();
+        }
         onClose?.();
       }
     }

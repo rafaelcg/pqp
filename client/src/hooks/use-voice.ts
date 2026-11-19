@@ -27,6 +27,7 @@ import {
 } from "@/lib/deafen-mute";
 import { publishLiveReactions } from "@/lib/live-reactions";
 import { notifyIncomingCall } from "@/lib/notifications";
+import { endRadioSeat } from "@/lib/music-prefs";
 import { receiveMusic, setMusicSession } from "@/lib/music-store";
 import {
   isSoundboardUserMuted,
@@ -6919,6 +6920,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       // The person hung up: whatever the card's rejoin was doing, the next
       // call is a new one with a tally of its own.
       audioHealthCarryOverUntil = 0;
+      // And the next seat in this call gets the Rádio's invite again.
+      endRadioSeat();
       leaveCall();
     },
 

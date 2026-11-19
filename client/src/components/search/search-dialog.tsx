@@ -347,7 +347,7 @@ export function SearchDialog({
  * Matched terms arrive delimited rather than as markup, so the highlight is
  * built from elements here and server text is never interpreted as HTML.
  */
-function Snippet({ snippet }: { snippet: string }) {
+export function Snippet({ snippet }: { snippet: string }) {
   return (
     <>
       {parseSearchSnippet(snippet).map((segment, index) =>

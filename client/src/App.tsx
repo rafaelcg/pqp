@@ -53,6 +53,8 @@ import {
   WhatsNewView,
 } from "@/components/deferred-panels";
 import { Menu as ActionMenu } from "@/components/ui/menu";
+import { ChannelBellButton, ChannelMoreButton, ChannelPinsButton } from "@/components/chat/channel-header-tools";
+import { TypingLine } from "@/components/chat/typing-line";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { createPortal } from "react-dom";
@@ -165,6 +167,7 @@ import {
   type ProfileWatchPartyContext,
 } from "@/components/user/user-profile-popover";
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
+import { HeaderSearch } from "@/components/search/header-search";
 import { ServerRail } from "@/components/layout/server-rail";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { NotifyOfferHint } from "@/components/layout/notify-offer-hint";
@@ -840,6 +843,10 @@ export type TokenResolver = (options?: {
 }) => Promise<string | null>;
 
 /** Equal-width icon tiles in the chat header (pins, channel settings, call, roster). */
+/** Apple keyboards label the same chord differently. */
+const IS_APPLE_KEYBOARD =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent);
+
 const HEADER_ACTION_TILE = cn(
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper",
   PANE_HEADER_ACTION_REDESIGN,
@@ -2120,6 +2127,7 @@ function MainAppContent({
       kind: "message",
       messageId: message.id,
       subjectName: message.authorName,
+      authorId: message.authorId,
     });
   }, []);
   const [pinsOpen, setPinsOpen] = useState(false);
@@ -4146,6 +4154,24 @@ function MainAppContent({
     }
     const extra: MentionCandidate[] = [];
     const canMass = perms.can(Permission.MENTION_EVERYONE);
+    // How many each mass or role mention reaches, not counting the sender:
+    // the @ list says so under the redesign.
+    // One pass for every count, not one per role.
+    let total = 0;
+    let online = 0;
+    const roleReach = new Map<string, number>();
+    for (const member of serverMembers) {
+      if (member.id === user?.id) {
+        continue;
+      }
+      total += 1;
+      if (member.status && member.status !== "offline") {
+        online += 1;
+      }
+      for (const roleId of member.roleIds ?? []) {
+        roleReach.set(roleId, (roleReach.get(roleId) ?? 0) + 1);
+      }
+    }
     if (canMass) {
       extra.push({
         id: "mention:everyone",
@@ -4153,6 +4179,7 @@ function MainAppContent({
         displayName: t("composer.mentionEveryone"),
         avatarUrl: null,
         mentionKind: "mass",
+        reach: total,
       });
       extra.push({
         id: "mention:here",
@@ -4160,6 +4187,7 @@ function MainAppContent({
         displayName: t("composer.mentionHere"),
         avatarUrl: null,
         mentionKind: "mass",
+        reach: online,
       });
     }
     for (const role of mentionableRoles) {
@@ -4173,6 +4201,7 @@ function MainAppContent({
           displayName: role.name,
           avatarUrl: null,
           mentionKind: "role",
+          reach: roleReach.get(role.id) ?? 0,
         });
       }
     }
@@ -4189,6 +4218,7 @@ function MainAppContent({
     mentionableRoles,
     perms,
     t,
+    user?.id,
   ]);
 
   // The roster above is the whole server once it has loaded, so a message
@@ -10076,32 +10106,77 @@ function MainAppContent({
     setMembersOpen(true);
   }
 
+  // After a block: re-read blocks, conversations and friends. One run at a
+  // time; a block during a run asks for one more pass after it, so an older
+  // read can never land after a newer one.
+  const blockRefreshRef = useRef({ running: false, again: false });
+  const refreshAfterBlock = useCallback(async () => {
+    const state = blockRefreshRef.current;
+    if (state.running) {
+      state.again = true;
+      return;
+    }
+    state.running = true;
+    try {
+      do {
+        state.again = false;
+        try {
+          await loadBlocks();
+          // A blocked author's messages stop counting towards unread on the
+          // server, so the conversation's badge is now wrong by however much
+          // they had said. Refetching is what settles it. The row itself
+          // stays, since blocking somebody does not erase what was said.
+          await loadConversations({ trustSnapshot: true });
+          // A block also ended a friendship, if there was one: the schema's
+          // trigger deletes the pair's row in both directions, a pending
+          // request included. Nothing tells us, so re-read the friends list
+          // to make that visible on every surface at once.
+          await friendsRef.current.refresh();
+        } catch {
+          // The block itself landed; only the re-read failed.
+          setAppError(translateMessage("report.blockedRefreshFailed"));
+        }
+      } while (state.again);
+    } finally {
+      state.running = false;
+    }
+  }, [loadBlocks, loadConversations]);
   const handleBlockUser = useCallback(
-    async (userId: string) => {
+    async (userId: string): Promise<boolean> => {
       try {
         await blockUser(userId);
-        await loadBlocks();
-        // A blocked author's messages stop counting towards unread on the
-        // server, so the conversation's badge is now wrong by however much they
-        // had said. Refetching is what settles it — the row itself stays, since
-        // blocking somebody does not erase what was already said to you.
-        await loadConversations({ trustSnapshot: true });
-        // A BLOCK ALSO ENDED A FRIENDSHIP, if there was one: the schema's
-        // trigger deletes the pair's row the moment the block lands, in both
-        // directions and including a pending request. Nothing tells us that
-        // happened, so every surface drawing the friends list — the badge, the
-        // list itself, any open profile card — kept showing a friendship the
-        // database no longer has. Re-reading here is what makes the trigger's
-        // effect visible everywhere at once.
-        await friendsRef.current.refresh();
       } catch (error) {
         setAppError(
           error instanceof Error ? error.message : "Failed to block that person",
         );
+        return false;
       }
+      // The block landed: say so now. A slow refresh never holds the report
+      // dialog's confirmation.
+      void refreshAfterBlock();
+      return true;
     },
-    [loadBlocks, loadConversations],
+    [refreshAfterBlock],
   );
+  // Stable, so the memoized message list keeps its memo: the row's Bloquear
+  // and the channel intro's two buttons (`channel-intro.tsx`).
+  const handleBlockAuthor = useStableCallback((userId: string) => {
+    void handleBlockUser(userId);
+  });
+  const introCopyInvite = useStableCallback(() =>
+    selectedServerId
+      ? copyInvitePaste({ serverId: selectedServerId, locale }).then(() => undefined)
+      : Promise.resolve(),
+  );
+  const introEditChannel = useStableCallback(() => {
+    if (selectedChannelId) {
+      setChannelSettings({
+        channelId: selectedChannelId,
+        section: "overview",
+        forceAdvanced: false,
+      });
+    }
+  });
 
   const handleUnblockUser = useCallback(
     async (userId: string) => {
@@ -11614,6 +11689,14 @@ function MainAppContent({
         compact={compact}
         chrome={!musicInComposer}
         embed={false}
+        onOpenRadio={
+          redesign
+            ? () => {
+                setMusicOpen(true);
+                void openVoiceChannel();
+              }
+            : undefined
+        }
       />
       {voiceState.status !== "idle" && !seatedInLiveParty && (
         <VoiceStatusBar
@@ -11792,12 +11875,32 @@ function MainAppContent({
       !appPaneOnScreen,
   );
 
+  // Under the redesign, below `sm`, a server channel's tools fold into one
+  // tile (`ChannelMoreButton`): beside the title there is room for three
+  // tiles, and with five the last two were off the right edge.
+  const foldHeaderTools = redesign && selectedChannel?.kind === "server";
+  const foldOnPhone = (node: ReactNode) =>
+    foldHeaderTools ? <span className="contents max-sm:hidden">{node}</span> : node;
+  const canScheduleSession =
+    isChannelSessionScheduleEnabled() &&
+    canManageChannels &&
+    selectedChannel?.kind === "server" &&
+    selectedChannel.type === "voice";
+  const canOpenChannelSettings =
+    (canManageChannels || canManageRoles) && selectedChannel?.kind === "server";
+  const openChannelSettings = () => {
+    if (selectedChannel) {
+      setChannelSettings({
+        channelId: selectedChannel.id,
+        section: canManageChannels ? "overview" : "permissions",
+        forceAdvanced: false,
+      });
+    }
+  };
+
   const channelHeaderTools = selectedChannel ? (
     <>
-          {isChannelSessionScheduleEnabled() &&
-            canManageChannels &&
-            selectedChannel.kind === "server" &&
-            selectedChannel.type === "voice" && (
+          {canScheduleSession && foldOnPhone(
             <Tooltip label={t("watchPartySchedule.header.schedule")}>
               <button
                 type="button"
@@ -11808,18 +11911,58 @@ function MainAppContent({
               >
                 <HeaderGlyph off={<CalendarClock className="h-4 w-4" />} on={HeaderCalendarIcon} />
               </button>
-            </Tooltip>
+            </Tooltip>,
           )}
-          <Tooltip label={t("chrome.pins")}>
-            <button
-              type="button"
-              className={HEADER_ACTION_TILE}
-              onClick={() => setPinsOpen(true)}
-            >
-              <HeaderGlyph off={<Pin className="h-4 w-4" />} on={HeaderPinIcon} />
-            </button>
-          </Tooltip>
-          {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
+          {(() => {
+            const pinTile = (
+              <Tooltip label={t("chrome.pins")}>
+                <button
+                  type="button"
+                  data-channel-header-pins=""
+                  className={HEADER_ACTION_TILE}
+                  onClick={() => setPinsOpen(true)}
+                >
+                  <HeaderGlyph off={<Pin className="h-4 w-4" />} on={HeaderPinIcon} />
+                </button>
+              </Tooltip>
+            );
+            // Under the redesign a channel with pins says so in words,
+            // "Fixadas 2", and the bell sits beside it.
+            return redesign ? (
+              <>
+                {selectedChannel.kind === "server" && selectedServer && selectedChannel.type === "text" && (
+                  <HeaderSearch
+                    serverId={selectedServer.id}
+                    serverName={selectedServer.name}
+                    channel={selectedChannel}
+                    members={serverMembers}
+                    channels={channels.filter((c) => c.type === "text" || c.type === "forum")}
+                    shortcutKey={conversationsHome ? "f" : "k"}
+                    shortcut={`${IS_APPLE_KEYBOARD ? "⌘" : "Ctrl "}${conversationsHome ? "F" : "K"}`}
+                    tileClassName={HEADER_ACTION_TILE}
+                  />
+                )}
+                {foldOnPhone(
+                  <ChannelPinsButton
+                    channelId={selectedChannel.id}
+                    messages={chat.getMessages()}
+                    onOpen={() => setPinsOpen(true)}
+                    fallback={pinTile}
+                  />,
+                )}
+                {selectedChannel.kind === "server" && foldOnPhone(
+                  <ChannelBellButton
+                    channel={selectedChannel}
+                    inherits={selectedServer?.name ?? null}
+                    className={HEADER_ACTION_TILE}
+                  />,
+                )}
+              </>
+            ) : (
+              pinTile
+            );
+          })()}
+          {canViewWatchPartyHistory && selectedChannel.kind === "server" && foldOnPhone(
             <Tooltip label={t("chrome.watchPartyHistory")}>
               <button
                 type="button"
@@ -11832,27 +11975,41 @@ function MainAppContent({
               >
                 <HeaderGlyph off={<History className="h-4 w-4" />} on={HeaderHistoryIcon} />
               </button>
-            </Tooltip>
+            </Tooltip>,
           )}
-          {(canManageChannels || canManageRoles) &&
-            selectedChannel.kind === "server" && (
+          {canOpenChannelSettings && foldOnPhone(
             <Tooltip label={t("chrome.channelSettings")}>
               <button
                 type="button"
                 className={HEADER_ACTION_TILE}
                 data-channel-header-settings=""
                 aria-label={t("chrome.channelSettings")}
-                onClick={() =>
-                  setChannelSettings({
-                    channelId: selectedChannel.id,
-                    section: canManageChannels ? "overview" : "permissions",
-                    forceAdvanced: false,
-                  })
-                }
+                onClick={openChannelSettings}
               >
                 <HeaderGlyph off={<Settings className="h-4 w-4" />} on={HeaderSettingsIcon} />
               </button>
-            </Tooltip>
+            </Tooltip>,
+          )}
+          {foldHeaderTools && selectedChannel.kind === "server" && (
+            <span className="contents sm:hidden">
+              <ChannelMoreButton
+                channel={selectedChannel}
+                inherits={selectedServer?.name ?? null}
+                onOpenPins={() => setPinsOpen(true)}
+                actions={[
+                  ...(canOpenChannelSettings
+                    ? [{ id: "channel-more-settings", label: t("chrome.channelSettings"), icon: Settings, onSelect: openChannelSettings }]
+                    : []),
+                  ...(canViewWatchPartyHistory
+                    ? [{ id: "channel-more-history", label: t("chrome.watchPartyHistory"), icon: History, onSelect: () => setWatchPartyHistoryChannelId(selectedChannel.id) }]
+                    : []),
+                  ...(canScheduleSession
+                    ? [{ id: "channel-more-schedule", label: t("watchPartySchedule.header.schedule"), icon: CalendarClock, onSelect: () => setScheduleSheetOpen(true) }]
+                    : []),
+                ]}
+                className={HEADER_ACTION_TILE}
+              />
+            </span>
           )}
           {/* The roster toggle, last in the row — the same position and the
               same icon Discord puts it in, because that is where the muscle
@@ -11896,6 +12053,9 @@ function MainAppContent({
       {...nudgeShake}
       className={cn("flex min-h-0 min-w-0 flex-1 flex-col", nudgeShake.className)}
       data-retro-window={retroWindow ? "" : undefined}
+      // A voice room's chat is the call's chat: the smallest avatar
+      // (index.css, `data-message-surface`).
+      data-message-surface={isVoiceRoomChannelType(selectedChannel.type) ? "call" : undefined}
       // The whole conversation is the drop target, not the textarea: dragging a
       // screenshot onto the messages is what people actually do, and a target
       // the size of one input is a target you miss.
@@ -12008,13 +12168,35 @@ function MainAppContent({
           {/* A watch party channel with a party on it has its own count on
               the bar ("N assistindo"); a second one here, of the seated
               room, says a different number about the same show. */}
-          {!(isWatchPartySplit && watchParties.byChannel[selectedChannel.id]) && (
+          {!(isWatchPartySplit && watchParties.byChannel[selectedChannel.id]) &&
+            // Under the redesign "N aqui" is dropped while the member list
+            // beside it shows the same people; a topic always shows.
+            !(
+              redesign &&
+              !activeConversation &&
+              !selectedChannel.topic &&
+              memberSidebarAvailable &&
+              memberSidebar.open &&
+              !openThread
+            ) && (
             <p className={cn("truncate text-[11px] text-paper-muted", PANE_HEADER_DETAIL_REDESIGN, "redesign:max-md:text-xs redesign:md:min-w-0 redesign:md:border-l redesign:md:border-[color:var(--pane-header-rule)] redesign:md:pl-3")}>
               {activeConversation
                 ? conversationSubtitle(activeConversation)
-                : selectedChannel.topic
-                  ? selectedChannel.topic
-                  : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
+                : redesign
+                  ? // "4 online · Papo geral do Sandbox": the count only while
+                    // the member list is closed, since the list shows the same
+                    // people, then the topic.
+                    [
+                      memberSidebarAvailable && memberSidebar.open && !openThread
+                        ? null
+                        : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleOnline", { count: chat.getPresence().length })}`,
+                      selectedChannel.topic || null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : selectedChannel.topic
+                    ? selectedChannel.topic
+                    : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
             </p>
           )}
         </div>
@@ -12944,6 +13126,18 @@ function MainAppContent({
         }
         messages={chat.getMessages()}
         participants={activeConversation?.participants}
+        moderation={cardModeration}
+        onBlockUser={handleBlockAuthor}
+        introName={
+          selectedChannel.kind === "server" && selectedChannel.type === "text"
+            ? selectedChannel.name
+            : null
+        }
+        introTopic={selectedChannel.topic ?? null}
+        onIntroCopyInvite={
+          perms.can(Permission.CREATE_INVITE) ? introCopyInvite : undefined
+        }
+        onIntroEdit={canManageChannels ? introEditChannel : undefined}
         currentUserId={user?.id ?? null}
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
@@ -12958,6 +13152,7 @@ function MainAppContent({
         isLoadingOlder={chat.isLoadingOlder()}
         isLoadingNewer={chat.isLoadingNewer()}
         typingUsers={chat.getTypingUsers()}
+        typingInComposer={redesign && !isWatchPartySplit && canSendHere}
         botNotice={chat.getBotNotice()}
         onDismissBotNotice={chat.dismissBotNotice}
         canModerate={canManageMessages}
@@ -12974,6 +13169,7 @@ function MainAppContent({
         onJumpToPresent={jumpToPresent}
         onEditMessage={chat.editMessage}
         onDeleteMessage={chat.deleteMessage}
+        onActionError={setAppError}
         // Server channels only: a conversation has no moderators, and the
         // endpoint refuses one. Offering the mode there would be a menu entry
         // whose confirm ends in a 404.
@@ -13074,6 +13270,7 @@ function MainAppContent({
       <div hidden={!canSendHere}>
       <MessageComposer
         variant={isWatchPartySplit ? "stream" : "default"}
+        typingLine={redesign ? <TypingLine users={chat.getTypingUsers()} /> : null}
         // Remount per channel: the draft is component state, so without this a
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.
@@ -13159,9 +13356,10 @@ function MainAppContent({
           selectedServerId &&
           (selectedChannel.type === "text" || selectedChannel.type === "voice") &&
           !isWatchPartySplit
-            ? (buttonClassName) => (
+            ? (buttonClassName, menu) => (
                 <AppLauncher
                   key={selectedChannel.id}
+                  menuTrigger={menu}
                   serverId={selectedServerId}
                   channelId={selectedChannel.id}
                   channelName={selectedChannel.name}
@@ -14666,6 +14864,9 @@ function MainAppContent({
       <ReportDialog
         target={reportTarget}
         onClose={() => setReportTarget(null)}
+        onBlock={handleBlockUser}
+        isBlocked={(userId) => blockedUserIds.has(userId)}
+        placeName={selection.kind === "server" ? (selectedServer?.name ?? null) : null}
       />
 
       <StoriesHost

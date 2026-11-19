@@ -35,7 +35,7 @@ export function useChannelSidebarWidth(slot: SidebarWidthSlot = {}): {
   /** Settled. Persisted. */
   commitWidth: (width: number) => void;
 } {
-  const { key, defaultWidth } = slot;
+  const { key, defaultWidth, maxWidth: slotMax = Number.POSITIVE_INFINITY } = slot;
   // THE CHOICE AND WHAT IS DRAWN ARE TWO NUMBERS. The resize listener used to
   // write the window's bound into the choice itself (`min(previous, bound)`),
   // so a window made narrow once (docked beside another, a phone held
@@ -47,9 +47,10 @@ export function useChannelSidebarWidth(slot: SidebarWidthSlot = {}): {
   const [preferred, setPreferred] = useState(() =>
     loadChannelSidebarWidth(Number.POSITIVE_INFINITY, { key, defaultWidth }),
   );
-  const [maxWidth, setMaxWidth] = useState(() =>
+  const [windowMax, setMaxWidth] = useState(() =>
     channelSidebarMaxWidth(viewportWidth()),
   );
+  const maxWidth = Math.max(Math.min(windowMax, slotMax), 0);
   // A caller that switches slot while mounted reads the new slot's stored
   // width, rather than showing (and then saving under the new key) the old
   // one's. Today every caller keeps one slot for its lifetime; this keeps it
@@ -76,11 +77,11 @@ export function useChannelSidebarWidth(slot: SidebarWidthSlot = {}): {
 
   const commitWidth = useCallback(
     (next: number) => {
-      const clamped = clampChannelSidebarWidth(next, viewportWidth());
+      const clamped = Math.min(clampChannelSidebarWidth(next, viewportWidth()), slotMax);
       setPreferred(clamped);
       saveChannelSidebarWidth(clamped, { key });
     },
-    [key],
+    [key, slotMax],
   );
 
   const width = Math.min(preferred, maxWidth);

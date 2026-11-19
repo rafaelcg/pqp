@@ -93,6 +93,13 @@ let snapshot: MusicSnapshot = {
 };
 /** This machine saw YouTube ENDED for this current track id. */
 let localEndedTrackId: string | null = null;
+/**
+ * The track THIS machine started in a room that had nothing on. Whoever
+ * opens the Rádio is in it, and that is a fact about this tap, not about
+ * who queued the song: sitting down later in a room playing your own
+ * earlier pick still gets the invite.
+ */
+let openedHereTrackId: string | null = null;
 /** Bumped to abandon an in-flight related fill. */
 let fillGeneration = 0;
 const listeners = new Set<() => void>();
@@ -179,11 +186,17 @@ export function setMusicSession(next: MusicSession | null): void {
   session = next;
   if (!sameRoom) {
     snapshot = { ...snapshot, listening: true, open: false };
+    openedHereTrackId = null;
   }
   set(null, next?.channelId ?? null);
   if (next && !snapshot.listening) {
     next.sendListening?.(false);
   }
+}
+
+/** The track this machine started in an empty room, or null. */
+export function musicOpenedHereTrackId(): string | null {
+  return openedHereTrackId;
 }
 
 /** The room this machine may write to right now, or null. */
@@ -297,6 +310,7 @@ export function useMusicDock(): MusicDockSnapshot {
 
 export function resetMusicStoreForTests(): void {
   session = null;
+  openedHereTrackId = null;
   positionProbe = null;
   seekApply = null;
   localEndedTrackId = null;
@@ -528,6 +542,7 @@ export function addTracks(resolved: MusicResolved[]): MusicAddManyOutcome {
     current = rest[0] ?? null;
     rest = rest.slice(1);
     startedPlaying = current !== null;
+    openedHereTrackId = current?.id ?? null;
   }
   const room = MUSIC_QUEUE_LIMIT - held.queue.length;
   const fits = rest.slice(0, Math.max(0, room));
@@ -551,6 +566,7 @@ export function addTrack(resolved: MusicResolved): MusicAddOutcome {
   }
   const held = base();
   if (held.current === null) {
+    openedHereTrackId = track.id;
     write({ ...held, current: track, queue: held.queue, status: "playing", positionMs: 0 });
     return "playing";
   }

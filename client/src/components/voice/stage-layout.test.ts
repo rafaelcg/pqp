@@ -20,6 +20,8 @@ import {
   STRIP_LIMIT_NARROW,
   STRIP_LIMIT_WIDE,
   type StageTile,
+  MUSIC_SHRUNK_PIN,
+  planRoomFocus,
 } from "./stage-layout";
 
 /**
@@ -717,5 +719,23 @@ describe("the room's cards", () => {
       (p) => p.key,
     );
     expect(keys).toEqual(["talker", "hand2", "hand1", "me"]);
+  });
+});
+
+describe("planRoomFocus", () => {
+  const base = { pinnedTileId: null, shareIds: [], cameraIds: [], music: false, musicId: "music-stage" };
+  it("puts a share first, then the music, then nothing", () => {
+    expect(planRoomFocus({ ...base, shareIds: ["s1"], music: true })).toEqual({ kind: "share", id: null });
+    expect(planRoomFocus({ ...base, music: true })).toEqual({ kind: "music" });
+    expect(planRoomFocus(base)).toEqual({ kind: "none" });
+  });
+  it("lets any pinned tile be the main one", () => {
+    expect(planRoomFocus({ ...base, pinnedTileId: "cam:a", cameraIds: ["cam:a"], shareIds: ["s1"], music: true })).toEqual({ kind: "camera", id: "cam:a" });
+    expect(planRoomFocus({ ...base, pinnedTileId: "s2", shareIds: ["s1", "s2"] })).toEqual({ kind: "share", id: "s2" });
+    expect(planRoomFocus({ ...base, pinnedTileId: "music-stage", shareIds: ["s1"], music: true })).toEqual({ kind: "music" });
+  });
+  it("shrinks the music into the cards, and ignores a pin that is gone", () => {
+    expect(planRoomFocus({ ...base, pinnedTileId: MUSIC_SHRUNK_PIN, music: true })).toEqual({ kind: "none" });
+    expect(planRoomFocus({ ...base, pinnedTileId: "cam:gone", music: true })).toEqual({ kind: "music" });
   });
 });

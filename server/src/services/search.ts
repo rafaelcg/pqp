@@ -103,6 +103,68 @@ export function decodeSearchCursor(raw: string): SearchCursor | null {
   return { rank: parsedRank, createdAt, id };
 }
 
+/**
+ * What a search may be narrowed to besides its words (the header search's
+ * chips). Every field is optional and each one only removes rows, so an empty
+ * object is exactly the unfiltered search.
+ */
+export interface SearchFilters {
+  /** One channel and the threads and forum posts under it. */
+  channelId?: string;
+  authorId?: string;
+  /** Messages that mention this person. */
+  mentionsId?: string;
+  has?: SearchHas;
+  /** On or after this day (the viewer's, see `tz`), `YYYY-MM-DD`. */
+  since?: string;
+  /** Before this day (the viewer's, see `tz`), `YYYY-MM-DD`. */
+  until?: string;
+  /**
+   * The viewer's UTC offset in minutes, east positive (`-getTimezoneOffset()`).
+   * Puts the day boundary at the viewer's midnight. Absent is UTC.
+   */
+  tz?: number;
+}
+
+export const SEARCH_HAS = ["link", "image", "file"] as const;
+export type SearchHas = (typeof SEARCH_HAS)[number];
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+function isRealDay(value: string): boolean {
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+/**
+ * The filters from a search URL. A malformed value is dropped rather than
+ * refused: a stale chip should cost a filter, never the whole search.
+ */
+export function parseSearchFilters(params: URLSearchParams): SearchFilters {
+  const id = (name: string) => {
+    const value = params.get(name);
+    return value && UUID.test(value) ? value : undefined;
+  };
+  const day = (name: string) => {
+    const value = params.get(name);
+    // Round trip: V8 parses 2026-02-31 as March 3, and Postgres would then fail the ::date cast.
+    return value && DAY.test(value) && isRealDay(value) ? value : undefined;
+  };
+  const has = params.get("has");
+  const rawTz = params.get("tz");
+  const tz = rawTz !== null && /^-?\d{1,3}$/.test(rawTz) ? Number(rawTz) : undefined;
+  return {
+    channelId: id("channelId"),
+    authorId: id("authorId"),
+    mentionsId: id("mentionsId"),
+    has: (SEARCH_HAS as readonly string[]).includes(has ?? "") ? (has as SearchHas) : undefined,
+    since: day("since"),
+    until: day("until"),
+    tz: tz !== undefined && tz >= -840 && tz <= 840 ? tz : undefined,
+  };
+}
+
 interface SearchRow {
   id: string;
   channel_id: string;
@@ -131,6 +193,7 @@ export async function searchMessages(
   query: string,
   limit: number,
   cursor?: SearchCursor,
+  filters: SearchFilters = {},
 ): Promise<MessageSearchResponse> {
   const params: unknown[] = [
     serverId,
@@ -151,6 +214,46 @@ export async function searchMessages(
     cursorClause = `AND (ts_rank_cd(m.search_tsv, q.query), m.created_at, m.id)
         < ($7::real, $8::timestamptz, $9::uuid)`;
     params.push(cursor.rank, cursor.createdAt, cursor.id);
+  }
+
+  // Each filter appends its own parameter, so the numbering follows whatever
+  // the cursor took.
+  const filterClauses: string[] = [];
+  const bind = (value: unknown) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  if (filters.channelId) {
+    const id = bind(filters.channelId);
+    filterClauses.push(`AND (m.channel_id = ${id}::uuid OR (c.type = 'thread' AND c.parent_id = ${id}::uuid))`);
+  }
+  if (filters.authorId) {
+    filterClauses.push(`AND m.author_id = ${bind(filters.authorId)}::uuid`);
+  }
+  if (filters.mentionsId) {
+    filterClauses.push(
+      `AND EXISTS (SELECT 1 FROM message_mentions mm WHERE mm.message_id = m.id AND mm.user_id = ${bind(filters.mentionsId)}::uuid)`,
+    );
+  }
+  if (filters.has === "link") {
+    filterClauses.push(`AND m.body ~* 'https?://'`);
+  } else if (filters.has === "image") {
+    filterClauses.push(
+      `AND EXISTS (SELECT 1 FROM message_attachments a WHERE a.message_id = m.id AND a.content_type LIKE 'image/%')`,
+    );
+  } else if (filters.has === "file") {
+    filterClauses.push(
+      `AND EXISTS (SELECT 1 FROM message_attachments a WHERE a.message_id = m.id AND a.content_type NOT LIKE 'image/%')`,
+    );
+  }
+  // The viewer's midnight: the day's UTC midnight minus their offset.
+  const localMidnight = (day: string) =>
+    `(${bind(day)}::date)::timestamp AT TIME ZONE 'UTC' - ${bind(filters.tz ?? 0)}::int * interval '1 minute'`;
+  if (filters.since) {
+    filterClauses.push(`AND m.created_at >= ${localMidnight(filters.since)}`);
+  }
+  if (filters.until) {
+    filterClauses.push(`AND m.created_at < ${localMidnight(filters.until)}`);
   }
 
   // `hits` is limited before the outer select runs, so ts_headline — which
@@ -180,6 +283,7 @@ export async function searchMessages(
          AND m.search_tsv @@ q.query
          AND ${VISIBLE_CHANNEL}
          ${cursorClause}
+         ${filterClauses.join("\n         ")}
        ORDER BY rank DESC, m.created_at DESC, m.id DESC
        LIMIT $4
      )

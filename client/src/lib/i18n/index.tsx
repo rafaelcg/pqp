@@ -8,6 +8,7 @@ import {
 } from "react";
 import { applyDocumentLocale, detectLocale, type Locale } from "@/lib/locale";
 import { getDesktop } from "@/lib/desktop";
+import { useRedesign } from "@/lib/redesign";
 import {
   isLocaleLoaded,
   loadLocale,
@@ -86,12 +87,15 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     };
   }, [locale]);
 
+  // A new `t` when the look flips, so copy with a `_redesign` variant redraws.
+  const redesign = useRedesign();
   const value = useMemo<Translator>(
     () => ({
       locale: readyLocale === locale ? locale : "en",
       t: (key, vars) => translateMessage(key, vars),
     }),
-    [locale, readyLocale],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [locale, readyLocale, redesign],
   );
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

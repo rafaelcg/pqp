@@ -30,6 +30,8 @@ import {
   type InlineSaveState,
 } from "@/components/settings/kit";
 import { VoiceNotesGroup } from "@/components/settings/voice-notes-group";
+import { MyReportsGroup } from "@/components/settings/my-reports-group";
+import { useRedesign } from "@/lib/redesign";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
@@ -195,6 +197,7 @@ export function PrivacySection({
   onBlockUser?: (userId: string) => void | Promise<void>;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const save = useInlineSave();
   // Per row: one row's request finishing must not free another row's button.
   const [unblocking, setUnblocking] = useState<ReadonlySet<string>>(() => new Set());
@@ -546,6 +549,8 @@ export function PrivacySection({
           ))
         )}
       </SettingsGroup>
+
+      {redesign && <MyReportsGroup />}
 
       <div role="status" aria-live="polite">
         {notice ? (

@@ -1,4 +1,4 @@
-import { MENU_SEPARATOR } from "@/components/ui/menu-items";
+import { MENU_HEADING, MENU_SEPARATOR } from "@/components/ui/menu-items";
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -13,9 +13,26 @@ import {
   WarningCircle as WarningCircleFill,
   WifiSlash,
   ArrowDown as ArrowDownGlyph,
+  EyeSlash,
   type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
 import { Icon as Glyph } from "@/components/ui/icon";
+import { ChannelIntro, type ChannelIntroInfo } from "@/components/chat/channel-intro";
+import { UnreadStrip } from "@/components/chat/unread-strip";
+import { MessageFold } from "@/components/chat/message-fold";
+import {
+  MemberModerationDialog,
+  type ModerationSubject,
+} from "@/components/user/member-moderation-dialog";
+import {
+  moderationActions,
+  moderationNeedsConfirmation,
+  type ProfileModerationAction,
+  type ProfileModerationContext,
+} from "@/components/user/profile-relations";
+import { applyMemberModeration, moderationActionLabel } from "@/lib/member-moderation";
+import { orderMessageMenu } from "@/lib/message-menu-order";
+import { isJumboEmoji } from "@/lib/emoji-only";
 import { EmptyState as EmptyStateView } from "@/components/ui/empty-state";
 import {
   CONTENT_CARD_FOCUS_REDESIGN,
@@ -62,6 +79,11 @@ import {
   Star,
   Crown,
   Trash2,
+  Ban,
+  Gavel,
+  TimerOff,
+  TimerReset,
+  UserMinus,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -76,11 +98,17 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type TouchEvent as ReactTouchEvent,
   type ReactElement,
   type ReactNode,
   type Ref,
 } from "react";
-import { useRedesign } from "@/lib/redesign";
+import { isRedesignOn, useRedesign } from "@/lib/redesign";
+import { useMediaQuery } from "@/components/ui/use-media-query";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
+import { useSwipeToReply } from "@/lib/swipe-to-reply";
+import { ReactionWhoSheet } from "@/components/chat/reaction-who-sheet";
 import { createPortal } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useChatDisplay } from "@/hooks/use-chat-display";
@@ -158,6 +186,7 @@ import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
 import { hintDietHides, useHintDiet } from "@/lib/hint-diet";
 import { shouldOpenUp } from "@/lib/menu-flip";
+import { extendUnreadTally, type UnreadTally } from "@/lib/unread-tally";
 import {
   cn,
   formatDayLabel,
@@ -192,6 +221,22 @@ const LOAD_MORE_THRESHOLD_PX = 240;
 const ANCHOR_HOLD_MS = 1500;
 /** How long a jumped-to message stays lit. */
 const HIGHLIGHT_MS = 2_000;
+/** Under the redesign, how long a load runs before its skeleton shows. */
+const SKELETON_DELAY_MS = 300;
+
+/** True once `on` has held for `ms`; false again the moment it drops. */
+function useDelayedTrue(on: boolean, ms: number): boolean {
+  const [due, setDue] = useState(false);
+  useEffect(() => {
+    if (!on) {
+      setDue(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setDue(true), ms);
+    return () => window.clearTimeout(timer);
+  }, [on, ms]);
+  return on && due;
+}
 /**
  * How long a jump's smooth scroll may take before it is treated as stopped,
  * for a browser without `scrollend` or a scroll that had nowhere to go (which
@@ -313,6 +358,37 @@ export interface MessageRoleColor {
 
 /** Shared identity, so the default prop does not remount every row each render. */
 const EMPTY_BLOCKED: ReadonlySet<string> = new Set<string>();
+
+/** The staff rungs' glyphs, the same ones the member list draws. */
+const MESSAGE_MODERATION_ICON: Record<ProfileModerationAction, LucideIcon> = {
+  timeout: TimerOff,
+  endTimeout: TimerReset,
+  kick: UserMinus,
+  ban: Gavel,
+};
+
+/** A staff rung's label in the message menu, which names the person. */
+function staffRungLabel(
+  rung: ProfileModerationAction,
+  name: string,
+  deleteAndBan: boolean,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (rung) {
+    case "timeout":
+      return t("chat.menu.timeout", { name });
+    case "kick":
+      return t("chat.menu.kick", { name });
+    case "ban":
+      return deleteAndBan ? t("chat.menu.deleteAndBan") : t("chat.menu.ban", { name });
+    default:
+      return moderationActionLabel(rung, t);
+  }
+}
+
+/** A run of back-to-back curtained messages; `ids` is shared by the run. */
+type BlockedRun = { lead: boolean; ids: string[] };
+const NO_BLOCKED_RUNS: ReadonlyMap<string, BlockedRun> = new Map();
 const EMPTY_AUTHORS: ReadonlyMap<string, MessageAuthorInfo> = new Map();
 const EMPTY_ROLES: readonly MessageRoleColor[] = [];
 
@@ -343,6 +419,18 @@ interface MessageListProps {
   historyFailed?: boolean;
   onRetryHistory?: () => void;
   hasMore?: boolean;
+  /** People typing show under the composer (the redesign's status line). */
+  typingInComposer?: boolean;
+  /**
+   * A server text channel's name (null everywhere else), its topic and what
+   * the viewer may do there: under the redesign, the greeting above the first
+   * message and the empty channel's cards (`channel-intro.tsx`). Separate
+   * props, so the list's memo holds.
+   */
+  introName?: string | null;
+  introTopic?: string | null;
+  onIntroCopyInvite?: () => Promise<void>;
+  onIntroEdit?: () => void;
   /** True while the loaded window stops short of the newest message. */
   hasNewer?: boolean;
   isLoadingOlder?: boolean;
@@ -373,6 +461,8 @@ interface MessageListProps {
   onJumpToPresent?: () => Promise<boolean>;
   onEditMessage?: (messageId: string, body: string) => Promise<void>;
   onDeleteMessage?: (messageId: string) => Promise<void>;
+  /** A menu action that failed after its dialog closed (the app's error strip). */
+  onActionError?: (message: string) => void;
   /**
    * Delete a hand-picked set in one call, MANAGE_MESSAGES only.
    *
@@ -393,6 +483,14 @@ interface MessageListProps {
    * whether the channel has moderators.
    */
   onReportMessage?: (message: ChatMessage) => void;
+  /**
+   * The staff rungs on somebody else's message (redesign only): the same
+   * context the profile card reads, so the menu never offers what the API
+   * would refuse.
+   */
+  moderation?: ProfileModerationContext | null;
+  /** Blocks an author from the message menu (redesign only), after a confirm. */
+  onBlockUser?: (userId: string) => void;
   /** Client-render-only: the server unfurls and caches regardless, so turning
    * this off only stops this reader's own client from drawing the card. */
   showLinkEmbeds?: boolean;
@@ -562,12 +660,16 @@ interface RowCacheEntry {
  * is every row except the new one. An edit or a reaction still gets a fresh
  * `Row`, correctly, because the message object itself is a new reference.
  */
+/** Per `buildRows` result: the lowest index whose `Row` was rebuilt, or its length. */
+const firstRebuiltRow = new WeakMap<readonly Row[], number>();
+
 function buildRows(
   messages: readonly ChatMessage[],
   cache: Map<string, RowCacheEntry>,
 ): Row[] {
   const rows: Row[] = new Array(messages.length);
   const seen = new Set<string>();
+  let firstRebuilt = messages.length;
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     const previous = index > 0 ? messages[index - 1] : undefined;
@@ -583,6 +685,9 @@ function buildRows(
       continue;
     }
 
+    if (index < firstRebuilt) {
+      firstRebuilt = index;
+    }
     const newDay =
       !previous || !isSameDay(previous.createdAt, message.createdAt);
     const withinWindow =
@@ -612,6 +717,7 @@ function buildRows(
     }
   }
 
+  firstRebuiltRow.set(rows, firstRebuilt);
   return rows;
 }
 
@@ -665,6 +771,13 @@ function mentionRowRadius(joinTop: boolean, joinBottom: boolean): string {
  */
 const MESSAGE_ROW_REDESIGN =
   "redesign:mx-2 redesign:rounded-[var(--message-row-radius)] redesign:px-3";
+/*
+ * The avatar's size under the redesign: 40 on desktop, 36 on a phone, 32 in a
+ * thread (`--message-avatar` in index.css). The gutter keeps its 56px, so the
+ * text column does not move between sizes.
+ */
+const MESSAGE_AVATAR_REDESIGN =
+  "redesign:h-[var(--message-avatar)] redesign:w-[var(--message-avatar)]";
 /** The time beside a name and in the gutter. */
 const MESSAGE_TIME_REDESIGN = "redesign:text-xs redesign:text-text-tertiary";
 /*
@@ -780,6 +893,11 @@ export const MessageList = memo(function MessageList({
   historyFailed = false,
   onRetryHistory,
   hasMore = false,
+  typingInComposer = false,
+  introName = null,
+  introTopic = null,
+  onIntroCopyInvite,
+  onIntroEdit,
   hasNewer = false,
   isLoadingOlder = false,
   isLoadingNewer = false,
@@ -799,6 +917,7 @@ export const MessageList = memo(function MessageList({
   onJumpToPresent,
   onEditMessage,
   onDeleteMessage,
+  onActionError,
   onBulkDelete,
   onRetryMessage,
   onDiscardMessage,
@@ -806,6 +925,8 @@ export const MessageList = memo(function MessageList({
   onPinMessage,
   onUnpinMessage,
   onReportMessage,
+  moderation = null,
+  onBlockUser,
   showLinkEmbeds = true,
   onStartThread,
   onOpenThread,
@@ -860,13 +981,22 @@ export const MessageList = memo(function MessageList({
   }, [missingAuthorKey, reportMissingAuthors]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const redesign = useRedesign();
+  const channelIntro = useMemo<ChannelIntroInfo | null>(
+    () =>
+      introName
+        ? { name: introName, topic: introTopic, onCopyInvite: onIntroCopyInvite, onEdit: onIntroEdit }
+        : null,
+    [introName, introTopic, onIntroCopyInvite, onIntroEdit],
+  );
   // Under the redesign the jump pill clears the bot's note: it rises over
   // the footer (the note and the typing line) while it is taller than the
   // typing line alone, and follows the note down as it collapses.
-  const logFooterRef = useRef<HTMLDivElement>(null);
+  // A callback ref, not `useRef`: the footer only mounts once history has
+  // loaded, after this effect's first run, and has to be measured then.
+  const [logFooterEl, logFooterRef] = useState<HTMLDivElement | null>(null);
   const [logFooterHeight, setLogFooterHeight] = useState(0);
   useLayoutEffect(() => {
-    const el = logFooterRef.current;
+    const el = logFooterEl;
     if (!redesign || !el) {
       setLogFooterHeight(0);
       return;
@@ -877,7 +1007,7 @@ export const MessageList = memo(function MessageList({
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [redesign]);
+  }, [redesign, logFooterEl]);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(true);
@@ -1087,6 +1217,75 @@ export const MessageList = memo(function MessageList({
     [rows, currentUsername, currentUserId],
   );
   const rowIds = useMemo(() => rows.map((row) => row.message.id), [rows]);
+  // Under the redesign, back-to-back curtained messages are one line: the
+  // first carries the count and reveals the whole run, the rest stay
+  // registered (a permalink still lands) and draw nothing. A day line ends a
+  // run, and so does the first unread message, so its "Novas" line still
+  // draws. With the toggle off every curtained message keeps its own line.
+  const firstUnreadId = useMemo(
+    () => findFirstUnreadMessageId(messages, unreadSince, currentUserId),
+    [messages, unreadSince, currentUserId],
+  );
+  const blockedRuns = useMemo(() => {
+    // Nobody blocked is the common case: no pass and no new map per arrival.
+    if (!redesign || blockedAuthorIds.size === 0) {
+      return NO_BLOCKED_RUNS;
+    }
+    const runs = new Map<string, BlockedRun>();
+    let lead: BlockedRun | null = null;
+    for (const row of rows) {
+      const id = row.message.id;
+      const curtained =
+        !row.message.systemKind &&
+        row.message.authorId !== currentUserId &&
+        blockedAuthorIds.has(row.message.authorId) &&
+        !revealedIds.has(id);
+      if (!curtained) {
+        lead = null;
+      } else if (lead && !row.dayLabel && id !== firstUnreadId) {
+        lead.ids.push(id);
+        runs.set(id, { lead: false, ids: lead.ids });
+      } else {
+        lead = { lead: true, ids: [id] };
+        runs.set(id, lead);
+      }
+    }
+    return runs;
+  }, [redesign, rows, currentUserId, blockedAuthorIds, revealedIds, firstUnreadId]);
+  // The message menu's staff rungs and Bloquear (redesign only) open these.
+  const [pendingModeration, setPendingModeration] = useState<{
+    action: Exclude<ProfileModerationAction, "endTimeout">;
+    subject: ModerationSubject;
+    /** Apagar e banir: the message the ban came from, deleted once it lands. */
+    deleteMessageId?: string;
+  } | null>(null);
+  const [pendingBlock, setPendingBlock] = useState<ModerationSubject | null>(null);
+  const handleModerate = useCallback(
+    (action: ProfileModerationAction, subject: ModerationSubject, deleteMessageId?: string) => {
+      if (!moderation) {
+        return;
+      }
+      if (action === "endTimeout") {
+        // Lifting a sentence takes nothing away: no dialog, as on the card.
+        void applyMemberModeration({
+          action,
+          serverId: moderation.serverId,
+          userId: subject.id,
+        }).then(
+          () => moderation.onModerated(),
+          (error: unknown) =>
+            onActionError?.(error instanceof Error ? error.message : t("member.moderationFailed")),
+        );
+        return;
+      }
+      setPendingModeration({ action, subject, deleteMessageId });
+    },
+    [moderation, onActionError, t],
+  );
+  const handleBlockAuthor = useCallback(
+    (subject: ModerationSubject) => setPendingBlock(subject),
+    [],
+  );
   // `rows` (the array, not its contents) gets a new reference on every
   // message arrival even when almost every `Row` inside it is the cached,
   // reused one, so `rowIds` does too. `handleRowNavigate` below only reads
@@ -1156,10 +1355,35 @@ export const MessageList = memo(function MessageList({
     return fn;
   }
 
-  const firstUnreadId = useMemo(
-    () => findFirstUnreadMessageId(messages, unreadSince, currentUserId),
-    [messages, unreadSince, currentUserId],
-  );
+  // Under the redesign, the strip at the top of the log (`unread-strip.tsx`):
+  // the count and mentions from the first new message down, others' only.
+  const unreadKey = `${channelId ?? ""}::${unreadSince ?? "none"}`;
+  const [unreadDismissedKey, setUnreadDismissedKey] = useState<string | null>(null);
+  const unreadDismissed = unreadDismissedKey === unreadKey;
+  const unreadTallyRef = useRef<UnreadTally | null>(null);
+  const unreadStrip = useMemo(() => {
+    if (!redesign || !firstUnreadId || unreadDismissed) {
+      unreadTallyRef.current = null;
+      return null;
+    }
+    // Extended on an append, recounted otherwise (`unread-tally.ts`).
+    const tally = extendUnreadTally(unreadTallyRef.current, {
+      rows,
+      mentionMask,
+      firstId: firstUnreadId,
+      selfId: currentUserId,
+      changedFrom: firstRebuiltRow.get(rows) ?? 0,
+      maskKey: `${currentUsername ?? ""}\u0000${currentUserId ?? ""}`,
+    });
+    unreadTallyRef.current = tally;
+    return tally && tally.count > 0
+      ? {
+          count: tally.count,
+          mentions: tally.mentions,
+          since: formatTime(rows[tally.start].message.createdAt),
+        }
+      : null;
+  }, [redesign, firstUnreadId, unreadDismissed, rows, mentionMask, currentUserId, currentUsername]);
   // A forum post's opening message is its first: known only once nothing
   // older is left to page in.
   const forumOpeningId =
@@ -1215,6 +1439,11 @@ export const MessageList = memo(function MessageList({
     }
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        // Taken: the unread strip must not read the same Escape as "mark read".
+        // The strip is the redesign's; the old look's layers still hear it.
+        if (isRedesignOn()) {
+          event.preventDefault();
+        }
         leaveSelectMode();
       }
     }
@@ -2160,8 +2389,30 @@ export const MessageList = memo(function MessageList({
     return source.names.get(userId) ?? null;
   }, []);
 
+  const jumpToFirstUnread = useCallback(() => {
+    const node =
+      unreadDividerRef.current ??
+      (firstUnreadId ? rowNodes.current.get(firstUnreadId) : null) ??
+      null;
+    if (node && scrollRef.current) {
+      setIsPinned(false);
+      scrollWithin(scrollRef.current, node, { block: "center" });
+    }
+  }, [firstUnreadId]);
+  const dismissUnread = useCallback(() => {
+    setUnreadDismissedKey(unreadKey);
+    onMarkRead?.();
+  }, [unreadKey, onMarkRead]);
+  // Under the redesign a quick load shows nothing rather than a skeleton
+  // that blinks for a frame: it appears only after 300 ms.
+  const skeletonDue = useDelayedTrue(isLoading && redesign, SKELETON_DELAY_MS);
+
   if (isLoading) {
-    return <MessageListSkeleton />;
+    return redesign && !skeletonDue ? (
+      <div className="flex-1" data-message-list-waiting="" />
+    ) : (
+      <MessageListSkeleton />
+    );
   }
 
   return (
@@ -2186,13 +2437,23 @@ export const MessageList = memo(function MessageList({
         aria-live="off"
         className="flex-1 overflow-y-auto [overflow-anchor:none] py-4"
       >
+        {unreadStrip && !unreadDismissed && (
+          <UnreadStrip
+            count={unreadStrip.count}
+            mentions={unreadStrip.mentions}
+            since={unreadStrip.since}
+            onJump={jumpToFirstUnread}
+            onDismiss={dismissUnread}
+            escapeDisabled={selecting}
+          />
+        )}
         {forumPost?.listHeader}
         {hasMore && (
           <div className="flex justify-center pb-3">
             {isLoadingOlder ? (
               <span className="flex items-center gap-2 text-xs text-paper-muted redesign:text-text-secondary">
                 <Spinner className="h-3 w-3 animate-spin" />
-                Loading older messages…
+                {t("chat.loadingOlder")}
               </span>
             ) : (
               <button
@@ -2200,7 +2461,7 @@ export const MessageList = memo(function MessageList({
                 onClick={loadOlder}
                 className={cn("rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper", LOG_LOAD_REDESIGN)}
               >
-                Load older messages
+                {t("chat.loadOlder")}
               </button>
             )}
           </div>
@@ -2212,9 +2473,20 @@ export const MessageList = memo(function MessageList({
           <HistoryFailed compact onRetry={onRetryHistory} />
         )}
 
+        {redesign &&
+          channelIntro &&
+          !forumPost &&
+          !hasMore &&
+          !historyFailed &&
+          messages.length > 0 && <ChannelIntro info={channelIntro} empty={false} />}
+
         {messages.length === 0 ? (
           historyFailed ? (
             <HistoryFailed onRetry={onRetryHistory} />
+          ) : redesign && channelIntro && !forumPost ? (
+            <div className="flex min-h-full flex-col justify-end">
+              <ChannelIntro info={channelIntro} empty />
+            </div>
           ) : (
             <EmptyState onCopyOwnerInvite={onCopyOwnerInvite} />
           )
@@ -2340,9 +2612,21 @@ export const MessageList = memo(function MessageList({
                 blockedAuthorIds.has(row.message.authorId) &&
                 !revealedIds.has(rowId)
               }
-              onReveal={stableRowCallback(rowId, "reveal", [], () => () =>
-                setRevealedIds((current) => new Set(current).add(rowId)),
-              )}
+              blockedRun={blockedRuns.get(rowId)}
+              moderation={moderation}
+              onModerate={moderation ? handleModerate : undefined}
+              onBlockAuthor={onBlockUser ? handleBlockAuthor : undefined}
+              onReveal={stableRowCallback(rowId, "reveal", [blockedRuns.get(rowId)?.ids.length], () => () => {
+                const run = blockedRuns.get(rowId);
+                const ids = run?.lead ? run.ids : [rowId];
+                setRevealedIds((current) => {
+                  const next = new Set(current);
+                  for (const id of ids) {
+                    next.add(id);
+                  }
+                  return next;
+                });
+              })}
               isFlashing={flashId === rowId}
               registerRow={registerRow}
               onJumpToMessage={jumpToMessage}
@@ -2566,7 +2850,9 @@ export const MessageList = memo(function MessageList({
                   : undefined
               }
               onMarkRead={onMarkRead}
-              showUnreadDivider={rowId === firstUnreadId}
+              showUnreadDivider={
+                rowId === firstUnreadId && !(redesign && unreadDismissed)
+              }
               afterForumOpening={
                 forumOpeningId !== null &&
                 index > 0 &&
@@ -2672,7 +2958,7 @@ export const MessageList = memo(function MessageList({
         <Reveal show={!!botNotice}>
           {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
         </Reveal>
-        <TypingIndicator users={typingUsers} authors={authors} />
+        <TypingIndicator users={typingUsers} authors={authors} peopleElsewhere={typingInComposer} />
       </div>
 
       {jumpNotice && (
@@ -2713,10 +2999,42 @@ export const MessageList = memo(function MessageList({
               )
             : variant === "stream" && !hasNewer
               ? t("chat.jump.paused")
-              : t("chat.jump.present")}
+              : t(redesign ? "chat.jump.end" : "chat.jump.present")}
         </button>
       )}
     </div>
+    {moderation && (
+      <MemberModerationDialog
+        action={pendingModeration?.action ?? null}
+        subject={pendingModeration?.subject ?? null}
+        serverId={moderation.serverId}
+        onDone={() => {
+          moderation.onModerated();
+          moderation.onRolesChanged?.();
+          const deleteId = pendingModeration?.deleteMessageId;
+          if (deleteId && pendingModeration?.action === "ban" && onDeleteMessage) {
+            void onDeleteMessage(deleteId).catch(() =>
+              onActionError?.(t("chat.menu.banDoneDeleteFailed")),
+            );
+          }
+        }}
+        onClose={() => setPendingModeration(null)}
+      />
+    )}
+    {onBlockUser && (
+      <ConfirmDialog
+        open={pendingBlock !== null}
+        title={t("profile.block")}
+        description={t("profile.block.confirm", { name: pendingBlock?.displayName ?? "" })}
+        confirmLabel={t("profile.block")}
+        onConfirm={() => {
+          if (pendingBlock) {
+            onBlockUser(pendingBlock.id);
+          }
+        }}
+        onClose={() => setPendingBlock(null)}
+      />
+    )}
     </VoiceNoteNamesContext.Provider>
     </CustomEmojiProvider>
   );
@@ -2767,6 +3085,29 @@ function QueuedSendFooter({
   );
 }
 
+/**
+ * A reaction's count. A change after the first render rolls the new number
+ * in from below (the text channels canvas, "Movimento", 1); a count that was
+ * already there when the message loaded does not move.
+ */
+function RollingCount({ value }: { value: number }) {
+  const first = useRef(value);
+  const changed = useRef(false);
+  if (value !== first.current) {
+    changed.current = true;
+  }
+  const rolled = changed.current;
+  return (
+    <span
+      key={value}
+      data-count-roll={rolled ? "" : undefined}
+      className="font-medium tabular-nums"
+    >
+      {value}
+    </span>
+  );
+}
+
 function FailedSendFooter({
   message,
   tabIndex,
@@ -2795,7 +3136,7 @@ function FailedSendFooter({
   }, [message.retryAvailableAt]);
 
   return (
-    <div className="mt-1.5">
+    <div className="mt-1.5" data-send-failed="">
       <p className="flex items-start gap-2 text-xs text-danger redesign:text-[13px]">
         <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
         <Glyph icon={WarningCircleFill} size="sm" className="mt-0.5 hidden shrink-0 redesign:block" />
@@ -2999,9 +3340,12 @@ function EmptyState({
 function TypingIndicator({
   users,
   authors,
+  peopleElsewhere = false,
 }: {
   users: TypingUser[];
   authors: ReadonlyMap<string, MessageAuthorInfo>;
+  /** Under the redesign people typing show under the composer instead. */
+  peopleElsewhere?: boolean;
 }) {
   const { t } = useTranslation();
   const retro = useRetroLook();
@@ -3034,7 +3378,7 @@ function TypingIndicator({
   // than jumps when somebody starts or stops typing.
   return (
     <>
-    <Reveal show={people.length > 0}>
+    <Reveal show={people.length > 0 && !peopleElsewhere}>
     <p
       className="px-4 pb-1 text-xs text-paper-muted redesign:px-7 redesign:pb-1.5 redesign:text-text-secondary"
       aria-live="polite"
@@ -3295,6 +3639,16 @@ interface MessageRowProps {
   canModerate: boolean;
   /** True while this message is behind the blocked curtain. */
   isBlocked: boolean;
+  /** Its place in a run of curtained messages (redesign only). */
+  blockedRun?: BlockedRun;
+  /** See `MessageListProps.moderation`. */
+  moderation?: ProfileModerationContext | null;
+  onModerate?: (
+    action: ProfileModerationAction,
+    subject: ModerationSubject,
+    deleteMessageId?: string,
+  ) => void;
+  onBlockAuthor?: (subject: ModerationSubject) => void;
   onReveal: () => void;
   isFlashing: boolean;
   registerRow: (messageId: string, node: HTMLElement | null) => void;
@@ -3385,6 +3739,10 @@ const MessageRow = memo(function MessageRow({
   channelId,
   canModerate,
   isBlocked,
+  blockedRun,
+  moderation = null,
+  onModerate,
+  onBlockAuthor,
   onReveal,
   isFlashing,
   registerRow,
@@ -3442,6 +3800,7 @@ const MessageRow = memo(function MessageRow({
   const { t, locale } = useTranslation();
   const openProfile = useProfilePopover();
   const compact = useChatDisplay().display.density === "compact";
+  const redesign = useRedesign();
   const { message, dayLabel } = row;
   // The first unread message opens a block even when the same person also
   // wrote the message above the "Novas" line: the divider is where the reader
@@ -3565,6 +3924,8 @@ const MessageRow = memo(function MessageRow({
   const isReal = !message.pending && !message.failed;
   const canDelete = isReal && !!onDelete && (isMine || canModerate);
   const canReply = isReal && !!onReply;
+  // The lightbox's Ver no canal: back to this row, with the jump's flash.
+  const viewInChannel = useCallback(() => onJumpToMessage(message.id), [onJumpToMessage, message.id]);
   const isMessagePinned = Boolean(message.pinnedAt);
   // -1 outside the active row so Tab costs one stop per log, not one per
   // control on every message — see `isActive` on MessageRowProps.
@@ -3685,6 +4046,29 @@ const MessageRow = memo(function MessageRow({
     };
   }
 
+  // Drag right to reply, on a phone under the redesign.
+  // A narrow phone, the width the menu and the sheets turn into sheets at.
+  const phone = useMediaQuery(BELOW_SM_QUERY, false);
+  const swipe = useSwipeToReply(
+    redesign && phone && canReply && !selecting && !stream,
+    onReply,
+  );
+
+  if (isBlocked && blockedRun && !blockedRun.lead) {
+    // The rest of a run: registered so a permalink or reply lands, drawn as
+    // nothing because the run's first line already counts it.
+    return (
+      <article
+        ref={(node) => {
+          registerRow(message.id, node);
+        }}
+        tabIndex={-1}
+        aria-hidden
+        className="h-0 overflow-hidden"
+      />
+    );
+  }
+
   if (isBlocked) {
     return (
       <>
@@ -3708,7 +4092,12 @@ const MessageRow = memo(function MessageRow({
           )}
           style={ROW_CONTENT_VISIBILITY}
         >
-          <span className="italic">{t("chat.blocked")}</span>
+          <Glyph icon={EyeSlash} kind="symbol" size="sm" className="hidden shrink-0 redesign:block" />
+          {blockedRun ? (
+            <span>{t("chat.blockedRun", { count: blockedRun.ids.length })}</span>
+          ) : (
+            <span className="italic">{t("chat.blocked")}</span>
+          )}
           <button
             type="button"
             tabIndex={controlTabIndex}
@@ -3901,6 +4290,48 @@ const MessageRow = memo(function MessageRow({
       : []),
   ];
 
+  // Under the redesign the menu also carries Bloquear and the staff block,
+  // and is regrouped (lib/message-menu-order.ts). The toggle off keeps `items`.
+  const subject: ModerationSubject = { id: message.authorId, displayName: message.authorName };
+  const canActOnAuthor = isReal && !isMine && !stream && !message.isWebhook && !message.isAutomod;
+  const staffRungs = redesign && canActOnAuthor && onModerate
+    ? moderationActions(message.authorId, currentUserId, moderation)
+    : [];
+  const menuItems: ContextMenuItemDef[] = redesign
+    ? orderMessageMenu(
+        [
+          ...items,
+          ...(canActOnAuthor && onBlockAuthor
+            ? [
+                {
+                  id: "block",
+                  label: t("profile.block"),
+                  icon: Ban,
+                  onSelect: selectAndClose(() => onBlockAuthor(subject), false),
+                },
+              ]
+            : []),
+          ...staffRungs.map((rung) => {
+            // On a message the ban also takes the message with it, when the
+            // reader may delete it (the canvas's "Apagar e banir").
+            const deleteAndBan = rung === "ban" && canDelete;
+            return {
+              id: `mod-${rung}`,
+              label: staffRungLabel(rung, subject.displayName, deleteAndBan, t),
+              icon: MESSAGE_MODERATION_ICON[rung],
+              danger: moderationNeedsConfirmation(rung),
+              onSelect: selectAndClose(
+                () => onModerate?.(rung, subject, deleteAndBan ? message.id : undefined),
+                false,
+              ),
+            };
+          }),
+        ],
+        isMine,
+        t("chat.menu.staff"),
+      )
+    : items;
+
   /**
    * The quick reactions, as a STRIP rather than as menu items.
    *
@@ -3941,13 +4372,32 @@ const MessageRow = memo(function MessageRow({
       )}
 
       <ContextMenu
-        items={items}
+        items={menuItems}
         reactions={quickReactions}
         reactionsLabel={t("reactions.quick")}
         onMoreReactions={
           isReal && !stream ? selectAndClose(onOpenPicker, false) : undefined
         }
         moreReactionsLabel={t("reactions.more")}
+        sheetOnPhone
+        phonePreview={
+          redesign && phone && message.body.trim() ? (
+            <div data-held-message="" className="flex gap-2.5 px-3 py-2.5">
+              <UserAvatar
+                name={message.authorName}
+                avatarUrl={message.authorAvatarUrl}
+                rounded="full"
+                className="h-8 w-8 shrink-0"
+              />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-text">{message.authorName}</p>
+                <p className="line-clamp-3 whitespace-pre-wrap break-words text-[0.9375rem] leading-[1.375rem] text-text">
+                  {message.body}
+                </p>
+              </div>
+            </div>
+          ) : undefined
+        }
         // While picking a set, the row's one job is to be picked. A menu
         // offering Reply and Edit over a checkbox is two interactions
         // competing for the same click.
@@ -3983,7 +4433,8 @@ const MessageRow = memo(function MessageRow({
             mentionsYou && !isFlashing
               ? mentionRowRadius(mentionJoinTop, mentionJoinBottom)
               : null,
-            message.pending && "opacity-60",
+            message.pending && "opacity-60 redesign:opacity-70",
+            "redesign:transition-opacity redesign:duration-100",
             isFlashing && "bg-accent/15 ring-1 ring-accent/50",
             mentionsYou && !isFlashing && "pqp-message-mention",
             !mentionsYou && !isFlashing && !selecting && "hover:bg-ink-3/40",
@@ -4002,7 +4453,14 @@ const MessageRow = memo(function MessageRow({
             selecting && !selected && "redesign:hover:bg-[color:var(--message-hover)]",
           )}
           data-forum-answer={forumAnswer ? "" : undefined}
+          data-message-flash={isFlashing ? "" : undefined}
+          {...swipe}
         >
+          {"data-swipe-reply" in swipe && (
+            <span data-swipe-reply-mark="" aria-hidden>
+              <Glyph icon={ArrowBendUpLeft} size="sm" />
+            </span>
+          )}
           {selecting && onToggleSelect && isReal && (
             /* One overlay rather than a checkbox column: the row layout stays
                exactly where it was, so nothing shifts sideways the moment the
@@ -4040,20 +4498,20 @@ const MessageRow = memo(function MessageRow({
           >
             {stream ? null : startsGroup && !compact ? (
               <div
-                className="flex w-14 shrink-0 items-start justify-end pr-2"
+                className="flex w-14 shrink-0 items-start justify-end pr-2 redesign:pr-3"
                 data-row-gutter=""
               >
-                <div className="relative h-9 w-9 shrink-0">
+                <div className={cn("relative h-9 w-9 shrink-0", MESSAGE_AVATAR_REDESIGN)}>
                   <AuthorButton
                     message={message}
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
-                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline redesign:rounded-full"
+                    className={cn("block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline redesign:rounded-full", MESSAGE_AVATAR_REDESIGN)}
                   >
                     {message.isAutomod ? (
                       <span
-                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft redesign:rounded-full"
+                        className={cn("grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft redesign:rounded-full", MESSAGE_AVATAR_REDESIGN)}
                         title={t("chat.automodPosted")}
                       >
                         <ShieldCheck className="h-5 w-5" aria-hidden />
@@ -4063,7 +4521,7 @@ const MessageRow = memo(function MessageRow({
                         name={message.authorName}
                         avatarUrl={message.authorAvatarUrl}
                         rounded="lg"
-                        className={cn("h-9 w-9", freshBotReply && "bot-face-pop")}
+                        className={cn("h-9 w-9", MESSAGE_AVATAR_REDESIGN, freshBotReply && "bot-face-pop")}
                         fallbackClassName="bg-ink-3 text-sm"
                         botFace={serverBot && (authorGone || authorInfo?.status === "offline") ? "dormindo" : undefined}
                       />
@@ -4120,7 +4578,7 @@ const MessageRow = memo(function MessageRow({
                   data-row-header=""
                 >
                   <span
-                    className="inline-flex items-baseline gap-1"
+                    className="inline-flex items-baseline gap-1 redesign:min-w-0 redesign:max-w-full"
                     data-row-author=""
                   >
                     <AuthorButton
@@ -4130,6 +4588,9 @@ const MessageRow = memo(function MessageRow({
                       onOpenProfile={openProfile}
                       className={cn(
                         "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
+                        // A long name stops at 320px with an ellipsis; the
+                        // title carries it whole.
+                        "redesign:min-w-0 redesign:max-w-80 redesign:truncate",
                         !roleColor && (isMine ? "text-signal" : "text-paper"),
                         !roleColor && (isMine ? "redesign:text-[color:var(--message-own-name)]" : "redesign:text-text"),
                         // A role colour has no contrast floor, so its lightness is
@@ -4271,10 +4732,12 @@ const MessageRow = memo(function MessageRow({
                       onClose={() => onClosePoll?.(message.id)}
                     />
                   ) : message.body && !hideBodyForBauCard ? (
+                    <MessageFold enabled={!isMine && !stream}>
                     <div
                       className={cn(
                         "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90 redesign:text-text",
                         stream && "[&>p]:inline",
+                        !stream && attachments.length === 0 && !message.forward && isJumboEmoji(shownBody) && "pqp-jumbo",
                         // "(editada)" ends the last line it belongs to, never a line of its own:
                         // the marker is the last child, so only a paragraph right before it goes
                         // inline. A body ending in a list, quote or code keeps its block.
@@ -4290,6 +4753,7 @@ const MessageRow = memo(function MessageRow({
                         <EditedMarker editedAt={message.editedAt} />
                       )}
                     </div>
+                    </MessageFold>
                   ) : null}
                   {attachments.length > 0 && (
                     <div>
@@ -4303,6 +4767,10 @@ const MessageRow = memo(function MessageRow({
                           authorName: message.authorName,
                           isMine,
                         }}
+                        onReply={canReply ? onReply : undefined}
+                        onReact={isReal && !stream ? onOpenPicker : undefined}
+                        onViewInChannel={isReal ? viewInChannel : undefined}
+                        uploading={message.uploading}
                       />
                       <EditedMarker editedAt={message.editedAt} />
                     </div>
@@ -4352,6 +4820,18 @@ const MessageRow = memo(function MessageRow({
               {message.pending && message.queued && (
                 <QueuedSendFooter tabIndex={controlTabIndex} onDiscard={onDiscard} />
               )}
+              {message.uploading && !message.failed && (
+                <div className="mt-1.5 grid max-w-[8rem] grid-cols-1 gap-2" data-send-uploading="">
+                  <button
+                    type="button"
+                    tabIndex={controlTabIndex}
+                    onClick={onDiscard}
+                    className={FAILED_ACTION_TILE}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              )}
 
               {isReal && !stream && (
                 <ReactionBar
@@ -4362,6 +4842,7 @@ const MessageRow = memo(function MessageRow({
                   onOpenPicker={onOpenPicker}
                   onClosePicker={onClosePicker}
                   tabIndex={controlTabIndex}
+                  authors={authors}
                 />
               )}
 
@@ -4398,6 +4879,7 @@ const MessageRow = memo(function MessageRow({
                   ? "flex"
                   : "hidden group-hover:flex group-focus-within:flex",
               )}
+              data-row-toolbar=""
               onContextMenu={forwardRowContextMenu}
             >
               {/* Hover-only by construction: this whole bar is out of tab
@@ -4543,6 +5025,29 @@ const MessageRow = memo(function MessageRow({
                       moreUp ? "redesign:mb-2" : "redesign:mt-2",
                     )}
                   >
+                    {redesign ? (
+                      menuItems.map((item) =>
+                        item.separator ? (
+                          <div key={item.id} role="separator" className={MENU_SEPARATOR} />
+                        ) : item.heading ? (
+                          <div key={item.id} role="presentation" className={MENU_HEADING}>
+                            {item.label}
+                          </div>
+                        ) : (
+                          <MoreMenuItem
+                            key={item.id}
+                            icon={item.icon}
+                            danger={item.danger}
+                            onSelect={() => {
+                              setMoreOpen(false);
+                              item.onSelect?.();
+                            }}
+                          >
+                            {item.label}
+                          </MoreMenuItem>
+                        ),
+                      )
+                    ) : (<>
                     {onToggleAnswer && isReal && (
                       <MoreMenuItem
                         icon={CircleCheck}
@@ -4651,6 +5156,7 @@ const MessageRow = memo(function MessageRow({
                         {t("chat.bulk.select")}
                       </MoreMenuItem>
                     )}
+                    </>)}
                   </div>
                 )}
               </div>
@@ -4660,7 +5166,7 @@ const MessageRow = memo(function MessageRow({
       </ContextMenu>
       <ConfirmDialog
         open={deleteOpen}
-        title={t("chat.delete")}
+        title={t(redesign ? "chat.deleteConfirmTitle" : "chat.delete")}
         description={t("chat.deleteConfirm")}
         confirmLabel={t("chat.delete")}
         onConfirm={() => onDelete?.()}
@@ -5166,7 +5672,7 @@ function ReplyQuote({
     >
       <CornerUpLeft className="h-3 w-3 shrink-0 redesign:hidden" aria-hidden />
       <Glyph icon={ArrowBendUpLeft} kind="symbol" size="sm" className="hidden text-text-tertiary redesign:block" />
-      <span className="shrink-0 font-medium text-accent redesign:font-semibold redesign:text-text">
+      <span className="shrink-0 font-medium text-accent redesign:max-w-40 redesign:truncate redesign:font-semibold redesign:text-text">
         {replyTo.authorName}
       </span>
       <span className="min-w-0 flex-1 truncate">{replyTo.excerpt}</span>
@@ -5277,6 +5783,8 @@ interface ReactionBarProps {
   onClosePicker: () => void;
   /** -1 outside the active row — see `controlTabIndex` in MessageRow. */
   tabIndex: number;
+  /** Avatars for the who-reacted sheet. */
+  authors: ReadonlyMap<string, MessageAuthorInfo>;
 }
 
 function ReactionWhoTip({
@@ -5333,19 +5841,48 @@ function ReactionWhoTip({
   );
 }
 
+/** How long a finger rests on a reaction before the who-reacted sheet opens. */
+const REACTION_HOLD_MS = 450;
+
 function ReactionChip({
   reaction,
   currentUserId,
   onToggle,
+  onHold,
+  fresh = false,
+  onSettled,
   tabIndex,
 }: {
   reaction: MessageReaction;
   currentUserId: string | null;
   onToggle: (emoji: string) => void;
+  /** Holding the chip opens who reacted (phone, under the redesign). */
+  onHold?: (emoji: string) => void;
+  /** Added after the row mounted: pops in under the redesign (index.css). */
+  fresh?: boolean;
+  onSettled?: (emoji: string) => void;
   tabIndex: number;
 }) {
   const { t } = useTranslation();
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const holdTimer = useRef<number | null>(null);
+  // A mouse keeps the desktop's hover tip and right-click menu at any width.
+  const pointer = useRef<string>("mouse");
+  // The click that follows a hold is the end of the hold, not a toggle.
+  const held = useRef(false);
+  const clearHold = () => {
+    if (holdTimer.current !== null) {
+      window.clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+  };
+  useEffect(() => clearHold, []);
+  const hold = () => {
+    clearHold();
+    held.current = true;
+    navigator.vibrate?.(10);
+    onHold?.(reaction.emoji);
+  };
   const named = formatReactionWho(
     reaction.users,
     reaction.count,
@@ -5373,10 +5910,56 @@ function ReactionChip({
       <button
         type="button"
         tabIndex={tabIndex}
-        onClick={() => onToggle(reaction.emoji)}
-        onPointerEnter={(event) =>
-          setAnchor(event.currentTarget.getBoundingClientRect())
-        }
+        onClick={() => {
+          if (held.current) {
+            held.current = false;
+            return;
+          }
+          onToggle(reaction.emoji);
+        }}
+        {...(onHold && {
+          // The row's own menu opens on a long press too: a hold on a
+          // reaction is about the reaction, so the row never hears it.
+          onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+            pointer.current = event.pointerType;
+            held.current = false;
+            if (event.pointerType !== "mouse") {
+              event.stopPropagation();
+              clearHold();
+              holdTimer.current = window.setTimeout(hold, REACTION_HOLD_MS);
+            }
+          },
+          onPointerUp: clearHold,
+          onPointerCancel: clearHold,
+          // The lift after a hold would arrive as a mousedown on the sheet's
+          // backdrop, which closes it the moment it opened.
+          onTouchEnd: (event: ReactTouchEvent<HTMLButtonElement>) => {
+            if (held.current) {
+              event.preventDefault();
+              held.current = false;
+            }
+          },
+          onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => {
+            if (Math.abs(event.movementX) + Math.abs(event.movementY) > 6) {
+              clearHold();
+            }
+          },
+          // Android sends a contextmenu for the same hold; iOS never does.
+          onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => {
+            if (pointer.current === "mouse") {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            if (!held.current) {
+              hold();
+            }
+          },
+        })}
+        onPointerEnter={(event) => {
+          pointer.current = event.pointerType;
+          setAnchor(event.currentTarget.getBoundingClientRect());
+        }}
         onPointerLeave={() => setAnchor(null)}
         onFocus={(event) =>
           setAnchor(event.currentTarget.getBoundingClientRect())
@@ -5384,6 +5967,8 @@ function ReactionChip({
         onBlur={() => setAnchor(null)}
         aria-pressed={reaction.me}
         aria-label={ariaLabel}
+        data-reaction-fresh={fresh ? "" : undefined}
+        onAnimationEnd={fresh ? () => onSettled?.(reaction.emoji) : undefined}
         className={cn(
           "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
           reaction.me
@@ -5396,9 +5981,9 @@ function ReactionChip({
         <span className="text-sm leading-none redesign:text-base" aria-hidden>
           {reaction.emoji}
         </span>
-        <span className="font-medium tabular-nums">{reaction.count}</span>
+        <RollingCount value={reaction.count} />
       </button>
-      {anchor && <ReactionWhoTip anchor={anchor}>{tooltip}</ReactionWhoTip>}
+      {anchor && (!onHold || pointer.current === "mouse") && <ReactionWhoTip anchor={anchor}>{tooltip}</ReactionWhoTip>}
     </>
   );
 }
@@ -5411,9 +5996,29 @@ function ReactionBar({
   onOpenPicker,
   onClosePicker,
   tabIndex,
+  authors,
 }: ReactionBarProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
+  // A narrow phone, the width the menu and the sheets turn into sheets at.
+  const phone = useMediaQuery(BELOW_SM_QUERY, false);
+  const [whoEmoji, setWhoEmoji] = useState<string | null>(null);
+  // A reaction the row already had when it mounted never pops in: loading
+  // history and switching channels do not animate.
+  // A chip that has popped joins the set, so moving between the two groups
+  // below (which remounts it) never pops it twice.
+  const loaded = useRef(new Set(reactions.map((r) => r.emoji)));
+  const settle = (emoji: string) => loaded.current.add(emoji);
+  const onHold = redesign && phone ? setWhoEmoji : undefined;
   const hasReactions = reactions.length > 0;
+  // The last reaction went (yours, taken off inside the sheet): the bar draws
+  // nothing below, so the sheet closes here. Left set, it would open again by
+  // itself the next time somebody reacted.
+  useEffect(() => {
+    if (!hasReactions) {
+      setWhoEmoji(null);
+    }
+  }, [hasReactions]);
 
   if (!hasReactions && !isPickerOpen) {
     return null;
@@ -5427,6 +6032,9 @@ function ReactionBar({
           reaction={reaction}
           currentUserId={currentUserId}
           onToggle={onToggle}
+          onHold={onHold}
+          fresh={!loaded.current.has(reaction.emoji)}
+          onSettled={settle}
           tabIndex={tabIndex}
         />
       ))}
@@ -5440,6 +6048,9 @@ function ReactionBar({
             reaction={reaction}
             currentUserId={currentUserId}
             onToggle={onToggle}
+            onHold={onHold}
+            fresh={!loaded.current.has(reaction.emoji)}
+            onSettled={settle}
             tabIndex={tabIndex}
           />
         ))}
@@ -5463,6 +6074,16 @@ function ReactionBar({
             onClosePicker();
           }}
           onClose={onClosePicker}
+        />
+      )}
+      {whoEmoji !== null && onHold && (
+        <ReactionWhoSheet
+          reactions={reactions}
+          initialEmoji={whoEmoji}
+          currentUserId={currentUserId}
+          avatarFor={(userId) => authors.get(userId)?.avatarUrl ?? null}
+          onToggle={onToggle}
+          onClose={() => setWhoEmoji(null)}
         />
       )}
     </div>

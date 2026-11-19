@@ -5,6 +5,7 @@ import type { Channel } from "@pqp/shared";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { getDesktop } from "@/lib/desktop";
 import { translateMessage } from "@/lib/i18n";
+import { isRedesignOn } from "@/lib/redesign";
 import {
   isDesktopNotifyDefaultOnEnabled,
   onNotifyDefaultsChange,
@@ -166,7 +167,15 @@ export function notificationLevelItems(
   if (overridden && inherits) {
     items.push({
       id: `${prefix}-reset`,
-      label: translateMessage("notify.menu.reset", { inherits }),
+      // "server" and "account" are the two levels above a channel or a
+      // conversation, not names, so under the redesign they get a sentence
+      // of their own. The old look keeps the wording it had.
+      label:
+        isRedesignOn() && inherits === "server"
+          ? translateMessage("notify.menu.resetServer")
+          : isRedesignOn() && inherits === "account"
+            ? translateMessage("notify.menu.resetAccount")
+            : translateMessage("notify.menu.reset", { inherits }),
       icon: Undo2,
       onSelect: () => setLevel(null),
     });
