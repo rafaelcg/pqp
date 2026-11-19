@@ -38,7 +38,10 @@ function Fold({ children }: { children: ReactNode }) {
       return;
     }
     const measure = () => {
-      const lineHeight = Number.parseFloat(getComputedStyle(node).lineHeight) || 22;
+      // The body sets `--chat-line-height`, which the fold's clamp uses; the
+      // wrapper only inherits the row's.
+      const body = node.querySelector<HTMLElement>(".markdown-body") ?? node;
+      const lineHeight = Number.parseFloat(getComputedStyle(body).lineHeight) || 22;
       setTall(node.scrollHeight > lineHeight * FOLD_AFTER_LINES + 1);
     };
     measure();

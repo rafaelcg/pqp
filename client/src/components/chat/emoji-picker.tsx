@@ -70,6 +70,8 @@ export function EmojiPickerPanel({
     }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        // This Escape is spent: the unread strip and other layers skip it.
+        event.preventDefault();
         onClose?.();
       }
     }

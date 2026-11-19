@@ -1220,7 +1220,12 @@ export const MessageList = memo(function MessageList({
   // Under the redesign, back-to-back curtained messages are one line: the
   // first carries the count and reveals the whole run, the rest stay
   // registered (a permalink still lands) and draw nothing. A day line ends a
-  // run. With the toggle off every curtained message keeps its own line.
+  // run, and so does the first unread message, so its "Novas" line still
+  // draws. With the toggle off every curtained message keeps its own line.
+  const firstUnreadId = useMemo(
+    () => findFirstUnreadMessageId(messages, unreadSince, currentUserId),
+    [messages, unreadSince, currentUserId],
+  );
   const blockedRuns = useMemo(() => {
     // Nobody blocked is the common case: no pass and no new map per arrival.
     if (!redesign || blockedAuthorIds.size === 0) {
@@ -1237,7 +1242,7 @@ export const MessageList = memo(function MessageList({
         !revealedIds.has(id);
       if (!curtained) {
         lead = null;
-      } else if (lead && !row.dayLabel) {
+      } else if (lead && !row.dayLabel && id !== firstUnreadId) {
         lead.ids.push(id);
         runs.set(id, { lead: false, ids: lead.ids });
       } else {
@@ -1246,7 +1251,7 @@ export const MessageList = memo(function MessageList({
       }
     }
     return runs;
-  }, [redesign, rows, currentUserId, blockedAuthorIds, revealedIds]);
+  }, [redesign, rows, currentUserId, blockedAuthorIds, revealedIds, firstUnreadId]);
   // The message menu's staff rungs and Bloquear (redesign only) open these.
   const [pendingModeration, setPendingModeration] = useState<{
     action: Exclude<ProfileModerationAction, "endTimeout">;
@@ -1350,10 +1355,6 @@ export const MessageList = memo(function MessageList({
     return fn;
   }
 
-  const firstUnreadId = useMemo(
-    () => findFirstUnreadMessageId(messages, unreadSince, currentUserId),
-    [messages, unreadSince, currentUserId],
-  );
   // Under the redesign, the strip at the top of the log (`unread-strip.tsx`):
   // the count and mentions from the first new message down, others' only.
   const unreadKey = `${channelId ?? ""}::${unreadSince ?? "none"}`;

@@ -10132,10 +10132,9 @@ function MainAppContent({
           // request included. Nothing tells us, so re-read the friends list
           // to make that visible on every surface at once.
           await friendsRef.current.refresh();
-        } catch (error) {
-          setAppError(
-            error instanceof Error ? error.message : "Failed to block that person",
-          );
+        } catch {
+          // The block itself landed; only the re-read failed.
+          setAppError(translateMessage("report.blockedRefreshFailed"));
         }
       } while (state.again);
     } finally {
