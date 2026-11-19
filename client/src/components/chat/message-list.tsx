@@ -6008,6 +6008,14 @@ function ReactionBar({
   const settle = (emoji: string) => loaded.current.add(emoji);
   const onHold = redesign && phone ? setWhoEmoji : undefined;
   const hasReactions = reactions.length > 0;
+  // The last reaction went (yours, taken off inside the sheet): the bar draws
+  // nothing below, so the sheet closes here. Left set, it would open again by
+  // itself the next time somebody reacted.
+  useEffect(() => {
+    if (!hasReactions) {
+      setWhoEmoji(null);
+    }
+  }, [hasReactions]);
 
   if (!hasReactions && !isPickerOpen) {
     return null;
