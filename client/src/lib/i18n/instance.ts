@@ -18,7 +18,7 @@ const isTest = Boolean(
 );
 
 const PLURAL_OR_CONTEXT_SUFFIX =
-  /_(?:zero|one|two|few|many|other|desktop)$/;
+  /_(?:zero|one|two|few|many|other|desktop|redesign)$/;
 
 type ResourceKey = keyof typeof en;
 type StripSuffix<K extends string> = K extends `${infer Base}_${
@@ -28,7 +28,8 @@ type StripSuffix<K extends string> = K extends `${infer Base}_${
   | "few"
   | "many"
   | "other"
-  | "desktop"}`
+  | "desktop"
+  | "redesign"}`
   ? Base
   : K;
 
@@ -97,8 +98,25 @@ export async function loadLocale(locale: Locale): Promise<void> {
   await i18n.changeLanguage(locale);
 }
 
+/**
+ * Under the redesign a key with a `_redesign` variant reads that one, so the
+ * new look can reword copy while the old look keeps the words it had. An
+ * explicit `context` (the desktop variants) wins. It reads the attribute
+ * `applyRedesign` puts on `<html>`, which is cheap enough for every call.
+ */
+function redesignDrawn(): boolean {
+  return typeof document !== "undefined" && document.documentElement.hasAttribute("data-redesign");
+}
+
+function withRedesignContext(vars?: MessageVars): MessageVars | undefined {
+  if (vars?.context !== undefined || !redesignDrawn()) {
+    return vars;
+  }
+  return { ...vars, context: "redesign" };
+}
+
 export function translateMessage(key: MessageKey, vars?: MessageVars): string {
-  const result = i18n.t(String(key), vars);
+  const result = i18n.t(String(key), withRedesignContext(vars));
   return typeof result === "string" ? result : String(result);
 }
 
