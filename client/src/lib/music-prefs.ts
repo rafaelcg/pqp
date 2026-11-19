@@ -356,6 +356,21 @@ export function applyMusicJoinGate(
   return declined;
 }
 
+/**
+ * The person hung up. Being in the Rádio ends with the seat, but a hang-up
+ * leaves the music session where it was, so a rejoin of the same call in the
+ * same page looked like the same seat and the music played with no invite.
+ * Not for a seat that is only retaken (the microphone coming on): that is
+ * the same person in the same Rádio.
+ */
+export function endRadioSeat(): void {
+  if (!isRedesignOn() || joinGate.channelId === null) {
+    return;
+  }
+  writeJoined(joinGate.channelId, false);
+  joinGate = { channelId: null, trackId: null, joined: false, listening: true, openedTrackId: null };
+}
+
 function onMusicSessionChange() {
   const snap = getMusicSnapshot();
   const current = snap.state?.current ?? null;

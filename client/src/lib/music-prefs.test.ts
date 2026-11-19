@@ -8,6 +8,7 @@ import {
 } from "./music-store";
 import {
   applyMusicJoinGate,
+  endRadioSeat,
   getMusicPrefs,
   markRadioJoinIntent,
   musicPictureMode,
@@ -237,6 +238,15 @@ describe("music prefs store", () => {
     applyMusicJoinGate(CHANNEL, "t1", false, { listening: true });
     const other = "22222222-2222-4222-8222-222222222222";
     expect(applyMusicJoinGate(other, "t9", false, { listening: true })).toBe(true);
+  });
+
+  it("gives the invite again after hanging up and rejoining the same call", () => {
+    applyMusicJoinGate(CHANNEL, null, false, { listening: true });
+    applyMusicJoinGate(CHANNEL, "t1", false, { listening: true });
+    // Entrar na Rádio.
+    expect(applyMusicJoinGate(CHANNEL, "t1", false, { listening: true })).toBe(false);
+    endRadioSeat();
+    expect(applyMusicJoinGate(CHANNEL, "t1", false, { listening: true })).toBe(true);
   });
 
   it("keeps a joined tab in the Rádio across a reload", () => {
