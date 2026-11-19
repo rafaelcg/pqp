@@ -425,6 +425,12 @@ function ImageTile({
  * message's Responder and Reagir. The wrapper keeps the right-click from also
  * opening the row's message menu. What happened shows on the image itself
  * for a moment, since the list has no toast.
+ *
+ * A MOUSE'S MENU ONLY. The image sits inside the row's own menu trigger, and
+ * a finger held on it is holding the message: that opens the row's sheet
+ * ("Segurando uma mensagem"). Both triggers hear the same press, so with this
+ * one live a hold armed two long-press timers and opened two menus. For a
+ * touch or a pen this trigger goes deaf and the press belongs to the row.
  */
 function ImageMenu({
   attachment,
@@ -439,6 +445,13 @@ function ImageMenu({
 }) {
   const { t } = useTranslation();
   const [notice, setNotice] = useState<string | null>(null);
+  // What the last press here was made with. A phone starts as touch, so its
+  // first hold is already the row's.
+  const [touch, setTouch] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      (window.matchMedia?.("(pointer: coarse)").matches ?? false),
+  );
   const timer = useRef<number | null>(null);
   useEffect(
     () => () => {
@@ -499,9 +512,25 @@ function ImageMenu({
     <span
       data-image-menu=""
       className="relative block min-w-0"
-      onContextMenu={(event) => event.stopPropagation()}
+      // Capture, and committed at once: the trigger below must already be deaf
+      // when this same press reaches it, or a first touch after a mouse (a
+      // laptop with a touch screen) would still arm its long-press.
+      onPointerDownCapture={(event) => {
+        const next = event.pointerType !== "mouse";
+        if (next !== touch) {
+          flushSync(() => setTouch(next));
+        }
+      }}
+      // A finger's contextmenu (Android sends one for a hold) goes on to the row.
+      onContextMenu={(event) => {
+        if (!touch) {
+          event.stopPropagation();
+        }
+      }}
     >
-      <ContextMenu items={items}>{children}</ContextMenu>
+      <ContextMenu items={items} triggerDisabled={touch}>
+        {children}
+      </ContextMenu>
       {notice && (
         <span
           role="status"

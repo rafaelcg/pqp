@@ -88,6 +88,14 @@ interface ContextMenuProps {
   moreReactionsLabel?: string;
   children: ReactNode;
   disabled?: boolean;
+  /**
+   * The menu stays mounted but its trigger hears nothing: no right-click and
+   * no long-press timer. For a menu nested in another menu's trigger that
+   * must let a press through to the outer one (an image inside a message row,
+   * for a finger). Unlike `disabled` it does not change the tree, so it can
+   * flip in the middle of a press without remounting the child.
+   */
+  triggerDisabled?: boolean;
   onOpenChange?: (open: boolean) => void;
   /**
    * Under the redesign, below `sm`, the menu rises from the bottom edge as a
@@ -116,6 +124,7 @@ export function ContextMenu({
   moreReactionsLabel,
   children,
   disabled = false,
+  triggerDisabled = false,
   onOpenChange,
   sheetOnPhone = false,
   phonePreview,
@@ -214,6 +223,7 @@ export function ContextMenu({
           and for the touch long-press alike. */}
       <ContextMenuPrimitive.Trigger
         asChild
+        disabled={triggerDisabled}
         onContextMenu={recordPointer}
         onPointerDown={recordPointer}
       >
