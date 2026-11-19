@@ -2041,15 +2041,24 @@ function ActiveCall({
   // button, or the sidebar player before this stage mounted) is asking to see
   // it, so the music takes the stage back from whatever was pinned. Pinning
   // something else over an open queue closes it, so the dock button never
-  // spends a press closing a queue nobody can see.
+  // spends a press closing a queue nobody can see. Closing the queue gives
+  // the stage back to what it took it from (a share, a pinned camera), unless
+  // the viewer pinned something else meanwhile.
   const queueOpen = stageMusic.open;
   const pinnedForQueue = useRef(false);
+  // The pin the queue replaced, or undefined when it replaced nothing.
+  const pinBeforeQueue = useRef<string | null | undefined>(undefined);
   const musicPanelWas = useRef(musicPanel);
   useEffect(() => {
     const panelLeft = musicPanelWas.current && !musicPanel;
     musicPanelWas.current = musicPanel;
     if (!queueOpen) {
+      const before = pinBeforeQueue.current;
       pinnedForQueue.current = false;
+      pinBeforeQueue.current = undefined;
+      if (before !== undefined && pinnedTileId === MUSIC_STAGE_TILE_ID) {
+        setPin(before);
+      }
       return;
     }
     if (!roomStage) {
@@ -2058,6 +2067,9 @@ function ActiveCall({
     if (!pinnedForQueue.current) {
       pinnedForQueue.current = true;
       if (!musicPanel) {
+        // A shrunk player is not given back: opening the queue ends the shrink.
+        pinBeforeQueue.current =
+          pinnedTileId === MUSIC_SHRUNK_PIN ? undefined : pinnedTileId;
         setPin(MUSIC_STAGE_TILE_ID);
       }
       return;
