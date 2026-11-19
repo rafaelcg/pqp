@@ -367,7 +367,12 @@ function SearchPanel({
             <button
               type="button"
               aria-label={t("search.removeChip", { label: `${prefix(chip.kind)}: ${chip.label}` })}
-              onClick={() => setChips((prev) => prev.filter((c) => c.kind !== chip.kind))}
+              onClick={() => {
+                setChips((prev) => prev.filter((c) => c.kind !== chip.kind));
+                // The button goes with its chip, and focus would go with it:
+                // back to the field, where Enter and the arrows are heard.
+                inputRef.current?.focus();
+              }}
               className="grid h-4 w-4 place-items-center rounded-full hover:bg-[color:color-mix(in_oklab,currentColor_15%,transparent)]"
             >
               <Icon icon={X} size="sm" kind="symbol" className="h-3 w-3" />
