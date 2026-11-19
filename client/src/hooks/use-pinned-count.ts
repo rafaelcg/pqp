@@ -1,11 +1,56 @@
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { fetchPinnedMessages } from "@/lib/api";
+
+/*
+ * The count lives outside the hook, per channel, so the pins panel can say
+ * what it just read or removed. The header's own fetch only runs again for a
+ * pin change on a message in the loaded window, and a pinned message is
+ * usually older than that: unpinning one from the panel left "Fixadas 3" in
+ * the header over a list of two.
+ */
+const counts = new Map<string, number>();
+const listeners = new Set<() => void>();
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** The last known count for a channel, or null while unknown. */
+export function pinnedCountOf(channelId: string | null): number | null {
+  return channelId ? (counts.get(channelId) ?? null) : null;
+}
+
+/** A read of the channel's whole pinned list: this is how many it holds. */
+export function setPinnedCount(channelId: string, count: number): void {
+  if (counts.get(channelId) === count) {
+    return;
+  }
+  counts.set(channelId, count);
+  for (const listener of [...listeners]) {
+    listener();
+  }
+}
+
+/** One pin was removed. A count nobody has read yet stays unknown. */
+export function pinnedCountDropped(channelId: string): void {
+  const known = counts.get(channelId);
+  if (known !== undefined && known > 0) {
+    setPinnedCount(channelId, known - 1);
+  }
+}
+
+export function resetPinnedCountsForTests(): void {
+  counts.clear();
+  listeners.clear();
+}
 
 /**
  * How many messages are pinned in a channel, for the header's "Fixadas N"
- * under the redesign. One fetch per channel, and one more when a pin or an
+ * under the redesign. One fetch per visit, and one more when a pin or an
  * unpin lands on a message in the loaded window (`pinSignature` changes).
- * A pin on a message outside the window is picked up on the next visit.
+ * The pins panel reports what it reads and removes (`setPinnedCount`,
+ * `pinnedCountDropped`), which covers a message outside the window.
  * `null` while unknown or when `channelId` is null, so the header keeps
  * its plain tile instead of guessing a number.
  */
@@ -13,8 +58,6 @@ export function usePinnedCount(
   channelId: string | null,
   pinSignature: string,
 ): number | null {
-  const [count, setCount] = useState<{ channelId: string; count: number } | null>(null);
-
   useEffect(() => {
     if (!channelId) {
       return;
@@ -26,7 +69,7 @@ export function usePinnedCount(
       fetchPinnedMessages(channelId)
         .then((res) => {
           if (!cancelled) {
-            setCount({ channelId, count: res.messages.length });
+            setPinnedCount(channelId, res.messages.length);
           }
         })
         .catch(() => {
@@ -39,7 +82,11 @@ export function usePinnedCount(
     };
   }, [channelId, pinSignature]);
 
-  return channelId && count?.channelId === channelId ? count.count : null;
+  return useSyncExternalStore(
+    subscribe,
+    () => pinnedCountOf(channelId),
+    () => null,
+  );
 }
 
 /** The pinned ids among `messages`, as one string that changes when a pin does. */

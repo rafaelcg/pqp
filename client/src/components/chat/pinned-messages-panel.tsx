@@ -10,6 +10,7 @@ import { Menu } from "@/components/ui/menu";
 import { Spinner } from "@/components/ui/spinner";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { pinnedCountDropped, setPinnedCount } from "@/hooks/use-pinned-count";
 import { fetchPinnedMessages, unpinMessage } from "@/lib/api";
 import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 import { useTranslation, type Translator } from "@/lib/i18n";
@@ -71,6 +72,8 @@ export function PinnedMessagesPanel({
     setLoading(true);
     fetchPinnedMessages(channelId)
       .then((res) => {
+        // The header's "Fixadas N" follows this read, open panel or not.
+        setPinnedCount(channelId, res.messages.length);
         if (!cancelled) {
           setPins(res.messages);
         }
@@ -98,6 +101,11 @@ export function PinnedMessagesPanel({
       // No broadcast reconciliation to wait for here — the panel is its own
       // read, not the message list, so it drops the row itself.
       setPins((prev) => prev.filter((message) => message.id !== messageId));
+      // The unpinned message is usually older than the loaded window, so the
+      // header's count would not hear of it from the list.
+      if (channelId) {
+        pinnedCountDropped(channelId);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("pins.unpinFailed"));
     } finally {
