@@ -33,7 +33,7 @@
   },
   "devDependencies": {
     "@pqp/shared": "workspace:*",
-    "@types/node": "^22.10.5",
+    "@types/node": "^26.6.6",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }
