@@ -9,7 +9,9 @@ import {
   type ComponentType,
   type ReactNode,
 } from "react";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 import { horizontalShiftIntoView } from "@/lib/context-menu-placement";
+import { isRedesignOn } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 import {
   MENU_SURFACE,
@@ -210,6 +212,26 @@ export function ContextMenu({
     setAlignOffset(openAbove ? -height : 0);
   }, []);
 
+  // The sheet rises under the cursor that asked for it, where a floating menu
+  // opens beside it. Radix selects whatever item a button is let go over, so
+  // on a narrow window the release of the right-click that opened the sheet
+  // chose a row nobody pressed ("Excluir" sits in that list). The press that
+  // opened the sheet is spent: its release selects nothing. A finger never
+  // gets here, since its release goes to the row it went down on.
+  const openingPressRef = useRef(false);
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      openingPressRef.current =
+        open &&
+        sheetOnPhone &&
+        isRedesignOn() &&
+        typeof window !== "undefined" &&
+        (window.matchMedia?.(BELOW_SM_QUERY).matches ?? false);
+      onOpenChange?.(open);
+    },
+    [onOpenChange, sheetOnPhone],
+  );
+
   const strip = reactions ?? [];
   const hasStrip = strip.length > 0;
   if (disabled || (items.length === 0 && !hasStrip)) {
@@ -217,7 +239,7 @@ export function ContextMenu({
   }
 
   return (
-    <ContextMenuPrimitive.Root onOpenChange={onOpenChange}>
+    <ContextMenuPrimitive.Root onOpenChange={handleOpenChange}>
       {/* Radix composes these with its own handlers, so the coordinates
           recorded here are exactly the ones it anchors to — for a right-click
           and for the touch long-press alike. */}
@@ -251,6 +273,17 @@ export function ContextMenu({
             hasStrip ? "min-w-[16.5rem]" : "min-w-[11.5rem]",
           )}
           onCloseAutoFocus={(e) => e.preventDefault()}
+          // A press that starts inside the sheet is a new one, and counts.
+          onPointerDownCapture={() => {
+            openingPressRef.current = false;
+          }}
+          onPointerUpCapture={(event) => {
+            if (openingPressRef.current) {
+              openingPressRef.current = false;
+              // Radix's own handler on the item skips a prevented event.
+              event.preventDefault();
+            }
+          }}
         >
           {sheetOnPhone && phonePreview && (
             <div data-sheet-preview="" aria-hidden className="hidden">
