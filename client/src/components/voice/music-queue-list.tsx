@@ -385,7 +385,10 @@ function StageQueueRow({
     <ContextMenu items={menuItems}>
       <li
         draggable={canManage}
-        tabIndex={canManage ? 0 : undefined}
+        // A stop for everybody, not only whoever manages the music: the
+        // actions are drawn on hover or focus inside the row, so without it
+        // a keyboard never reaches the row's menu.
+        tabIndex={0}
         data-queue-row={track.id}
         data-drop={dropBefore ? "before" : dropAfter ? "after" : undefined}
         onDragStart={onDragStart}
