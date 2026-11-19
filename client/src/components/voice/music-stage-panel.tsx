@@ -111,11 +111,14 @@ export function MusicStagePanel({
   const queue = music.state?.queue ?? [];
   const wide = slotWidth === 0 || slotWidth >= SIDE_BY_SIDE_PX;
   const hasPlayer = current !== null || parked !== null;
-  const side = music.open && hasPlayer && wide && music.listening;
+  // A parked track is a finished queue, not a song to join: it lays out like
+  // one being listened to whether or not this person pressed Sair.
+  const laidOut = music.listening || current === null;
+  const side = music.open && hasPlayer && wide && laidOut;
   // Over the queue the cover turns sideways; the video cannot (YouTube's
   // player has to stay at least 200 by 200), so it stays full width with the
   // lines tight under it (`StagePlayer`).
-  const overQueue = music.open && hasPlayer && !wide && music.listening;
+  const overQueue = music.open && hasPlayer && !wide && laidOut;
   const playing = music.state?.status === "playing";
   const canManage = effectiveCanManageMusic(voiceState, music.state);
   const canSetSwitches = canSetMusicSwitches(voiceState);

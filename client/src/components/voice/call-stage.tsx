@@ -292,7 +292,7 @@ import {
   requestSettingsSection,
 } from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
-import { toggleMusicOpen, useMusicDock } from "@/lib/music-store";
+import { setMusicOpen, toggleMusicOpen, useMusicDock } from "@/lib/music-store";
 import { isAutomatedBrowser } from "@/lib/hints";
 import { SoundboardControl } from "@/components/voice/soundboard-control";
 import {
@@ -2037,17 +2037,38 @@ function ActiveCall({
       ? (allPeople.find((person) => roomCameraKeys.has(person.key))?.key ?? null)
       : null;
   // A shrunk player stays shrunk across songs, like any pin, until the card
-  // is pressed or the queue is opened. Opening the queue (the dock's music button) is asking to see it, so the
-  // music takes the stage back from whatever was pinned.
+  // is pressed or the queue is opened. Opening the queue (the dock's music
+  // button, or the sidebar player before this stage mounted) is asking to see
+  // it, so the music takes the stage back from whatever was pinned. Pinning
+  // something else over an open queue closes it, so the dock button never
+  // spends a press closing a queue nobody can see.
   const queueOpen = stageMusic.open;
-  const queueWasOpen = useRef(queueOpen);
+  const pinnedForQueue = useRef(false);
+  const musicPanelWas = useRef(musicPanel);
   useEffect(() => {
-    if (queueOpen && !queueWasOpen.current && roomStage && !musicPanel) {
-      setPin(MUSIC_STAGE_TILE_ID);
+    const panelLeft = musicPanelWas.current && !musicPanel;
+    musicPanelWas.current = musicPanel;
+    if (!queueOpen) {
+      pinnedForQueue.current = false;
+      return;
     }
-    queueWasOpen.current = queueOpen;
+    if (!roomStage) {
+      return;
+    }
+    if (!pinnedForQueue.current) {
+      pinnedForQueue.current = true;
+      if (!musicPanel) {
+        setPin(MUSIC_STAGE_TILE_ID);
+      }
+      return;
+    }
+    // Only a pin of something else: a share taking the space keeps the queue,
+    // which then lives in the composer's bar.
+    if (panelLeft && pinnedTileId !== null && pinnedTileId !== MUSIC_STAGE_TILE_ID) {
+      setMusicOpen(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queueOpen]);
+  }, [queueOpen, roomStage, musicPanel, pinnedTileId]);
   const stripDrawn =
     !roomStage &&
     showStrip &&

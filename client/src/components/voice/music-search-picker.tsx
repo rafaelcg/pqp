@@ -159,6 +159,9 @@ export function MusicSearchPicker({
   const rows = results ?? (showRecents ? recentTracks : null);
   const lastQueried = useRef("");
   const runId = useRef(0);
+  // An edit to the field retires a link still resolving, so a late answer
+  // never puts a preview of the old link under new text.
+  const resolveId = useRef(0);
 
   useEffect(() => {
     onQueryActive?.(Boolean(query.trim()) || results !== null);
@@ -215,9 +218,11 @@ export function MusicSearchPicker({
        * `runSearch` checks, so bumping it here retires that answer.
        */
       runId.current += 1;
+      resolveId.current += 1;
+      const mine = resolveId.current;
       try {
         const { track, tracks } = await resolveMusic(text);
-        if (room === null || musicSessionChannelId() !== room) {
+        if (resolveId.current !== mine || room === null || musicSessionChannelId() !== room) {
           return;
         }
         if (big) {
@@ -245,7 +250,9 @@ export function MusicSearchPicker({
           tellOutcome(addTrack(track));
         }
       } catch (error) {
-        setNotice(t(musicErrorKey(error)));
+        if (resolveId.current === mine) {
+          setNotice(t(musicErrorKey(error)));
+        }
       }
     },
     [big, t, tellOutcome],
@@ -454,6 +461,7 @@ export function MusicSearchPicker({
   const onQueryChange = (value: string) => {
     setQuery(value);
     setPreview(null);
+    resolveId.current += 1;
     if (results && !value.trim()) {
       setResults(null);
       setResultsFor("");

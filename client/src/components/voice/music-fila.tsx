@@ -16,6 +16,7 @@ import type { MusicTrack } from "@pqp/shared";
 import type { VoiceState } from "@/hooks/use-voice";
 import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import { setMusicPlacement, useMusicPrefs } from "@/lib/music-prefs";
 import {
   setMusicOpen,
@@ -148,7 +149,18 @@ export function MusicFila({
   const rule = cn(sheet ? "border-border/60" : "border-ink-4/60", "redesign:border-[color:var(--card-border)]");
   const tone = sheet ? "composer" : "rail";
 
+  const redesign = useRedesign();
   useEffect(() => {
+    if (!redesign) {
+      // The old look: any Escape closes the queue, as it always did.
+      const onOldKey = (event: KeyboardEvent) => {
+        if (event.key === "Escape") {
+          setMusicOpen(false);
+        }
+      };
+      window.addEventListener("keydown", onOldKey);
+      return () => window.removeEventListener("keydown", onOldKey);
+    }
     const onKey = (event: KeyboardEvent) => {
       // Escape out of a menu or a dialog closes that one first; the queue
       // is the next Escape, not the same one.
@@ -168,7 +180,7 @@ export function MusicFila({
     // Capture, so this runs before the menu's own Escape takes it down.
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  }, [redesign]);
 
   /*
    * A press anywhere else closes the sheet, the way every popover does. The
