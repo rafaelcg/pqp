@@ -7,6 +7,7 @@ import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { useTheme } from "@/hooks/use-theme";
 import { fetchTrendingGifs, searchGifs } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { isRedesignOn } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 import { POPOVER_SURFACE } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
@@ -63,7 +64,11 @@ export function GifPickerPanel({
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         // This Escape is spent: the unread strip and other layers skip it.
-        event.preventDefault();
+        // Only under the redesign, where the strip is; the old look's layers
+        // each still hear it.
+        if (isRedesignOn()) {
+          event.preventDefault();
+        }
         onClose();
       }
     }

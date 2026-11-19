@@ -328,13 +328,17 @@ export function applyMusicJoinGate(
     writeJoined(channelId, joinGate.joined);
   }
   const previousTrackId = joinGate.trackId;
-  const opened = Boolean(seat.openedHere) && trackId !== null && joinGate.openedTrackId !== trackId;
+  // Being in the Rádio is the new look's idea. The old look keeps its rule:
+  // with auto-join off, every track that appears asks again.
+  const radio = isRedesignOn();
+  const opened =
+    radio && Boolean(seat.openedHere) && trackId !== null && joinGate.openedTrackId !== trackId;
   const declined = shouldAutoDeclineListen({
     autoJoin,
     previousTrackId,
     nextTrackId: trackId,
     seatChanged,
-    joined: joinGate.joined,
+    joined: radio && joinGate.joined,
     openedHere: opened,
   });
   if (opened) {

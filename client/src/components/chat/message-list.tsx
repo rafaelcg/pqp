@@ -104,7 +104,7 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { useRedesign } from "@/lib/redesign";
+import { isRedesignOn, useRedesign } from "@/lib/redesign";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 import { useSwipeToReply } from "@/lib/swipe-to-reply";
@@ -1440,7 +1440,10 @@ export const MessageList = memo(function MessageList({
     function onKey(event: KeyboardEvent) {
       if (event.key === "Escape") {
         // Taken: the unread strip must not read the same Escape as "mark read".
-        event.preventDefault();
+        // The strip is the redesign's; the old look's layers still hear it.
+        if (isRedesignOn()) {
+          event.preventDefault();
+        }
         leaveSelectMode();
       }
     }

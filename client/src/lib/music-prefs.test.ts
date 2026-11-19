@@ -249,6 +249,19 @@ describe("music prefs store", () => {
     expect(applyMusicJoinGate(CHANNEL, "t1", false, { listening: true })).toBe(true);
   });
 
+  it("keeps the old look asking at every track that appears, joined or not", () => {
+    localStorage.setItem("pqp-redesign", "off");
+    applyMusicJoinGate(CHANNEL, null, false, { listening: true });
+    expect(applyMusicJoinGate(CHANNEL, "t1", false, { listening: true })).toBe(true);
+    // Ouvir, then the queue ends and somebody adds a song.
+    applyMusicJoinGate(CHANNEL, "t1", false, { listening: true });
+    applyMusicJoinGate(CHANNEL, null, false, { listening: true });
+    expect(applyMusicJoinGate(CHANNEL, "t2", false, { listening: true })).toBe(true);
+    // Starting the track here does not exempt it either.
+    applyMusicJoinGate(CHANNEL, null, false, { listening: true });
+    expect(applyMusicJoinGate(CHANNEL, "t3", false, { listening: true, openedHere: true })).toBe(true);
+  });
+
   it("keeps a joined tab in the Rádio across a reload", () => {
     vi.stubGlobal("sessionStorage", fakeLocalStorage());
     try {
