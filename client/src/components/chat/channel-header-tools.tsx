@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { At, Bell, BellSlash, PushPin } from "@phosphor-icons/react";
+import { At, Bell, BellSlash, DotsThree, PushPin } from "@phosphor-icons/react";
+import { Pin, type LucideIcon } from "lucide-react";
 import type { Channel } from "@pqp/shared";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Icon } from "@/components/ui/icon";
@@ -8,7 +9,7 @@ import {
   notificationLevelItems,
   useChannelNotificationLevel,
 } from "@/hooks/use-notifications";
-import { pinSignatureOf, usePinnedCount } from "@/hooks/use-pinned-count";
+import { pinSignatureOf, useKnownPinnedCount, usePinnedCount } from "@/hooks/use-pinned-count";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -96,6 +97,67 @@ export function ChannelBellButton({
         className={cn(className, controls.overridden && "text-text")}
       >
         <Icon icon={glyph} size="sm" className="h-[1.125rem] w-[1.125rem]" />
+      </button>
+    </Menu>
+  );
+}
+
+/** One of the folded tools in `ChannelMoreButton`'s menu. */
+export interface ChannelMoreAction {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  onSelect: () => void;
+}
+
+/**
+ * The header's tools on a phone-width window, folded into one tile. Beside
+ * the title there is room for three tiles (search, this one, the member
+ * list); with the pins, the bell and channel settings as tiles of their own
+ * the row ran off the right edge and the last two could not be reached.
+ * Holds the pins (with their count), the notification levels and whatever
+ * else the caller folds (`actions`: channel settings, past broadcasts).
+ */
+export function ChannelMoreButton({
+  channel,
+  inherits,
+  onOpenPins,
+  actions,
+  className,
+}: {
+  channel: Pick<Channel, "id" | "serverId">;
+  inherits: string | null;
+  onOpenPins: () => void;
+  actions: readonly ChannelMoreAction[];
+  className: string;
+}) {
+  const { t } = useTranslation();
+  const controls = useChannelNotificationLevel(channel);
+  // `ChannelPinsButton` is mounted beside this tile and does the reading.
+  const count = useKnownPinnedCount(channel.id);
+  const items: ContextMenuItemDef[] = [
+    {
+      id: "channel-more-pins",
+      label: count ? t("chrome.pinsCount", { count }) : t("chrome.pins"),
+      icon: Pin,
+      onSelect: onOpenPins,
+    },
+    ...actions,
+    ...notificationLevelItems("channel-more", controls, inherits).map((item) =>
+      item.id === "channel-more-heading" ? { ...item, heading: true, disabled: undefined } : item,
+    ),
+  ];
+  const label = t("chrome.moreActions");
+  return (
+    <Menu items={items} align="end">
+      <button
+        type="button"
+        aria-label={label}
+        title={label}
+        data-channel-header-more=""
+        className={className}
+      >
+        <Icon icon={DotsThree} size="sm" kind="symbol" className="h-[1.125rem] w-[1.125rem]" />
       </button>
     </Menu>
   );

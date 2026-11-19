@@ -82,6 +82,14 @@ export function usePinnedCount(
     };
   }, [channelId, pinSignature]);
 
+  return useKnownPinnedCount(channelId);
+}
+
+/**
+ * The count as the store holds it, with no fetch of its own: for a second
+ * reader of a channel beside the one that runs `usePinnedCount`.
+ */
+export function useKnownPinnedCount(channelId: string | null): number | null {
   return useSyncExternalStore(
     subscribe,
     () => pinnedCountOf(channelId),

@@ -53,7 +53,7 @@ import {
   WhatsNewView,
 } from "@/components/deferred-panels";
 import { Menu as ActionMenu } from "@/components/ui/menu";
-import { ChannelBellButton, ChannelPinsButton } from "@/components/chat/channel-header-tools";
+import { ChannelBellButton, ChannelMoreButton, ChannelPinsButton } from "@/components/chat/channel-header-tools";
 import { TypingLine } from "@/components/chat/typing-line";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -11875,12 +11875,32 @@ function MainAppContent({
       !appPaneOnScreen,
   );
 
+  // Under the redesign, below `sm`, a server channel's tools fold into one
+  // tile (`ChannelMoreButton`): beside the title there is room for three
+  // tiles, and with five the last two were off the right edge.
+  const foldHeaderTools = redesign && selectedChannel?.kind === "server";
+  const foldOnPhone = (node: ReactNode) =>
+    foldHeaderTools ? <span className="contents max-sm:hidden">{node}</span> : node;
+  const canScheduleSession =
+    isChannelSessionScheduleEnabled() &&
+    canManageChannels &&
+    selectedChannel?.kind === "server" &&
+    selectedChannel.type === "voice";
+  const canOpenChannelSettings =
+    (canManageChannels || canManageRoles) && selectedChannel?.kind === "server";
+  const openChannelSettings = () => {
+    if (selectedChannel) {
+      setChannelSettings({
+        channelId: selectedChannel.id,
+        section: canManageChannels ? "overview" : "permissions",
+        forceAdvanced: false,
+      });
+    }
+  };
+
   const channelHeaderTools = selectedChannel ? (
     <>
-          {isChannelSessionScheduleEnabled() &&
-            canManageChannels &&
-            selectedChannel.kind === "server" &&
-            selectedChannel.type === "voice" && (
+          {canScheduleSession && foldOnPhone(
             <Tooltip label={t("watchPartySchedule.header.schedule")}>
               <button
                 type="button"
@@ -11891,7 +11911,7 @@ function MainAppContent({
               >
                 <HeaderGlyph off={<CalendarClock className="h-4 w-4" />} on={HeaderCalendarIcon} />
               </button>
-            </Tooltip>
+            </Tooltip>,
           )}
           {(() => {
             const pinTile = (
@@ -11922,25 +11942,27 @@ function MainAppContent({
                     tileClassName={HEADER_ACTION_TILE}
                   />
                 )}
-                <ChannelPinsButton
-                  channelId={selectedChannel.id}
-                  messages={chat.getMessages()}
-                  onOpen={() => setPinsOpen(true)}
-                  fallback={pinTile}
-                />
-                {selectedChannel.kind === "server" && (
+                {foldOnPhone(
+                  <ChannelPinsButton
+                    channelId={selectedChannel.id}
+                    messages={chat.getMessages()}
+                    onOpen={() => setPinsOpen(true)}
+                    fallback={pinTile}
+                  />,
+                )}
+                {selectedChannel.kind === "server" && foldOnPhone(
                   <ChannelBellButton
                     channel={selectedChannel}
                     inherits={selectedServer?.name ?? null}
                     className={HEADER_ACTION_TILE}
-                  />
+                  />,
                 )}
               </>
             ) : (
               pinTile
             );
           })()}
-          {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
+          {canViewWatchPartyHistory && selectedChannel.kind === "server" && foldOnPhone(
             <Tooltip label={t("chrome.watchPartyHistory")}>
               <button
                 type="button"
@@ -11953,27 +11975,41 @@ function MainAppContent({
               >
                 <HeaderGlyph off={<History className="h-4 w-4" />} on={HeaderHistoryIcon} />
               </button>
-            </Tooltip>
+            </Tooltip>,
           )}
-          {(canManageChannels || canManageRoles) &&
-            selectedChannel.kind === "server" && (
+          {canOpenChannelSettings && foldOnPhone(
             <Tooltip label={t("chrome.channelSettings")}>
               <button
                 type="button"
                 className={HEADER_ACTION_TILE}
                 data-channel-header-settings=""
                 aria-label={t("chrome.channelSettings")}
-                onClick={() =>
-                  setChannelSettings({
-                    channelId: selectedChannel.id,
-                    section: canManageChannels ? "overview" : "permissions",
-                    forceAdvanced: false,
-                  })
-                }
+                onClick={openChannelSettings}
               >
                 <HeaderGlyph off={<Settings className="h-4 w-4" />} on={HeaderSettingsIcon} />
               </button>
-            </Tooltip>
+            </Tooltip>,
+          )}
+          {foldHeaderTools && selectedChannel.kind === "server" && (
+            <span className="contents sm:hidden">
+              <ChannelMoreButton
+                channel={selectedChannel}
+                inherits={selectedServer?.name ?? null}
+                onOpenPins={() => setPinsOpen(true)}
+                actions={[
+                  ...(canOpenChannelSettings
+                    ? [{ id: "channel-more-settings", label: t("chrome.channelSettings"), icon: Settings, onSelect: openChannelSettings }]
+                    : []),
+                  ...(canViewWatchPartyHistory
+                    ? [{ id: "channel-more-history", label: t("chrome.watchPartyHistory"), icon: History, onSelect: () => setWatchPartyHistoryChannelId(selectedChannel.id) }]
+                    : []),
+                  ...(canScheduleSession
+                    ? [{ id: "channel-more-schedule", label: t("watchPartySchedule.header.schedule"), icon: CalendarClock, onSelect: () => setScheduleSheetOpen(true) }]
+                    : []),
+                ]}
+                className={HEADER_ACTION_TILE}
+              />
+            </span>
           )}
           {/* The roster toggle, last in the row — the same position and the
               same icon Discord puts it in, because that is where the muscle
