@@ -294,17 +294,29 @@ const TYPING_THROTTLE_MS = 2_500;
 /** A send with no broadcast back within this window is treated as failed. */
 const SEND_TIMEOUT_MS = 10_000;
 /**
- * The longest a send waits for its own uploads. The upload itself has no
+ * The shortest a send waits for its own uploads. The upload itself has no
  * timer, and a later send in the channel queues behind this one, so a stalled
  * file must fail the send rather than hold the channel until a reload.
  */
-const UPLOAD_SEND_MAX_WAIT_MS = 5 * 60_000;
+const UPLOAD_SEND_MIN_WAIT_MS = 5 * 60_000;
+/**
+ * The slowest link a send still waits for, in bytes per second (256 kbit/s).
+ * No progress event reaches this hook, so a large file gets a longer wait in
+ * proportion to its size instead of failing while it is still moving.
+ */
+const UPLOAD_FLOOR_BYTES_PER_SECOND = 256_000 / 8;
+
+/** How long a send waits for files totalling `bytes`, all on one link. */
+export function uploadDeadlineMs(bytes: number): number {
+  const scaled = Math.ceil((Math.max(0, bytes) / UPLOAD_FLOOR_BYTES_PER_SECOND) * 1000);
+  return Math.max(UPLOAD_SEND_MIN_WAIT_MS, scaled);
+}
 
 type UploadDone = Awaited<NonNullable<OutgoingAttachment["pending"]>>;
 
-function withUploadDeadline(pending: Promise<UploadDone>): Promise<UploadDone> {
+function withUploadDeadline(pending: Promise<UploadDone>, deadlineMs: number): Promise<UploadDone> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("upload-timeout")), UPLOAD_SEND_MAX_WAIT_MS);
+    const timer = setTimeout(() => reject(new Error("upload-timeout")), deadlineMs);
     pending.then(
       (done) => {
         clearTimeout(timer);
@@ -317,6 +329,12 @@ function withUploadDeadline(pending: Promise<UploadDone>): Promise<UploadDone> {
     );
   });
 }
+/**
+ * Added to the slow-mode gap between two queued sends. The server measures the
+ * window between arrivals, so a client timer that fires a few milliseconds
+ * early, or a frame that lands a little sooner, would be refused.
+ */
+const SLOW_MODE_GAP_MARGIN_MS = 500;
 /**
  * A reconnect replays the outbox in paced chunks, the way the transport
  * drains its own queue: one burst, then a few frames every half second, so
@@ -821,6 +839,34 @@ export function createChatController(
    * each row carries its own `channelId`, and `applyPage` puts it back.
    */
   const heldUploadSends = new Map<string, ChatMessage>();
+  /**
+   * Upload sends on the wire with no answer yet. A switch holds their bubble
+   * like an upload in progress, so a refusal that lands while the reader is
+   * elsewhere still has a row to fail.
+   */
+  const awaitingAnswer = new Set<string>();
+
+  /** A held send the server answered for good: it is stored, or gone. */
+  function dropHeldSend(nonce: string) {
+    awaitingAnswer.delete(nonce);
+    const held = heldUploadSends.get(nonce);
+    if (!held) {
+      return;
+    }
+    heldUploadSends.delete(nonce);
+    clearSendTimer(nonce);
+    revokeLocalPreviews(held);
+  }
+
+  /** Account change or dispose: nothing held may answer or fire later. */
+  function clearHeldSends() {
+    for (const [nonce, held] of heldUploadSends) {
+      clearSendTimer(nonce);
+      revokeLocalPreviews(held);
+    }
+    heldUploadSends.clear();
+    awaitingAnswer.clear();
+  }
 
   /**
    * Per channel, the sends still waiting to go on the wire, chained in the
@@ -839,7 +885,9 @@ export function createChatController(
 
   /** The gap the server keeps between two sends in a slow-mode channel. */
   function slowModeGapMs(target: string): number {
-    return channelId === target && !bypassSlowMode && slowModeSeconds > 0 ? slowModeSeconds * 1000 : 0;
+    return channelId === target && !bypassSlowMode && slowModeSeconds > 0
+      ? slowModeSeconds * 1000 + SLOW_MODE_GAP_MARGIN_MS
+      : 0;
   }
 
   /**
@@ -910,58 +958,89 @@ export function createChatController(
     applySlowModeHold(channelId, Date.now() + durationMs, nonce);
   }
 
+  function armRetryUnlock(nonce: string, waitMs: number) {
+    clearRetryUnlock(nonce);
+    retryUnlockTimers.set(
+      nonce,
+      setTimeout(() => {
+        retryUnlockTimers.delete(nonce);
+        messages = messages.map((message) =>
+          message.nonce === nonce && message.retryAvailableAt
+            ? { ...message, retryAvailableAt: undefined }
+            : message,
+        );
+        emit();
+      }, waitMs),
+    );
+  }
+
+  /**
+   * `target` is the channel the server named. A send to a channel the reader
+   * has left is only in `heldUploadSends`, and is failed there so the way back
+   * shows it with Retry.
+   */
   function markRejected(
     nonce: string,
     reason: MessageRejectReason,
     retryAfterMs?: number,
     automodMessage?: string,
+    target: string | null = channelId,
   ) {
+    const here = target === channelId;
+    const held = heldUploadSends.get(nonce);
+    const heldMatches = Boolean(held && held.channelId === target && (held.pending || held.failed));
+    // A refusal for another channel that matches nothing held is not ours.
+    if (!here && !heldMatches) {
+      return;
+    }
     clearSendTimer(nonce);
     clearRetryUnlock(nonce);
     forgetInOutbox(nonce);
+    awaitingAnswer.delete(nonce);
     let waitMs: number | undefined;
     if (!isPermanentRejectReason(reason)) {
       if (retryAfterMs && retryAfterMs > 0) {
         waitMs = retryAfterMs;
-      } else if (reason === "slow-mode" && slowModeSeconds > 0) {
+      } else if (reason === "slow-mode" && here && slowModeSeconds > 0) {
         waitMs = slowModeSeconds * 1000;
       }
     }
     const retryAvailableAt = waitMs ? Date.now() + waitMs : undefined;
-    let changed = false;
-    messages = messages.map((message) => {
-      if (message.nonce !== nonce || (!message.pending && !message.failed)) {
-        return message;
-      }
-      changed = true;
-      return {
-        ...message,
-        pending: false,
-        failed: true,
-        rejectReason: reason,
-        retryAvailableAt,
-        ...(automodMessage ? { automodMessage } : {}),
-      };
+    const refuse = (message: ChatMessage): ChatMessage => ({
+      ...message,
+      pending: false,
+      failed: true,
+      rejectReason: reason,
+      retryAvailableAt,
+      ...(automodMessage ? { automodMessage } : {}),
     });
-    if (changed) {
+    let changed = false;
+    if (here) {
+      messages = messages.map((message) => {
+        if (message.nonce !== nonce || (!message.pending && !message.failed)) {
+          return message;
+        }
+        changed = true;
+        return refuse(message);
+      });
+    }
+    if (!changed && held && heldMatches) {
+      heldUploadSends.set(nonce, refuse(held));
+    } else if (!changed) {
+      return;
+    }
+    if (target) {
       if (reason === "slow-mode") {
-        startSlowModeHold(nonce, waitMs ?? 0);
-      } else if (channelId && slowModeHolds.get(channelId)?.nonce === nonce) {
-        clearSlowModeHold(channelId);
+        if (waitMs && !(here && bypassSlowMode)) {
+          applySlowModeHold(target, Date.now() + waitMs, nonce);
+        }
+      } else if (slowModeHolds.get(target)?.nonce === nonce) {
+        clearSlowModeHold(target);
       }
+    }
+    if (changed) {
       if (retryAvailableAt && waitMs) {
-        retryUnlockTimers.set(
-          nonce,
-          setTimeout(() => {
-            retryUnlockTimers.delete(nonce);
-            messages = messages.map((message) =>
-              message.nonce === nonce && message.retryAvailableAt
-                ? { ...message, retryAvailableAt: undefined }
-                : message,
-            );
-            emit();
-          }, waitMs),
-        );
+        armRetryUnlock(nonce, waitMs);
       }
       emit();
     }
@@ -971,6 +1050,8 @@ export function createChatController(
     // The server was reachable and never answered: this is a real failure,
     // with Retry on the bubble, not something to replay on the next connect.
     forgetInOutbox(nonce);
+    sendTimers.delete(nonce);
+    awaitingAnswer.delete(nonce);
     let changed = false;
     messages = messages.map((message) => {
       if (message.nonce !== nonce || !message.pending) {
@@ -979,6 +1060,10 @@ export function createChatController(
       changed = true;
       return { ...message, pending: false, failed: true };
     });
+    const held = heldUploadSends.get(nonce);
+    if (!changed && held?.pending) {
+      heldUploadSends.set(nonce, { ...held, pending: false, failed: true });
+    }
     if (changed) {
       emit();
     }
@@ -1059,25 +1144,33 @@ export function createChatController(
   }
 
   function resetChannelState() {
-    for (const timer of sendTimers.values()) {
-      clearTimeout(timer);
+    for (const message of messages) {
+      if (
+        message.nonce &&
+        (message.uploading ||
+          queuedBehind.has(message.nonce) ||
+          (message.pending && awaitingAnswer.has(message.nonce)))
+      ) {
+        // Still uploading, queued behind an upload, or sent with no answer
+        // yet: keep it, previews and all, for its channel.
+        heldUploadSends.set(message.nonce, message);
+        continue;
+      }
+      revokeLocalPreviews(message);
     }
-    sendTimers.clear();
+    // A held send keeps its failure clock: no answer still fails it.
+    for (const [nonce, timer] of sendTimers) {
+      if (!heldUploadSends.has(nonce)) {
+        clearTimeout(timer);
+        sendTimers.delete(nonce);
+      }
+    }
     for (const timer of retryUnlockTimers.values()) {
       clearTimeout(timer);
     }
     retryUnlockTimers.clear();
     typing.clear();
     botNotice = null;
-    for (const message of messages) {
-      if (message.nonce && (message.uploading || queuedBehind.has(message.nonce))) {
-        // Still uploading, or queued behind an upload: keep it, previews and
-        // all, for its channel.
-        heldUploadSends.set(message.nonce, message);
-        continue;
-      }
-      revokeLocalPreviews(message);
-    }
     messages = [];
     windowGeneration += 1;
     presence = [];
@@ -1161,11 +1254,36 @@ export function createChatController(
     messages = [...settled, ...inFlight.filter(isOptimistic)];
     // Uploads sent here before the reader left come back as they are now:
     // still uploading, or failed with the reason on the bubble.
+    // A sent one the page already holds was stored with no broadcast seen:
+    // the page row wins. A claimed attachment id belongs to one message only.
+    const storedIds = new Set<string>();
+    const storedAttachmentIds = new Set<string>();
+    for (const message of messages) {
+      if (!isOptimistic(message)) {
+        storedIds.add(message.id);
+        for (const attachment of message.attachments ?? []) {
+          storedAttachmentIds.add(attachment.id);
+        }
+      }
+    }
     for (const [nonce, held] of heldUploadSends) {
-      if (held.channelId === channelId) {
-        heldUploadSends.delete(nonce);
-        if (!messages.some((message) => message.nonce === nonce)) {
-          messages = [...messages, held];
+      if (held.channelId !== channelId) {
+        continue;
+      }
+      const stored =
+        storedIds.has(held.id) ||
+        (!held.uploading &&
+          (held.attachments ?? []).some((attachment) => storedAttachmentIds.has(attachment.id)));
+      if (stored) {
+        dropHeldSend(nonce);
+        continue;
+      }
+      heldUploadSends.delete(nonce);
+      if (!messages.some((message) => message.nonce === nonce)) {
+        messages = [...messages, held];
+        const waitMs = held.retryAvailableAt ? held.retryAvailableAt - Date.now() : 0;
+        if (held.failed && waitMs > 0) {
+          armRetryUnlock(nonce, waitMs);
         }
       }
     }
@@ -1259,10 +1377,7 @@ export function createChatController(
         }
         uploadAborts.clear();
         queuedBehind.clear();
-        for (const held of heldUploadSends.values()) {
-          revokeLocalPreviews(held);
-        }
-        heldUploadSends.clear();
+        clearHeldSends();
       }
       if (ownsOutbox && currentUserId !== previousUserId) {
         // The rows belong to an account, not to the tab. A sign-out drops
@@ -1661,8 +1776,13 @@ export function createChatController(
         });
       }
       let settled: PromiseSettledResult<UploadDone>[] = [];
+      // One clock for every file of the send, sized by their total: files
+      // that upload one after another share the link.
+      const deadlineMs = uploadDeadlineMs(
+        waiting.reduce((total, item) => total + item.byteSize, 0),
+      );
       const uploads = Promise.allSettled(
-        waiting.map((item) => withUploadDeadline(item.pending!)),
+        waiting.map((item) => withUploadDeadline(item.pending!, deadlineMs)),
       ).then((results) => {
         settled = results;
       });
@@ -1712,13 +1832,8 @@ export function createChatController(
           uploading: false,
           attachments: resolved,
         }));
-        const held = heldUploadSends.get(nonce);
-        if (held) {
-          // Sent from a channel the reader has left: the server keeps it,
-          // and that channel's next page shows it.
-          heldUploadSends.delete(nonce);
-          revokeLocalPreviews(held);
-        }
+        // A row held for a channel the reader left stays held until the
+        // server answers: its broadcast drops it, a refusal fails it there.
         emit();
         // A bubble the reader discarded while it waited is not sent. Queued
         // sends are held over a channel switch, so missing means discarded.
@@ -1731,6 +1846,7 @@ export function createChatController(
         if (channelId === targetChannelId && !bypassSlowMode && slowModeSeconds > 0) {
           startSlowModeHold(nonce, slowModeSeconds * 1000);
         }
+        awaitingAnswer.add(nonce);
         transmit(
           nonce,
           clamped,
@@ -1790,11 +1906,7 @@ export function createChatController(
       // finds no bubble and sends nothing.
       uploadAborts.get(nonce)?.forEach((abort) => abort());
       uploadAborts.delete(nonce);
-      const held = heldUploadSends.get(nonce);
-      if (held) {
-        heldUploadSends.delete(nonce);
-        revokeLocalPreviews(held);
-      }
+      dropHeldSend(nonce);
       for (const message of messages) {
         if (message.nonce === nonce) {
           revokeLocalPreviews(message);
@@ -2056,6 +2168,9 @@ export function createChatController(
           // not be replayed on the next connect.
           if (message.nonce) {
             forgetInOutbox(message.nonce);
+            // Stored. A row held for this send would come back beside the
+            // stored one, so it goes, whichever channel is open.
+            dropHeldSend(message.nonce);
           }
           if (message.message.channelId !== channelId) {
             return;
@@ -2282,14 +2397,16 @@ export function createChatController(
           if (message.nonce) {
             forgetInOutbox(message.nonce);
           }
-          if (message.channelId !== channelId || !message.nonce) {
+          if (!message.nonce) {
             return;
           }
+          // Another channel only fails a send held for it.
           markRejected(
             message.nonce,
             message.reason,
             message.retryAfterMs,
             message.automodMessage,
+            message.channelId,
           );
           return;
         }
@@ -2325,10 +2442,7 @@ export function createChatController(
 
     dispose() {
       resetChannelState();
-      for (const held of heldUploadSends.values()) {
-        revokeLocalPreviews(held);
-      }
-      heldUploadSends.clear();
+      clearHeldSends();
       sendTails.clear();
       queuedBehind.clear();
       // Nothing will send what these uploads were for: stop them.

@@ -8,6 +8,7 @@ import {
   messageCanRetry,
   messageRetryReady,
   remainingWaitSeconds,
+  uploadDeadlineMs,
 } from "./use-chat";
 import type { RealtimeTransport } from "@/lib/realtime";
 
@@ -2643,7 +2644,10 @@ describe("sends queued behind an upload", () => {
     land({ attachmentId: "11111111-1111-4111-8111-111111111111", width: null, height: null });
     await vi.advanceTimersByTimeAsync(0);
     expect(creates(sent)).toEqual(["foto"]);
+    // The server window plus a margin, so timer jitter is not refused.
     await vi.advanceTimersByTimeAsync(5_000);
+    expect(creates(sent)).toEqual(["foto"]);
+    await vi.advanceTimersByTimeAsync(500);
     expect(creates(sent)).toEqual(["foto", "legenda"]);
   });
 
@@ -2732,7 +2736,193 @@ describe("queued sends, review follow-ups", () => {
     land({ attachmentId: "11111111-1111-4111-8111-111111111111", width: null, height: null });
     await vi.advanceTimersByTimeAsync(0);
     expect(creates(sent)).toEqual(["foto"]);
+    // The server window plus a margin, so timer jitter is not refused.
     await vi.advanceTimersByTimeAsync(5_000);
+    expect(creates(sent)).toEqual(["foto"]);
+    await vi.advanceTimersByTimeAsync(500);
     expect(creates(sent)).toEqual(["foto", "legenda"]);
+  });
+});
+
+describe("upload sends answered after a channel switch", () => {
+  const OTHER = "c0000000-0000-4000-8000-000000000002";
+  const REAL_ID = "11111111-1111-4111-8111-111111111111";
+  type Done = { attachmentId: string; width: null; height: null };
+
+  function upload(pending: Promise<Done>, byteSize = 10, abort?: () => void) {
+    return {
+      attachmentId: "local-1",
+      filename: "mapa.png",
+      contentType: "image/png",
+      byteSize,
+      width: null,
+      height: null,
+      previewUrl: "blob:local",
+      pending,
+      abort,
+    };
+  }
+
+  function lastCreate(sent: unknown[]) {
+    return sent
+      .filter((frame) => (frame as { type: string }).type === "message-create")
+      .at(-1) as { nonce: string; body: string; channelId: string };
+  }
+
+  function storedRow(id: string): Message {
+    return serverMessage({
+      id,
+      channelId: CHANNEL,
+      body: "o mapa",
+      createdAt: "2026-11-18T12:00:00.000Z",
+      attachments: [
+        {
+          id: REAL_ID,
+          filename: "mapa.png",
+          contentType: "image/png",
+          byteSize: 10,
+          width: null,
+          height: null,
+          url: "https://files.example/mapa.png",
+        },
+      ],
+    });
+  }
+
+  async function sendAndLeave() {
+    const ctx = setup();
+    let land!: (value: Done) => void;
+    ctx.chat.sendMessage("o mapa", null, [upload(new Promise((resolve) => (land = resolve)))]);
+    ctx.chat.joinChannel(OTHER);
+    land({ attachmentId: REAL_ID, width: null, height: null });
+    await vi.advanceTimersByTimeAsync(0);
+    const frame = lastCreate(ctx.sent);
+    expect(frame.channelId).toBe(CHANNEL);
+    return { ...ctx, nonce: frame.nonce };
+  }
+
+  it("shows a refusal that landed in another channel as a failed bubble on the way back", async () => {
+    const { chat, nonce } = await sendAndLeave();
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce,
+      reason: "automod",
+      automodMessage: "Sem links aqui.",
+    });
+    expect(chat.getMessages()).toHaveLength(0);
+
+    chat.joinChannel(CHANNEL);
+    chat.setMessages([], false, false);
+    const [message] = chat.getMessages();
+    expect(message?.body).toBe("o mapa");
+    expect(message?.failed).toBe(true);
+    expect(message?.pending).toBe(false);
+    expect(message?.rejectReason).toBe("automod");
+    expect(message?.automodMessage).toBe("Sem links aqui.");
+    expect(message?.attachments?.[0]?.id).toBe(REAL_ID);
+  });
+
+  it("fails a text queued behind the upload when it is refused while away", async () => {
+    const { chat, sent } = setup();
+    let land!: (value: Done) => void;
+    chat.sendMessage("foto", null, [upload(new Promise((resolve) => (land = resolve)))]);
+    chat.sendMessage("legenda");
+    chat.joinChannel(OTHER);
+    land({ attachmentId: REAL_ID, width: null, height: null });
+    await vi.advanceTimersByTimeAsync(0);
+    const caption = lastCreate(sent);
+    expect(caption.body).toBe("legenda");
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce: caption.nonce,
+      reason: "slow-mode",
+      retryAfterMs: 4_000,
+    });
+
+    chat.joinChannel(CHANNEL);
+    chat.setMessages([], false, false);
+    const refused = chat.getMessages().find((message) => message.body === "legenda");
+    expect(refused?.failed).toBe(true);
+    expect(refused?.rejectReason).toBe("slow-mode");
+    expect(messageRetryReady(refused!)).toBe(false);
+    await vi.advanceTimersByTimeAsync(4_000);
+    const unlocked = chat.getMessages().find((message) => message.body === "legenda");
+    expect(messageRetryReady(unlocked!)).toBe(true);
+  });
+
+  it("drops the held bubble when its broadcast lands in another channel", async () => {
+    const { chat, nonce } = await sendAndLeave();
+    chat.handleServerMessage({
+      type: "message-broadcast",
+      nonce,
+      message: storedRow("m-stored"),
+    });
+    chat.joinChannel(CHANNEL);
+    chat.setMessages([storedRow("m-stored")], false, false);
+    expect(chat.getMessages().map((message) => message.id)).toEqual(["m-stored"]);
+  });
+
+  it("shows one row when the page holds the stored message and no broadcast came", async () => {
+    const { chat } = await sendAndLeave();
+    chat.joinChannel(CHANNEL);
+    chat.setMessages([storedRow("m-stored")], false, false);
+    expect(chat.getMessages().map((message) => message.id)).toEqual(["m-stored"]);
+  });
+
+  it("still fails a held send the server never answers", async () => {
+    const { chat } = await sendAndLeave();
+    chat.joinChannel(CHANNEL);
+    chat.setMessages([], false, false);
+    expect(chat.getMessages()[0]?.pending).toBe(true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(chat.getMessages()[0]?.failed).toBe(true);
+  });
+
+  it("keeps an unanswered send held over a second switch", async () => {
+    const { chat, nonce } = await sendAndLeave();
+    chat.joinChannel(CHANNEL);
+    chat.setMessages([], false, false);
+    chat.joinChannel(OTHER);
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce,
+      reason: "cannot-send",
+    });
+    chat.joinChannel(CHANNEL);
+    chat.setMessages([], false, false);
+    expect(chat.getMessages()[0]?.rejectReason).toBe("cannot-send");
+  });
+
+  it("forgets held sends on dispose and on an account change", async () => {
+    const first = await sendAndLeave();
+    first.chat.dispose();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(first.chat.getMessages()).toEqual([]);
+
+    const second = await sendAndLeave();
+    second.chat.setCurrentUser(null);
+    second.chat.setCurrentUser(ME);
+    second.chat.joinChannel(CHANNEL);
+    second.chat.setMessages([], false, false);
+    expect(second.chat.getMessages()).toEqual([]);
+  });
+
+  it("waits longer for a large file before failing the send", async () => {
+    const { chat } = setup();
+    const abort = vi.fn();
+    const bytes = 40 * 1024 * 1024;
+    const deadline = uploadDeadlineMs(bytes);
+    expect(deadline).toBeGreaterThan(20 * 60_000);
+    expect(uploadDeadlineMs(10)).toBe(5 * 60_000);
+    chat.sendMessage("video", null, [upload(new Promise(() => {}), bytes, abort)]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(abort).not.toHaveBeenCalled();
+    expect(chat.getMessages()[0]?.uploading).toBe(true);
+    await vi.advanceTimersByTimeAsync(deadline - 5 * 60_000);
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(chat.getMessages()[0]?.uploadFailed).toBe(true);
   });
 });
