@@ -23,6 +23,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertLoopbackApi, localPgConfig } from "./lib/local-pg.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "../..");
@@ -38,15 +39,7 @@ export const HEAVY_FIRST_MARKER = "bench-primeira-1";
 
 /** Throws unless `databaseUrl` is a local database named like a scratch one. */
 export function assertScratchDatabase(databaseUrl) {
-  const url = new URL(databaseUrl);
-  const name = decodeURIComponent(url.pathname.replace(/^\//, ""));
-  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname)) {
-    throw new Error(`desktop-bench refuses a non-local database host: ${url.hostname}`);
-  }
-  if (!/^pqp_bench/.test(name)) {
-    throw new Error(`desktop-bench only seeds databases named pqp_bench*, got "${name}"`);
-  }
-  return name;
+  return localPgConfig(databaseUrl, { benchDatabase: true }).database;
 }
 
 async function api(apiUrl, token, route, init = {}) {
@@ -105,7 +98,8 @@ async function waitForHall(apiUrl) {
 }
 
 export async function seed({ apiUrl, databaseUrl, log = () => {} }) {
-  assertScratchDatabase(databaseUrl);
+  const pgConfig = localPgConfig(databaseUrl, { benchDatabase: true });
+  assertLoopbackApi(apiUrl);
   const { hall, general, offTopic, voice } = await waitForHall(apiUrl);
   log(`sandbox ${hall.id}: general ${general.id}, off-topic ${offTopic.id}, voice ${voice.id}`);
 
@@ -124,7 +118,7 @@ export async function seed({ apiUrl, databaseUrl, log = () => {} }) {
   }
   log("second participant (bob) joined, share notice acknowledged for both accounts");
 
-  const db = new pg.Client({ connectionString: databaseUrl });
+  const db = new pg.Client(pgConfig);
   await db.connect();
   try {
     // The API's own dev seed adds the dummy roster after the hall exists; wait
@@ -167,16 +161,22 @@ export async function seed({ apiUrl, databaseUrl, log = () => {} }) {
     await db.end();
   }
 
-  // A live watch party: the real create and state routes. The picture itself
-  // (an hls_sessions row and the ffmpeg source) is `lib/hls-source.mjs`'s.
-  const { party } = await api(apiUrl, DEV_TOKEN, `/api/servers/${hall.id}/watch-parties`, {
-    method: "POST",
-    body: JSON.stringify({ name: "bench party" }),
-  });
-  await api(apiUrl, DEV_TOKEN, `/api/watch-parties/${party.id}/state`, {
-    method: "POST",
-    body: JSON.stringify({ state: "live" }),
-  });
+  // A live watch party: the real create and state routes. Reuse one a failed
+  // earlier seed left behind instead of making a second.
+  const listed = await api(apiUrl, DEV_TOKEN, `/api/servers/${hall.id}/watch-parties`).catch(() => ({}));
+  let party = (listed.parties ?? []).find((p) => p.name === "bench party") ?? null;
+  if (!party) {
+    ({ party } = await api(apiUrl, DEV_TOKEN, `/api/servers/${hall.id}/watch-parties`, {
+      method: "POST",
+      body: JSON.stringify({ name: "bench party" }),
+    }));
+  }
+  if (party.status !== "live") {
+    await api(apiUrl, DEV_TOKEN, `/api/watch-parties/${party.id}/state`, {
+      method: "POST",
+      body: JSON.stringify({ state: "live" }),
+    });
+  }
   log(`watch party ${party.id} live in channel ${party.channelId}`);
 
   return {

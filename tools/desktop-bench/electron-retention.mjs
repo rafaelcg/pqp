@@ -31,7 +31,7 @@ const click = (name) => clickSidebar(page, name);
 const out = [await snap("light, fresh")];
 await click("off-topic");
 await waitForText(page, HEAVY_LAST_MARKER, 30_000, "main");
-await loadHistory(page);
+if (!(await loadHistory(page)).loaded) throw new Error("the oldest message never appeared");
 out.push(await snap("heavy, 2000 rows mounted"));
 await click("general");
 await waitForText(page, LIGHT_MARKER, 30_000, "main");

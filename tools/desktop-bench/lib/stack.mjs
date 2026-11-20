@@ -3,13 +3,15 @@
 //   scratch Postgres database -> API (server/dist, dev auth bypass)
 //   static server for a production build of the client (SPA fallback)
 //   livekit-server --dev      (SFU scenes; skipped, and said so, if not installed)
-//   fake S3 + ffmpeg HLS      (the watch party scene, lib/hls-source.mjs)
+//   fake S3 + ffmpeg HLS      (the watch party scene; the encoder runs only during S7,
+//                              `stack.startPartySource()`, lib/hls-source.mjs)
 //
 // Every process this module starts is tracked by pid and stopped by pid (its own
 // process group where it has one). Nothing here ever matches a process by name:
 // the owner's own pqp desktop app may be running on the same machine.
-import { spawn, spawnSync } from "node:child_process";
-import { createReadStream, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { createRequire } from "node:module";
@@ -18,7 +20,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startFakeS3 } from "../../db-blip-harness/fake-s3.mjs";
 import { startHlsSource } from "./hls-source.mjs";
-import { assertScratchDatabase, seed } from "../seed.mjs";
+import { localPgConfig } from "./local-pg.mjs";
+import { seed } from "../seed.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const repo = path.resolve(here, "../../..");
@@ -131,6 +134,33 @@ export function buildClient({ outDir, log }) {
   if (r.status !== 0) throw new Error("client build failed (is @pqp/shared built? pnpm --filter @pqp/shared build)");
 }
 
+/** What the client build depends on: HEAD plus any local change under client/ and packages/shared. */
+function clientBuildStamp() {
+  const git = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  const h = createHash("sha256");
+  h.update(git("rev-parse", "HEAD"));
+  h.update(git("diff", "HEAD", "--", "client", "packages/shared"));
+  h.update(git("ls-files", "--others", "--exclude-standard", "--", "client", "packages/shared"));
+  h.update(`${PORTS.api}`);
+  return h.digest("hex");
+}
+
+/**
+ * Build the client unless `outDir` already holds a build of exactly this
+ * source (stamped with HEAD, local changes and the API port it was baked
+ * with). A cached build of another commit would be recorded under this
+ * commit's sha, so it is never reused.
+ */
+export function ensureClientBuild({ outDir, log, force = false }) {
+  const stampFile = path.join(outDir, ".bench-stamp");
+  const stamp = clientBuildStamp();
+  const fresh =
+    !force && existsSync(path.join(outDir, "index.html")) && existsSync(stampFile) && readFileSync(stampFile, "utf8") === stamp;
+  if (fresh) return;
+  buildClient({ outDir, log });
+  writeFileSync(stampFile, stamp);
+}
+
 export function livekitInstalled() {
   return spawnSync("livekit-server", ["--version"], { stdio: "ignore" }).status === 0;
 }
@@ -142,10 +172,8 @@ export function livekitInstalled() {
  * @param {(m: string) => void} o.log
  */
 export async function startStack({ pgAdminUrl, clientDist, log }) {
-  const admin = new URL(pgAdminUrl);
-  if (!["127.0.0.1", "localhost", "::1"].includes(admin.hostname)) {
-    throw new Error(`desktop-bench refuses a non-local Postgres: ${admin.hostname}`);
-  }
+  // Explicit fields from the checked URL, never the raw string (no ?host= override).
+  const adminConfig = localPgConfig(pgAdminUrl);
   for (const [name, port] of Object.entries(PORTS)) {
     if (name === "livekit") continue;
     if (!(await portFree(port))) throw new Error(`port ${port} (${name}) is in use; set BENCH_${name.toUpperCase()}_PORT`);
@@ -156,7 +184,9 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
   }
 
   const cleanups = [];
+  let stopped = false;
   const stop = async () => {
+    stopped = true;
     for (const step of cleanups.splice(0).reverse()) {
       try {
         await step();
@@ -165,15 +195,20 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
       }
     }
   };
+  // A Ctrl-C during startup must still tear down what is already up.
+  const onInt = () => stop().finally(() => process.exit(130));
+  const onTerm = () => stop().finally(() => process.exit(143));
+  process.once("SIGINT", onInt);
+  process.once("SIGTERM", onTerm);
   try {
     // Database.
     const dbName = `pqp_bench_${Date.now().toString(36)}`;
-    const adminClient = new pg.Client({ connectionString: pgAdminUrl });
+    const adminClient = new pg.Client(adminConfig);
     await adminClient.connect();
     await adminClient.query(`CREATE DATABASE ${dbName}`);
     await adminClient.end();
     cleanups.push(async () => {
-      const c = new pg.Client({ connectionString: pgAdminUrl });
+      const c = new pg.Client(adminConfig);
       await c.connect();
       await c.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
       await c.end();
@@ -181,7 +216,7 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
     const dbUrl = new URL(pgAdminUrl);
     dbUrl.pathname = `/${dbName}`;
     const databaseUrl = dbUrl.toString();
-    assertScratchDatabase(databaseUrl);
+    const pgConfig = localPgConfig(databaseUrl, { benchDatabase: true });
     log(`scratch database ${dbName}`);
 
     const scratch = mkdtempSync(path.join(tmpdir(), "pqp-desktop-bench-"));
@@ -196,7 +231,7 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
     // SFU.
     let livekit = null;
     if (livekitInstalled()) {
-      const lk = spawn("livekit-server", ["--dev"], { detached: true, stdio: "ignore" });
+      const lk = spawn("livekit-server", ["--dev", "--bind", "127.0.0.1"], { detached: true, stdio: "ignore" });
       cleanups.push(() => stopChild(lk));
       await waitFor("livekit-server", async () => (await fetch(`http://127.0.0.1:${PORTS.livekit}`)).ok, 20_000);
       livekit = { url: `ws://127.0.0.1:${PORTS.livekit}`, pid: lk.pid };
@@ -218,6 +253,8 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
         PORT: String(PORTS.api),
         DATABASE_URL: databaseUrl,
         DEV_AUTH_BYPASS: "true",
+        // The bypass token is public: this API answers on loopback only.
+        LISTEN_HOST: "127.0.0.1",
         ...(livekit
           ? { LIVEKIT_URL: livekit.url, LIVEKIT_API_KEY: "devkey", LIVEKIT_API_SECRET: "secret" }
           : {}),
@@ -248,22 +285,29 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
     const apiUrl = `http://127.0.0.1:${PORTS.api}`;
     const ids = await seed({ apiUrl, databaseUrl, log });
 
-    // The watch party's picture.
-    const hls = await startHlsSource({ s3Root, databaseUrl, channelId: ids.partyChannelId, log });
-    cleanups.push(() => hls.stop());
-    // The API memoises "no stream" for a minute, and a viewer must find one:
-    // wait until it answers with the playlist.
-    await waitFor(
-      "the watch party stream",
-      async () => {
-        const r = await fetch(`${apiUrl}/api/channels/${ids.partyChannelId}/live`, {
-          headers: { Authorization: "Bearer dev-local-token" },
-        });
-        return Boolean((await r.json()).stream);
-      },
-      120_000,
-    );
-    log("watch party stream is live through the playlist proxy");
+    // The watch party's picture is started per run, by the scene that needs it.
+    let party = null;
+    const startPartySource = async () => {
+      if (party) await party.stop();
+      party = await startHlsSource({ s3Root, pgConfig, channelId: ids.partyChannelId, log });
+      const want = party.startedAt;
+      // The API memoises "no stream" for a minute: wait for THIS session.
+      await waitFor(
+        "the watch party stream",
+        async () => {
+          const r = await fetch(`${apiUrl}/api/channels/${ids.partyChannelId}/live`, {
+            headers: { Authorization: "Bearer dev-local-token" },
+          });
+          return (await r.json()).stream?.startedAt === want;
+        },
+        150_000,
+      );
+      log("watch party stream is live through the playlist proxy");
+      return party;
+    };
+    cleanups.push(async () => {
+      if (party) await party.stop();
+    });
 
     return {
       apiUrl,
@@ -272,11 +316,18 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
       databaseUrl,
       ids,
       livekit,
-      pids: { api: api.pid, livekit: livekit?.pid ?? null, ffmpeg: hls.pid },
-      stop,
+      startPartySource,
+      pids: { api: api.pid, livekit: livekit?.pid ?? null },
+      stop: async () => {
+        process.removeListener("SIGINT", onInt);
+        process.removeListener("SIGTERM", onTerm);
+        await stop();
+      },
     };
   } catch (error) {
-    await stop();
+    process.removeListener("SIGINT", onInt);
+    process.removeListener("SIGTERM", onTerm);
+    if (!stopped) await stop();
     throw error;
   }
 }

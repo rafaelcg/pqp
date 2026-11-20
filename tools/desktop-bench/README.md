@@ -18,8 +18,15 @@ real account, or anything that costs money.
 | API | `server/dist` with `DEV_AUTH_BYPASS=true` (seeds the Sandbox hall) | 3971 |
 | Client | a `vite build` of `client/` (into the system temp dir, reused between runs; `BENCH_REBUILD=1` rebuilds) served by a tiny static server | 4183 |
 | SFU | `livekit-server --dev` if installed (`brew install livekit`) | 7880 to 7882 |
-| Watch party source | ffmpeg writes a live 720p30 HLS stream into a fake S3 and one `hls_sessions` row says it is live | 3973 |
+| Watch party source | ffmpeg writes a live 720p30 HLS stream into a fake S3 and one `hls_sessions` row says it is live; started for S7 only and stopped (row ended) after it | 3973 |
 | Second person | headless Chromium signed in as `dev-local-token:bob` (`pqp:dev-user-suffix`) | none |
+
+The API and `livekit-server` are bound to 127.0.0.1 (the bypass token is public).
+The database guard in [`lib/local-pg.mjs`](./lib/local-pg.mjs) builds explicit
+connection fields from the checked URL and refuses any query string, so a
+`?host=` override cannot point it elsewhere. The client build is cached in the
+system temp dir and keyed on HEAD plus local changes under `client/` and
+`packages/shared`, so a different commit is never measured from an old bundle.
 
 Everything it starts is stopped by pid (its own process group), never by name:
 the owner's installed pqp app may be running on the same machine. Electron runs

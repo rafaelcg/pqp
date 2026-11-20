@@ -32,7 +32,9 @@
     "stack": {
       "livekit": true,
       "fakeCapture": "Chromium fake device, 1920x1080; the share scenes do not capture the OS screen",
-      "participant": "headless Chromium, dev-local-token:bob, not measured"
+      "participant": "headless Chromium, dev-local-token:bob, not measured",
+      "hlsEncoder": "ffmpeg 720p30 ran for the whole run, beside every scene (the harness at HEAD starts it only for S7)",
+      "apiListen": "all interfaces with the dev bypass (the harness at HEAD binds the API and livekit-server to 127.0.0.1)"
     }
   },
   "thermalBefore": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",

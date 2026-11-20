@@ -88,10 +88,16 @@ export async function startParticipant({ stack, share = false, route }) {
   await ctx.addInitScript(() => localStorage.setItem("pqp:dev-user-suffix", "bob"));
   await ctx.addInitScript(FAKE_DISPLAY_INIT);
   const page = await ctx.newPage();
-  await page.goto(`${stack.appUrl}${route}`);
-  await waitForText(page, "Lobby", 60_000).catch(() => {});
-  await joinVoice(page);
-  if (share) await startShare(page);
+  try {
+    await page.goto(`${stack.appUrl}${route}`);
+    await waitForText(page, "Lobby", 60_000).catch(() => {});
+    await joinVoice(page);
+    if (share) await startShare(page);
+  } catch (error) {
+    // No handle is returned on a failed setup, so nobody else can close this.
+    await browser.close().catch(() => {});
+    throw error;
+  }
   return {
     page,
     async stop() {

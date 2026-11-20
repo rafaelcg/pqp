@@ -7,8 +7,7 @@
 //   # in another shell, export the printed BENCH_* values, then run a script
 import os from "node:os";
 import path from "node:path";
-import { existsSync } from "node:fs";
-import { buildClient, startStack } from "./lib/stack.mjs";
+import { ensureClientBuild, startStack } from "./lib/stack.mjs";
 
 const argv = process.argv.slice(2);
 const val = (n, d) => {
@@ -17,7 +16,7 @@ const val = (n, d) => {
 };
 const log = (m) => console.error(`[stack-up] ${m}`);
 const clientDist = val("client-dist", path.join(os.tmpdir(), "pqp-desktop-bench-client-dist"));
-if (!existsSync(path.join(clientDist, "index.html"))) buildClient({ outDir: clientDist, log });
+if (!argv.includes("--client-dist")) ensureClientBuild({ outDir: clientDist, log });
 
 const stack = await startStack({
   pgAdminUrl: val("pg-admin", process.env.BENCH_PG_ADMIN_URL ?? "postgres://postgres:bench@127.0.0.1:55439/postgres"),

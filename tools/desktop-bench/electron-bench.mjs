@@ -16,11 +16,11 @@
 //   --client-dist D  a client build to serve instead of building one [BENCH_CLIENT_DIST]
 //   --smoke          one run, 20 s calls, 8 s CPU windows; the file name says so
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildClient, repo, startStack } from "./lib/stack.mjs";
+import { ensureClientBuild, repo, startStack } from "./lib/stack.mjs";
 import { SCENE_GROUPS, SCENE_NAMES } from "./lib/scenes.mjs";
 import { sleep } from "./lib/electron.mjs";
 import { summarizeScene } from "./lib/stats.mjs";
@@ -125,11 +125,7 @@ async function main() {
   mkdirSync(path.dirname(outFile), { recursive: true });
 
   const clientDist = cfg.clientDist ?? path.join(os.tmpdir(), "pqp-desktop-bench-client-dist");
-  if (!cfg.clientDist) {
-    if (!existsSync(path.join(clientDist, "index.html")) || process.env.BENCH_REBUILD === "1") {
-      buildClient({ outDir: clientDist, log });
-    }
-  }
+  if (!cfg.clientDist) ensureClientBuild({ outDir: clientDist, log, force: process.env.BENCH_REBUILD === "1" });
 
   const stack = await startStack({ pgAdminUrl: cfg.pgAdminUrl, clientDist, log });
   const missing = [];
@@ -147,6 +143,7 @@ async function main() {
       stack: {
         livekit: Boolean(stack.livekit),
         fakeCapture: "Chromium fake device, 1920x1080; the share scenes do not capture the OS screen",
+        hlsEncoder: "ffmpeg 720p30, running only during S7",
         participant: "headless Chromium, dev-local-token:bob, not measured",
       },
     },
@@ -158,6 +155,19 @@ async function main() {
   const write = () => writeFileSync(outFile, JSON.stringify(result, null, 2));
 
   const raw = {};
+  // Rebuild every scene's summary from the raw runs (failed runs included) and
+  // persist: called after every run, success or not, and once more at the end.
+  const refresh = () => {
+    for (const [id, runs] of Object.entries(raw)) {
+      result.scenes[id] = {
+        name: SCENE_NAMES[id],
+        summary: summarizeScene(runs),
+        runs: runs.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== "versions"))),
+      };
+    }
+    result.missingScenes = missing;
+    write();
+  };
   const stop = async () => {
     await stack.stop();
   };
@@ -183,6 +193,7 @@ async function main() {
           for (const id of group.ids) {
             (raw[id] ??= []).push({ error: String(error?.message ?? error).slice(0, 500) });
           }
+          refresh();
           await sleep(5_000);
           continue;
         }
@@ -193,24 +204,19 @@ async function main() {
           const c = r.cpu?.totalPct;
           log(`  ${id}: ${m != null ? `${m} MB` : ""}${c != null ? `, ${c}% CPU` : ""}`);
         }
-        for (const [id, runs] of Object.entries(raw)) {
-          result.scenes[id] = {
-            name: SCENE_NAMES[id],
-            summary: summarizeScene(runs),
-            runs: runs.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== "versions"))),
-          };
-        }
-        result.missingScenes = missing;
-        write();
+        refresh();
         await sleep(cfg.smoke ? 2_000 : 10_000);
       }
     }
   } finally {
-    result.finishedAt = new Date().toISOString();
-    result.thermalAfter = thermal();
-    result.missingScenes = missing;
-    write();
-    await stop();
+    try {
+      result.finishedAt = new Date().toISOString();
+      result.thermalAfter = thermal();
+      refresh();
+    } finally {
+      // Teardown runs even when the result cannot be written.
+      await stop();
+    }
   }
   log(`wrote ${outFile}`);
   if (missing.length) log(`NOT RUN (no livekit-server): ${missing.join(", ")}`);

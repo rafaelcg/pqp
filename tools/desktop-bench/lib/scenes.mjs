@@ -49,7 +49,15 @@ const lightRoute = (stack) => lightUrl(stack).slice(stack.appUrl.length);
 async function open(stack, { url = lightUrl(stack), marker = LIGHT_MARKER, userDataDir } = {}) {
   const dir = userDataDir ?? freshUserDataDir();
   const e = await launchElectron({ url, userDataDir: dir });
-  const tContent = await waitForText(e.page, marker, 60_000);
+  let tContent;
+  try {
+    tContent = await waitForText(e.page, marker, 60_000);
+  } catch (error) {
+    // Never leave an instance running into the next scene.
+    await e.close();
+    if (!userDataDir) removeDir(dir);
+    throw error;
+  }
   const versions = await e.app.evaluate(({ screen, BrowserWindow }) => {
     const display = screen.getPrimaryDisplay();
     return {
@@ -119,6 +127,7 @@ export async function s2s3History(stack, cfg) {
     await sleep(5_000);
     const toHeavyMs = await switchTo(o.page, "off-topic", HEAVY_LAST_MARKER);
     const history = await loadHistory(o.page);
+    if (!history.loaded) throw new Error("the oldest message never appeared: S2 would measure a partial history");
     const sweep = await scrollSweep(o.page);
     await sleep(3_000);
     const s2 = await measureWindow(o.app, cfg.cpuWindowSeconds);
@@ -204,8 +213,13 @@ export const s5Share = (stack, cfg) => callScene(stack, cfg, { id: "S5", share: 
 export const s6Watch = (stack, cfg) => callScene(stack, cfg, { id: "S6", watch: true });
 
 export async function s7Party(stack, cfg) {
-  const o = await open(stack);
+  // The only scene with an encoder beside it, started for this run and stopped
+  // (its session ended) afterwards. The wait for the API to see it happens
+  // before the shell launches, so it is never inside a measurement.
+  const source = await stack.startPartySource();
+  let o = null;
   try {
+    o = await open(stack);
     await clickSidebar(o.page, "watch-party");
     await o.page.waitForFunction(
       () => [...document.querySelectorAll("video")].some((v) => v.videoWidth > 0 && !v.paused && v.currentTime > 0),
@@ -221,7 +235,8 @@ export async function s7Party(stack, cfg) {
     });
     return { S7: { ...result, extras, versions: o.versions } };
   } finally {
-    await o.dispose();
+    await o?.dispose();
+    await source.stop();
   }
 }
 

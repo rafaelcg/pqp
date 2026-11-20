@@ -73,7 +73,7 @@ await waitForText(page, HEAVY_LAST_MARKER, 30_000, "main");
 // Heap: what is still alive after the whole history is mounted.
 await cdp.send("HeapProfiler.startSampling", { samplingInterval: 32768 });
 await cdp.send("Profiler.start");
-await loadHistory(page);
+if (!(await loadHistory(page)).loaded) throw new Error("the oldest message never appeared");
 const loadCpu = await cdp.send("Profiler.stop");
 await cdp.send("HeapProfiler.collectGarbage");
 const heap = await cdp.send("HeapProfiler.stopSampling");
