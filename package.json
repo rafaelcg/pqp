@@ -7,6 +7,8 @@
     "dev": "pnpm run --parallel --filter @pqp/client --filter @pqp/server dev",
     "build": "pnpm run -r --filter=!@pqp/electron --filter=!@pqp/apps-build --filter=!@pqp/app-sdk --filter=!@pqp/apps-docs build",
     "test": "pnpm run -r test",
+    "fixtures:wire": "pnpm --filter @pqp/shared fixtures:wire",
+    "fixtures:wire:check": "pnpm --filter @pqp/shared fixtures:wire:check",
     "typecheck": "pnpm run -r --filter=!@pqp/electron typecheck",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

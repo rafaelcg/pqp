@@ -88,6 +88,21 @@ is checked against vectors generated from them.
   state is not write state (`MusicState` against `MusicStateWrite`), `.max()` on an
   array counts items, zod's `.url()` accepts `javascript:` and `data:`.
   `restarts-api` (touches `packages/shared`).
+
+  **Status (2026-11-20): done.** Generators, fixtures and tests live in
+  `packages/shared` (`scripts/`, `fixtures/wire/`, `src/wire-fixtures.test.ts`) and
+  change no runtime schema. `pnpm fixtures:wire` regenerates both files and
+  `pnpm fixtures:wire:check` compares without writing. On `main` today: 19 client
+  and 30 server arms, 72 vectors, 295 value rules over 32 arms, 345 violation
+  frames (every rule proved, none unproved), 16 `.url()` and 15 `.guid()` probe
+  cases and 29 pins of the one `.refine` (the soundboard sound id). Changes from
+  #1561 worth knowing: `.uuid()` is now `guid` (the schemas use zod 4's `.guid()`,
+  which ignores version and variant nibbles), `.int()` is `safeint` (whole and
+  within 2^53), a violation must be refused for the kind of reason its rule names
+  (not merely at the right path), a format built as its own node (`z.guid()`)
+  is read as a rule, and `z.coerce.*`, `.strict()`, `.regex()`, `.email()`,
+  `.superRefine()` and every node type outside the closed table throw. Fixture
+  format and the allowlist of what a fixture may hold: `packages/shared/fixtures/wire/README.md`.
 - **A2 (M). Android replays the vectors.** `WireVectorsTest.kt` in
   `android/app/src/test/kotlin/gg/pqp/app/protocol/`: decode every valid vector,
   never apply a refused one, and an allowlist of arms the app does not handle yet
