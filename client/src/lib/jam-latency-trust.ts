@@ -19,3 +19,19 @@ export function latencyIsMeasured(result: { method: LatencyMethod; confidence: L
   }
   return result.confidence === "high" || result.confidence === "medium" || result.method === "manual";
 }
+
+/**
+ * Which sentence the header chip's tooltip says about the number. It follows what
+ * the number IS, so the label and the tooltip cannot disagree: the browser's guess
+ * says it is a guess, a measurement says it is subtracted from the take, and a
+ * measurement that came back unsure says that.
+ */
+export function latencyChipTitleKey(result: {
+  method: LatencyMethod;
+  confidence: LatencyConfidence;
+}): "jam.latency.chipTitleEstimate" | "jam.latency.chipTitle" | "jam.latency.chipTitleUnsure" {
+  if (result.method === "estimate") {
+    return "jam.latency.chipTitleEstimate";
+  }
+  return latencyIsMeasured(result) ? "jam.latency.chipTitle" : "jam.latency.chipTitleUnsure";
+}

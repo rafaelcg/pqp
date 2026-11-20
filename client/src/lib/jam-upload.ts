@@ -117,9 +117,12 @@ export async function prepareStemWithinLimit(
     limitBytes: JAM_AUDIO_MAX_BYTES,
   },
 ): Promise<JamStemUpload> {
-  const whole = await deps.prepare(source, options);
-  if (whole.audio.size <= deps.limitBytes) {
-    return whole;
+  {
+    // Block scoped: over the limit the whole file is of no use, so nothing holds it while the cut one is encoded.
+    const whole = await deps.prepare(source, options);
+    if (whole.audio.size <= deps.limitBytes) {
+      return whole;
+    }
   }
   if (source.video === null) {
     const head = Math.max(0, Math.round((source.trimStartMs * source.sampleRate) / 1000));

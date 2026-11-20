@@ -730,11 +730,15 @@ export function useJamStudio(args: UseJamStudioArgs) {
         }
       }
       postedRef.current = true;
+      // Whether this take plays with others is read from the mix as the server has it NOW: the snapshot
+      // this studio held was taken before the upload, and somebody may have posted or left meanwhile.
+      // A read that fails says nothing about the band (`postedOutcome`).
+      const fresh = answer.track.inMix ? await rereadJamTracks(channelId, targetSong).catch(() => null) : null;
       setOutcome(
         postedOutcome({
           inMix: answer.track.inMix,
           swapped,
-          othersInMix: backingRef.current.filter((one) => one.inMix).length,
+          othersInMix: fresh ? fresh.filter((one) => one.inMix && one.id !== answer.track.id).length : null,
         }),
       );
       setPosted({ songId: targetSong, trackId: answer.track.id });

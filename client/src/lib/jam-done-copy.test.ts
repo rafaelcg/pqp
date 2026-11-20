@@ -34,6 +34,11 @@ describe("postedOutcome reads what the server did", () => {
   it("a take that replaced the poster's earlier one is a swap, even though the server first left it out", () => {
     expect(postedOutcome({ inMix: false, swapped: true, othersInMix: 3 })).toBe("swapped");
   });
+  it("claims nothing about a band when the mix could not be read after the send", () => {
+    expect(postedOutcome({ inMix: true, swapped: false, othersInMix: null })).toBe("unknown");
+    // and a take the server left out is another version whether or not the read worked
+    expect(postedOutcome({ inMix: false, swapped: false, othersInMix: null })).toBe("version");
+  });
 });
 
 describe("the done screen says what became of the take", () => {
@@ -76,6 +81,13 @@ describe("the done screen says what became of the take", () => {
     });
   });
 
+  it("an unread mix says only that the recording is in it", () => {
+    expect(doneCopy({ ...base, outcome: "unknown" })).toEqual({
+      titleKey: "jam.post.doneTitle",
+      bodyKey: "jam.post.doneInMix",
+    });
+  });
+
   it("a swap says the recording took the place of the earlier one", () => {
     expect(doneCopy({ ...base, outcome: "swapped" })).toEqual({
       titleKey: "jam.post.doneTitle",
@@ -97,6 +109,7 @@ describe("the done screen says what became of the take", () => {
       { ...base, outcome: "version", canSwitchMix: true },
       { ...base, outcome: "alone" },
       { ...base, outcome: "swapped" },
+      { ...base, outcome: "unknown" },
       { ...base, swapFailed: true },
       { ...base, outsideTake: true },
       { ...base, outsideTake: true, autoAcceptOutside: true },

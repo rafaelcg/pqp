@@ -19,7 +19,7 @@ import type { LatencyConfidence, LatencyMethod } from "@/lib/jam";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { judgeLevel, levelBar, type JamLevelVerdict, type SilenceClock } from "@/lib/jam-level";
-import { latencyIsMeasured } from "@/lib/jam-latency-trust";
+import { latencyChipTitleKey, latencyIsMeasured } from "@/lib/jam-latency-trust";
 import { createLiveBars } from "@/lib/jam-live";
 import { cn } from "@/lib/utils";
 import { JamBars, useBarCount } from "./jam-bars";
@@ -189,7 +189,7 @@ export function LatencyChip({ studio }: { studio: JamStudio }) {
   const ms = Math.round(current.roundTripMs);
   // A guess is shown as a guess: "set" and the dot are for a number somebody measured.
   const measured = latencyIsMeasured(current);
-  const text = t(current.method === "estimate" ? "jam.latency.chipTitleEstimate" : "jam.latency.chipTitle", { ms });
+  const text = t(latencyChipTitleKey(current), { ms });
   return (
     <Tooltip label={text}>
       <span

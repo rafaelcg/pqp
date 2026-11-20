@@ -52,12 +52,14 @@ export function doneCopy(input: DoneCopyInput): DoneCopy {
         : "jam.public.studio.doneOutside"
       : outcome === "alone"
         ? "jam.post.doneAlone"
-        : outcome === "version"
-          ? input.canSwitchMix
-            ? "jam.post.doneVersionOwner"
-            : "jam.post.doneVersion"
-          : outcome === "swapped"
-            ? "jam.post.doneSwapped"
-            : "jam.post.doneBody";
+        : outcome === "unknown"
+          ? "jam.post.doneInMix"
+          : outcome === "version"
+            ? input.canSwitchMix
+              ? "jam.post.doneVersionOwner"
+              : "jam.post.doneVersion"
+            : outcome === "swapped"
+              ? "jam.post.doneSwapped"
+              : "jam.post.doneBody";
   return { titleKey, bodyKey };
 }

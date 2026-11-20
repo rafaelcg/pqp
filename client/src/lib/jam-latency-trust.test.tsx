@@ -6,7 +6,7 @@ import { LatencyChip } from "@/components/jam/jam-studio-parts";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { JamStudio } from "@/hooks/use-jam-studio";
 import { I18nProvider } from "@/lib/i18n";
-import { latencyIsMeasured } from "./jam-latency-trust";
+import { latencyChipTitleKey, latencyIsMeasured } from "./jam-latency-trust";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -35,6 +35,25 @@ describe("latencyIsMeasured", () => {
 
   it("is true for a number the person typed on purpose", () => {
     expect(latencyIsMeasured({ method: "manual", confidence: "high" })).toBe(true);
+  });
+});
+
+describe("the chip's tooltip follows what the number is", () => {
+  it("a guess says it is a guess, a measurement says it is subtracted, an unsure one says unsure", () => {
+    expect(latencyChipTitleKey({ method: "estimate", confidence: "low" })).toBe("jam.latency.chipTitleEstimate");
+    expect(latencyChipTitleKey({ method: "loopback", confidence: "high" })).toBe("jam.latency.chipTitle");
+    expect(latencyChipTitleKey({ method: "tap-along", confidence: "low" })).toBe("jam.latency.chipTitleUnsure");
+  });
+
+  it("every one of them exists in English, Portuguese and Spanish", async () => {
+    const en = (await import("@/locales/en/translation.json")).default as Record<string, string>;
+    const pt = (await import("@/locales/pt-BR/translation.json")).default as Record<string, string>;
+    const es = (await import("@/locales/es/translation.json")).default as Record<string, string>;
+    for (const key of ["jam.latency.chipTitleEstimate", "jam.latency.chipTitle", "jam.latency.chipTitleUnsure"]) {
+      for (const catalogue of [en, pt, es]) {
+        expect(catalogue[key], key).toContain("{ms}");
+      }
+    }
   });
 });
 
