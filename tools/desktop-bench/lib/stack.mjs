@@ -184,17 +184,19 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
   }
 
   const cleanups = [];
-  let stopped = false;
-  const stop = async () => {
-    stopped = true;
-    for (const step of cleanups.splice(0).reverse()) {
-      try {
-        await step();
-      } catch (error) {
-        console.error("[stack] cleanup step failed:", error?.message ?? error);
+  let stopping = null;
+  // One teardown, however many callers ask: a second caller waits for the
+  // first instead of seeing an empty list and returning early.
+  const stop = () =>
+    (stopping ??= (async () => {
+      for (const step of cleanups.splice(0).reverse()) {
+        try {
+          await step();
+        } catch (error) {
+          console.error("[stack] cleanup step failed:", error?.message ?? error);
+        }
       }
-    }
-  };
+    })());
   // A Ctrl-C during startup must still tear down what is already up.
   const onInt = () => stop().finally(() => process.exit(130));
   const onTerm = () => stop().finally(() => process.exit(143));
@@ -316,6 +318,10 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
       if (party) await party.stop();
     });
 
+    // Startup is over: the caller owns signals from here (two handlers both
+    // calling stop would race, and the one that exits first leaves the rest up).
+    process.removeListener("SIGINT", onInt);
+    process.removeListener("SIGTERM", onTerm);
     return {
       apiUrl,
       appUrl: `http://127.0.0.1:${PORTS.app}`,
@@ -325,16 +331,12 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
       livekit,
       startPartySource,
       pids: { api: api.pid, livekit: livekit?.pid ?? null },
-      stop: async () => {
-        process.removeListener("SIGINT", onInt);
-        process.removeListener("SIGTERM", onTerm);
-        await stop();
-      },
+      stop,
     };
   } catch (error) {
     process.removeListener("SIGINT", onInt);
     process.removeListener("SIGTERM", onTerm);
-    if (!stopped) await stop();
+    await stop();
     throw error;
   }
 }
