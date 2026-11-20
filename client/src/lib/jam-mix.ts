@@ -41,6 +41,29 @@ export function takeToReplace(
 
 
 /**
+ * What a posted take turned into, which is what the "done" screen must say:
+ *
+ *   band      it is in the mix and others are: it plays with them
+ *   alone     it is in the mix and nothing else is: the first take, no band yet
+ *   swapped   it took the place of the poster's own earlier take of the instrument
+ *   version   it was stored as another version of an instrument that is already
+ *             in the mix, and stays OUT of the mix until somebody who may turns it on
+ *
+ * The server decides `inMix` (the first take of an instrument is in, every later
+ * one is out), so the answer is read from its reply, never guessed from what the
+ * screen hoped for. `othersInMix` is the number of takes that were in the mix
+ * when this one was sent.
+ */
+export type PostedOutcome = "band" | "alone" | "swapped" | "version";
+
+export function postedOutcome(input: { inMix: boolean; swapped: boolean; othersInMix: number }): PostedOutcome {
+  if (input.inMix) {
+    return input.othersInMix > 0 ? "band" : "alone";
+  }
+  return input.swapped ? "swapped" : "version";
+}
+
+/**
  * Runs one thing at a time: a call made while another is running is dropped and
  * answers `undefined`. Two quick taps on competing takes would otherwise each
  * read the same snapshot of the mix and leave both of them in.

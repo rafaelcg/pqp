@@ -1,4 +1,5 @@
 import { forwardRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from "react";
+import { bidiClean } from "@/lib/bidi";
 import "./jam-tile.css";
 
 /**
@@ -57,11 +58,14 @@ export function TileCaption({
     >
       {mark}
       <span className="truncate @max-[7.5rem]/tile:hidden">
-        <span data-jam-caption-person="">{name}</span>
+        {/* <bdi>: a person's name and label are typed by them, and sit inline beside each other and the dot */}
+        <span data-jam-caption-person="">
+          <bdi>{bidiClean(name)}</bdi>
+        </span>
         {label && (
           <span data-jam-caption-label="" className={join("hidden font-semibold @min-[11rem]/tile:inline", tone === "media" ? "text-on-media-muted" : "text-text-secondary")}>
             {" · "}
-            {label}
+            <bdi>{bidiClean(label)}</bdi>
           </span>
         )}
       </span>

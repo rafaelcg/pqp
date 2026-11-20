@@ -7,6 +7,7 @@ import { jamSiteHomeUrl } from "@/lib/jam-public-links";
 import { openPublicJamById } from "@/lib/jam-public-nav";
 import { useJamPublicMe } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
+import { UserText } from "./user-text";
 
 /**
  * The public jams, as one quiet row under a channel's own songs: a few cards
@@ -91,7 +92,7 @@ function ShelfCard({ song }: { song: PublicJamSong }) {
       <ShelfArt song={song} />
       <span className="flex min-w-0 flex-col leading-snug">
         <span className="truncate text-sm font-bold text-text group-hover:underline">{song.title}</span>
-        <span className="truncate text-[13px] text-text-secondary">{song.artist ?? who}</span>
+        <span className="truncate text-[13px] text-text-secondary">{song.artist ?? who ? <UserText>{(song.artist ?? who)!}</UserText> : null}</span>
         {need ? (
           <span className="truncate text-[13px] font-semibold text-text-secondary">
             {t(JAM_INSTRUMENT_LOOK[need].missingKey as MessageKey)}

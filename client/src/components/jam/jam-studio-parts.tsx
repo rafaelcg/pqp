@@ -19,6 +19,7 @@ import type { LatencyConfidence, LatencyMethod } from "@/lib/jam";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { judgeLevel, levelBar, type JamLevelVerdict, type SilenceClock } from "@/lib/jam-level";
+import { latencyIsMeasured } from "@/lib/jam-latency-trust";
 import { createLiveBars } from "@/lib/jam-live";
 import { cn } from "@/lib/utils";
 import { JamBars, useBarCount } from "./jam-bars";
@@ -186,6 +187,8 @@ export function LatencyChip({ studio }: { studio: JamStudio }) {
     return null;
   }
   const ms = Math.round(current.roundTripMs);
+  // A guess is shown as a guess: "set" and the dot are for a number somebody measured.
+  const measured = latencyIsMeasured(current);
   const text = t(current.method === "estimate" ? "jam.latency.chipTitleEstimate" : "jam.latency.chipTitle", { ms });
   return (
     <Tooltip label={text}>
@@ -197,8 +200,8 @@ export function LatencyChip({ studio }: { studio: JamStudio }) {
         className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-2.5 text-xs font-semibold tabular-nums text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:hidden"
       >
         <Headphones className="h-3.5 w-3.5" aria-hidden />
-        {t("jam.latency.chipLabel", { ms })}
-        {current.method !== "estimate" && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accent" />}
+        {t(measured ? "jam.latency.chipLabel" : "jam.latency.chipLabelEstimate", { ms })}
+        {measured && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accent" />}
       </span>
     </Tooltip>
   );

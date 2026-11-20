@@ -2,7 +2,6 @@ import type { CreateJamSongRequest, JamInstrument, JamTrack } from "@pqp/shared"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listInputs,
-  prepareStemUpload,
   tapTempo,
   type JamEngine,
   type JamInput,
@@ -11,11 +10,12 @@ import {
   type LatencyStatus,
   type RecordingHandle,
 } from "@/lib/jam";
+import { phaseHoldsUnsentWork, useLeaveGuard } from "@/hooks/use-leave-guard";
 import { createJamSong, deleteJamSong, jamErrorKind, updateJamTrack, type JamErrorKind } from "@/lib/jam-api";
 import { createPublicJam } from "@/lib/jam-public-api";
 import { blockPeaks, isSilentTake, silentIn } from "@/lib/jam-take-silence";
 import { forgetCheckSkipped, isCheckSkipped, rememberCheckSkipped } from "@/lib/jam-latency-skip";
-import { replaceInMix, takeToReplace } from "@/lib/jam-mix";
+import { postedOutcome, replaceInMix, takeToReplace, type PostedOutcome } from "@/lib/jam-mix";
 import { createLevelMeter, type JamLevelMeter } from "@/lib/jam-level";
 import { getJamEngine, syncJamStems, TAKE_STEM_ID } from "@/lib/jam-session";
 import { applyJamWrite, jamStoreEpoch, putJamSongOnWall, putJamTrackInSong, rereadJamTracks } from "@/lib/jam-store";
@@ -31,6 +31,7 @@ import {
 } from "@/lib/jam-take-edit";
 import {
   postTake,
+  prepareStemWithinLimit,
   startJamPost,
   withoutVideo,
   type JamPostProgress,
@@ -160,6 +161,8 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const [goneOnPost, setGoneOnPost] = useState(false);
   const [wantsReplace, setWantsReplace] = useState(true);
   const [swapFailed, setSwapFailed] = useState(false);
+  /** What the take became, for the "done" screen to say it (`postedOutcome`). */
+  const [outcome, setOutcome] = useState<PostedOutcome | null>(null);
   /** The input went away mid-recording: what happened to the take, for the screen to say. */
   const [micLost, setMicLost] = useState<"kept" | "empty" | null>(null);
   /** The song was closed to new takes while this one waited: it can never be sent there. */
@@ -174,6 +177,8 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const grid = useRef<{ t0: number; f0: number; beatSec: number; total: number } | null>(null);
   const taps = useRef<number[]>([]);
   const job = useRef<{ state: JamPostState; take: JamPostTake } | null>(null);
+  /** "Send the sound only" was chosen for this take: the picture is not part of any later try. */
+  const videoSkipped = useRef(false);
   const createdSongId = useRef<string | null>(null);
   const cameraRef = useRef<MediaStream | null>(null);
   const takeUrl = useRef<string | null>(null);
@@ -560,6 +565,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
     resetPeaks();
     setElapsedMs(0);
     job.current = null;
+    videoSkipped.current = false;
     setPostError(null);
     setMicLost(null);
     setPhase("setup");
@@ -640,6 +646,33 @@ export function useJamStudio(args: UseJamStudioArgs) {
     setPhase("posting");
     setProgress({ stage: "uploading", fraction: 0 });
     try {
+      // Encoded BEFORE the song is created: a take that cannot fit (`prepareStemWithinLimit` throws the
+      // server's own 413 without a request) must not leave an empty song behind it.
+      if (!job.current) {
+        const at = placed(take, edits);
+        const upload = await prepareStemWithinLimit(
+          {
+            samples: take.samples,
+            sampleRate: take.sampleRate,
+            offsetMs: at.offsetMs,
+            trimStartMs: at.trimStartMs,
+            trimEndMs: at.trimEndMs,
+            video: videoSkipped.current ? null : take.video,
+          },
+          { gain: at.gain },
+        );
+        const input: JamPostTake = {
+          audio: upload.audio,
+          video: upload.video,
+          offsetMs: upload.offsetMs,
+          trimStartMs: upload.trimStartMs,
+          trimEndMs: upload.trimEndMs,
+          durationMs: upload.durationMs,
+          gain: upload.gain,
+          peaks: upload.peaks,
+        };
+        job.current = { state: startJamPost(input), take: input };
+      }
       let targetSong = detached ? createdSongId.current : (songId ?? createdSongId.current);
       if (!targetSong) {
         const source = detached ?? draft;
@@ -660,31 +693,6 @@ export function useJamStudio(args: UseJamStudioArgs) {
         targetSong = song.id;
         putJamSongOnWall(channelId, song, asked);
       }
-      if (!job.current) {
-        const at = placed(take, edits);
-        const upload = await prepareStemUpload(
-          {
-            samples: take.samples,
-            sampleRate: take.sampleRate,
-            offsetMs: at.offsetMs,
-            trimStartMs: at.trimStartMs,
-            trimEndMs: at.trimEndMs,
-            video: take.video,
-          },
-          { gain: at.gain },
-        );
-        const input: JamPostTake = {
-          audio: upload.audio,
-          video: upload.video,
-          offsetMs: upload.offsetMs,
-          trimStartMs: upload.trimStartMs,
-          trimEndMs: upload.trimEndMs,
-          durationMs: upload.durationMs,
-          gain: upload.gain,
-          peaks: upload.peaks,
-        };
-        job.current = { state: startJamPost(input), take: input };
-      }
       const answer = await postTake({
         songId: targetSong,
         instrument,
@@ -701,8 +709,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
       // A new take of an instrument the poster already has in the mix replaces it
       // when they said so (the default): the new one in, then the old one out. The
       // take is posted either way, so a failure here is told, never a failed post.
+      let swapped = false;
       if (replaceTake && wantsReplace && !answer.track.inMix) {
-        const outcome = await replaceInMix(
+        const swap = await replaceInMix(
           answer.track.id,
           replaceTake.id,
           async (id, inMix) => {
@@ -715,11 +724,19 @@ export function useJamStudio(args: UseJamStudioArgs) {
           },
           () => rereadJamTracks(channelId, targetSong),
         );
-        if (outcome !== "replaced") {
+        swapped = swap === "replaced";
+        if (!swapped) {
           setSwapFailed(true);
         }
       }
       postedRef.current = true;
+      setOutcome(
+        postedOutcome({
+          inMix: answer.track.inMix,
+          swapped,
+          othersInMix: backingRef.current.filter((one) => one.inMix).length,
+        }),
+      );
       setPosted({ songId: targetSong, trackId: answer.track.id });
       setPhase("done");
     } catch (failure) {
@@ -764,6 +781,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
 
   /** The picture would not go: post the sound alone, which is already stored. */
   const postWithoutVideo = useCallback(() => {
+    videoSkipped.current = true;
     if (job.current) {
       job.current = { ...job.current, state: withoutVideo(job.current.state) };
     }
@@ -877,22 +895,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
 
   // ---- teardown ------------------------------------------------------------
   // ---- unsent work survives neither a reload nor a closed tab -----------------
-  // A take that is recorded and not sent, or one going up, exists only in this
-  // page. The browser asks before it goes (its own words, never ours). Not in
-  // any other phase: nothing is lost by leaving the setup, and a live recording
-  // has its own question when it is the app that is left.
-  const unsent = phase === "review" || phase === "posting";
-  useEffect(() => {
-    if (!unsent) {
-      return;
-    }
-    const ask = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", ask);
-    return () => window.removeEventListener("beforeunload", ask);
-  }, [unsent]);
+  // A take being recorded (the ten minutes of somebody's playing included), one recorded
+  // and not sent, and one going up exist only in this page: see `phaseHoldsUnsentWork`.
+  useLeaveGuard(phaseHoldsUnsentWork(phase));
 
   useEffect(() => {
     return () => {
@@ -1011,6 +1016,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
     setShareVideo,
     setWantsReplace,
     swapFailed,
+    outcome,
     posted,
     startError,
     levelClock,
