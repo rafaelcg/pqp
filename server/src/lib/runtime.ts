@@ -65,6 +65,7 @@ export interface PoolStats {
 export type { PoolCheckoutStats } from "./pool-checkouts.js";
 import type { PoolCheckoutStats } from "./pool-checkouts.js";
 import type { AdmissionStats } from "./admission.js";
+import type { SharedDeflateStats } from "./ws-shared-deflate.js";
 import { eventLoopLagSnapshot, type EventLoopLag } from "./event-loop.js";
 import {
   notePoolOccupancy,
@@ -189,6 +190,16 @@ export interface RuntimeMetrics {
    */
   wsAuth: (AdmissionStats & { enabled: boolean }) | null;
   /**
+   * Compress-once fan-out (`lib/ws-shared-deflate.ts`, runtime flag
+   * `ws_shared_deflate`), cumulative since boot, or null in a process with no
+   * WebSocket server. `broadcasts` and `sockets` are the frames and sockets
+   * that took the shared path; `compressionsAvoided` (zlib runs `ws` would
+   * have made and did not) and `bytesNotCompressed` are the processor saving;
+   * `fallbacks` says, by reason, which sockets got `ws`'s own compression
+   * instead. All zero with the flag off, which is the point of the flag.
+   */
+  wsSharedDeflate: (SharedDeflateStats & { enabled: boolean }) | null;
+  /**
    * How late this process fires its own timers, over the last minute
    * (`lib/event-loop.ts`): p50, p99 and max in milliseconds, with the idle
    * floor already subtracted. THIS REPLICA ONLY, like everything in
@@ -226,6 +237,16 @@ let readDbBreakerStats:
   | null = null;
 
 let readWsAuthStats: (() => AdmissionStats & { enabled: boolean }) | null = null;
+let readWsSharedDeflateStats:
+  | (() => SharedDeflateStats & { enabled: boolean })
+  | null = null;
+
+/** Called once by `index.ts` with the shared-deflate counters and the flag. */
+export function registerWsSharedDeflateStats(
+  read: () => SharedDeflateStats & { enabled: boolean },
+): void {
+  readWsSharedDeflateStats = read;
+}
 
 /** Called once by `index.ts` with `wsAuthAdmissionStats`. */
 export function registerWsAuthStats(
@@ -423,9 +444,20 @@ export function runtimeSnapshot(): RuntimeMetrics {
     peakTrackedSince,
     poolWait: safePoolWait(),
     wsAuth: safeWsAuthStats(),
+    wsSharedDeflate: safeWsSharedDeflateStats(),
     eventLoop: eventLoopLagSnapshot(),
     db: { breaker: safeDbBreakerStats() },
   };
+}
+
+function safeWsSharedDeflateStats():
+  | (SharedDeflateStats & { enabled: boolean })
+  | null {
+  try {
+    return readWsSharedDeflateStats?.() ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function safeWsAuthStats(): (AdmissionStats & { enabled: boolean }) | null {
@@ -470,6 +502,7 @@ export function resetRuntimeMetrics(): void {
   readPoolCheckoutStats = null;
   readDbBreakerStats = null;
   readWsAuthStats = null;
+  readWsSharedDeflateStats = null;
   peakSockets = 0;
   peakPoolWaiting = 0;
   peakPoolBusy = 0;

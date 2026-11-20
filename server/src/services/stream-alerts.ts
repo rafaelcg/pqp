@@ -20,6 +20,8 @@ import {
 } from "../lib/bus.js";
 import { flagServerOverrides, isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
+import type { WebSocket } from "ws";
+import { broadcastEncoded, encodeFrame } from "../ws/fanout.js";
 import { forEachSocketOfUser } from "../ws/sockets.js";
 import { computeMemberPermissionsBulk } from "./permissions.js";
 import { pushStreamStarted, resolvePushLevel } from "./push.js";
@@ -834,7 +836,7 @@ const STREAM_ALERT_TOPIC = "stream-alert.deliver";
  * own sockets, never the process's.
  */
 export function deliverStreamStarted(event: StreamAlertEvent): number {
-  const frame = JSON.stringify({
+  const frame = encodeFrame({
     type: "stream-started",
     serverId: event.serverId,
     channelId: event.channelId,
@@ -844,15 +846,15 @@ export function deliverStreamStarted(event: StreamAlertEvent): number {
     kind: event.kind,
     startedAt: event.startedAt,
   } satisfies StreamStartedMessage);
-  let sent = 0;
+  const targets: WebSocket[] = [];
   for (const userId of new Set(event.userIds)) {
     forEachSocketOfUser(userId, (socket) => {
       if (socket.readyState === 1) {
-        socket.send(frame);
-        sent += 1;
+        targets.push(socket);
       }
     });
   }
+  const sent = broadcastEncoded(targets, frame);
   metrics.delivered += sent;
   return sent;
 }

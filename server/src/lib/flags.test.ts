@@ -86,6 +86,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   message_list_windowing: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   ws_auth_admission: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  ws_shared_deflate: (raw) => raw === "true",
   community_home: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   forward_messages: (raw) => raw === "true",

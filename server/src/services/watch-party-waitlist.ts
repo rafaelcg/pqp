@@ -14,6 +14,8 @@ import { bindFlagDefault, isEnabled } from "../lib/flags.js";
 import { publishToCluster, isBusEnabled, subscribeToCluster } from "../lib/bus.js";
 import { HttpError } from "../lib/http.js";
 import { logEvent } from "../lib/log.js";
+import type { WebSocket } from "ws";
+import { broadcastEncoded, encodeFrame } from "../ws/fanout.js";
 import { forEachAuthenticatedSocket } from "../ws/sockets.js";
 import {
   isLiveHlsEnabled,
@@ -322,16 +324,18 @@ interface ApprovedEvent {
 /** The local half: this process's sockets for each approved person. */
 function deliverApproved(event: ApprovedEvent): void {
   const recipients = new Set(event.userIds);
-  const frame = JSON.stringify({
+  const frame = encodeFrame({
     type: "watch-party-waitlist-approved",
     serverId: event.serverId,
     serverName: event.serverName,
   });
+  const targets: WebSocket[] = [];
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && recipients.has(user.id)) {
-      socket.send(frame);
+      targets.push(socket);
     }
   });
+  broadcastEncoded(targets, frame);
 }
 
 subscribeToCluster(APPROVED_TOPIC, (data) => {

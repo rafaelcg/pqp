@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WebSocket } from "ws";
 import {
+  broadcastEncoded,
   createCoalescer,
   droppedFrameCount,
   encodeFrame,
@@ -99,6 +100,51 @@ describe("sendEncodedDroppable", () => {
     const fake = fakeSocket(SEND_BACKPRESSURE_BYTES * 10);
     sendEncoded(fake.socket, encodeFrame({ type: "message-broadcast" }));
     expect(fake.sent).toHaveLength(1);
+  });
+});
+
+describe("broadcastEncoded", () => {
+  it("with the flag off is one send(frame, { binary: false }) per open socket, as before", () => {
+    delete process.env.WS_SHARED_DEFLATE;
+    const fakes = Array.from({ length: 20 }, () => fakeSocket());
+    fakes[3]!.readyState = 3;
+    const frame = encodeFrame({ type: "voice-roster", pad: "x".repeat(4096) });
+    const seen: number[] = [];
+    const sent = broadcastEncoded(
+      fakes.map((fake) => fake.socket),
+      frame,
+      { onSent: (_socket, index) => seen.push(index) },
+    );
+    expect(sent).toBe(19);
+    expect(seen).toEqual(fakes.map((_, i) => i).filter((i) => i !== 3));
+    for (const [i, fake] of fakes.entries()) {
+      expect(fake.sent).toEqual(i === 3 ? [] : [{ data: frame, options: { binary: false } }]);
+    }
+  });
+
+  it("drops for a socket over the threshold only when droppable", () => {
+    const slow = fakeSocket(SEND_BACKPRESSURE_BYTES + 1);
+    const ok = fakeSocket();
+    const before = droppedFrameCount();
+    expect(broadcastEncoded([slow.socket, ok.socket], encodeFrame({ type: "x" }), { droppable: true })).toBe(1);
+    expect(slow.sent).toHaveLength(0);
+    expect(droppedFrameCount()).toBe(before + 1);
+    expect(broadcastEncoded([slow.socket, ok.socket], encodeFrame({ type: "m" }))).toBe(2);
+    expect(slow.sent).toHaveLength(1);
+  });
+
+  it("with the flag on, a socket that is not a real ws socket still gets the plain send", () => {
+    process.env.WS_SHARED_DEFLATE = "true";
+    try {
+      const fakes = Array.from({ length: 20 }, () => fakeSocket());
+      const frame = encodeFrame({ type: "voice-roster", pad: "x".repeat(4096) });
+      expect(broadcastEncoded(fakes.map((fake) => fake.socket), frame)).toBe(20);
+      for (const fake of fakes) {
+        expect(fake.sent).toEqual([{ data: frame, options: { binary: false } }]);
+      }
+    } finally {
+      delete process.env.WS_SHARED_DEFLATE;
+    }
   });
 });
 
