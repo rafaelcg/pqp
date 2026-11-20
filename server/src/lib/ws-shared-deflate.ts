@@ -62,17 +62,40 @@ import { logEvent } from "./log.js";
  * socket's writable buffer, so `bufferedAmount`, and with it the droppable
  * frames' backpressure check, sees them exactly as it sees any other write.
  *
+ * ONE DIFFERENCE IN WHAT BACKPRESSURE COUNTS, deliberate and documented in
+ * `docs/FEATURE_FLAGS.md`. While `ws` compresses a frame it counts the
+ * UNCOMPRESSED size in `_sender._bufferedBytes` (and every message queued
+ * behind it at its uncompressed size too), and only the compressed size once
+ * the frame is written. A shared frame is written at once, so it is counted at
+ * its compressed size from the start. For a slow socket that means
+ * `bufferedAmount` climbs more slowly with the flag on (a roster deflates about
+ * 6x), so `SEND_BACKPRESSURE_BYTES` is crossed later and droppable frames
+ * (typing, presence and roster snapshots) are dropped for it less often. The
+ * threshold then measures bytes really waiting on the socket rather than bytes
+ * waiting on zlib; no behaviour was changed to compensate.
+ *
  * WHAT THIS TOUCHES INSIDE `ws`. Private fields: `_sender` (`_state`, `_queue`,
  * `_firstFragment`, `sendFrame`) and `_extensions['permessage-deflate']`
- * (`params`, `_isServer`, `_threshold`, `_options`). Read against `ws` 8.23;
- * every read is shape-checked per socket and any surprise is a fallback
- * (`wsInternals`), never a throw. A different `ws` minor turns the whole path
- * off until someone re-reads `sender.js` and `permessage-deflate.js` and adds
- * it to {@link AUDITED_WS_MINORS}; the test fails first.
+ * (`params`, `_isServer`, `_threshold`, `_options`). Read against `ws`
+ * 8.23.0; every read is shape-checked per socket and any surprise is a
+ * fallback (`wsInternals`), never a throw. ANY other installed version, a
+ * patch release included, turns the whole path off until someone re-reads
+ * `sender.js` and `permessage-deflate.js` and adds that exact version to
+ * {@link AUDITED_WS_VERSIONS}; the test fails first. Exact on purpose: private
+ * fields carry no semver promise, and a patch can rename one as easily as a
+ * minor can.
  */
 
-/** `ws` versions whose internals the comment above was checked against. */
-export const AUDITED_WS_MINORS: readonly string[] = ["8.23"];
+/**
+ * The exact `ws` versions whose internals the comment above was checked
+ * against. Exact strings, never a range or a prefix.
+ */
+export const AUDITED_WS_VERSIONS: readonly string[] = ["8.23.0"];
+
+/** Whether `version` is one that was audited. Exported for the guard test. */
+export function wsVersionAudited(version: string | null): boolean {
+  return version !== null && AUDITED_WS_VERSIONS.includes(version);
+}
 
 /**
  * Fewer recipients than this and the shared path is not worth it: the one
@@ -204,9 +227,7 @@ function installedWsVersion(): string | null {
 /** The installed `ws`, read once. Exported for the guard test. */
 export const INSTALLED_WS_VERSION = installedWsVersion();
 
-const wsAudited =
-  INSTALLED_WS_VERSION !== null &&
-  AUDITED_WS_MINORS.includes(INSTALLED_WS_VERSION.split(".").slice(0, 2).join("."));
+const wsAudited = wsVersionAudited(INSTALLED_WS_VERSION);
 
 /** Test seam: pretend the installed `ws` was not audited. */
 let forceUnaudited = false;
