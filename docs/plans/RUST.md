@@ -133,7 +133,7 @@ zero rules; `android.yml` and `ios.yml` replay every vector.
   PRs; this table is also the input to D6.
 
 B2, B3 and B4 run in parallel after B1. **Exit:** committed numbers for every
-scene on macOS and the Windows runner.
+scene on macOS and for B3's scenes on the Windows runner.
 
 ### Phase C. `pqp-client-core` in Rust, Android first
 
@@ -230,19 +230,24 @@ reference and the desktop takes D6's route. A go goes to the owner (section 7).
 
 Runtime flags, registered in `server/src/lib/flags.ts`, served on
 `GET /api/client-core/config`, read by the apps at socket open:
-`client_core_shadow` (global, default off: compute both, use native, report) and
-`client_core_primary_android` / `client_core_primary_ios` (global, default off: use
-the Rust answer). Per-platform rather than per-server because one socket serves
-every server.
+`client_core_shadow` (global, default off: compute both, act on the Kotlin or
+Swift answer, report the Rust one) and `client_core_primary_android` /
+`client_core_primary_ios` (global, default off: act on the Rust answer). Only a
+primary flag ever puts the Rust answer in charge. Per-platform rather than
+per-server because one socket serves every server.
 
 - **E1 (S). Shadow on.** Flip `client_core_shadow`. Every mismatch kind becomes a
   vector in Phase A and a fix in whichever copy is wrong.
 - **E2 (S per platform). Primary.** Flip a platform's primary flag once shadow has
   run a full release with zero mismatches and at least 1,000,000 frames and 500
-  reconnects compared on that platform. The native path stays in the build.
-- **E3 (S per platform). Retire the native copy** after two releases on primary
-  with zero mismatches and no crash attributed to the core. From then on the core
-  is the only path, like any other code.
+  reconnects compared on that platform. The Kotlin or Swift path stays in the
+  build, and flipping the primary flag off returns to it.
+- **E3 (S per platform). Retire the Kotlin or Swift copy** after two releases on
+  primary with zero mismatches and no crash attributed to the core. This is the
+  one deliberate end of flag rollback: from then on the core is the only path,
+  like any other code, and a regression in it is fixed forward or reverted in an
+  app release. The primary flag is removed in the same PR so nobody believes it
+  still switches anything.
 - **E4 (M). First payoff.** With the machine shared, bring web's resume behaviour
   to the phones' mesh rooms and to Android (pitfall 11) as one change to the core,
   behind its own flag and capability. Scoped as its own plan section when E2 is
@@ -268,7 +273,8 @@ protocol or the reconnect rules made once.
    network toggled.
 5. **Rollback is a flag flip**, never an image rollback or an app release. A native
    desktop client, which a flag cannot switch, rolls back by pointing the updater
-   back at Electron.
+   back at Electron. The one planned exception is E3, after two clean releases on
+   primary, and it says so.
 6. **CI.** `rust.yml` runs `cargo test`, `cargo clippy -- -D warnings` and
    `cargo fmt --check` on changes to `rust/**`, `packages/shared/fixtures/**` and
    `packages/shared/scripts/**`. The parity check is machine-independent: fixtures
