@@ -291,17 +291,24 @@ export async function startStack({ pgAdminUrl, clientDist, log }) {
       if (party) await party.stop();
       party = await startHlsSource({ s3Root, pgConfig, channelId: ids.partyChannelId, log });
       const want = party.startedAt;
-      // The API memoises "no stream" for a minute: wait for THIS session.
-      await waitFor(
-        "the watch party stream",
-        async () => {
-          const r = await fetch(`${apiUrl}/api/channels/${ids.partyChannelId}/live`, {
-            headers: { Authorization: "Bearer dev-local-token" },
-          });
-          return (await r.json()).stream?.startedAt === want;
-        },
-        150_000,
-      );
+      try {
+        // The API memoises "no stream" for a minute: wait for THIS session.
+        await waitFor(
+          "the watch party stream",
+          async () => {
+            const r = await fetch(`${apiUrl}/api/channels/${ids.partyChannelId}/live`, {
+              headers: { Authorization: "Bearer dev-local-token" },
+            });
+            return (await r.json()).stream?.startedAt === want;
+          },
+          150_000,
+        );
+      } catch (error) {
+        // The caller gets no handle on a failure: the encoder must not outlive it.
+        await party.stop();
+        party = null;
+        throw error;
+      }
       log("watch party stream is live through the playlist proxy");
       return party;
     };

@@ -163,7 +163,8 @@ export async function seed({ apiUrl, databaseUrl, log = () => {} }) {
 
   // A live watch party: the real create and state routes. Reuse one a failed
   // earlier seed left behind instead of making a second.
-  const listed = await api(apiUrl, DEV_TOKEN, `/api/servers/${hall.id}/watch-parties`).catch(() => ({}));
+  // A failed listing must fail the seed, not look like "no party yet".
+  const listed = await api(apiUrl, DEV_TOKEN, `/api/servers/${hall.id}/watch-parties`);
   let party = (listed.parties ?? []).find((p) => p.name === "bench party") ?? null;
   if (!party) {
     ({ party } = await api(apiUrl, DEV_TOKEN, `/api/servers/${hall.id}/watch-parties`, {

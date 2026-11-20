@@ -62,45 +62,48 @@ function topAlloc(sampling, n = 25) {
 const dir = freshUserDataDir();
 const launched = await launchElectron({ url: `${BASE}/app/server/${S}/channel/${L}?lang=en`, userDataDir: dir });
 const { page } = launched;
-await waitForText(page, LIGHT_MARKER);
-const cdp = await page.context().newCDPSession(page);
-await cdp.send("Profiler.enable");
-await cdp.send("HeapProfiler.enable");
+try {
+  await waitForText(page, LIGHT_MARKER);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Profiler.enable");
+  await cdp.send("HeapProfiler.enable");
 
-await clickSidebar(page, "off-topic");
-await waitForText(page, HEAVY_LAST_MARKER, 30_000, "main");
+  await clickSidebar(page, "off-topic");
+  await waitForText(page, HEAVY_LAST_MARKER, 30_000, "main");
 
-// Heap: what is still alive after the whole history is mounted.
-await cdp.send("HeapProfiler.startSampling", { samplingInterval: 32768 });
-await cdp.send("Profiler.start");
-if (!(await loadHistory(page)).loaded) throw new Error("the oldest message never appeared");
-const loadCpu = await cdp.send("Profiler.stop");
-await cdp.send("HeapProfiler.collectGarbage");
-const heap = await cdp.send("HeapProfiler.stopSampling");
+  // Heap: what is still alive after the whole history is mounted.
+  await cdp.send("HeapProfiler.startSampling", { samplingInterval: 32768 });
+  await cdp.send("Profiler.start");
+  if (!(await loadHistory(page)).loaded) throw new Error("the oldest message never appeared");
+  const loadCpu = await cdp.send("Profiler.stop");
+  await cdp.send("HeapProfiler.collectGarbage");
+  const heap = await cdp.send("HeapProfiler.stopSampling");
 
-// CPU: leaving the heavy channel.
-await cdp.send("Profiler.start");
-const t0 = Date.now();
-await clickSidebar(page, "general");
-await waitForText(page, LIGHT_MARKER, 30_000, "main");
-const leaveMs = Date.now() - t0;
-const leaveCpu = await cdp.send("Profiler.stop");
+  // CPU: leaving the heavy channel.
+  await cdp.send("Profiler.start");
+  const t0 = Date.now();
+  await clickSidebar(page, "general");
+  await waitForText(page, LIGHT_MARKER, 30_000, "main");
+  const leaveMs = Date.now() - t0;
+  const leaveCpu = await cdp.send("Profiler.stop");
 
-// CPU: in a call for 10 s.
-await joinVoice(page);
-await sleep(3000);
-await cdp.send("Profiler.start");
-await sleep(10_000);
-const callCpu = await cdp.send("Profiler.stop");
+  // CPU: in a call for 10 s.
+  await joinVoice(page);
+  await sleep(3000);
+  await cdp.send("Profiler.start");
+  await sleep(10_000);
+  const callCpu = await cdp.send("Profiler.stop");
 
-writeFileSync(path.join(OUT, "leave.cpuprofile"), JSON.stringify(leaveCpu.profile));
-writeFileSync(path.join(OUT, "call.cpuprofile"), JSON.stringify(callCpu.profile));
-console.log(JSON.stringify({
-  historyLoadCpu: topSelf(loadCpu.profile, 15),
-  liveHeapAfterHistory: topAlloc(heap, 25),
-  leaveMs,
-  leaveCpu: topSelf(leaveCpu.profile, 25),
-  callCpu10s: topSelf(callCpu.profile, 25),
-}, null, 2));
-await launched.close();
-removeDir(dir);
+  writeFileSync(path.join(OUT, "leave.cpuprofile"), JSON.stringify(leaveCpu.profile));
+  writeFileSync(path.join(OUT, "call.cpuprofile"), JSON.stringify(callCpu.profile));
+  console.log(JSON.stringify({
+    historyLoadCpu: topSelf(loadCpu.profile, 15),
+    liveHeapAfterHistory: topAlloc(heap, 25),
+    leaveMs,
+    leaveCpu: topSelf(leaveCpu.profile, 25),
+    callCpu10s: topSelf(callCpu.profile, 25),
+  }, null, 2));
+} finally {
+  await launched.close();
+  removeDir(dir);
+}
