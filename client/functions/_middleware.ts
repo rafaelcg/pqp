@@ -863,7 +863,9 @@ async function handleJam(context: PagesContext, url: URL, target: JamTarget): Pr
   const injected = injectJamHead(
     html,
     { target, song, enabled },
-    { locale: cardLocale, fallbackImage: `${url.origin}/images/og-image.jpg` },
+    // The cover is OUR address on the API (stable, public songs only), never
+    // the signed URL the song's JSON carries; the card is the jam site's own.
+    { locale: cardLocale, siteOrigin: url.origin, apiOrigin },
   );
   const response = rewritten(shell, injected.html);
   if (injected.noindex) {

@@ -214,14 +214,41 @@ caption, a post) and each one shows up as its own row.
 ## Sharing and SEO
 
 The edge (`handleJam`, `src/lib/jam-meta.ts`) writes the head of `/m/<id>`:
-title, who played, "Falta baixo: grava a tua parte", the cover when it is an
-absolute https URL (else the site's 1200x630 card), canonical to
+title, who played, "Falta baixo: grava a tua parte", canonical to
 `https://jam.pqp.gg/m/<id>` whichever mount served the page, JSON-LD
-`MusicRecording`. English for Spanish readers, like the other cards. No
-generated image (`docs/HANDLES.md` "Not built"). **Known gap:** a cover URL is a
-signed address that expires within an hour; an unfurler that copies the picture
-on its first fetch keeps it, one that re-fetches later may not. A stable cover
-address is a server change. There is no sitemap entry: the sitemap generator is
+`MusicRecording`. English for Spanish readers, like the other cards; the language
+is chosen as for every public page (`preferredLocale`: `?lang=`, then
+`Accept-Language`, Portuguese when a crawler sends neither).
+
+**The picture** is one of two, and never a signed URL:
+
+- **A song with a public cover** (public, and its cover passed the image
+  scanner: the song JSON's `coverUrl` is non-null) points `og:image` at
+  `<api>/api/public/jams/<id>/cover`, a stable address that serves the CURRENT
+  object from our origin (200 with type and length, `ETag`, ranges, 304, HEAD;
+  the Baú cover's `serveCover`, `docs/COMMUNITY_HOME.md`). `public, max-age=300,
+  s-maxage=300`: a song taken down keeps its cached picture at most five
+  minutes. Unknown, malformed, private, unpublished, unscanned, rejected and
+  cover-less ids are the same `404 no-store`, byte for byte, behind its own
+  address bucket, and the route is not matched at all while `jam_public` is off.
+  The signed URL in the JSON is for the page's own player; an unfurler that
+  cached it would hold a dead link within the hour, which is why no tag carries
+  it. The cover is a square, so the card is `summary`; no size is stated (the
+  JSON does not carry one, and a wrong size is worse than none).
+- **Everything else** (a song with no cover yet, which until the scanner has run
+  is every song; the home; a page that is not public) gets the jam card,
+  `/images/og-jam.png` (pt-BR) or `/images/og-jam-en.png`: 1200x630, the band as
+  a mosaic in the six `--color-inst-*` fills with one empty dashed seat, "Toca
+  junto." / "Play along.". `og:image:width/height/type/alt` are stated and the
+  card is `summary_large_image`. It names no song, so a private or unknown page
+  reveals nothing. Drawn by `client/scripts/og-image/jam-template.html`
+  (`pnpm --filter @pqp/client og:image` re-renders it, with the fonts read from
+  `src/assets/fonts`, no network).
+
+Not verified against the real unfurlers (WhatsApp, X, Discord, Slack): there is
+no way to run them from a laptop, so check a live link with each once `jam_public`
+is on, and `curl -I` the cover address.
+There is no sitemap entry: the sitemap generator is
 static-only on purpose (`docs/HANDLES.md`), and a song list from the database is
 the enumeration surface it refuses to be.
 

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<title>pqp jam og image</title>
+<style>
+  /* Faces the jam site itself loads (client/src/fonts.css), read from the repo:
+     this card needs no network to render. */
+  @font-face { font-family: "Gabarito"; font-weight: 400 900; src: url("../../src/assets/fonts/gabarito-latin.woff2") format("woff2"); }
+  @font-face { font-family: "Instrument Sans"; font-weight: 400 700; src: url("../../src/assets/fonts/instrument-sans-latin.woff2") format("woff2"); }
+  @font-face { font-family: "Dela Gothic One"; font-weight: 400; src: url("../../src/assets/fonts/dela-gothic-one-latin.woff2") format("woff2"); }
+
+  /* Tokens copied from client/src/index.css (dark theme, the jam site's default
+     and the brand's). The six instrument fills are --color-inst-*, the ink on
+     them is --color-on-inst. Every shape on the card is opaque: no alpha, no
+     gradient, no blur, so nothing on it can go muddy when a client shrinks it. */
+  :root {
+    --surface-0: oklch(0.16 0.012 250);
+    --surface-1: oklch(0.2 0.014 250);
+    --border-strong: oklch(0.38 0.02 250);
+    --text: oklch(0.93 0.015 95);
+    --text-secondary: oklch(0.82 0.015 95);
+    --accent: oklch(0.88 0.19 125);
+    --on-accent: oklch(0.16 0.012 250);
+    --inst-bass: oklch(0.64 0.15 255);
+    --inst-other: oklch(0.71 0.16 310);
+    --inst-drums: oklch(0.77 0.15 55);
+    --inst-vocals: oklch(0.82 0.12 345);
+    --inst-keys: oklch(0.87 0.11 195);
+    --inst-guitar: oklch(0.92 0.15 90);
+    --on-inst: oklch(0.16 0.012 250);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; background: var(--surface-0); }
+  body { position: relative; font-family: "Instrument Sans", system-ui, sans-serif; color: var(--text); }
+
+  .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 10px; background: var(--accent); }
+
+  .brand { position: absolute; left: 68px; top: 58px; display: flex; align-items: center; gap: 18px; }
+  .brand svg { width: 64px; height: auto; display: block; }
+  .word { font-family: "Dela Gothic One", "Gabarito", sans-serif; font-size: 54px; line-height: 1; letter-spacing: -0.01em; }
+  .word i { font-style: normal; color: var(--accent); }
+
+  h1 { position: absolute; left: 66px; top: 160px; font-family: "Gabarito", sans-serif; font-weight: 900;
+    font-size: 124px; line-height: 0.96; letter-spacing: -0.03em; }
+  h1 span { display: block; }
+  h1 .a { color: var(--accent); }
+  .sub { position: absolute; left: 68px; top: 424px; width: 520px; font-size: 28px; line-height: 1.3;
+    font-weight: 500; color: var(--text-secondary); }
+  .chips { position: absolute; left: 68px; bottom: 54px; display: flex; gap: 12px; align-items: center; }
+  .chip { font-weight: 700; font-size: 22px; padding: 10px 20px; border-radius: 999px;
+    background: var(--accent); color: var(--on-accent); }
+
+  /* The band as a mosaic: the song view's own picture. Six parts in their
+     instrument colours, one seat still empty (dashed, the way the app draws a
+     missing part) which is what the page asks the visitor to fill. */
+  .mosaic { position: absolute; left: 640px; top: 76px; width: 484px; height: 478px;
+    display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 150px); gap: 14px; }
+  .tile { position: relative; min-height: 0; min-width: 0; border-radius: 26px; overflow: hidden; }
+  .tile svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .tile.empty { border: 4px dashed var(--accent); background: var(--surface-1); }
+  .guitar { grid-column: 1 / 3; grid-row: 1; background: var(--inst-guitar); }
+  .vocals { grid-column: 3; grid-row: 1; background: var(--inst-vocals); }
+  .drums  { grid-column: 1; grid-row: 2 / 4; background: var(--inst-drums); }
+  .keys   { grid-column: 2; grid-row: 2; background: var(--inst-keys); }
+  .bass   { grid-column: 3; grid-row: 2; background: var(--inst-bass); }
+  .other  { grid-column: 2; grid-row: 3; background: var(--inst-other); }
+  .empty  { grid-column: 3; grid-row: 3; }
+</style>
+</head>
+<body>
+  <div class="bar"></div>
+
+  <div class="brand">
+    <!-- Logo mark: the app icon's bubble (client/public/icons/icon-512.png), redrawn as vectors. -->
+    <svg viewBox="98 122 318 322" aria-hidden="true">
+      <path fill="oklch(0.88 0.19 125)" d="M168 122h178c39 0 70 31 70 70v108c0 39-31 70-70 70h-110l-54 73 -8-75-16-2c-32-6-58-34-58-68V192c0-39 31-70 70-70z"/>
+      <circle cx="181" cy="237" r="26" fill="oklch(0.16 0.012 250)"/>
+      <circle cx="256" cy="237" r="26" fill="oklch(0.16 0.012 250)"/>
+      <circle cx="331" cy="237" r="26" fill="oklch(0.16 0.012 250)"/>
+    </svg>
+    <span class="word">pqp <i>jam</i></span>
+  </div>
+
+  <h1><span id="h1a"></span><span class="a" id="h1b"></span></h1>
+  <p class="sub" id="sub"></p>
+  <div class="chips"><span class="chip">jam.pqp.gg</span></div>
+
+  <div class="mosaic" id="mosaic"></div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const COPY = {
+    pt: { lang: "pt-BR", h1a: "Toca", h1b: "junto.", sub: "Ouve a música e grava a parte que falta." },
+    en: { lang: "en", h1a: "Play", h1b: "along.", sub: "Listen, then record the missing part." },
+  };
+  const lang = params.get("lang") === "en" ? "en" : "pt";
+  const t = COPY[lang];
+  document.documentElement.lang = t.lang;
+  for (const k of ["h1a", "h1b", "sub"]) document.getElementById(k).textContent = t[k];
+
+  // A level strip per part: rounded bars in the ink that sits on an instrument
+  // fill. Each tile has its own rhythm so the mosaic reads as six players, and
+  // the heights are fixed numbers, so the same card renders byte for byte.
+  const BARS = {
+    guitar: [34, 62, 46, 80, 54, 92, 60, 40, 72, 50, 84, 36, 58],
+    vocals: [30, 56, 84, 66, 90, 48, 28],
+    drums:  [88, 40, 88, 40, 88, 40, 88, 40, 88, 40, 88],
+    keys:   [26, 44, 62, 80, 62, 44, 26],
+    bass:   [70, 70, 46, 46, 82, 82, 40],
+    other:  [32, 70, 24, 64, 40, 78, 30],
+  };
+  function strip(heights, vertical) {
+    const n = heights.length;
+    // A vertical strip is for the tall tile (150 x 314), so its box is 100 x 210.
+    const long = vertical ? 210 : 100;
+    const pitch = long / n;
+    const w = pitch * 0.5;
+    const rects = heights.map((h, i) => {
+      const x = pitch * i + (pitch - w) / 2;
+      return vertical
+        ? `<rect x="${(50 - h / 2).toFixed(2)}" y="${x.toFixed(2)}" width="${h}" height="${w.toFixed(2)}" rx="${(w / 2).toFixed(2)}"/>`
+        : `<rect x="${x.toFixed(2)}" y="${(50 - h / 2).toFixed(2)}" width="${w.toFixed(2)}" height="${h}" rx="${(w / 2).toFixed(2)}"/>`;
+    }).join("");
+    return `<svg viewBox="0 0 100 ${long}" preserveAspectRatio="none" aria-hidden="true"><g fill="var(--on-inst)">${rects}</g></svg>`;
+  }
+  const tile = (cls, inner) => `<div class="tile ${cls}">${inner}</div>`;
+  document.getElementById("mosaic").innerHTML = [
+    tile("guitar", strip(BARS.guitar, false).replace("<svg ", '<svg style="padding:22px 26px" ')),
+    tile("vocals", strip(BARS.vocals, false).replace("<svg ", '<svg style="padding:24px" ')),
+    tile("drums", strip(BARS.drums, true).replace("<svg ", '<svg style="padding:30px 26px" ')),
+    tile("keys", strip(BARS.keys, false).replace("<svg ", '<svg style="padding:24px" ')),
+    tile("bass", strip(BARS.bass, false).replace("<svg ", '<svg style="padding:24px" ')),
+    tile("other", strip(BARS.other, false).replace("<svg ", '<svg style="padding:24px" ')),
+    tile("empty",
+      `<svg viewBox="0 0 100 100" style="padding:26px" aria-hidden="true"><path d="M50 22V78M22 50H78" stroke="var(--accent)" stroke-width="12" stroke-linecap="round" fill="none"/></svg>`),
+  ].join("");
+</script>
+</body>
+</html>

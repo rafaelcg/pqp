@@ -16,14 +16,26 @@
  *  - The home is indexable only while the flag is on. Off, it is `noindex`.
  *  - The canonical address is always `https://jam.pqp.gg/...`, whichever mount
  *    served the page, so `/jam/m/<id>` on pqp.gg is not a second page.
- *  - The image is the cover when it is an absolute https URL (a square, so the
- *    card is `summary`), else the site's own 1200x630 card
- *    (`summary_large_image`). There is no generated card: it needs a Worker
- *    with a font and an SVG-to-PNG step (`docs/HANDLES.md`, "Not built"). A
- *    cover URL is a signed address that expires (`mediaExpiresAt`, an hour at
- *    most): an unfurler that copies the picture on its first fetch (WhatsApp, X,
- *    Slack) keeps it, one that re-fetches later may find it gone. That is the
- *    known gap (`docs/JAM_SITE.md`); a stable cover address is a server change.
+ *  - The image is the song's cover only when the API says it has a public one
+ *    (`coverUrl` is non-null: public song, cover passed the scanner), and then
+ *    it is OUR address for it, `<api>/api/public/jams/<id>/cover`, never the
+ *    signed URL the JSON carries for the page's own player. A signed URL
+ *    expires within the hour (`mediaExpiresAt`), so an unfurl that WhatsApp, X
+ *    or Discord cached and re-reads later would be broken; the route serves the
+ *    current object from our origin, cacheable, 404 for anything not public
+ *    (server `jam-public-routes.ts`, the Baú cover's pattern, #1260). The cover
+ *    is a square, so its card is `summary`, and its size is not known here so
+ *    none is stated (a wrong one is worse than none).
+ *  - Everything else (a song with no cover yet, which until the scanner runs is
+ *    every song; the home; a page that is not public) gets the jam site's own
+ *    1200x630 card, `client/public/images/og-jam.png` (pt-BR) and `og-jam-en.png`
+ *    (English, which Spanish readers get), drawn by
+ *    `client/scripts/og-image/jam-template.html`. It carries the true size,
+ *    type and an `alt`, and is `summary_large_image`. It names no song, so it
+ *    reveals nothing about a page that is not public.
+ *  - No signed URL may reach a tag. `renderJamHead` never reads `coverUrl` as an
+ *    address, only as "there is a cover", and a test fails on any `X-Amz` or
+ *    `sig=` in a head.
  *
  * DELIBERATELY DEPENDENCY-FREE, like `community-meta.ts`: wrangler bundles the
  * middleware outside the pnpm workspace.
@@ -90,9 +102,26 @@ export interface JamSongMeta {
 
 export interface JamMetaOptions {
   locale: "pt-BR" | "en";
-  /** The address of the site's own card picture, absolute. */
-  fallbackImage: string;
+  /** The origin the page was served from, for the site's own card pictures (`/images/og-jam*.png`). */
+  siteOrigin: string;
+  /** The API's origin, for a song's cover address. Null: no cover is offered, the card is. */
+  apiOrigin: string | null;
 }
+
+/** The size the jam card is drawn at (`client/scripts/og-image/jam-template.html`). */
+export const JAM_CARD_WIDTH = 1200;
+export const JAM_CARD_HEIGHT = 630;
+
+/** The jam card in a language: `og-jam.png` for Portuguese, `og-jam-en.png` for English. */
+export function jamCardImagePath(locale: "pt-BR" | "en"): string {
+  return locale === "pt-BR" ? "/images/og-jam.png" : "/images/og-jam-en.png";
+}
+
+/** What the card's picture says, for `og:image:alt`. Words, not a filename. */
+const CARD_ALT = {
+  "pt-BR": "pqp jam: um mosaico de instrumentos e a frase Toca junto.",
+  en: "pqp jam: a mosaic of instruments and the words Play along.",
+} as const;
 
 const NAMES: Record<"pt-BR" | "en", Record<string, string>> = {
   "pt-BR": { guitar: "guitarra", bass: "baixo", drums: "bateria", vocals: "voz", keys: "teclado", other: "outro instrumento" },
@@ -144,15 +173,31 @@ const HOME_TEXT = {
   },
 } as const;
 
-function imageOf(coverUrl: string | null, fallback: string): { url: string; isCover: boolean } {
-  return coverUrl && coverUrl.startsWith("https://") ? { url: coverUrl, isCover: true } : { url: fallback, isCover: false };
+/** The stable address a song's cover is served from, or null when the page has no cover to offer. */
+export function jamCoverAddress(apiOrigin: string | null, songId: string): string | null {
+  return apiOrigin ? `${apiOrigin.replace(/\/+$/, "")}/api/public/jams/${songId}/cover` : null;
+}
+
+interface CardImage {
+  url: string;
+  alt: string;
+  /** Set for the site's own card, whose size and type are ours to state. */
+  card: boolean;
+}
+
+function cardImage(options: JamMetaOptions): CardImage {
+  return {
+    url: `${options.siteOrigin}${jamCardImagePath(options.locale)}`,
+    alt: CARD_ALT[options.locale],
+    card: true,
+  };
 }
 
 interface Card {
   title: string;
   description: string;
   url: string;
-  image: { url: string; isCover: boolean };
+  image: CardImage;
   noindex: boolean;
   jsonLd?: object;
 }
@@ -172,11 +217,21 @@ function renderHead(card: Card, locale: "pt-BR" | "en"): string {
     ...(card.noindex ? [] : [`<meta property="og:url" content="${e(card.url)}" />`]),
     `<meta property="og:title" content="${e(card.title)}" />`,
     `<meta property="og:description" content="${e(card.description)}" />`,
+    `<meta property="og:locale" content="${locale === "pt-BR" ? "pt_BR" : "en_US"}" />`,
     `<meta property="og:image" content="${e(card.image.url)}" />`,
-    `<meta name="twitter:card" content="${card.image.isCover ? "summary" : "summary_large_image"}" />`,
+    ...(card.image.card
+      ? [
+          `<meta property="og:image:type" content="image/png" />`,
+          `<meta property="og:image:width" content="${JAM_CARD_WIDTH}" />`,
+          `<meta property="og:image:height" content="${JAM_CARD_HEIGHT}" />`,
+        ]
+      : []),
+    `<meta property="og:image:alt" content="${e(card.image.alt)}" />`,
+    `<meta name="twitter:card" content="${card.image.card ? "summary_large_image" : "summary"}" />`,
     `<meta name="twitter:title" content="${e(card.title)}" />`,
     `<meta name="twitter:description" content="${e(card.description)}" />`,
     `<meta name="twitter:image" content="${e(card.image.url)}" />`,
+    `<meta name="twitter:image:alt" content="${e(card.image.alt)}" />`,
   ];
   if (card.jsonLd) {
     // `</script>` inside a JSON string would close the block early.
@@ -196,7 +251,12 @@ export function renderJamHead(
     target.kind === "song" ? `https://jam.pqp.gg/m/${target.songId}` : "https://jam.pqp.gg/";
   if (target.kind === "song" && song && enabled) {
     const text = jamSongCardText(song, options.locale);
-    const image = imageOf(song.coverUrl, options.fallbackImage);
+    // `coverUrl` says only THAT the song has a public cover. The address in the
+    // tag is ours and stable; the signed URL in it never leaves this function.
+    const cover = song.coverUrl ? jamCoverAddress(options.apiOrigin, target.songId) : null;
+    const image: CardImage = cover
+      ? { url: cover, alt: song.title, card: false }
+      : cardImage(options);
     const card: Card = {
       ...text,
       url: canonical,
@@ -219,7 +279,7 @@ export function renderJamHead(
     title: generic.title,
     description: generic.description,
     url: canonical,
-    image: { url: options.fallbackImage, isCover: false },
+    image: cardImage(options),
     noindex: !indexable,
   };
   return { head: renderHead(card, options.locale), noindex: !indexable };
