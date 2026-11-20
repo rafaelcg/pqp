@@ -127,9 +127,20 @@ async function runMode(mode: string, n: number, rounds: number): Promise<void> {
 
   const fanOut = async () => {
     acks = 0;
-    const done = new Promise<void>((resolve) => (waiter = { n, resolve }));
+    let timer: NodeJS.Timeout | undefined;
+    const done = new Promise<void>((resolve, reject) => {
+      waiter = { n, resolve };
+      timer = setTimeout(
+        () => reject(new Error(`${mode}: ${acks}/${n} acks after 30 s`)),
+        30_000,
+      );
+    });
     broadcastEncoded(sockets, frame, { droppable: true });
-    await done;
+    try {
+      await done;
+    } finally {
+      clearTimeout(timer);
+    }
   };
   await fanOut();
   await new Promise((r) => setTimeout(r, 300));

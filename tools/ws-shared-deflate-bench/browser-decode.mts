@@ -62,14 +62,14 @@ function roster(seq: number, people: number): string {
 
 const page = `<!doctype html><meta charset="utf-8"><script>
 window.received = [];
-window.ready = new Promise((resolve) => {
+window.ready = new Promise((resolve, reject) => {
   let open = 0;
   for (let i = 0; i < ${SOCKETS}; i += 1) {
     const list = [];
     window.received.push(list);
     const socket = new WebSocket("ws://" + location.host + "/ws?i=" + i);
     socket.onmessage = (event) => list.push(event.data);
-    socket.onerror = () => list.push("<error>");
+    socket.onerror = () => { list.push("<error>"); reject(new Error("socket " + i + " failed")); };
     socket.onclose = (event) => list.push("<close " + event.code + ">");
     socket.onopen = () => { if (++open === ${SOCKETS}) resolve(); };
   }

@@ -14,7 +14,8 @@ import { logEvent } from "./log.js";
  * zlib runs of the same bytes, measured at about 406 ms of processor and about
  * 328 KB of memory per socket (the zlib context each socket keeps while its
  * frame is in flight). Compressing it once and writing the same bytes to every
- * socket measured 17.6 ms and 24 KB per socket. `tools/ws-shared-deflate-bench`
+ * socket measured 17.6 ms for the WHOLE fan-out (the one compression plus
+ * 1,000 socket writes) and 24 KB per socket. `tools/ws-shared-deflate-bench`
  * reproduces both numbers.
  *
  * WHY THE SAME BYTES ARE VALID FOR EVERY SOCKET. A permessage-deflate message
@@ -78,6 +79,17 @@ export const AUDITED_WS_MINORS: readonly string[] = ["8.23"];
  * compression it does runs synchronously on the event loop, where `ws` would
  * have done the same work on the zlib thread pool, so it only pays once it
  * replaces several of those.
+ *
+ * WHY SYNCHRONOUS AT ALL. It is what makes ordering trivial: the frame is on
+ * the socket in the same tick `socket.send` would have queued it, so a send
+ * the caller makes right after can never overtake it. The cost is small and
+ * measured: compressing a 92 KB roster and inflating it back to check it took
+ * about 0.75 ms on the bench machine (`compressMs` / `compressions` on the
+ * counters, 15.7 ms over 21 compressions), once per broadcast per window size
+ * (normally one). The per-socket path it replaces is not free on the event
+ * loop either: dispatching 1,000 compressions and their callbacks measured
+ * 324 ms of process processor time against 20 ms for the whole shared
+ * fan-out, with the same event-loop p99 (1.7 ms) in both.
  */
 export const SHARED_DEFLATE_MIN_RECIPIENTS = 8;
 
