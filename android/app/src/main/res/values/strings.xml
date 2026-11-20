@@ -363,8 +363,11 @@
     <string name="voice_camera_of">%1$s\'s camera</string>
     <string name="voice_camera_someone">Someone</string>
     <string name="voice_camera_close">Close</string>
-    <string name="voice_speaker_on">Speaker</string>
-    <string name="voice_speaker_off">Earpiece</string>
+    <!-- The call bar's route button: where the call's sound is right now. -->
+    <string name="voice_route_speaker">Speaker</string>
+    <string name="voice_route_earpiece">Earpiece</string>
+    <string name="voice_route_wired">Wired headset</string>
+    <string name="voice_route_bluetooth">Bluetooth headset</string>
     <string name="voice_server_muted_you">A moderator muted you</string>
     <string name="voice_open_settings">App settings</string>
     <string name="voice_server_muted_peer">%1$s was muted by a moderator</string>

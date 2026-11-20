@@ -2,9 +2,12 @@ package gg.pqp.app.voice.telecom
 
 import android.content.Context
 import gg.pqp.app.R
+import gg.pqp.app.voice.AudioOutput
+import gg.pqp.app.voice.AudioRoutePolicy
 import gg.pqp.app.voice.CallController
 import gg.pqp.app.voice.CallTelecomHooks
 import gg.pqp.app.voice.IncomingCall
+import gg.pqp.app.voice.TelecomAudioRoute
 import gg.pqp.app.voice.VoiceController
 import gg.pqp.app.voice.VoiceStage
 import gg.pqp.app.voice.VoiceState
@@ -48,7 +51,7 @@ class TelecomController(
     private val calls: CallController,
     private val scope: CoroutineScope,
     private val gateway: TelecomGateway = AndroidTelecomGateway(context),
-) : CallTelecomHooks, TelecomConnectionCallbacks {
+) : CallTelecomHooks, TelecomConnectionCallbacks, TelecomAudioRoute {
 
     private val context = context.applicationContext
     private var state = TelecomState()
@@ -57,6 +60,7 @@ class TelecomController(
         gateway.ensureRegistered()
         TelecomBridge.callbacks = this
         calls.telecomHooks = this
+        voice.telecomAudio = this
 
         scope.launch {
             var wasActive = false
@@ -145,6 +149,21 @@ class TelecomController(
         // whatever room actually IS active now (Farol review, PR 678).
         if (voice.state.value.channelId != roomId) return
         muteChangeFrom(voice.state.value.muted, muted)?.let(voice::setMuted)
+    }
+
+    override fun onAudioRouteChanged(roomId: String, route: Int) {
+        voice.onTelecomRouteReported(roomId, route)
+    }
+
+    override fun onConnectionRegistered(roomId: String) {
+        voice.onTelecomConnectionReady(roomId)
+    }
+
+    // --- TelecomAudioRoute: the route, asked of Telecom while a connection is live ---
+
+    override fun requestRoute(roomId: String, output: AudioOutput): Boolean {
+        val connection = TelecomBridge.find(roomId) ?: return false
+        return connection.requestRoute(AudioRoutePolicy.telecomRoute(output))
     }
 
     override fun onShowIncomingCallUi(roomId: String, displayName: String) {

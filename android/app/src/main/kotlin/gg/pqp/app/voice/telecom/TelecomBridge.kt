@@ -26,6 +26,15 @@ interface TelecomConnectionCallbacks {
      * system call UI. */
     fun onAudioStateChanged(roomId: String, muted: Boolean)
 
+    /** Telecom's report of where this room's sound is going
+     * (`CallAudioState.route`). Shown on the call bar's route button, never
+     * answered with a route request: see `CallAudioRouter`. */
+    fun onAudioRouteChanged(roomId: String, route: Int) {}
+
+    /** This room's connection now exists, so a route request can reach
+     * Telecom. Called from [TelecomBridge.register]. */
+    fun onConnectionRegistered(roomId: String) {}
+
     /** Telecom wants this app to draw its own incoming-call UI for this room. */
     fun onShowIncomingCallUi(roomId: String, displayName: String)
 
@@ -86,6 +95,7 @@ object TelecomBridge {
         if (pendingActive.remove(roomId)) {
             runCatching { connection.setActive() }
         }
+        callbacks?.onConnectionRegistered(roomId)
     }
 
     /** Only removes the entry if it is still this exact connection: a second,

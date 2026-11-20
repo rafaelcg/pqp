@@ -349,8 +349,10 @@
     <string name="voice_camera_of">Câmera de %1$s</string>
     <string name="voice_camera_someone">Alguém</string>
     <string name="voice_camera_close">Fechar</string>
-    <string name="voice_speaker_on">Viva-voz</string>
-    <string name="voice_speaker_off">Fone</string>
+    <string name="voice_route_speaker">Viva-voz</string>
+    <string name="voice_route_earpiece">No ouvido</string>
+    <string name="voice_route_wired">Fone com fio</string>
+    <string name="voice_route_bluetooth">Fone Bluetooth</string>
     <string name="voice_server_muted_you">Um moderador te mutou</string>
     <string name="voice_open_settings">Configurações do app</string>
     <string name="voice_server_muted_peer">Um moderador mutou %1$s</string>

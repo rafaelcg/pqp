@@ -58,6 +58,7 @@ import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
 import androidx.compose.ui.res.pluralStringResource
+import gg.pqp.app.voice.AudioOutput
 import gg.pqp.app.voice.OutgoingCall
 import gg.pqp.app.voice.OutgoingPhase
 import gg.pqp.app.voice.VoiceController
@@ -232,18 +233,26 @@ fun CallBar(
                         ),
                         on = state.deafened,
                     )
+                    // Where the sound really is, not what was asked for:
+                    // with a headset connected "auto" is the headset, and the
+                    // button has to say so. Before the route is known (the
+                    // call is still joining) it shows the default, the
+                    // loudspeaker.
+                    val route = state.audioRoute ?: AudioOutput.Speaker
                     CallControl(
-                        onClick = controller::toggleSpeakerphone,
-                        icon = if (state.speakerphone) {
-                            PqpIcons.Speakerphone
-                        } else {
-                            PqpIcons.Earpiece
+                        onClick = controller::toggleAudioRoute,
+                        icon = when (route) {
+                            AudioOutput.Bluetooth -> PqpIcons.BluetoothHeadset
+                            AudioOutput.UsbHeadset, AudioOutput.WiredHeadset -> PqpIcons.WiredHeadset
+                            AudioOutput.Speaker -> PqpIcons.Speakerphone
+                            AudioOutput.Earpiece -> PqpIcons.Earpiece
                         },
                         contentDescription = stringResource(
-                            if (state.speakerphone) {
-                                R.string.voice_speaker_on
-                            } else {
-                                R.string.voice_speaker_off
+                            when (route) {
+                                AudioOutput.Bluetooth -> R.string.voice_route_bluetooth
+                                AudioOutput.UsbHeadset, AudioOutput.WiredHeadset -> R.string.voice_route_wired
+                                AudioOutput.Speaker -> R.string.voice_route_speaker
+                                AudioOutput.Earpiece -> R.string.voice_route_earpiece
                             },
                         ),
                         // Not a toggled-on container: the speaker is a routing
