@@ -14,6 +14,7 @@ import {
   useJamPublicWaiting,
 } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
+import { isolate } from "@/lib/bidi";
 import { JamConsentChoices, useConsentAnswer } from "./jam-public-parts";
 import { JamPublicSheet } from "./jam-public-sheet";
 
@@ -212,7 +213,7 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
         data-jam-public-line="consent"
         className="flex flex-col gap-2 rounded-[var(--radius-card)] bg-surface-2 px-3.5 py-3"
       >
-        <p className="text-sm font-semibold leading-snug text-text">{t("jam.public.consent.ask", { title: song.title })}</p>
+        <p className="text-sm font-semibold leading-snug text-text">{t("jam.public.consent.ask", { title: isolate(song.title) })}</p>
         <p className="text-[13px] leading-snug text-text-secondary">{t("jam.public.consent.askHint")}</p>
         <JamConsentChoices busy={consent.busy} onChoose={(choice) => void consent.choose(song.id, choice).then(() => state.refresh())} />
         {consent.error && (
@@ -313,10 +314,10 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
               data-jam-origin=""
               className="rounded-sm underline-offset-2 hover:text-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
             >
-              {t("jam.public.origin", { name: origin.name })}
+              {t("jam.public.origin", { name: isolate(origin.name) })}
             </a>
           ) : (
-            <span data-jam-origin="">{t("jam.public.origin", { name: origin.name })}</span>
+            <span data-jam-origin="">{t("jam.public.origin", { name: isolate(origin.name) })}</span>
           ))}
         {copied && (
           <span role="status" data-jam-copied="">

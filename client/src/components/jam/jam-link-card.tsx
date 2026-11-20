@@ -12,6 +12,8 @@ import type { JamSongLink } from "@/lib/jam-share";
 import type { JamCardState } from "@/lib/jam-share-card";
 import { formatClock, songNeed } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
+import { bidiClean, isolate } from "@/lib/bidi";
+import { UserText } from "./user-text";
 import { bandOrder } from "./jam-art";
 import { JamCoverPhoto, useJamCover, type JamCoverState } from "./jam-cover";
 import { useNeedLabel } from "./jam-need";
@@ -32,8 +34,9 @@ import { useNeedLabel } from "./jam-need";
 
 const INSTRUMENT_DOT = "grid h-4 w-4 shrink-0 place-items-center rounded-full";
 
-function people(song: JamSongSummary, anonymous: string): string {
-  const names = song.contributors.length > 0 ? song.contributors.map((one) => one.name ?? anonymous) : [song.authorName ?? anonymous];
+/** The people on a song: "Gabi +2". `wrap` isolates each name for a line that is drawn; an aria-label reads the plain one. */
+function people(song: JamSongSummary, anonymous: string, wrap: (name: string) => string = (name) => name): string {
+  const names = song.contributors.length > 0 ? song.contributors.map((one) => wrap(one.name ?? anonymous)) : [wrap(song.authorName ?? anonymous)];
   const first = names[0] ?? anonymous;
   const more = Math.max(0, (song.contributorCount || names.length) - 1);
   return more > 0 ? `${first} +${more}` : first;
@@ -88,12 +91,14 @@ export function JamLinkCardView({ song, href, onOpen }: { song: JamSongSummary; 
   const need = songNeed(song);
   const present = bandOrder(song.instruments);
   const missing = need.kind === "missing" ? need.instruments : [];
-  const who = people(song, t("jam.tile.anonymous"));
+  const who = people(song, t("jam.tile.anonymous"), isolate);
+  const plainWho = people(song, t("jam.tile.anonymous"));
   const needText = missing.length > 0 ? needLabel(need) : "";
   const length = clock ? clock.durationMs : (song.mixDurationMs ?? 0);
   const timeLabel = clock ? `${formatClock(clock.seconds * 1000)} / ${formatClock(length)}` : length > 0 ? formatClock(length) : "";
   const state: JamCardPlayState = player.state;
-  const label = [song.title, song.artist ?? t("jam.original"), who, needText].filter(Boolean).join(", ");
+  // read in logical order by a screen reader, so no isolate: only the explicit controls are dropped
+  const label = bidiClean([song.title, song.artist ?? t("jam.original"), plainWho, needText].filter(Boolean).join(", "));
 
   return (
     <article
@@ -121,7 +126,11 @@ export function JamLinkCardView({ song, href, onOpen }: { song: JamSongSummary; 
         <div className="flex min-w-0 items-baseline text-[13px] leading-[18px] text-text-secondary">
           {/* a phone's card drops the artist before the people: the people are the point of a Jam */}
           <span className="min-w-0 flex-1 truncate">
-            {song.artist && <span className="@max-[20rem]/jamcard:hidden">{song.artist} · </span>}
+            {song.artist && (
+              <span className="@max-[20rem]/jamcard:hidden">
+                <UserText>{song.artist}</UserText> ·{" "}
+              </span>
+            )}
             {who}
           </span>
         </div>

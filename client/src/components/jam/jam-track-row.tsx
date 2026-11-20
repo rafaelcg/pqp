@@ -10,6 +10,7 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { volumeDelta } from "@/lib/jam-clip";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cn } from "@/lib/utils";
+import { isolate } from "@/lib/bidi";
 import { JamLaneFrame, JamLaneIdentity } from "./jam-lane-frame";
 import { JamLaneWave, type JamTimeline } from "./jam-lane-wave";
 
@@ -122,7 +123,7 @@ export function JamTrackRow({
   const heard = track.inMix || auditioning;
   // Somebody else is soloed: this lane sits back so the soloed one stands out.
   const soloDimmed = othersSoloed && !lane.solo;
-  const who = `${person}${track.label ? ` · ${track.label}` : ""}`;
+  const who = `${mine ? person : isolate(person)}${track.label ? ` · ${isolate(track.label)}` : ""}`;
 
   const menu: ContextMenuItemDef[] = [
     ...(canSwitchMix && track.inMix

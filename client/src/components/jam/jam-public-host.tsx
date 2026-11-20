@@ -12,6 +12,7 @@ import {
 } from "@/lib/jam-public-nav";
 import { subscribeJamPublicNotices, useJamPublicMe } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
+import { isolate } from "@/lib/bidi";
 import { JamPublicView } from "./jam-public-view";
 import { JamConsentDialog } from "./jam-public-waiting";
 
@@ -163,7 +164,7 @@ function toastFor(
 ): Toast | null {
   nextToastKey += 1;
   const key = nextToastKey;
-  const title = notice.title;
+  const title = isolate(notice.title);
   const reason = notice.reason ? ` ${notice.reason}` : "";
   switch (notice.kind) {
     case "consent":

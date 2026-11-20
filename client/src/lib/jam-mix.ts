@@ -41,6 +41,34 @@ export function takeToReplace(
 
 
 /**
+ * What a posted take turned into, which is what the "done" screen must say:
+ *
+ *   band      it is in the mix and others are: it plays with them
+ *   alone     it is in the mix and nothing else is: the first take, no band yet
+ *   swapped   it took the place of the poster's own earlier take of the instrument
+ *   version   it was stored as another version of an instrument that is already
+ *             in the mix, and stays OUT of the mix until somebody who may turns it on
+ *   unknown   it is in the mix, and who else is could not be read afterwards
+ *
+ * The server decides `inMix` (the first take of an instrument is in, every later
+ * one is out), so the answer is read from its reply, never guessed from what the
+ * screen hoped for. `othersInMix` is the number of OTHER takes in the mix as the
+ * server has it after this one landed, or null when that read failed.
+ */
+export type PostedOutcome = "band" | "alone" | "swapped" | "version" | "unknown";
+
+export function postedOutcome(input: { inMix: boolean; swapped: boolean; othersInMix: number | null }): PostedOutcome {
+  if (input.inMix) {
+    // `null`: the mix could not be read after the send, so nothing is claimed about a band.
+    if (input.othersInMix === null) {
+      return "unknown";
+    }
+    return input.othersInMix > 0 ? "band" : "alone";
+  }
+  return input.swapped ? "swapped" : "version";
+}
+
+/**
  * Runs one thing at a time: a call made while another is running is dropped and
  * answers `undefined`. Two quick taps on competing takes would otherwise each
  * read the same snapshot of the mix and leave both of them in.

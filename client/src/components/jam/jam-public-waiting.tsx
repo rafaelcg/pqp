@@ -6,6 +6,8 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { openPublicJamById } from "@/lib/jam-public-nav";
 import { answerConsent, useJamPublicMe, useJamPublicWaiting } from "@/lib/jam-public-store";
+import { isolate } from "@/lib/bidi";
+import { UserText } from "./user-text";
 import { JamConsentChoices, useConsentAnswer } from "./jam-public-parts";
 
 /**
@@ -34,7 +36,7 @@ export function JamPublicWaitingStrip() {
         <p className={row} role="status" data-jam-waiting="consent">
           <span className="min-w-0">
             {waiting.consents.length === 1
-              ? t("jam.public.waiting.consentOne", { title: waiting.consents[0]!.title })
+              ? t("jam.public.waiting.consentOne", { title: isolate(waiting.consents[0]!.title) })
               : t("jam.public.waiting.consents", { count: waiting.consents.length, countLabel: waiting.consents.length })}
           </span>
           <Button size="sm" variant="secondary" className="pointer-coarse:h-11" onClick={() => setConsentOpen(true)} data-jam-waiting-open="consent">
@@ -46,7 +48,7 @@ export function JamPublicWaitingStrip() {
         <p className={row} role="status" data-jam-waiting="inbox">
           <span className="min-w-0">
             {waiting.inbox.length === 1
-              ? t("jam.public.waiting.takeOne", { title: waiting.inbox[0]!.songTitle })
+              ? t("jam.public.waiting.takeOne", { title: isolate(waiting.inbox[0]!.songTitle) })
               : t("jam.public.waiting.takes", { count: waiting.inbox.length, countLabel: waiting.inbox.length })}
           </span>
           <Button size="sm" variant="secondary" className="pointer-coarse:h-11" onClick={() => setInboxOpen(true)} data-jam-waiting-open="inbox">
@@ -110,14 +112,14 @@ function ConsentItem({
   onChoose: Parameters<typeof JamConsentChoices>[0]["onChoose"];
 }) {
   const { t } = useTranslation();
-  const by = request.startedBy.name ?? t("jam.tile.anonymous");
+  const by = isolate(request.startedBy.name ?? t("jam.tile.anonymous"));
   return (
     <li className="flex flex-col gap-2" data-jam-consent-item={request.songId}>
       <div className="flex flex-col leading-snug">
         <span className="text-sm font-bold text-text">{request.title}</span>
         <span className="text-[13px] text-text-secondary">
           {request.serverName
-            ? t("jam.public.consent.byIn", { name: by, server: request.serverName })
+            ? t("jam.public.consent.byIn", { name: by, server: isolate(request.serverName) })
             : t("jam.public.consent.by", { name: by })}
           {" · "}
           {t("jam.public.consent.parts", { count: request.parts, countLabel: request.parts })}
@@ -179,7 +181,7 @@ function InboxRow({ item, onOpen }: { item: JamPublicInboxItem; onOpen: () => vo
       <span className="flex min-w-0 flex-col leading-snug">
         <span className="truncate text-sm font-bold text-text">{item.songTitle}</span>
         <span className="truncate text-[13px] text-text-secondary">
-          {t(look.nameKey as MessageKey)} · {item.track.authorName ?? t("jam.tile.anonymous")}
+          {t(look.nameKey as MessageKey)} · <UserText>{item.track.authorName ?? t("jam.tile.anonymous")}</UserText>
         </span>
       </span>
       <Button size="sm" variant="secondary" onClick={onOpen} className="shrink-0">

@@ -7,6 +7,7 @@ import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { useJamStoreEpoch } from "@/lib/jam-store";
 import { JAM_TILE_SPAN, songNeed, type JamNeed, type JamTileSize } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
+import { bidiClean, isolate } from "@/lib/bidi";
 import { useNeedLabel } from "./jam-need";
 import { bandOrder, ContributorStack, Equalizer } from "./jam-art";
 import { JamArtwork } from "./jam-artwork";
@@ -55,8 +56,9 @@ export interface JamTileProps {
   compact?: boolean;
 }
 
-function names(song: JamSongSummary, anonymous: string): string {
-  const people = song.contributors.length > 0 ? song.contributors.map((one) => one.name ?? anonymous) : [song.authorName ?? anonymous];
+/** The people on a song: "Gabi +2". `wrap` isolates each name for a line that is drawn; an aria-label reads the plain one. */
+function names(song: JamSongSummary, anonymous: string, wrap: (name: string) => string = (name) => name): string {
+  const people = song.contributors.length > 0 ? song.contributors.map((one) => wrap(one.name ?? anonymous)) : [wrap(song.authorName ?? anonymous)];
   const first = people[0] ?? anonymous;
   const more = Math.max(0, (song.contributorCount || people.length) - 1);
   return more > 0 ? `${first} +${more}` : first;
@@ -102,12 +104,14 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
     // eslint-disable-next-line react-hooks/exhaustive-deps -- when it comes near, and again after the store was emptied for another account
   }, [near, storeEpoch]);
 
-  const who = names(song, t("jam.tile.anonymous"));
+  const who = names(song, t("jam.tile.anonymous"), isolate);
+  const plainWho = names(song, t("jam.tile.anonymous"));
   // The credit line: the artist when there is one, then who is on it ("Original" alone is noise)
-  const subtitle = song.artist ?? t("jam.original");
-  const credit = song.artist ? `${song.artist} · ${who}` : who;
+  const subtitle = song.artist ? isolate(song.artist) : t("jam.original");
+  const credit = song.artist ? `${subtitle} · ${who}` : who;
   const closed = song.joinMode === "closed";
-  const label = `${song.title}, ${subtitle}, ${who}, ${closed ? t("jam.tile.closed") : needLabel(need)}`;
+  // read in logical order by a screen reader, so no isolate: only the explicit controls are dropped
+  const label = bidiClean(`${song.title}, ${song.artist ?? t("jam.original")}, ${plainWho}, ${closed ? t("jam.tile.closed") : needLabel(need)}`);
 
   function hover(event: React.PointerEvent<HTMLElement>, on: boolean) {
     // A mouse over a song with people in it wakes their videos, muted; a touch and reduced motion do not.

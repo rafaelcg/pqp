@@ -7,6 +7,8 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { answerConsent } from "@/lib/jam-public-store";
+import { isolate } from "@/lib/bidi";
+import { UserText } from "./user-text";
 import { JamConsentChoices, useConsentAnswer } from "./jam-public-parts";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -112,7 +114,7 @@ export function JamPublicSheet({ open, onClose, songId, viewerId, songTitle, ori
                       checked={showOriginDraft}
                       onCheckedChange={setShowOriginDraft}
                       label={t("jam.public.sheet.showOrigin")}
-                      description={t("jam.public.sheet.showOriginHint", { name: originName })}
+                      description={t("jam.public.sheet.showOriginHint", { name: isolate(originName ?? "") })}
                     />
                   </div>
                 )}
@@ -219,7 +221,7 @@ export function JamPublicSheet({ open, onClose, songId, viewerId, songTitle, ori
                 busy={busy}
                 onCheckedChange={(next) => void state.setShowOrigin(next)}
                 label={t("jam.public.sheet.showOrigin")}
-                description={t("jam.public.sheet.showOriginHint", { name: originName })}
+                description={t("jam.public.sheet.showOriginHint", { name: isolate(originName ?? "") })}
               />
             </div>
           )}
@@ -290,7 +292,7 @@ function PartRow({ part }: { part: JamPublicationPart }) {
     <li className="flex items-center justify-between gap-3 px-3.5 py-2.5" data-jam-public-part={part.consent}>
       <span className="min-w-0 truncate text-text">
         <span className="font-semibold">{t(look.nameKey as MessageKey)}</span>
-        <span className="text-text-secondary"> · {part.authorName ?? t("jam.tile.anonymous")}</span>
+        <span className="text-text-secondary"> · <UserText>{part.authorName ?? t("jam.tile.anonymous")}</UserText></span>
       </span>
       <span className="shrink-0 text-[13px] font-semibold text-text-secondary">
         {t(`jam.public.consent.state.${part.consent}` as MessageKey)}

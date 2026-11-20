@@ -39,6 +39,7 @@ import {
 } from "@/lib/jam-wall";
 import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
 import { cn } from "@/lib/utils";
+import { isolate } from "@/lib/bidi";
 import "./jam.css";
 import { coverGradient } from "./jam-art";
 import { useElementWidth } from "./jam-bars";
@@ -433,7 +434,7 @@ export function JamPane({
       return;
     }
     setFreshSongs((current) => new Set([...current, ...arrived.map((song) => song.id)]));
-    setAnnouncement(t("jam.wall.arrived", { title: arrived[0]!.title }));
+    setAnnouncement(t("jam.wall.arrived", { title: isolate(arrived[0]!.title) }));
     const timer = window.setTimeout(() => {
       setFreshSongs((current) => {
         const next = new Set(current);
@@ -795,7 +796,7 @@ export function JamPane({
                 className="pointer-events-auto flex max-w-[min(32rem,100%)] animate-toast-in items-center gap-2.5 rounded-full bg-surface-3 py-1.5 pl-3.5 pr-1.5 text-sm font-semibold text-text shadow-[var(--shadow-2)]"
               >
                 <Trash2 className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden />
-                <span className="min-w-0 truncate">{t("jam.wall.songDeleted", { title: deletedTitle })}</span>
+                <span className="min-w-0 truncate">{t("jam.wall.songDeleted", { title: isolate(deletedTitle) })}</span>
                 <button
                   type="button"
                   onClick={() => setDeletedTitle(null)}
@@ -1030,7 +1031,7 @@ function JamCallCard({
       </span>
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
         <span className={cn("truncate text-sm font-extrabold first-letter:uppercase", look.ink)}>{t(look.missingKey as MessageKey)}</span>
-        <span className="truncate text-[13px] font-semibold text-text-secondary">{t("jam.calls.in", { title: song.title })}</span>
+        <span className="truncate text-[13px] font-semibold text-text-secondary">{t("jam.calls.in", { title: isolate(song.title) })}</span>
       </span>
       <Mic
         className="h-4 w-4 shrink-0 text-text-tertiary transition-[color,transform] duration-[var(--duration-base)] group-hover:text-accent motion-safe:group-hover:scale-110"

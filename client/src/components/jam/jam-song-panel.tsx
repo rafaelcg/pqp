@@ -34,6 +34,8 @@ import {
 import type { JamDetail } from "@/lib/jam-state";
 import { competingInstruments, formatClock, orderTracks, songNeed, songTimeline } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
+import { isolate } from "@/lib/bidi";
+import { UserText } from "./user-text";
 import { ContributorStack, Equalizer } from "./jam-art";
 import { useBarCount } from "./jam-bars";
 import { JamArtwork } from "./jam-artwork";
@@ -425,8 +427,8 @@ export function JamSongPanel({
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-semibold text-text-secondary">
             {!stageOn && <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-border-strong" />}
             <span className={cn("min-w-0", !stageOn && "basis-full sm:basis-auto")}>
-              {song.artist ?? t("jam.original")}
-              <span className="max-sm:hidden"> · {viewer?.isAuthor ? t("jam.song.startedByYou") : t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}</span>
+              {song.artist ? <UserText>{song.artist}</UserText> : t("jam.original")}
+              <span className="max-sm:hidden"> · {viewer?.isAuthor ? t("jam.song.startedByYou") : t("jam.song.startedBy", { name: isolate(song.authorName ?? t("jam.tile.anonymous")) })}</span>
             </span>
           </div>
           {song.joinMode === "closed" && (
@@ -688,7 +690,7 @@ export function JamSongPanel({
                       key={instrument}
                       instrument={instrument}
                       index={tracks.length + index}
-                      who={viewer?.isAuthor ? null : (song.authorName ?? t("jam.tile.anonymous"))}
+                      who={viewer?.isAuthor ? null : isolate(song.authorName ?? t("jam.tile.anonymous"))}
                       canRecord={reason === null && addable.includes(instrument)}
                       onRecord={() => onRecord(instrument, true)}
                     />
@@ -795,7 +797,7 @@ export function JamSongPanel({
       />
       <ConfirmDialog
         open={confirmSong}
-        title={t("jam.song.deleteTitle", { title: song.title })}
+        title={t("jam.song.deleteTitle", { title: isolate(song.title) })}
         description={t("jam.song.deleteBody", { count: song.trackCount, countLabel: song.trackCount })}
         confirmLabel={t("jam.song.delete")}
         cancelLabel={t("jam.keep")}
