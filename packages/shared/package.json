@@ -17,7 +17,9 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "fixtures:wire": "node --import ./scripts/ts-register.mjs scripts/gen-proto-vectors.mjs && node --import ./scripts/ts-register.mjs scripts/gen-constraints.mjs",
+    "fixtures:wire:check": "node --import ./scripts/ts-register.mjs scripts/gen-proto-vectors.mjs --check && node --import ./scripts/ts-register.mjs scripts/gen-constraints.mjs --check"
   },
   "dependencies": {
     "zod": "^4.6.7"

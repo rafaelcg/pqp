@@ -105,6 +105,7 @@ export default tseslint.config(
     files: [
       "scripts/**/*.mjs",
       "packages/app-sdk/scripts/**/*.mjs",
+      "packages/shared/scripts/**/*.mjs",
       "client/scripts/**/*.mjs",
       "server/scripts/**/*.mjs",
       "client/bench/**/*.mjs",
