@@ -481,7 +481,7 @@ describe("broadcastEncoded with ws_shared_deflate on", () => {
     for (const client of wsClients) client.socket.terminate();
   });
 
-  it("respects backpressure: a paused client's frames are dropped past the threshold and the rest decode in order", async () => {
+  it("respects backpressure: a paused client's frames are dropped past the threshold and the rest decode in order", { timeout: 60_000 }, async () => {
     const before = harness.serverSockets.length;
     const slow = await rawClient(harness.port, "permessage-deflate", "takeover", { paused: true });
     const fast: RawClient[] = [];
@@ -493,42 +493,55 @@ describe("broadcastEncoded with ws_shared_deflate on", () => {
     const slowServer = sockets[0]!;
     resetSharedDeflateStats();
 
-    // Barely compressible, so the slow socket's buffer fills in a few frames.
-    const frames = Array.from({ length: 40 }, (_, seq) =>
-      encodeFrame({ type: "voice-roster", seq, noise: randomBytes(48_000).toString("base64") }),
-    );
+    // Barely compressible, so the slow socket's buffer fills fast. How many
+    // frames that takes depends on the kernel: Linux autotunes loopback
+    // buffers to several megabytes before anything stays in user space, macOS
+    // far less. So send until the socket is well over the threshold, then a
+    // few more, rather than a fixed count.
+    const frameAt = (seq: number) =>
+      encodeFrame({ type: "voice-roster", seq, noise: randomBytes(48_000).toString("base64") });
     const slowGot: number[] = [];
     let maxBuffered = 0;
-    for (let seq = 0; seq < frames.length; seq += 1) {
-      broadcastEncoded(sockets, frames[seq]!, {
+    let messageAfter = -1;
+    let overSince = -1;
+    let total = 0;
+    for (let seq = 0; seq < 1_000; seq += 1) {
+      broadcastEncoded(sockets, frameAt(seq), {
         droppable: true,
         onSent: (socket) => {
           if (socket === slowServer) slowGot.push(seq);
         },
       });
+      total = seq + 1;
       maxBuffered = Math.max(maxBuffered, slowServer.bufferedAmount);
-      // A message is never droppable: it queues behind the shared frames.
-      if (seq === 30) slowServer.send(JSON.stringify({ type: "message", seq }));
+      if (overSince === -1 && slowServer.bufferedAmount > 1024 * 1024) {
+        overSince = seq;
+        // A message is never droppable: it queues behind the shared frames.
+        slowServer.send(JSON.stringify({ type: "message", seq }));
+        messageAfter = seq;
+      }
+      if (overSince !== -1 && seq - overSince >= 10) break;
       // Let the fast clients read; only the paused one should back up.
-      await new Promise((r) => setTimeout(r, 5));
+      await new Promise((r) => setTimeout(r, 2));
     }
     expect(maxBuffered).toBeGreaterThan(1024 * 1024);
-    expect(slowGot.length).toBeLessThan(frames.length);
+    expect(slowGot.length).toBeLessThan(total);
     // What the shared path wrote is visible to bufferedAmount immediately.
     expect(sharedDeflateStats().sockets).toBeGreaterThan(fast.length * 10);
 
-    await Promise.all(fast.map((raw) => raw.waitForCount(frames.length)));
+    await Promise.all(fast.map((raw) => raw.waitForCount(total, 30_000)));
+    const all = Array.from({ length: total }, (_, seq) => seq);
     for (const raw of fast) {
       expect(raw.errors).toEqual([]);
-      expect(raw.messages.map((m) => JSON.parse(m.text).seq)).toEqual(frames.map((_, seq) => seq));
+      expect(raw.messages.map((m) => JSON.parse(m.text).seq)).toEqual(all);
     }
     slow.socket.resume();
-    await slow.waitForCount(slowGot.length + 1);
+    await slow.waitForCount(slowGot.length + 1, 30_000);
     expect(slow.errors).toEqual([]);
     const order = slow.messages.map((m) => JSON.parse(m.text) as { type: string; seq: number });
     expect(order.filter((m) => m.type === "voice-roster").map((m) => m.seq)).toEqual(slowGot);
     const messageAt = order.findIndex((m) => m.type === "message");
-    expect(messageAt).toBe(slowGot.filter((seq) => seq <= 30).length);
+    expect(messageAt).toBe(slowGot.filter((seq) => seq <= messageAfter).length);
     for (const raw of [slow, ...fast]) raw.socket.destroy();
   });
 
