@@ -57,10 +57,12 @@ import {
   registerCompressedSocketCount,
   registerSocketCount,
   registerWsAuthStats,
+  registerWsSharedDeflateStats,
   runtimeSnapshot,
 } from "./lib/runtime.js";
 import { claimSingletonTickOrRun } from "./lib/singleton-lease.js";
 import { wsPerMessageDeflate } from "./lib/ws-compression.js";
+import { sharedDeflateStats } from "./lib/ws-shared-deflate.js";
 import {
   clientAddress,
   createRateLimiter,
@@ -86,7 +88,7 @@ import { userActivity } from "./services/user-activity.js";
 import { clientPlatforms, noteSocketClient } from "./services/client-platforms.js";
 import { userStats } from "./services/user-stats.js";
 import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
-import { startFeatureFlags } from "./lib/flags.js";
+import { isEnabled, startFeatureFlags } from "./lib/flags.js";
 import { startAppCatalogLoad } from "./apps/catalog.js";
 import { reportCurrentVersionsNotServed } from "./apps/served.js";
 import { startAppParticipantSweep } from "./ws/apps.js";
@@ -367,6 +369,10 @@ const wss = new WebSocketServer({
 // has to "people connected". A Set's `size`, read only when the dashboard asks.
 registerSocketCount(() => wss.clients.size);
 registerWsAuthStats(wsAuthAdmissionStats);
+registerWsSharedDeflateStats(() => ({
+  ...sharedDeflateStats(),
+  enabled: isEnabled("ws_shared_deflate"),
+}));
 
 // Event-loop lag for `runtime.eventLoop` on the admin metrics: a libuv timer
 // folded into 5 s slices, no per-request cost, unref'd. See lib/event-loop.ts.

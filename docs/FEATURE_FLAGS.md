@@ -1302,3 +1302,40 @@ Turn it off from controles → interruptores, or `PUT /api/admin/flags
 the mode it loaded with; the next `/api/me` (a reload) picks the change up.
 Pinned by `server/src/api/age-gate.test.ts` (the field, pending only, and the
 switch) and `client/src/components/user/age-gate-dialog.test.tsx`.
+
+## `ws_shared_deflate` (global, default off, server only)
+
+Compress-once fan-out. A frame that goes to many sockets (a voice roster, a
+presence snapshot, a message in a busy channel) is compressed by `ws` once per
+socket today: one 92 KB roster to 1,000 sockets is 1,000 zlib runs of the same
+bytes. With the flag on, `broadcastEncoded` (`server/src/ws/fanout.ts`, the one
+helper every identical-payload fan-out goes through) compresses it once and
+writes the same bytes to every socket that negotiated `permessage-deflate`,
+and the plain frame to every socket that did not. Measured with
+`tools/ws-shared-deflate-bench` (M5 Max, 1,000 sockets): server processor per
+fan-out 324 ms to 20 ms, memory per socket 326 KB to 18 KB.
+
+Behind `WS_SHARED_DEFLATE` (default **off**, only `true` turns the variable
+on, global: the fan-out has no server). Off is byte for byte the old path: one
+`socket.send(frame, { binary: false })` per socket. On, the shared path is
+taken only for frames of at least 1 KB (the compression threshold) going to
+at least 8 sockets, and per socket only when it is provably what `ws` would
+have written: the socket negotiated `server_no_context_takeover` (every
+socket does, `WS_PER_MESSAGE_DEFLATE` has always set it) and its sender is
+idle. Anything else is that socket's ordinary `socket.send`. No negotiated
+parameter changes, so it applies to clients that are already connected, and
+flipping it needs no restart. Why it is safe, in full:
+`server/src/lib/ws-shared-deflate.ts`.
+
+Counters: `runtime.wsSharedDeflate` on `GET /api/admin/metrics`, cumulative
+since boot: `broadcasts` and `sockets` that took the path, `plainSockets`,
+`compressions`, `compressionsAvoided` and `bytesNotCompressed` (the processor
+saving), `compressMs`, `skipped.fewRecipients`, and `fallbacks` by reason
+(`senderBusy`, `contextTakeover`, `wsInternals`, `compressFailed`,
+`verifyFailed`). The last two and `wsInternals` belong at zero; `wsInternals`
+for every socket means `ws` was upgraded to a version nobody audited, and the
+path has turned itself off. Pinned by `server/src/lib/ws-shared-deflate.test.ts`
+(real servers and clients, byte equality with `ws`'s own output, a receiver
+that keeps its window, interleaving, backpressure, 600 sockets) and
+`server/src/ws/shared-deflate-product.test.ts` (the chat fan-out over real
+compressed sockets).
