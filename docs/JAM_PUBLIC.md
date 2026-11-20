@@ -231,6 +231,7 @@ the page and not the clause.
 **There is no DMCA agent and none is claimed.** pqp is not registered with the US
 Copyright Office; the Terms clause is what it is. A rights holder writes to
 `contato@pqp.gg` or uses a report, and a person reads it.
+Accepted as a launch gap, see [Launch gaps accepted (2026-11-20)](#launch-gaps-accepted-2026-11-20).
 
 **Takedown, step by step, when a copyright report arrives** (instance queue,
 `GET /api/reports/instance`, or `copyrightReports` above):
@@ -350,6 +351,7 @@ Read against Cloudflare's documentation (2026-11-14), and no further than it goe
   confirmed**: the documentation says nothing about Workers or the Cache API.
   The runbook (README step 4.3) asks Cloudflare support. Until it is answered
   in writing, the tool is not to be described as covering public jams.
+  Accepted as a launch gap, see [Launch gaps accepted (2026-11-20)](#launch-gaps-accepted-2026-11-20).
 - It is a serving-path control: a daily email with file paths and a block "if
   possible". It cannot stop bytes landing in R2.
 
@@ -385,6 +387,58 @@ Not in this PR: a list of all public jams inside the app (the shelf links to the
 public site), the operator's review screens (they are in the dashboard), and
 votes on public songs (the contract has none).
 
+## Launch gaps accepted (2026-11-20)
+
+Owner decision, 2026-11-20. These are known gaps. Rafael accepted them for
+launch, to be followed up after the flag goes on. None of them blocks it.
+
+- **Custom domain.** `jam.pqp.gg` is not yet added as a custom domain on the
+  Pages project `pqp`. The site answers at `pqp.gg/jam` (`docs/JAM_SITE.md`).
+- **Cloudflare's CSAM tool and the edge Worker.** There is no written answer
+  from Cloudflare yet on whether its CSAM Scanning Tool covers the edge media
+  Worker's cached responses. `JAM_PUBLIC_MEDIA_BASE_URL` is unset, so the Worker
+  is not in the path, and public media is served from presigned bucket URLs that
+  the tool does not see. Do not describe the tool as covering public jams.
+- **Audio and text.** Audio is never scanned. Titles, artists and labels skip the
+  text filter. Song pages are `index, follow`.
+- **No DMCA agent.** Reported takes are reviewed and taken down by hand, per
+  [Copyright reports](#copyright-reports) and the [runbook](#take-something-down).
+- **No total storage quota per account.** Only per-file sizes and rates limit what
+  one account can store. As the code has them today: audio 32 MiB per file
+  (`JAM_AUDIO_MAX_BYTES`), video 100 MiB (`JAM_VIDEO_MAX_BYTES`), cover 4 MiB
+  (`JAM_COVER_MAX_BYTES`), a part at most 10 minutes
+  (`JAM_TRACK_MAX_DURATION_MS`), 30 uploads and 10 new songs per 10 minutes
+  (`JAM_UPLOADS_PER_WINDOW`, `JAM_SONGS_PER_WINDOW`, `JAM_WINDOW_MS`), and per 24
+  hours 5 public songs and 30 public takes (`JAM_PUBLIC_SONGS_PER_DAY`,
+  `JAM_PUBLIC_TAKES_PER_DAY`, [Limits](#limits)).
+- **Phones.** The iOS and Android apps have no public jam. A public jam link
+  opens the web.
+- **Labels.** A take cannot be labelled from the web UI, although the API
+  supports labels.
+
+### Checked in production, 2026-11-20 (read only)
+
+- The content scanner is configured (`CONTENT_SCAN_PROVIDER=openai` with its key)
+  on both API containers and on the worker.
+- ffmpeg is present in the worker image.
+
+**Not yet proven:** a jam cover passing through the scanner end to end, because
+nothing is published. The first check after the flag goes on is
+`jamPublic.scans.covers` on `GET /api/admin/metrics`.
+
+### Still gating the flag
+
+Code fixes from the 2026-11-20 persona QA:
+
+- The sign-up sheet that stayed dead after Escape on the public site, and the
+  site's other QA findings (#1708).
+- The link preview: a jam card for songs with no cover, and a stable cover
+  address instead of a signed URL in `og:image` (#1707, `restarts-api`).
+- Bidirectional and invisible text in titles and labels.
+- Studio messages that were not true.
+
+The last two had no open PR when this was written, so none is linked.
+
 ## Runbook
 
 ### Turn it on
@@ -393,10 +447,14 @@ votes on public songs (the contract has none).
 2. Check `CONTENT_SCAN_PROVIDER` is set on the API and the worker, and the worker
    image has ffmpeg (`<sha>-worker`). Without them covers and videos stay
    private (honest, but the site looks bare).
+   Verified in production on 2026-11-20; see [Launch gaps accepted
+   (2026-11-20)](#launch-gaps-accepted-2026-11-20) for what is still unproven.
 3. Optional, and before the flip rather than after: the edge media Worker
    (`tools/jam-media-edge/README.md`, deploy, the Cloudflare dashboard steps,
    then `JAM_PUBLIC_MEDIA_BASE_URL` on the API). It is not a prerequisite, and
    it does not make audio scanned (above).
+   Left out at launch by decision, see [Launch gaps accepted
+   (2026-11-20)](#launch-gaps-accepted-2026-11-20).
 4. Controles → interruptores → `jam_public`, or
    `PUT /api/admin/flags { key: "jam_public", enabled: true }`. Global, no
    restart. The website reads `GET /api/public/jams/config`.
