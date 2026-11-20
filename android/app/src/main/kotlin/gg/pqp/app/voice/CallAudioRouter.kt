@@ -20,6 +20,9 @@ import androidx.core.content.ContextCompat
  * seam as [CallTelecomHooks]).
  */
 interface TelecomAudioRoute {
+    /** Whether [roomId] has a live Telecom connection a route request would reach. */
+    fun hasLiveConnection(roomId: String): Boolean
+
     /**
      * Ask the live Telecom connection for [roomId] to move the call to
      * [output]. False when there is no live connection, and the caller then
@@ -63,6 +66,8 @@ interface TelecomAudioRoute {
 internal class CallAudioRouter(
     context: Context,
     private val audioManager: AudioManager,
+    /** Whether this call has a live Telecom connection to ask. */
+    private val telecomLive: () -> Boolean,
     /** True when a live Telecom connection took the request. */
     private val telecomRequest: (AudioOutput) -> Boolean,
     /** Every change of preference or real route, for [VoiceState]. */
@@ -93,6 +98,9 @@ internal class CallAudioRouter(
     private var scoConnected = false
     private var scoSeenConnecting = false
 
+    /** Direct routes the platform refused in a row; see [onDirectRefused]. */
+    private var retries = 0
+
     /** SCO refused or dropped; Bluetooth is left out until the devices change. */
     private var scoFailed = false
 
@@ -121,6 +129,8 @@ internal class CallAudioRouter(
     fun stop() {
         if (!active) return
         active = false
+        main.removeCallbacksAndMessages(null)
+        retries = 0
         unregister()
         releaseDirect()
         target = null
@@ -187,56 +197,94 @@ internal class CallAudioRouter(
             return
         }
         target = next
-        if (telecomRequest(next)) {
+        if (telecomLive()) {
             // Telecom owns it now. Anything this class asked AudioManager for
             // earlier would sit underneath Telecom's own request and win the
-            // moment Telecom let go, so it goes.
+            // moment Telecom let go, so it goes, and it goes FIRST: released
+            // after the request, it would switch the speakerphone off or stop
+            // SCO underneath the route Telecom had just accepted.
             if (heldDirect) releaseDirect()
+        }
+        if (telecomRequest(next)) {
             viaTelecom = true
         } else {
             viaTelecom = false
-            applyDirect(next)
+            if (applyDirect(next)) retries = 0 else onDirectRefused(next)
         }
         publish()
     }
 
-    private fun applyDirect(output: AudioOutput) {
+    /** True when the route was put into effect, false when the platform said no. */
+    private fun applyDirect(output: AudioOutput): Boolean {
         heldDirect = true
-        runCatching {
+        return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 applyCommunicationDevice(output)
             } else {
                 applyLegacy(AudioRoutePolicy.legacyAction(output))
             }
-        }.onFailure { Log.w(TAG, "route to $output refused: ${it.message}") }
+        }.getOrElse {
+            Log.w(TAG, "route to $output refused: ${it.message}")
+            false
+        }
+    }
+
+    /**
+     * The platform refused a direct route. Never left at that: the target is
+     * forgotten so it is asked for again, a failed Bluetooth start below 31
+     * drops Bluetooth until the devices change (so the next choice is
+     * audible), and anything else is retried a few times. Posted, not called
+     * inline, because this runs inside [apply].
+     */
+    private fun onDirectRefused(output: AudioOutput) {
+        target = null
+        if (output == AudioOutput.Bluetooth && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            scoFailed = true
+            available = available - AudioOutput.Bluetooth
+            main.post { if (active) apply(force = false) }
+            return
+        }
+        if (retries >= MAX_RETRIES) return
+        retries++
+        main.postDelayed({ if (active) apply(force = false) }, RETRY_MS)
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
-    private fun applyCommunicationDevice(output: AudioOutput) {
+    private fun applyCommunicationDevice(output: AudioOutput): Boolean {
         val device = audioManager.availableCommunicationDevices.firstOrNull {
             AudioRoutePolicy.outputFor(it.type, sdk) == output
         }
         if (device == null) {
             audioManager.clearCommunicationDevice()
-        } else if (audioManager.communicationDevice?.id != device.id) {
-            audioManager.setCommunicationDevice(device)
+            return true
         }
+        if (audioManager.communicationDevice?.id == device.id) return true
+        return audioManager.setCommunicationDevice(device)
     }
 
     @Suppress("DEPRECATION")
-    private fun applyLegacy(action: RouteAction.Legacy) {
+    private fun applyLegacy(action: RouteAction.Legacy): Boolean {
         if (action.bluetoothSco) {
             audioManager.isSpeakerphoneOn = false
             if (!scoStarted) {
                 scoStarted = true
                 scoSeenConnecting = false
-                audioManager.startBluetoothSco()
-                audioManager.isBluetoothScoOn = true
+                try {
+                    audioManager.startBluetoothSco()
+                    audioManager.isBluetoothScoOn = true
+                } catch (e: RuntimeException) {
+                    // No broadcast will ever follow a start that threw, so
+                    // this is the only moment to notice it.
+                    Log.w(TAG, "bluetooth SCO refused to start: ${e.message}")
+                    stopSco()
+                    return false
+                }
             }
         } else {
             stopSco()
             audioManager.isSpeakerphoneOn = action.speakerphoneOn
         }
+        return true
     }
 
     @Suppress("DEPRECATION")
@@ -369,5 +417,7 @@ internal class CallAudioRouter(
 
     private companion object {
         const val TAG = "pqp.voice.route"
+        const val MAX_RETRIES = 3
+        const val RETRY_MS = 1_000L
     }
 }

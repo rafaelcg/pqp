@@ -159,6 +159,15 @@ class AudioRoutePolicyTest {
     }
 
     @Test
+    fun `the earpiece goes to the loudspeaker even when a headset is connected`() {
+        // Telecom or the output switcher put the call on the earpiece with a
+        // headset still there. One tap means the loudspeaker, not the headset.
+        val withHeadset = outputs(wired)
+        val next = AudioRoutePolicy.toggled(AudioOutput.Earpiece, withHeadset)
+        assertEquals(AudioOutput.Speaker, AudioRoutePolicy.choose(withHeadset, next))
+    }
+
+    @Test
     fun `a tablet with no earpiece stays on the loudspeaker`() {
         val tablet = setOf(AudioOutput.Speaker)
         assertEquals(RoutePreference.Auto, AudioRoutePolicy.toggled(AudioOutput.Speaker, tablet))

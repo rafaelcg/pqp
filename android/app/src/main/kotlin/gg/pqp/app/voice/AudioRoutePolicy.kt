@@ -138,11 +138,14 @@ object AudioRoutePolicy {
      * - On the loudspeaker with a headset connected: back to the headset.
      * - On the loudspeaker with no headset: to the earpiece, today's toggle.
      *   On a device with no earpiece there is nowhere else to go.
-     * - On the earpiece: back to the loudspeaker.
+     * - On the earpiece: to the loudspeaker. Forced when a headset is
+     *   connected (the system put the call on the earpiece anyway), because
+     *   Auto would resolve to the headset instead.
      */
     fun toggled(current: AudioOutput, available: Set<AudioOutput>): RoutePreference = when {
         current.isHeadset -> RoutePreference.Speaker
-        current == AudioOutput.Earpiece -> RoutePreference.Auto
+        current == AudioOutput.Earpiece ->
+            if (available.any { it.isHeadset }) RoutePreference.Speaker else RoutePreference.Auto
         available.any { it.isHeadset } -> RoutePreference.Auto
         AudioOutput.Earpiece in available -> RoutePreference.Earpiece
         else -> RoutePreference.Auto

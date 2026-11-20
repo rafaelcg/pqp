@@ -511,6 +511,10 @@ class VoiceController(
     private val audioRouter = CallAudioRouter(
         context = context,
         audioManager = audioManager,
+        telecomLive = {
+            val roomId = _state.value.channelId
+            roomId != null && telecomAudio?.hasLiveConnection(roomId) == true
+        },
         telecomRequest = { output ->
             val roomId = _state.value.channelId
             roomId != null && telecomAudio?.requestRoute(roomId, output) == true

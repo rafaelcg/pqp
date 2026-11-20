@@ -161,6 +161,9 @@ class TelecomController(
 
     // --- TelecomAudioRoute: the route, asked of Telecom while a connection is live ---
 
+    override fun hasLiveConnection(roomId: String): Boolean =
+        TelecomBridge.find(roomId)?.isLive == true
+
     override fun requestRoute(roomId: String, output: AudioOutput): Boolean {
         val connection = TelecomBridge.find(roomId) ?: return false
         return connection.requestRoute(AudioRoutePolicy.telecomRoute(output))

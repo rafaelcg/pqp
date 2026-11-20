@@ -61,6 +61,9 @@ class PqpConnection(private val roomId: String) : Connection() {
      * exists from 34 on. `setAudioRoute` still works there and is the one
      * call that covers every API level this app runs on.
      */
+    /** Not ended, so [requestRoute] would reach Telecom. */
+    val isLive: Boolean get() = !ended
+
     fun requestRoute(route: Int): Boolean {
         if (ended) return false
         return runCatching {
