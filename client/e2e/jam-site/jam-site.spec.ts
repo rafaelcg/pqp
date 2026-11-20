@@ -636,6 +636,63 @@ test.describe("on a phone", () => {
       expect(overflow, path).toBeLessThanOrEqual(0);
     }
   });
+
+  test("the header fits from 320 to 768 px, with the theme toggle inside the screen", async ({ page }) => {
+    await mockApi(page);
+    for (const width of [320, 360, 390, 768]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const path of ["/jam", `/jam/m/${SONG_A}`]) {
+        await page.goto(path);
+        await expect(page.locator("main")).toBeVisible();
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        expect(overflow, `${width} ${path}`).toBeLessThanOrEqual(0);
+        const toggle = await page.locator("[data-jam-theme-toggle]").boundingBox();
+        expect(toggle!.x + toggle!.width, `${width} ${path}`).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
+  test("says what this is in the first screen, on the home and on a song", async ({ page }) => {
+    await mockApi(page);
+    for (const path of ["/jam", `/jam/m/${SONG_A}`]) {
+      await page.goto(path);
+      const line = page.locator("[data-jam-tagline]");
+      await expect(line).toBeVisible();
+      const box = await line.boundingBox();
+      expect(box!.y + box!.height, path).toBeLessThan(844);
+    }
+  });
+
+  test("every control on the song page is at least 44 px", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    await expect(page.locator("[data-jam-toggle]")).toBeVisible();
+    const small = await page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>("button, a[href], input")]
+        .filter((node) => !node.closest("dialog") && !node.matches(".sr-only") && node.getBoundingClientRect().width > 0)
+        .map((node) => ({ node: node.getAttribute("aria-label") ?? node.textContent?.trim() ?? node.tagName, box: node.getBoundingClientRect() }))
+        .filter(({ box }) => box.width < 44 || box.height < 44)
+        .map(({ node, box }) => `${node} ${Math.round(box.width)}x${Math.round(box.height)}`),
+    );
+    expect(small).toEqual([]);
+  });
+
+  test("the like button's name carries the count", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    await expect(page.getByRole("button", { name: "Curtir, 48 curtidas" })).toBeVisible();
+  });
+
+  test("the seek bar says the time it is at", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    const seek = page.locator("[data-jam-seek]");
+    await seek.focus();
+    await seek.press("End");
+    await expect(seek).toHaveAttribute("aria-valuetext", "0:06 / 0:06");
+    await seek.press("Home");
+    await expect(seek).toHaveAttribute("aria-valuetext", "0:00 / 0:06");
+  });
 });
 
 test.describe("the host mount", () => {

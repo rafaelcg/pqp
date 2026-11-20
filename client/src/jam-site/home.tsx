@@ -44,7 +44,7 @@ function Meta({ song, className, stacked = false }: { song: PublicJamSong; class
         <>
           {/* on a card the likes may wrap under the plays in a narrow language, so no separator dangles */}
           {!stacked && <span aria-hidden="true">·</span>}
-          <span className="inline-flex items-center gap-1" aria-label={jt("card.likes", { count: song.likes })}>
+          <span className="inline-flex items-center gap-1" role="img" aria-label={jt("card.likes", { count: song.likes })}>
             <Heart className="h-3 w-3" aria-hidden />
             {song.likes}
           </span>
@@ -92,7 +92,7 @@ function PlayButton({ song, size, label }: { song: PublicJamSong; size: "card" |
         focusRing,
         size === "hero"
           ? "h-16 w-16 bg-accent text-on-accent hover:scale-105 motion-reduce:hover:scale-100"
-          : "h-10 w-10 bg-surface-2 text-text ring-1 ring-inset ring-border hover:bg-accent hover:text-on-accent hover:ring-transparent pointer-coarse:h-11 pointer-coarse:w-11",
+          : "h-11 w-11 bg-surface-2 text-text ring-1 ring-inset ring-border hover:bg-accent hover:text-on-accent hover:ring-transparent",
       )}
     >
       <Play className={size === "hero" ? "h-7 w-7" : "h-4 w-4"} fill="currentColor" aria-hidden />
@@ -121,7 +121,7 @@ function Card({ song, skippable }: { song: PublicJamSong; skippable: boolean }) 
           <h3 className="line-clamp-2 min-w-0 flex-1 text-base font-bold leading-snug">
             <Link
               href={path}
-              className="rounded-sm outline-none after:absolute after:inset-0 after:z-0 after:rounded-[var(--radius-panel)] focus-visible:after:ring-2 focus-visible:after:ring-focus-ring"
+              className="rounded-sm py-3.5 outline-none after:absolute after:inset-0 after:z-0 after:rounded-[var(--radius-panel)] focus-visible:after:ring-2 focus-visible:after:ring-focus-ring"
             >
               {song.title}
             </Link>
@@ -345,7 +345,9 @@ export function HomePage() {
 
   return (
     <div className={CONTAINER}>
-      <h1 className="sr-only">{jt("meta.homeTitle")}</h1>
+      <h1 className="text-balance pt-6 text-[17px] font-semibold leading-6 text-text-secondary sm:text-lg lg:pt-8" data-jam-tagline="">
+        {jt("home.tagline")}
+      </h1>
       {fromApp && <FromAppNotice body={jt("fromApp.start")} />}
       <Hero song={featured.song} status={featured.status} />
       <div className="mt-10 sm:mt-14">

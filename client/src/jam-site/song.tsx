@@ -188,7 +188,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
     <div className={cn(CONTAINER, "pt-6 sm:pt-8")} data-jam-song={song.id}>
       <Link
         href={jamPath(mount, { kind: "home" })}
-        className="inline-flex h-10 items-center gap-2 rounded-full pr-3 text-[15px] font-bold text-text-secondary outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring sm:hidden"
+        className="inline-flex h-11 items-center gap-2 rounded-full pr-3 text-[15px] font-bold text-text-secondary outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring sm:hidden"
       >
         <ArrowLeft className="h-[18px] w-[18px]" aria-hidden />
         {jt("song.back")}
@@ -229,6 +229,9 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
         </p>
         </div>
       </div>
+      <p className="mt-4 text-balance text-[15px] font-semibold leading-6 text-text" data-jam-tagline="">
+        {jt("song.tagline")}
+      </p>
 
       <div className="mt-6" data-jam-stagewrap="">
         <SongStage
@@ -251,7 +254,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
         />
       </div>
 
-      <div className="mt-12 grid gap-10 lg:grid-cols-[minmax(0,1fr)_21rem] lg:gap-14">
+      <div className="mt-12 grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_21rem] lg:gap-14">
         <SongLanes
           tracks={tracks}
           needs={needs}

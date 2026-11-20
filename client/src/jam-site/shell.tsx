@@ -30,7 +30,7 @@ export function ThemeToggle() {
       onClick={() => setBrightness(next)}
       aria-label={jt("theme.toggle")}
       data-jam-theme-toggle=""
-      className={cn(buttonClass.base, buttonClass.icon, "pointer-coarse:h-11 pointer-coarse:w-11")}
+      className={cn(buttonClass.base, buttonClass.icon)}
     >
       {brightness === "dark" ? <Sun className="h-[18px] w-[18px]" aria-hidden /> : <Moon className="h-[18px] w-[18px]" aria-hidden />}
     </button>
@@ -43,11 +43,11 @@ export function Header() {
   const home = jamPath(mount, { kind: "home" });
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-surface-0">
-      <div className={cn(CONTAINER, "flex h-16 items-center gap-3")}>
+      <div className={cn(CONTAINER, "flex h-16 items-center gap-2 min-[390px]:gap-3")}>
         <Link
           href={home}
           aria-label={jt("nav.home")}
-          className="rounded-[var(--radius-control)] outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="inline-flex h-11 items-center rounded-[var(--radius-control)] outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           <Wordmark />
         </Link>
@@ -67,8 +67,13 @@ export function Header() {
         <a href={mainHref("/app", mainOrigin())} className={cn(button("ghost"), "max-sm:hidden")}>
           {jt("nav.signIn")}
         </a>
-        <button type="button" data-jam-start="" onClick={() => ask({ kind: "start" })} className={button("primary")}>
-          {jt("nav.start")}
+        {/* below 360 px the long label ("Começar uma jam") does not fit beside the wordmark and the toggle: the short one
+            is drawn and the long one stays the name, which still contains it */}
+        <button type="button" data-jam-start="" aria-label={jt("nav.start")} onClick={() => ask({ kind: "start" })} className={button("primary")}>
+          <span className="max-[359px]:hidden">{jt("nav.start")}</span>
+          <span className="min-[360px]:hidden" aria-hidden="true">
+            {jt("nav.startShort")}
+          </span>
         </button>
         <ThemeToggle />
       </div>
@@ -78,14 +83,15 @@ export function Header() {
 
 export function Footer() {
   const origin = mainOrigin();
-  const link = "rounded-sm hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
+  // 44 px tall hit area, and the footer's padding gives back what the links take, so it looks as it did
+  const link = "inline-flex min-h-11 min-w-11 items-center rounded-sm hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
   return (
     <footer className="mt-16 border-t border-border">
-      <div className={cn(CONTAINER, "flex flex-col gap-3 py-8 text-sm text-text-secondary sm:flex-row sm:items-center sm:gap-x-6")}>
-        <span>{jt("footer.line")}</span>
+      <div className={cn(CONTAINER, "flex flex-col gap-1 py-5 text-sm text-text-secondary sm:flex-row sm:items-center sm:gap-x-6")}>
+        <span className="max-sm:py-1">{jt("footer.line")}</span>
         <span className="flex-1 max-sm:hidden" />
         {/* the three links are one unit: on a phone they stay on one line under the sentence, never one orphaned word */}
-        <nav className="flex flex-wrap gap-x-6 gap-y-2" aria-label={jt("footer.line")}>
+        <nav className="flex flex-wrap gap-x-6" aria-label={jt("footer.line")}>
           <a className={link} href={mainHref("/", origin)}>
             {jt("footer.pqp")}
           </a>
@@ -148,7 +154,7 @@ export function FromAppNotice({ body }: { body: string }) {
         type="button"
         onClick={() => setOpen(false)}
         aria-label={jt("sheet.close")}
-        className={cn(buttonClass.base, buttonClass.icon, "h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11")}
+        className={cn(buttonClass.base, buttonClass.icon)}
       >
         <XIcon className="h-4 w-4" aria-hidden />
       </button>
