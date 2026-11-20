@@ -9,13 +9,14 @@ import WebSocket, { WebSocketServer, type PerMessageDeflateOptions } from "ws";
 import { broadcastEncoded, encodeFrame } from "../ws/fanout.js";
 import { WS_PER_MESSAGE_DEFLATE } from "./ws-compression.js";
 import {
-  AUDITED_WS_MINORS,
+  AUDITED_WS_VERSIONS,
   compressedTextFrameHeader,
   INSTALLED_WS_VERSION,
   resetSharedDeflateStats,
   setSharedDeflateUnauditedForTests,
   SHARED_DEFLATE_MIN_RECIPIENTS,
   sharedDeflateStats,
+  wsVersionAudited,
 } from "./ws-shared-deflate.js";
 
 /**
@@ -292,10 +293,24 @@ describe("the ws internals the shared path reads", () => {
     // If this fails, ws was bumped. Re-read lib/sender.js (`_state`, `_queue`,
     // `_firstFragment`, `sendFrame`, `dispatch`) and lib/permessage-deflate.js
     // (`params`, `_threshold`, `_options`, `_compress` resetting the deflater
-    // under `server_no_context_takeover`), then add the minor to
-    // AUDITED_WS_MINORS. Until then the shared path is off by itself.
-    const minor = INSTALLED_WS_VERSION?.split(".").slice(0, 2).join(".");
-    expect(AUDITED_WS_MINORS).toContain(minor);
+    // under `server_no_context_takeover`), then add the EXACT version to
+    // AUDITED_WS_VERSIONS. Until then the shared path is off by itself.
+    expect(AUDITED_WS_VERSIONS).toContain(INSTALLED_WS_VERSION);
+    expect(wsVersionAudited(INSTALLED_WS_VERSION)).toBe(true);
+  });
+
+  it("accepts only the exact audited versions: a patch bump switches the path off", () => {
+    for (const version of AUDITED_WS_VERSIONS) {
+      expect(wsVersionAudited(version)).toBe(true);
+    }
+    for (const version of ["8.23.1", "8.23.0-beta.1", "8.23", "8.24.0", "9.0.0", "", " 8.23.0"]) {
+      expect(wsVersionAudited(version)).toBe(false);
+    }
+    expect(wsVersionAudited(null)).toBe(false);
+    // Every entry is a full x.y.z, never a prefix someone could mistake for a range.
+    for (const version of AUDITED_WS_VERSIONS) {
+      expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+    }
   });
 
   it("frames a header the way RFC 6455 says, at all three length encodings", () => {
