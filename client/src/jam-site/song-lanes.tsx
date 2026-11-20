@@ -79,7 +79,7 @@ function LaneMenu({
             setOpen(true);
           }
         }}
-        className="grid h-9 w-9 place-items-center rounded-full text-text-tertiary outline-none hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring aria-expanded:bg-surface-2 aria-expanded:text-text pointer-coarse:h-11 pointer-coarse:w-11"
+        className="grid h-11 w-11 place-items-center rounded-full text-text-tertiary outline-none hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring aria-expanded:bg-surface-2 aria-expanded:text-text"
       >
         <Ellipsis className="h-4 w-4" aria-hidden />
       </button>
@@ -105,7 +105,7 @@ function LaneMenu({
                 (event.currentTarget.nextElementSibling as HTMLElement | null)?.focus();
               }
             }}
-            className="flex h-10 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 text-left text-sm font-semibold text-text outline-none hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring pointer-coarse:h-11"
+            className="flex h-11 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 text-left text-sm font-semibold text-text outline-none hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
           >
             <Flag className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden />
             {jt("lanes.report")}
@@ -125,7 +125,7 @@ function LaneMenu({
                 first.current?.focus();
               }
             }}
-            className="flex h-10 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 text-left text-sm font-semibold text-text outline-none hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring pointer-coarse:h-11"
+            className="flex h-11 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 text-left text-sm font-semibold text-text outline-none hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
           >
             <Copyright className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden />
             {jt("lanes.copyright")}
