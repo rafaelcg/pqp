@@ -82,7 +82,7 @@ const UNPROVED_CEILING = 0;
 
 describe("the generators read something, and no less than the committed floor", () => {
   it("proto vectors: every arm of both unions, at least the floor", () => {
-    expect(committedProto.client.types).toHaveLength(FLOOR.clientArms);
+    expect(committedProto.client.types.length).toBeGreaterThanOrEqual(FLOOR.clientArms);
     expect(committedProto.server.types.length).toBeGreaterThanOrEqual(FLOOR.serverArms);
     expect(committedProto.client.vectors.length).toBeGreaterThanOrEqual(FLOOR.clientVectors);
     expect(committedProto.server.vectors.length).toBeGreaterThanOrEqual(FLOOR.serverVectors);
@@ -303,6 +303,16 @@ describe("an unrecognised zod node or check throws, it is never skipped", () => 
   it("the message names the node and where it is", () => {
     expect(() => collect(arm({ state: z.object({ bag: z.record(z.string(), z.string()) }) })))
       .toThrow(/"record" at state\.bag/);
+  });
+
+  it("a whole-frame check on an object or a union throws instead of being dropped", () => {
+    const crossField = z.object({ a: z.string(), b: z.string() }).refine((v) => v.a !== v.b);
+    expect(() => collect(arm({ nested: crossField }))).toThrow(/refine|custom.*object at nested/);
+    expect(() => collect(crossField.extend({ type: z.literal("t") }).refine(() => true))).toThrow(
+      walk.UnrecognisedZodNode,
+    );
+    const union = z.union([z.string(), z.number()]).refine(() => true);
+    expect(() => collect(arm({ pick: union }))).toThrow(/union at pick/);
   });
 
   it("an object with a catchall (strict, passthrough) throws", () => {

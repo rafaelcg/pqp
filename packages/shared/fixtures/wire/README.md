@@ -1,8 +1,9 @@
 # Wire-contract fixtures
 
 Generated from the shipped zod schemas in `packages/shared/src/signaling.ts` (and
-the files it imports). The schemas are the only source of truth; every client
-replays these files to prove it reads a frame the way the server does. Plan:
+the files it imports). The schemas are the only source of truth; clients are
+meant to replay these files to prove they read a frame the way the server does
+(only the vitest suite does today, see the end). Plan:
 `docs/plans/RUST.md`, phase A. Do not edit the JSON by hand.
 
 | File | Holds | Generator |

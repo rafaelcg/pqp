@@ -266,6 +266,16 @@ export function collect(node, path, rows, identifyRefinement, depth = 0) {
   if (depth > 16) throw new Error(`schema nested past ${depth} levels at ${path}`);
   const { inner } = unwrap(node, path);
   const type = nodeType(inner, path);
+  // A check on an object or a union (`.refine()` across fields, say) is a rule
+  // the server enforces on the whole frame, and it has no row in this table.
+  // Descending into the children and returning would drop it without a word, so
+  // it stops the generator until somebody decides how clients express it.
+  if ((type === "object" || type === "union") && checksOf(inner).length) {
+    throw new UnrecognisedZodNode(
+      `a ${checksOf(inner)[0].check} check on the ${type} at ${path || "(root)"}: `
+      + "whole-frame rules are not modelled; port it deliberately, it is not skipped",
+    );
+  }
   if (type === "object") {
     for (const [key, child] of objectEntries(inner, path)) {
       collect(child, path ? `${path}.${key}` : key, rows, identifyRefinement, depth + 1);
