@@ -112,7 +112,9 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
   const ask = useAsk();
   const [spot, setSpot] = useState<number | null>(null);
   const [shared, setShared] = useState<string | null>(null);
-
+  // One hide timer at a time: an earlier toast's timer must not cut a newer one short.
+  const sharedTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(sharedTimer.current), []);
 
   const lastSpot = useRef<number | null>(null);
   const select = useCallback(
@@ -169,7 +171,8 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
     // what it is, and stays long enough to read and select.
     const copied = await copyText(url);
     setShared(copied ? jt("share.copied") : jt("share.manual", { url }));
-    window.setTimeout(() => setShared(null), copied ? 3500 : 9000);
+    window.clearTimeout(sharedTimer.current);
+    sharedTimer.current = window.setTimeout(() => setShared(null), copied ? 3500 : 9000);
   };
 
   useHead({
