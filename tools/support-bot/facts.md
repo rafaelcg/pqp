@@ -53,7 +53,7 @@ possível deste sistema.
 - Tem ajuste de qualidade, sim. Essa é a pergunta mais comum. Fica em
   Configurações, Voz e vídeo, "Qualidade do vídeo enviado (câmera e tela)":
   Automático, 1080p, 720p, 480p ou 360p. Vale pra câmera e pra tela. Durante a
-  call, o mesmo ajuste aparece no menu "Vídeo que você envia", na barra da call.
+  call, o mesmo ajuste aparece no menu "Vídeo que tu envia", na barra da call.
 - A qualidade escolhida é um teto, não uma garantia. Se a conexão de quem
   compartilha não aguenta, a imagem diminui pra não travar.
 - Quadros por segundo da tela: Automático, 30 fps ou 60 fps. Fica em

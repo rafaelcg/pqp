@@ -10,10 +10,10 @@ describe("withPqpPtBrCopy", () => {
     expect(merged.signIn?.start?.subtitle).toBe("Que bom te ver de novo");
     expect(merged.signIn?.start?.actionText).toBe("Não tem conta?");
     expect(merged.signIn?.start?.actionLink).toBe("Criar conta");
-    expect(merged.signUp?.start?.title).toBe("Criar sua conta no pqp");
+    expect(merged.signUp?.start?.title).toBe("Criar tua conta no pqp");
     expect(merged.signUp?.start?.actionText).toBe("Já tem conta?");
     expect(merged.signUp?.start?.actionLink).toBe("Entrar");
-    expect(merged.formFieldInputPlaceholder__emailAddress).toBe("seu@email.com");
+    expect(merged.formFieldInputPlaceholder__emailAddress).toBe("teu@email.com");
   });
 
   it("keeps stock Clerk copy for everything else", () => {

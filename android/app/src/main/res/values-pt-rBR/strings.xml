@@ -468,7 +468,7 @@
     <string name="friends_tab_all">Todos</string>
     <string name="friends_tab_pending">Pendentes</string>
     <string name="friends_add">Adicionar amigo</string>
-    <string name="friends_add_hint">Busque pelo identificador completo, como nome#1234.</string>
+    <string name="friends_add_hint">Busca pelo identificador completo, como nome#1234.</string>
     <string name="friends_add_action">Adicionar</string>
     <string name="friends_empty_online">Ninguém por aqui. Teus amigos aparecem aqui quando ficarem online.</string>
     <string name="friends_empty_all">Nenhum amigo ainda. Adiciona alguém pelo identificador completo, como nome#1234.</string>
@@ -761,8 +761,8 @@
     <!-- Voice notes -->
     <string name="voice_note_record">Segura para gravar uma mensagem de voz</string>
     <string name="voice_note_hint">Segura o microfone para gravar. Solta para enviar.</string>
-    <string name="voice_note_slide_cancel">Deslize para cancelar</string>
-    <string name="voice_note_lock_hint">Deslize para cima para travar</string>
+    <string name="voice_note_slide_cancel">Desliza para cancelar</string>
+    <string name="voice_note_lock_hint">Desliza para cima para travar</string>
     <string name="voice_note_locked">Travado. Tu pode soltar o dedo.</string>
     <string name="voice_note_paused">Pausado</string>
     <string name="voice_note_discard">Descartar mensagem de voz</string>
