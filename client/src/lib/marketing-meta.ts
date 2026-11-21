@@ -458,7 +458,7 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "pqp.gg/@você, um nome só, quem chegar primeiro leva. De graça, e é seu.",
+        "pqp.gg/@tu, um nome só, quem chegar primeiro leva. De graça, e é teu.",
       en: "pqp.gg/@you, one name, first come, first served. Free, and yours.",
       es: "pqp.gg/@tú, un solo nombre, el primero que llega se lo queda. Gratis, y tuyo.",
     },
@@ -472,7 +472,7 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "pqp.gg/@você, um nome só, quem chegar primeiro leva. De graça, e é seu.",
+        "pqp.gg/@tu, um nome só, quem chegar primeiro leva. De graça, e é teu.",
       en: "pqp.gg/@you, one name, first come, first served. Free, and yours.",
       es: "pqp.gg/@tú, un solo nombre, el primero que llega se lo queda. Gratis, y tuyo.",
     },
@@ -552,7 +552,7 @@ export const LANDING_FAQ: Record<
     {
       question: "E meus amigos que não saem do Discord?",
       answer:
-        "Não precisam sair. Dá pra usar os dois ao mesmo tempo, e o Discord continua igual. Você manda o link do convite no grupo, e quem clicar cria a conta em um minuto e entra pelo navegador, sem instalar nada.",
+        "Não precisam sair. Dá pra usar os dois ao mesmo tempo, e o Discord continua igual. Tu manda o link do convite no grupo, e quem clicar cria a conta em um minuto e entra pelo navegador, sem instalar nada.",
     },
     {
       question: "Perco o histórico?",
@@ -577,12 +577,12 @@ export const LANDING_FAQ: Record<
     {
       question: "O que o pqp coleta e onde ficam meus dados?",
       answer:
-        "O pqp.gg hospedado usa análise de visitas sem cookies (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que usa cookies. Essa tag conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing. No pqp.gg, os dados ficam no nosso banco em São Paulo, com backups na América do Norte. Você exporta os seus quando quiser e apaga a conta de dentro do app.",
+        "O pqp.gg hospedado usa análise de visitas sem cookies (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que usa cookies. Essa tag conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing. No pqp.gg, os dados ficam no nosso banco em São Paulo, com backups na América do Norte. Tu exporta os teus quando quiser e apaga a conta de dentro do app.",
     },
     {
       question: "E se o pqp acabar?",
       answer:
-        "O código é aberto, sob a AGPL, e está público no GitHub. Você pode exportar seus dados e rodar uma cópia do pqp na sua máquina.",
+        "O código é aberto, sob a AGPL, e está público no GitHub. Tu pode exportar teus dados e rodar uma cópia do pqp na tua máquina.",
     },
   ],
   en: [
@@ -680,7 +680,7 @@ export const LANDING_BOT_FAQ: Record<
       "home.faq.bot.a.replies":
         "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
       "home.faq.bot.a.actions":
-        "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Se você pedir, ele também lê outros canais que você e ele podem ver. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
+        "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Se tu pedir, ele também lê outros canais que tu e ele podem ver. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
       "home.faq.bot.a.gradual": "Ele é novo, está em beta e chega servidor por servidor.",
       "home.faq.bot.a.everyone": "Ele é novo e está em beta.",
     },
@@ -846,7 +846,7 @@ export const TELA_FAQ: Record<
         "O app de Android já está na Google Play, em pqp.gg/android. No iPhone, pelo TestFlight em pqp.gg/beta. O navegador continua funcionando nos dois.",
     },
     {
-      question: "O que vocês guardam sobre mim?",
+      question: "O que o pqp guarda sobre mim?",
       answer:
         "Menos do que tu imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
     },
@@ -1013,7 +1013,7 @@ export const VEM_FAQ: Record<
     {
       question: "Isso é seguro?",
       answer:
-        "É um site: não instala nada. Chamada em DM e em servidor pequeno é direta entre as pessoas; em servidor maior ela passa por um servidor de voz nosso, em São Paulo, Miami ou Londres, o mais perto de onde está a maioria do pessoal daquele servidor. A sua conta mora no nosso servidor em São Paulo. Você apaga a conta de dentro do app e exporta os seus dados quando quiser. Bloqueio, denúncia e automod existem. O código é público se você quiser olhar, e não precisa ler pra usar. O pqp é pra maiores de 18.",
+        "É um site: não instala nada. Chamada em DM e em servidor pequeno é direta entre as pessoas; em servidor maior ela passa por um servidor de voz nosso, em São Paulo, Miami ou Londres, o mais perto de onde está a maioria do pessoal daquele servidor. A sua conta mora no nosso servidor em São Paulo. Tu apaga a conta de dentro do app e exporta os seus dados quando quiser. Bloqueio, denúncia e automod existem. O código é público se tu quiser olhar, e não precisa ler pra usar. O pqp é pra maiores de 18.",
     },
     {
       question: "É de graça mesmo? Qual é a pegadinha?",
@@ -1033,7 +1033,7 @@ export const VEM_FAQ: Record<
     {
       question: "Preciso instalar alguma coisa?",
       answer:
-        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone pelo TestFlight, se você preferir.",
+        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone pelo TestFlight, se tu preferir.",
     },
     {
       question: "Quantas pessoas cabem numa call?",
@@ -1043,7 +1043,7 @@ export const VEM_FAQ: Record<
     {
       question: "E se eu quiser voltar?",
       answer:
-        "Volta. O Discord não mudou em nada. E a sua comunidade do pqp exporta quando você quiser.",
+        "Volta. O Discord não mudou em nada. E a sua comunidade do pqp exporta quando tu quiser.",
     },
   ],
   en: [
@@ -1148,7 +1148,7 @@ export const STREAMERS_FAQ: Record<
     {
       question: "O que eu posso mostrar?",
       answer:
-        "O que você tem direito de mostrar. Quem apresenta é responsável pelo que compartilha, como está nos termos de uso.",
+        "O que tu tem direito de mostrar. Quem apresenta é responsável pelo que compartilha, como está nos termos de uso.",
     },
     {
       question: "Como o que eu vou mostrar entra na sessão?",
@@ -1158,7 +1158,7 @@ export const STREAMERS_FAQ: Record<
     {
       question: "Faço live na Twitch ao mesmo tempo. Como acerto o OBS?",
       answer:
-        "A imagem no pqp chega uns segundos depois do que você vê, e a sua live também tem atraso. Pra sua reação não chegar antes da cena, coloca um atraso no OBS, em Configurações, Avançado, Atraso da transmissão. Começa com uns 9 segundos e pede pra alguém da moderação olhar a live e a sala lado a lado nos primeiros minutos. Esse atraso só muda com o OBS fora do ar. Se quiser a sala do pqp na cena, adiciona a janela do navegador como Captura de janela.",
+        "A imagem no pqp chega uns segundos depois do que tu vê, e a tua live também tem atraso. Pra tua reação não chegar antes da cena, coloca um atraso no OBS, em Configurações, Avançado, Atraso da transmissão. Começa com uns 9 segundos e pede pra alguém da moderação olhar a live e a sala lado a lado nos primeiros minutos. Esse atraso só muda com o OBS fora do ar. Se quiser a sala do pqp na cena, adiciona a janela do navegador como Captura de janela.",
     },
     {
       question: "Quanta gente aguenta?",

@@ -56,7 +56,7 @@ final class LocalizationCoverageTests: XCTestCase {
             "Accept": "Aceitar",                    // Friends
             "Threads": "Tópicos",                   // threads
             "banned a member": "baniu um membro",   // the audit log
-            "You are presenting": "Você está apresentando",  // screen share
+            "You are presenting": "Tu tá apresentando",  // screen share
             "More reactions": "Mais reações",       // the message menu
         ]
         for (key, portuguese) in expected {

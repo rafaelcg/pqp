@@ -121,7 +121,7 @@ export function inviteCardText(locale: InviteLocale): {
 } {
   return locale === "pt-BR"
     ? {
-        title: "Você recebeu um convite no pqp",
+        title: "Tu recebeu um convite no pqp",
         description:
           "Alguém te chamou pra uma comunidade no pqp. Abre o link pra ver qual é e entrar. De graça, sem instalar nada.",
       }

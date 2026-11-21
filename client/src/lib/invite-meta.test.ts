@@ -102,7 +102,7 @@ describe("inviteCodeFromMetaPath", () => {
 describe("inviteCardText", () => {
   it("says an invitation exists and what clicking it does", () => {
     const { title, description } = inviteCardText("pt-BR");
-    expect(title).toBe("Você recebeu um convite no pqp");
+    expect(title).toBe("Tu recebeu um convite no pqp");
     expect(description).toContain("comunidade");
   });
 
@@ -125,7 +125,7 @@ describe("renderInviteHead", () => {
   it("writes an invitation where the product's card used to be", () => {
     const head = renderInviteHead("aBc12_xY", "https://pqp.gg", "pt-BR");
     expect(head).toContain(
-      '<meta property="og:title" content="Você recebeu um convite no pqp" />',
+      '<meta property="og:title" content="Tu recebeu um convite no pqp" />',
     );
     expect(head).toContain('name="twitter:card" content="summary_large_image"');
     expect(head).toContain(
@@ -206,7 +206,7 @@ describe("injectInviteHead", () => {
     const out = injectInviteHead(INDEX_HTML, "aBc12_xY", OPTIONS);
     expect(out.match(/property="og:title"/g)).toHaveLength(1);
     expect(out.match(/<title>/g)).toHaveLength(1);
-    expect(out).toContain("Você recebeu um convite no pqp");
+    expect(out).toContain("Tu recebeu um convite no pqp");
   });
 
   it("strips the one tag with an underscore in its name, too", () => {
