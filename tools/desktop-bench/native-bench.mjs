@@ -112,6 +112,19 @@ function levelBetween(a, b) {
   };
 }
 
+/**
+ * Whatever is open right now (the prototype, the second participant), so a
+ * Ctrl-C closes them before the stack: a browser still connected to the
+ * static server would otherwise hold its close open.
+ */
+const open = new Set();
+async function closeOpen() {
+  for (const item of [...open]) {
+    open.delete(item);
+    await item.close().catch(() => {});
+  }
+}
+
 const lightRoute = (stack) => `/app/server/${stack.ids.serverId}/channel/${stack.ids.lightChannelId}?lang=en`;
 
 function nativeEnv(stack) {
@@ -126,6 +139,12 @@ function nativeEnv(stack) {
 
 async function openNative(stack, cfg, log) {
   const n = launchNative({ bin: cfg.bin, env: nativeEnv(stack), log });
+  open.add(n);
+  const close = n.close;
+  n.close = async () => {
+    open.delete(n);
+    await close();
+  };
   try {
     const first = await n.waitLine("FIRST_CONTENT", 60_000);
     await n.waitLine("READY", 60_000);
@@ -138,7 +157,16 @@ async function openNative(stack, cfg, log) {
 
 /** Bob in the call, then the prototype joins it: the order the Electron S4 uses. */
 async function joinWithBob(stack, n) {
-  const bob = await startParticipant({ stack, route: lightRoute(stack), initScripts: [RECORD_PEER_CONNECTIONS] });
+  const participant = await startParticipant({ stack, route: lightRoute(stack), initScripts: [RECORD_PEER_CONNECTIONS] });
+  const handle = { close: () => participant.stop() };
+  open.add(handle);
+  const bob = {
+    page: participant.page,
+    stop: async () => {
+      open.delete(handle);
+      await participant.stop();
+    },
+  };
   try {
     const since = Date.now();
     n.send("join Lobby");
@@ -402,8 +430,12 @@ async function main() {
     result.comparison = compareWith(cfg.compare ?? newestElectronResult(), result.scenes);
     writeFileSync(outFile, JSON.stringify(result, null, 2));
   };
-  process.on("SIGINT", () => stack.stop().finally(() => process.exit(130)));
-  process.on("SIGTERM", () => stack.stop().finally(() => process.exit(143)));
+  const onSignal = (code) => () =>
+    closeOpen()
+      .then(() => stack.stop())
+      .finally(() => process.exit(code));
+  process.on("SIGINT", onSignal(130));
+  process.on("SIGTERM", onSignal(143));
 
   try {
     log("D2 exit check: two-person call with the web client, both sides measure the other");

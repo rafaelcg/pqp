@@ -1,5 +1,5 @@
 //! pqp desktop prototype (docs/plans/RUST.md, step D2). A prototype to measure,
-//! not a product: see the README beside this crate for what it does not do.
+//! not a product. What it does and does not do: docs/plans/RUST.md, D2.
 //!
 //! Environment (all optional; the defaults are the desktop-bench stack):
 //!   PQP_API_URL      http://127.0.0.1:3971
@@ -81,7 +81,9 @@ fn main() {
     }
 
     Application::new().run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
+        // The Electron shell's window size on the bench machine (1280x800),
+        // so both draw the same number of pixels.
+        let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
