@@ -462,6 +462,9 @@ final class JamVideoTests: XCTestCase {
 
 // MARK: - Naming, links, bands
 
+/// A first-strong isolate around a name, written out so the tests do not use the code they check.
+private func iso(_ text: String) -> String { "\u{2068}\(text)\u{2069}" }
+
 final class JamNamingAndLinksTests: XCTestCase {
     private func track(label: String?, person: String? = "Bia", _ instrument: JamInstrument = .bass) -> JamTrack {
         JamTrack(id: "t", songId: "s", authorId: "u", authorName: person, instrument: instrument, label: label)
@@ -469,16 +472,16 @@ final class JamNamingAndLinksTests: XCTestCase {
 
     func testATrackIsNamedInstrumentThenLabelThenPersonWithClearSeparators() {
         let t = track(label: "take 2, com pedal")
-        XCTAssertEqual(JamTrackNaming.full(t), "Bass \u{00B7} take 2, com pedal \u{00B7} Bia")
-        XCTAssertEqual(JamTrackNaming.caption(t), "take 2, com pedal \u{00B7} Bia")
+        XCTAssertEqual(JamTrackNaming.full(t), "Bass \u{00B7} \(iso("take 2, com pedal")) \u{00B7} \(iso("Bia"))")
+        XCTAssertEqual(JamTrackNaming.caption(t), "\(iso("take 2, com pedal")) \u{00B7} \(iso("Bia"))")
         XCTAssertEqual(JamTrackNaming.spoken(t), "Bass, take 2, com pedal, by Bia")
     }
 
     func testAMissingLabelIsAbsentNotAnEmptySlotAndNeverGluedToTheName() {
         for none in [nil, "", "   "] as [String?] {
             let t = track(label: none)
-            XCTAssertEqual(JamTrackNaming.full(t), "Bass \u{00B7} Bia")
-            XCTAssertEqual(JamTrackNaming.caption(t), "Bia")
+            XCTAssertEqual(JamTrackNaming.full(t), "Bass \u{00B7} \(iso("Bia"))")
+            XCTAssertEqual(JamTrackNaming.caption(t), iso("Bia"))
             XCTAssertEqual(JamTrackNaming.spoken(t), "Bass, by Bia")
         }
         XCTAssertEqual(JamTrackNaming.full(track(label: nil, person: nil)), "Bass")
@@ -489,16 +492,16 @@ final class JamNamingAndLinksTests: XCTestCase {
         // The dev bypass names a second account "Dev User leo". That is the
         // person; the label slot is separate and stays empty.
         let t = track(label: nil, person: "Dev User leo", .drums)
-        XCTAssertEqual(JamTrackNaming.full(t), "Drums \u{00B7} Dev User leo")
+        XCTAssertEqual(JamTrackNaming.full(t), "Drums \u{00B7} \(iso("Dev User leo"))")
         let labelled = track(label: "bateria seca", person: "Dev User leo", .drums)
-        XCTAssertEqual(JamTrackNaming.full(labelled), "Drums \u{00B7} bateria seca \u{00B7} Dev User leo")
+        XCTAssertEqual(JamTrackNaming.full(labelled), "Drums \u{00B7} \(iso("bateria seca")) \u{00B7} \(iso("Dev User leo"))")
     }
 
     func testAChipNamesTheWholeTrackWhenAloneAndThePeopleWhenSeveral() {
         let one = track(label: "take 2")
-        XCTAssertEqual(JamTrackNaming.chip(instrument: .bass, tracks: [one]), "Bass \u{00B7} take 2 \u{00B7} Bia")
+        XCTAssertEqual(JamTrackNaming.chip(instrument: .bass, tracks: [one]), "Bass \u{00B7} \(iso("take 2")) \u{00B7} \(iso("Bia"))")
         let many = [track(label: nil, person: "Bia"), track(label: "x", person: "Duda"), track(label: nil, person: "Leo"), track(label: nil, person: "Bia")]
-        XCTAssertEqual(JamTrackNaming.chip(instrument: .bass, tracks: many), "Bass \u{00B7} Bia, Duda +1")
+        XCTAssertEqual(JamTrackNaming.chip(instrument: .bass, tracks: many), "Bass \u{00B7} \(iso("Bia")), \(iso("Duda")) +1")
         XCTAssertEqual(JamTrackNaming.chip(instrument: .guitar, tracks: many), "Guitar")
     }
 
@@ -638,10 +641,10 @@ final class JamSummaryShapesTests: XCTestCase {
 
     func testTheWhoLineCountsPeopleTheSummaryDidNotName() {
         // Four named at most, six in all.
-        XCTAssertEqual(JamWho.line(song: newShape(count: 6), contributors: ["a", "b", "c", "d"]), "a, b +4")
+        XCTAssertEqual(JamWho.line(song: newShape(count: 6), contributors: ["a", "b", "c", "d"]), "\(iso("a")), \(iso("b")) +4")
         // Three people, one with no name (account gone): the unnamed is counted.
-        XCTAssertEqual(JamWho.line(song: newShape(count: 3), contributors: ["rafa", "duda"]), "rafa, duda +1")
-        XCTAssertEqual(JamWho.line(song: newShape(count: 2), contributors: ["rafa", "duda"]), "rafa, duda")
+        XCTAssertEqual(JamWho.line(song: newShape(count: 3), contributors: ["rafa", "duda"]), "\(iso("rafa")), \(iso("duda")) +1")
+        XCTAssertEqual(JamWho.line(song: newShape(count: 2), contributors: ["rafa", "duda"]), "\(iso("rafa")), \(iso("duda"))")
     }
 
     func testAFrameCarryingTheNewFieldsReplacesTheTilesFacts() {

@@ -122,7 +122,7 @@ struct JamTileView: View {
     private var labels: some View {
         VStack(alignment: .leading, spacing: 3) {
             Spacer(minLength: 0)
-            Text(verbatim: song.title)
+            Text(verbatim: JamBidi.clean(song.title))
                 .font(JamFont.title(isHero ? 26 : (size == .wide ? 20 : 18)))
                 .foregroundStyle(onTint ? Palette.ink : Palette.paper)
                 .lineLimit(isHero ? 3 : 2)
@@ -154,7 +154,10 @@ struct JamTileView: View {
 
     private var subtitle: String {
         var parts: [String] = []
-        if let artist = song.artist, !artist.isEmpty { parts.append(artist) }
+        // the artist and the people sit on one line beside the app's own dot:
+        // each is an isolate, so neither can reorder the other or the dot
+        let artist = JamBidi.isolateOpt(song.artist)
+        if !artist.isEmpty { parts.append(artist) }
         if !whoText.isEmpty { parts.append(whoText) }
         return parts.joined(separator: " \u{00B7} ")
     }
@@ -207,9 +210,12 @@ struct JamTileView: View {
     }
 
     private var accessibilityLabel: Text {
-        var text = Text(verbatim: song.title)
-        if let artist = song.artist, !artist.isEmpty { text = text + Text(verbatim: ", \(artist)") }
-        if !whoText.isEmpty { text = text + Text(verbatim: ", \(whoText)") }
+        // read in logical order by VoiceOver: no isolate characters, only the
+        // explicit controls dropped
+        var text = Text(verbatim: JamBidi.clean(song.title))
+        let artist = JamBidi.clean(song.artist ?? "")
+        if !artist.isEmpty { text = text + Text(verbatim: ", \(artist)") }
+        if !whoText.isEmpty { text = text + Text(verbatim: ", \(JamBidi.clean(whoText))") }
         return text + Text(verbatim: ", \(need.text)")
     }
 }

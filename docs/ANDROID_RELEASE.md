@@ -647,6 +647,29 @@ of forcing the loudspeaker. The audio button in the call bar shows where the
 sound is really going.
 ```
 
+### 0.4.38 (`versionCode` 45)
+
+Since 0.4.37 (`versionCode` 44): the Portuguese copy says "tu" everywhere (a
+handful of strings still said "você", #1721), and names and song titles in Jam
+no longer scramble the app's own sentences when they mix scripts such as Arabic
+or Hebrew with Latin text (#1716).
+
+**pt-BR**:
+
+```
+O texto em português fala de "tu" em todo canto, sem sobrar "você". No Jam, nomes
+e títulos de música em outro alfabeto (árabe, hebraico) não bagunçam mais as
+frases do app.
+```
+
+**en-US**:
+
+```
+Portuguese copy now consistently addresses you as "tu". In Jam, names and song
+titles in other scripts (Arabic, Hebrew) no longer scramble the app's own
+sentences.
+```
+
 ### 0.4.2 (`versionCode` 9)
 
 Watch party no celular: tela do filme com a câmera de quem apresenta, dá pra apresentar direto do celular, e a lista de canais mostra só a watch party ao vivo ou o botão pra criar uma.

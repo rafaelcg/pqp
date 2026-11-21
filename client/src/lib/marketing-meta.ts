@@ -178,7 +178,7 @@ const WATCH_PARTY_COPY: PageCopy = {
       es: "Watch party en pqp | Miren juntos con todo el servidor",
     },
   description: {
-      "pt-BR": "Compartilhe a tela e deixe centenas de pessoas assistirem no navegador, com baixa latência, a sua câmera no palco e o chat do lado. Entre na lista do acesso antecipado.",
+      "pt-BR": "Compartilha a tela e deixa centenas de pessoas assistirem no navegador, com baixa latência, a tua câmera no palco e o chat do lado. Entra na lista do acesso antecipado.",
       en: "Share your screen and let hundreds watch in the browser, with low latency, your camera on stage and the chat beside it. Join the early access waitlist.",
       es: "Comparte tu pantalla y deja que cientos miren en el navegador, con baja latencia, tu cámara en el escenario y el chat al lado. Entra a la lista de acceso anticipado.",
     },
@@ -195,13 +195,13 @@ const WATCH_PARTY_COPY: PageCopy = {
 const STREAMERS_COPY: PageCopy = {
   canonicalPath: "/streamers",
   title: {
-    "pt-BR": "pqp pra streamers | Sua comunidade assistindo junto",
+    "pt-BR": "pqp pra streamers | Tua comunidade assistindo junto",
     en: "pqp for streamers | Your community watching together",
     es: "pqp para streamers | Tu comunidad viendo junta",
   },
   description: {
     "pt-BR":
-      "Compartilhe a tela numa sala do pqp e a sua comunidade assiste no navegador, sem instalar nada e sem o teto de 50 pessoas. A reação continua na sua live. Peça acesso.",
+      "Compartilha a tela numa sala do pqp e a tua comunidade assiste no navegador, sem instalar nada e sem o teto de 50 pessoas. A reação continua na tua live. Pede acesso.",
     en: "Share your screen in a pqp room and your community watches in the browser, with nothing to install and no 50-person cap. Your reaction stays on your stream. Ask for access.",
     es: "Comparte tu pantalla en una sala de pqp y tu comunidad la ve en el navegador, sin instalar nada y sin el tope de 50 personas. Tu reacción sigue en tu stream. Pide acceso.",
   },
@@ -214,7 +214,7 @@ const STREAMERS_COPY: PageCopy = {
     width: 1200,
     height: 630,
     alt: {
-      "pt-BR": "pqp pra streamers: sua comunidade assistindo junto, no navegador",
+      "pt-BR": "pqp pra streamers: tua comunidade assistindo junto, no navegador",
       en: "pqp for streamers: your community watching together, in the browser",
       es: "pqp para streamers: tu comunidad viendo junta, en el navegador",
     },
@@ -247,7 +247,7 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/": {
     canonicalPath: "/",
     title: {
-      "pt-BR": "pqp: voz, tela e chat pra sua galera, código aberto",
+      "pt-BR": "pqp: voz, tela e chat pra tua galera, código aberto",
       en: "pqp: voice, screen share and chat, open source",
       es: "pqp: voz, pantalla compartida y chat, código abierto",
     },
@@ -391,13 +391,13 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/vem": {
     canonicalPath: "/vem",
     title: {
-      "pt-BR": "Vem pra pqp: traz a galera e a estrutura do seu Discord em dois minutos",
+      "pt-BR": "Vem pra pqp: traz a galera e a estrutura do teu Discord em dois minutos",
       en: "Come to pqp: bring your crew and your Discord layout in two minutes",
       es: "Ven a pqp: trae a tu banda y la estructura de tu Discord en dos minutos",
     },
     description: {
       "pt-BR":
-        "Cola o link do template do seu Discord e a sala nasce igual no pqp: categorias, canais, cargos. Voz, tela com som e chat no navegador. De graça, código aberto, servidores de voz em São Paulo, Miami e Londres.",
+        "Cola o link do template do teu Discord e a sala nasce igual no pqp: categorias, canais, cargos. Voz, tela com som e chat no navegador. De graça, código aberto, servidores de voz em São Paulo, Miami e Londres.",
       en: "Paste your Discord template link and your server's layout shows up on pqp: categories, channels, roles. Voice, screen share with sound and chat in the browser. Free, open source, voice servers in São Paulo, Miami and London.",
       es: "Pega el link de la plantilla de tu Discord y tu servidor aparece igualito en pqp: categorías, canales, roles. Voz, pantalla compartida con sonido y chat en el navegador. Gratis, de código abierto, con servidores de voz en São Paulo, Miami y Londres.",
     },
@@ -452,13 +452,13 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/garanta": {
     canonicalPath: "/garanta",
     title: {
-      "pt-BR": "Garanta seu @ no pqp",
+      "pt-BR": "Garante teu @ no pqp",
       en: "Claim your @ on pqp",
       es: "Asegura tu @ en pqp",
     },
     description: {
       "pt-BR":
-        "pqp.gg/@você, um nome só, quem chegar primeiro leva. De graça, e é seu.",
+        "pqp.gg/@tu, um nome só, quem chegar primeiro leva. De graça, e é teu.",
       en: "pqp.gg/@you, one name, first come, first served. Free, and yours.",
       es: "pqp.gg/@tú, un solo nombre, el primero que llega se lo queda. Gratis, y tuyo.",
     },
@@ -466,13 +466,13 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/claim": {
     canonicalPath: "/garanta",
     title: {
-      "pt-BR": "Garanta seu @ no pqp",
+      "pt-BR": "Garante teu @ no pqp",
       en: "Claim your @ on pqp",
       es: "Asegura tu @ en pqp",
     },
     description: {
       "pt-BR":
-        "pqp.gg/@você, um nome só, quem chegar primeiro leva. De graça, e é seu.",
+        "pqp.gg/@tu, um nome só, quem chegar primeiro leva. De graça, e é teu.",
       en: "pqp.gg/@you, one name, first come, first served. Free, and yours.",
       es: "pqp.gg/@tú, un solo nombre, el primero que llega se lo queda. Gratis, y tuyo.",
     },
@@ -552,7 +552,7 @@ export const LANDING_FAQ: Record<
     {
       question: "E meus amigos que não saem do Discord?",
       answer:
-        "Não precisam sair. Dá pra usar os dois ao mesmo tempo, e o Discord continua igual. Você manda o link do convite no grupo, e quem clicar cria a conta em um minuto e entra pelo navegador, sem instalar nada.",
+        "Não precisam sair. Dá pra usar os dois ao mesmo tempo, e o Discord continua igual. Tu manda o link do convite no grupo, e quem clicar cria a conta em um minuto e entra pelo navegador, sem instalar nada.",
     },
     {
       question: "Perco o histórico?",
@@ -577,12 +577,12 @@ export const LANDING_FAQ: Record<
     {
       question: "O que o pqp coleta e onde ficam meus dados?",
       answer:
-        "O pqp.gg hospedado usa análise de visitas sem cookies (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que usa cookies. Essa tag conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing. No pqp.gg, os dados ficam no nosso banco em São Paulo, com backups na América do Norte. Você exporta os seus quando quiser e apaga a conta de dentro do app.",
+        "O pqp.gg hospedado usa análise de visitas sem cookies (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que usa cookies. Essa tag conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing. No pqp.gg, os dados ficam no nosso banco em São Paulo, com backups na América do Norte. Tu exporta os teus quando quiser e apaga a conta de dentro do app.",
     },
     {
       question: "E se o pqp acabar?",
       answer:
-        "O código é aberto, sob a AGPL, e está público no GitHub. Você pode exportar seus dados e rodar uma cópia do pqp na sua máquina.",
+        "O código é aberto, sob a AGPL, e está público no GitHub. Tu pode exportar teus dados e rodar uma cópia do pqp na tua máquina.",
     },
   ],
   en: [
@@ -680,7 +680,7 @@ export const LANDING_BOT_FAQ: Record<
       "home.faq.bot.a.replies":
         "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
       "home.faq.bot.a.actions":
-        "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Se você pedir, ele também lê outros canais que você e ele podem ver. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
+        "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Se tu pedir, ele também lê outros canais que tu e ele podem ver. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
       "home.faq.bot.a.gradual": "Ele é novo, está em beta e chega servidor por servidor.",
       "home.faq.bot.a.everyone": "Ele é novo e está em beta.",
     },
@@ -846,7 +846,7 @@ export const TELA_FAQ: Record<
         "O app de Android já está na Google Play, em pqp.gg/android. No iPhone, pelo TestFlight em pqp.gg/beta. O navegador continua funcionando nos dois.",
     },
     {
-      question: "O que vocês guardam sobre mim?",
+      question: "O que o pqp guarda sobre mim?",
       answer:
         "Menos do que tu imagina, e tudo está listado em linguagem simples na política de privacidade em pqp.gg/privacy. O pqp.gg hospedado usa analytics sem cookie (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing.",
     },
@@ -1013,7 +1013,7 @@ export const VEM_FAQ: Record<
     {
       question: "Isso é seguro?",
       answer:
-        "É um site: não instala nada. Chamada em DM e em servidor pequeno é direta entre as pessoas; em servidor maior ela passa por um servidor de voz nosso, em São Paulo, Miami ou Londres, o mais perto de onde está a maioria do pessoal daquele servidor. A sua conta mora no nosso servidor em São Paulo. Você apaga a conta de dentro do app e exporta os seus dados quando quiser. Bloqueio, denúncia e automod existem. O código é público se você quiser olhar, e não precisa ler pra usar. O pqp é pra maiores de 18.",
+        "É um site: não instala nada. Chamada em DM e em servidor pequeno é direta entre as pessoas; em servidor maior ela passa por um servidor de voz nosso, em São Paulo, Miami ou Londres, o mais perto de onde está a maioria do pessoal daquele servidor. A tua conta mora no nosso servidor em São Paulo. Tu apaga a conta de dentro do app e exporta os teus dados quando quiser. Bloqueio, denúncia e automod existem. O código é público se tu quiser olhar, e não precisa ler pra usar. O pqp é pra maiores de 18.",
     },
     {
       question: "É de graça mesmo? Qual é a pegadinha?",
@@ -1023,17 +1023,17 @@ export const VEM_FAQ: Record<
     {
       question: "E os bots?",
       answer:
-        "Webhook de entrada compatível com o do Discord (o que posta lá, posta aqui), webhook de saída pra quem quer automatizar, e comandos nativos: /roll, /flip, /draw, /poll, fila de música. Loja de bots ainda não tem. Se o seu servidor vive de bot, é a coisa mais honesta que a gente pode te dizer.",
+        "Webhook de entrada compatível com o do Discord (o que posta lá, posta aqui), webhook de saída pra quem quer automatizar, e comandos nativos: /roll, /flip, /draw, /poll, fila de música. Loja de bots ainda não tem. Se o teu servidor vive de bot, é a coisa mais honesta que a gente pode te dizer.",
     },
     {
       question: "E as minhas mensagens?",
       answer:
-        "Ficam no Discord. O template não carrega mensagem, e o pqp não pede login na sua conta de lá. O que nasce aqui é a estrutura; a conversa começa do zero, com a galera que chegar. As mensagens do pqp são suas: busca, exporta, apaga.",
+        "Ficam no Discord. O template não carrega mensagem, e o pqp não pede login na tua conta de lá. O que nasce aqui é a estrutura; a conversa começa do zero, com a galera que chegar. As mensagens do pqp são tuas: busca, exporta, apaga.",
     },
     {
       question: "Preciso instalar alguma coisa?",
       answer:
-        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone pelo TestFlight, se você preferir.",
+        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone pelo TestFlight, se tu preferir.",
     },
     {
       question: "Quantas pessoas cabem numa call?",
@@ -1043,7 +1043,7 @@ export const VEM_FAQ: Record<
     {
       question: "E se eu quiser voltar?",
       answer:
-        "Volta. O Discord não mudou em nada. E a sua comunidade do pqp exporta quando você quiser.",
+        "Volta. O Discord não mudou em nada. E a tua comunidade do pqp exporta quando tu quiser.",
     },
   ],
   en: [
@@ -1148,7 +1148,7 @@ export const STREAMERS_FAQ: Record<
     {
       question: "O que eu posso mostrar?",
       answer:
-        "O que você tem direito de mostrar. Quem apresenta é responsável pelo que compartilha, como está nos termos de uso.",
+        "O que tu tem direito de mostrar. Quem apresenta é responsável pelo que compartilha, como está nos termos de uso.",
     },
     {
       question: "Como o que eu vou mostrar entra na sessão?",
@@ -1158,7 +1158,7 @@ export const STREAMERS_FAQ: Record<
     {
       question: "Faço live na Twitch ao mesmo tempo. Como acerto o OBS?",
       answer:
-        "A imagem no pqp chega uns segundos depois do que você vê, e a sua live também tem atraso. Pra sua reação não chegar antes da cena, coloca um atraso no OBS, em Configurações, Avançado, Atraso da transmissão. Começa com uns 9 segundos e pede pra alguém da moderação olhar a live e a sala lado a lado nos primeiros minutos. Esse atraso só muda com o OBS fora do ar. Se quiser a sala do pqp na cena, adiciona a janela do navegador como Captura de janela.",
+        "A imagem no pqp chega uns segundos depois do que tu vê, e a tua live também tem atraso. Pra tua reação não chegar antes da cena, coloca um atraso no OBS, em Configurações, Avançado, Atraso da transmissão. Começa com uns 9 segundos e pede pra alguém da moderação olhar a live e a sala lado a lado nos primeiros minutos. Esse atraso só muda com o OBS fora do ar. Se quiser a sala do pqp na cena, adiciona a janela do navegador como Captura de janela.",
     },
     {
       question: "Quanta gente aguenta?",
@@ -1178,7 +1178,7 @@ export const STREAMERS_FAQ: Record<
     {
       question: "Como eu peço ajuda?",
       answer:
-        "Manda um e-mail pra contato@pqp.gg. Respondemos por lá, e se for a sua primeira sessão dá pra combinar um ensaio antes.",
+        "Manda um e-mail pra contato@pqp.gg. Respondemos por lá, e se for a tua primeira sessão dá pra combinar um ensaio antes.",
     },
   ],
   en: [
@@ -1424,7 +1424,7 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
  * is redrawn.
  */
 const PRODUCT_CARD_ALT: LocalizedText = {
-  "pt-BR": "pqp: voz, tela compartilhada e chat pra sua galera",
+  "pt-BR": "pqp: voz, tela compartilhada e chat pra tua galera",
   en: "pqp: voice, screen share and chat for your crew",
   es: "pqp: voz, pantalla compartida y chat para tu gente",
 };

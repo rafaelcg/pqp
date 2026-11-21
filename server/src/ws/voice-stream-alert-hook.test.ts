@@ -73,6 +73,10 @@ vi.mock("../voice/backends.js", () => ({
 const { handleVoiceMessage, resetVoicePeers, resetVoiceRateLimits, resetVoiceRoomTransports } =
   await import("./voice.js");
 
+// The reader registers once, while `voice.js` loads. Vitest 5 clears every mock
+// before each test by default, so read the registration here, not in the test.
+const readerRegistrations = [...alerts.reader.mock.calls];
+
 const ROOM = randomUUID();
 
 function recorder(): { socket: WebSocket } {
@@ -115,8 +119,8 @@ describe("set-sharing-screen and the start-of-stream notice", () => {
   });
 
   it("registers its room reader with the notice when the voice layer loads", () => {
-    expect(alerts.reader).toHaveBeenCalledTimes(1);
-    expect(typeof alerts.reader.mock.calls[0]![0]).toBe("function");
+    expect(readerRegistrations).toHaveLength(1);
+    expect(typeof readerRegistrations[0]![0]).toBe("function");
   });
 
   it("reports a start once, and a stop once", async () => {

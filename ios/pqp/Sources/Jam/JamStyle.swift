@@ -135,18 +135,20 @@ extension JamNeed {
 enum JamTrackNaming {
     static let separator = " \u{00B7} "
 
-    /// A row's second line: the label, then the person.
+    /// A row's second line: the label, then the person. Each is isolated, so a
+    /// right-to-left override in one cannot reorder the dot or the other
+    /// (`JamBidi`).
     static func caption(_ track: JamTrack) -> String {
-        [cleaned(track.label), cleaned(track.authorName)].compactMap { $0 }.joined(separator: separator)
+        drawn(track).joined(separator: separator)
     }
 
     /// Instrument, label, person.
     static func full(_ track: JamTrack) -> String {
-        ([track.instrument.title] + [cleaned(track.label), cleaned(track.authorName)].compactMap { $0 })
-            .joined(separator: separator)
+        ([track.instrument.title] + drawn(track)).joined(separator: separator)
     }
 
-    /// What VoiceOver reads.
+    /// What VoiceOver reads. Read in logical order, so no isolate characters:
+    /// only the explicit controls are dropped (`JamBidi.clean`).
     static func spoken(_ track: JamTrack) -> String {
         var parts = [track.instrument.title]
         if let label = cleaned(track.label) { parts.append(label) }
@@ -165,14 +167,21 @@ enum JamTrackNaming {
         }
         var parts = [instrument.title]
         if !people.isEmpty {
-            let shown = people.prefix(2).joined(separator: ", ")
+            let shown = people.prefix(2).map(JamBidi.isolate).joined(separator: ", ")
             parts.append(people.count > 2 ? "\(shown) +\(people.count - 2)" : shown)
         }
         return parts.joined(separator: separator)
     }
 
+    /// The label and the person that are present, each isolated for drawing.
+    private static func drawn(_ track: JamTrack) -> [String] {
+        [cleaned(track.label), cleaned(track.authorName)].compactMap { $0 }.map(JamBidi.isolate)
+    }
+
+    /// Without bidi controls, trimmed, and absent when nothing is left (a name
+    /// that was only controls is no name, never an empty isolate in a slot).
     private static func cleaned(_ text: String?) -> String? {
-        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        guard let text = text.map(JamBidi.clean)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
         return text
     }
 }

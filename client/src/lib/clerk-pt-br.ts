@@ -18,7 +18,7 @@ type ClerkPtBR = typeof ptBR;
 export function withPqpPtBrCopy(base: ClerkPtBR): ClerkPtBR {
   return {
     ...base,
-    formFieldInputPlaceholder__emailAddress: "seu@email.com",
+    formFieldInputPlaceholder__emailAddress: "teu@email.com",
     signIn: {
       ...base.signIn,
       start: {
@@ -33,7 +33,7 @@ export function withPqpPtBrCopy(base: ClerkPtBR): ClerkPtBR {
       ...base.signUp,
       start: {
         ...base.signUp?.start,
-        title: "Criar sua conta no pqp",
+        title: "Criar tua conta no pqp",
         actionText: "Já tem conta?",
         actionLink: "Entrar",
       },

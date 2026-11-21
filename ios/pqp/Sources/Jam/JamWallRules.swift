@@ -71,11 +71,14 @@ enum JamWho {
     /// "rafa, duda, leo" or "rafa, duda +2". `contributors` is the list of
     /// people with a track when the detail has been read; before that the
     /// author stands in for the rest, with the count the summary carries.
+    /// Every name is isolated (`JamBidi`), because the line is drawn beside
+    /// other text and a display name is not sanitised by the server; a
+    /// screen reader gets `JamBidi.clean(line)`.
     static func line(song: JamSongSummary, contributors: [String]?, maxNames: Int = 3) -> String {
-        let names = (contributors ?? []).filter { !$0.isEmpty }
+        let names = (contributors ?? []).map(JamBidi.isolate).filter { !$0.isEmpty }
         if names.isEmpty {
-            let author = song.authorName ?? ""
-            let rest = max(0, song.contributorCount - (song.authorName == nil ? 0 : 1))
+            let author = JamBidi.isolateOpt(song.authorName)
+            let rest = max(0, song.contributorCount - (author.isEmpty ? 0 : 1))
             if author.isEmpty { return rest > 0 ? "+\(rest)" : "" }
             return rest > 0 ? "\(author) +\(rest)" : author
         }

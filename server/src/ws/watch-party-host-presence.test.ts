@@ -329,6 +329,57 @@ describeDb("the watch-party host's grace clock across two instances", () => {
     };
   }
 
+  /**
+   * Close the host's laptop on A and bring the phone up on B, with A's stamp
+   * landing only AFTER A can see the phone. That is the state both tests
+   * below start from: "the stamp is set and the host is on B".
+   *
+   * THE ORDER IS THE POINT, NOT A NICETY. A's stamp arms a re-check
+   * (`setHostPresenceRecheckMsForTests(20)` here, 5 s in production), and the
+   * retraction these tests are about only happens if that re-check finds the
+   * host on B. Awaiting the close and then connecting B raced the 20 ms
+   * timer against the test's own next steps: a SELECT, then B's
+   * `registerStatusSocket`, which reads `user_preferences` before the socket
+   * is visible to anyone. On a loaded CI runner those two round trips took
+   * longer than 20 ms, the re-check found nobody, the stamp was already set
+   * so the idempotent re-stamp wrote nothing, and A never looked again:
+   * "timed out waiting for A's retraction to be in flight" / "the retry to
+   * clear the stamp". The product is fine there (B's own arrival clear,
+   * `onHostSocketOpened`, which these tests deliberately skip, would have
+   * cleared it); the test was asking a 20 ms clock to wait for two queries.
+   * Holding the stamp until B is visible on A makes the re-check's answer
+   * certain instead of a matter of speed.
+   */
+  async function closeOnAWithHostArrivingOnB(
+    a: Instance,
+    b: Instance,
+    laptop: WebSocket,
+    hostId: string,
+  ): Promise<WebSocket> {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    interceptPool(a, "host_disconnected_at = NOW()", async () => {
+      if (!held) {
+        held = true;
+        await gate;
+      }
+    });
+
+    const closing = disconnect(a, laptop, hostId);
+    await waitFor(async () => held, "A's stamp to be in flight");
+    const phone = await connect(b, hostId);
+    await waitFor(
+      async () => a.status.hasClusterSocket(hostId),
+      "the phone on B to be visible on A",
+    );
+    release();
+    await closing;
+    return phone;
+  }
+
   it("a close that races the retraction is not lost", async () => {
     // The stamp is set, the host is on B, and A is mid-retraction when B's
     // socket closes. B's close finds the stamp still set, so its idempotent
@@ -352,9 +403,8 @@ describeDb("the watch-party host's grace clock across two instances", () => {
       await gate;
     });
 
-    await disconnect(a, laptop, hostId);
+    const phone = await closeOnAWithHostArrivingOnB(a, b, laptop, hostId);
     expect(await disconnectedAt(channelId)).not.toBeNull();
-    const phone = await connect(b, hostId);
     await waitFor(async () => held, "A's retraction to be in flight");
 
     await disconnect(b, phone, hostId);
@@ -382,9 +432,8 @@ describeDb("the watch-party host's grace clock across two instances", () => {
       }
     });
 
-    await disconnect(a, laptop, hostId);
+    await closeOnAWithHostArrivingOnB(a, b, laptop, hostId);
     expect(await disconnectedAt(channelId)).not.toBeNull();
-    await connect(b, hostId);
 
     await waitFor(
       async () => (await disconnectedAt(channelId)) === null,

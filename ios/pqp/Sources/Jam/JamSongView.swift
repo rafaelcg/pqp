@@ -38,7 +38,7 @@ struct JamSongView: View {
             content
             if model.isSongGone { goneOverlay }
         }
-        .navigationTitle(model.song.title)
+        .navigationTitle(JamBidi.clean(model.song.title))
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Palette.ink, for: .navigationBar)
         .toolbar { toolbar }
@@ -124,13 +124,14 @@ struct JamSongView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             VStack(alignment: .leading, spacing: 8) {
-                Text(verbatim: model.song.title)
+                Text(verbatim: JamBidi.clean(model.song.title))
                     .font(JamFont.title(26))
                     .foregroundStyle(Palette.paper)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(verbatim: headerLine)
                     .font(JamFont.text(14))
                     .foregroundStyle(Palette.paperMuted)
+                    .accessibilityLabel(Text(verbatim: JamBidi.clean(headerLine)))
                 JamInstrumentChips(song: model.song, tracks: model.tracks)
             }
         }
@@ -139,9 +140,12 @@ struct JamSongView: View {
     }
 
     private var headerLine: String {
+        // artist and author share a line with the app's own dot: isolate each
         var parts: [String] = []
-        if let artist = model.song.artist, !artist.isEmpty { parts.append(artist) }
-        parts.append(model.song.authorName ?? String(localized: "Deleted account"))
+        let artist = JamBidi.isolateOpt(model.song.artist)
+        if !artist.isEmpty { parts.append(artist) }
+        let author = JamBidi.isolateOpt(model.song.authorName)
+        parts.append(author.isEmpty ? String(localized: "Deleted account") : author)
         return parts.joined(separator: " \u{00B7} ")
     }
 
@@ -372,6 +376,7 @@ struct JamInstrumentChips: View {
                     Circle().fill(instrument.color).frame(width: 8, height: 8)
                     Text(verbatim: JamTrackNaming.chip(instrument: instrument, tracks: tracks))
                         .lineLimit(1)
+                        .accessibilityLabel(Text(verbatim: JamBidi.clean(JamTrackNaming.chip(instrument: instrument, tracks: tracks))))
                 }
                 .font(JamFont.text(12, .bold))
                 .foregroundStyle(Palette.paper)

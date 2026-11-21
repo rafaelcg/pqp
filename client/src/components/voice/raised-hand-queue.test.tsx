@@ -151,7 +151,7 @@ describe("RaisedHandQueue", () => {
       selfUserId: "bob",
     });
     expect(html).toContain("Fila pra falar");
-    expect(html).toContain("Você é o 2º na fila");
+    expect(html).toContain("Tu é o 2º na fila");
   });
 
   describe("audience mode (docs/plans/AUDIENCE_MODE.md)", () => {

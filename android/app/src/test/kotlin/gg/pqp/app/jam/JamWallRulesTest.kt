@@ -9,6 +9,9 @@ import org.junit.Test
 /** What a tile says, which filter shows it, where it sits, and what a live frame does to the wall. */
 class JamWallRulesTest {
 
+    /** A first-strong isolate around a name, written out so the tests do not use the code they check. */
+    private fun iso(text: String) = "\u2068$text\u2069"
+
     private val channel = "00000000-0000-4000-8000-0000000000c1"
 
     private fun song(
@@ -119,13 +122,13 @@ class JamWallRulesTest {
     fun `the people line counts the ones the summary does not list`() {
         // Four listed of seven: "rafa, duda +5".
         val s = withPreview(names = listOf("rafa", "duda", "leo", "bia"), count = 7)
-        assertEquals("rafa, duda +5", JamWho.line(s, JamTileInfo.contributorNames(s, null)))
+        assertEquals("${iso("rafa")}, ${iso("duda")} +5", JamWho.line(s, JamTileInfo.contributorNames(s, null)))
         // Two of two: both named.
         val two = withPreview(names = listOf("rafa", "duda"))
-        assertEquals("rafa, duda", JamWho.line(two, JamTileInfo.contributorNames(two, null)))
+        assertEquals("${iso("rafa")}, ${iso("duda")}", JamWho.line(two, JamTileInfo.contributorNames(two, null)))
         // A person with no name is not a name.
         val nameless = withPreview(names = listOf("rafa", null), count = 2)
-        assertEquals("rafa", JamWho.line(nameless, JamTileInfo.contributorNames(nameless, null)).substringBefore(" +"))
+        assertEquals(iso("rafa"), JamWho.line(nameless, JamTileInfo.contributorNames(nameless, null)).substringBefore(" +"))
     }
 
     @Test
@@ -162,12 +165,12 @@ class JamWallRulesTest {
     @Test
     fun `the who line, with and without the detail`() {
         val s = song(authorName = "rafa", contributors = 4)
-        assertEquals("rafa +3", JamWho.line(s, null))
-        assertEquals("rafa, duda", JamWho.line(s.copy(contributorCount = 2), listOf("rafa", "duda")))
+        assertEquals("${iso("rafa")} +3", JamWho.line(s, null))
+        assertEquals("${iso("rafa")}, ${iso("duda")}", JamWho.line(s.copy(contributorCount = 2), listOf("rafa", "duda")))
         // The summary says four people and only two names are known (an older detail): the rest are counted, not hidden.
-        assertEquals("rafa, duda +2", JamWho.line(s, listOf("rafa", "duda")))
-        assertEquals("rafa, duda +2", JamWho.line(s, listOf("rafa", "duda", "leo", "bia")))
-        assertEquals("rafa", JamWho.line(song(authorName = "rafa", contributors = 1), null))
+        assertEquals("${iso("rafa")}, ${iso("duda")} +2", JamWho.line(s, listOf("rafa", "duda")))
+        assertEquals("${iso("rafa")}, ${iso("duda")} +2", JamWho.line(s, listOf("rafa", "duda", "leo", "bia")))
+        assertEquals(iso("rafa"), JamWho.line(song(authorName = "rafa", contributors = 1), null))
         assertEquals("+2", JamWho.line(song(authorName = null, authorId = null, contributors = 2), null))
         assertEquals("", JamWho.line(song(authorName = null, authorId = null, contributors = 0), null))
     }

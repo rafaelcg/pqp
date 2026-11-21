@@ -91,9 +91,9 @@ export const STREAMERS_PRERENDER_COPY: Record<
     "streamersPage.hero.eyebrow":
       "Pra streamers",
     "streamersPage.hero.title":
-      "Sua comunidade assistindo junto, numa sala que é sua.",
+      "Tua comunidade assistindo junto, numa sala que é tua.",
     "streamersPage.hero.body":
-      "Você compartilha a tela no pqp e a galera assiste no navegador, sem instalar nada, sem entrar na call e sem o teto de 50 pessoas. A reação continua na sua live, com o chat de sempre.",
+      "Tu compartilha a tela no pqp e a galera assiste no navegador, sem instalar nada, sem entrar na call e sem o teto de 50 pessoas. A reação continua na tua live, com o chat de sempre.",
     "streamersPage.hero.cta":
       "Pedir acesso",
     "streamersPage.hero.beta":
@@ -105,19 +105,19 @@ export const STREAMERS_PRERENDER_COPY: Record<
     "streamersPage.steps.setup.title":
       "Monta a sessão",
     "streamersPage.steps.setup.body":
-      "Aperta Criar watch party, dá um nome e escolhe a aba ou a janela que vai compartilhar. Só você vê a prévia até ir ao vivo.",
+      "Aperta Criar watch party, dá um nome e escolhe a aba ou a janela que vai compartilhar. Só tu vê a prévia até ir ao vivo.",
     "streamersPage.steps.live.title":
       "Vai ao vivo",
     "streamersPage.steps.live.body":
-      "Aperta Ir ao vivo. A imagem, o som da aba, o seu microfone e a sua câmera vão juntos pra quem está assistindo.",
+      "Aperta Ir ao vivo. A imagem, o som da aba, o teu microfone e a tua câmera vão juntos pra quem está assistindo.",
     "streamersPage.steps.watch.title":
       "A galera assiste",
     "streamersPage.steps.watch.body":
-      "Quem você convidar abre o link no navegador, no computador ou no celular, e assiste com o chat do lado. Ninguém precisa de microfone.",
+      "Quem tu convidar abre o link no navegador, no computador ou no celular, e assiste com o chat do lado. Ninguém precisa de microfone.",
     "streamersPage.beta.title":
       "Em beta, servidor por servidor",
     "streamersPage.beta.body":
-      "Cada sessão usa o nosso servidor de vídeo, então liberamos aos poucos. Você pede acesso, diz quanta gente costuma assistir, e avisamos no app quando o seu servidor for liberado.",
+      "Cada sessão usa o nosso servidor de vídeo, então liberamos aos poucos. Tu pede acesso, diz quanta gente costuma assistir, e avisamos no app quando o teu servidor for liberado.",
     "streamersPage.faq.title":
       "Perguntas de quem faz live",
     "streamersPage.faq.share.link":

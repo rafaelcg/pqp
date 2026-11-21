@@ -16,7 +16,7 @@
     "@anthropic-ai/sdk": "^0.133.0",
     "@clerk/backend": "^1.23.3",
     "@pqp/shared": "workspace:*",
-    "dotenv": "^16.4.7",
+    "dotenv": "^18.0.10",
     "livekit-server-sdk": "^2.19.3",
     "pg": "^8.23.1",
     "web-push": "^4.0.0",
@@ -30,6 +30,6 @@
     "@types/ws": "^8.18.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^5.1.0"
   }
 }
