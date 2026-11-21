@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# The pqp-core regression gate.
+#
+# Run this, not bare `cargo test`. `cargo test` alone only proves Rust reads
+# what TypeScript produced; this also sends Rust's own output back through the
+# shipped TypeScript, which is the half that decides whether a rolling deploy
+# hangs up a live call.
+#
+# It fails if a committed fixture no longer matches what the TypeScript
+# generates, so a schema change cannot ship with a stale Rust fixture that
+# keeps CI green.
+#
+# For permessage-deflate the fixture comes from `ws` running the shipped policy,
+# and the second leg matters more there than anywhere else in this gate: a
+# compressed stream the peer cannot read fails silently, because both sides
+# believe they compressed successfully.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+
+node rust/scripts/gen-resume-vectors.mjs >/dev/null
+# zod is not hoisted to the workspace root: it lives in packages/shared/
+# node_modules, where the shipped sources resolve it. Asked from the root it
+# always answers "missing", so a probe that runs there skips both generators and
+# still leaves the gate green — a drift check that never drifts. The probe asks
+# from the package that depends on zod.
+if (cd packages/shared && node --input-type=module \
+      -e 'const { z } = await import("zod"); process.exit(z ? 0 : 1)') 2>/dev/null; then
+  # A throw from either generator is fatal, which is the point: it means the
+  # schema grew a field, a constraint or a refinement these generators cannot
+  # name, and that is exactly what must not ship unported.
+  node --experimental-strip-types --no-warnings \
+       --import ./rust/scripts/ts-register.mjs rust/scripts/gen-proto-vectors.mjs >/dev/null
+  node --experimental-strip-types --no-warnings \
+       --import ./rust/scripts/ts-register.mjs rust/scripts/gen-constraints.mjs >/dev/null
+else
+  echo "NOTE: zod is not installed, so neither the protocol fixtures nor the value
+      rule table were regenerated. Run 'pnpm install'. Cargo still tests the
+      committed fixtures." >&2
+fi
+
+# The deflate fixtures come from `ws` rather than from the schemas, so this probe
+# asks for `ws` and not for zod. Same rule as above: a drift check that cannot
+# run has to say so out loud instead of leaving the gate green.
+if node --input-type=module -e \
+     'const { loadWs } = await import("./rust/scripts/ws-locate.mjs");
+      process.exit(loadWs(process.cwd()).package.version ? 0 : 1)' 2>/dev/null; then
+  node --experimental-strip-types --no-warnings \
+       --import ./rust/scripts/ts-register.mjs rust/scripts/gen-deflate-vectors.mjs >/dev/null
+else
+  echo "NOTE: ws is not installed, so the permessage-deflate fixtures were not
+      regenerated. Run 'pnpm install'. Cargo still tests the committed fixtures." >&2
+fi
+
+# Each fixture lives inside the crate that reads it, because `include_str!` of a
+# path above the crate root cannot be packaged: a `.crate` tarball holds only the
+# crate directory, so a published crate would compile against a file that is not
+# there. That turns this pathspec into a list -- add to it when a crate gains
+# fixtures. A stale pathspec is the failure mode to fear here, because `git diff`
+# is quiet and green about a directory that no longer exists, so the directories are
+# asserted to exist before anything is compared.
+fixtures_dirs=(rust/crates/pqp-core/fixtures rust/crates/pqp-deflate/fixtures)
+for fixtures_dir in "${fixtures_dirs[@]}"; do
+  if [ ! -d "$fixtures_dir" ]; then
+    echo "FAIL: $fixtures_dir is gone, so the fixture drift check would pass on nothing." >&2
+    echo "Point it at the directory the crates actually include_str! from." >&2
+    exit 1
+  fi
+done
+
+if ! git diff --exit-code --quiet -- "${fixtures_dirs[@]}"; then
+  echo "FAIL: fixtures under ${fixtures_dirs[*]} no longer match the shipped TypeScript." >&2
+  echo "The port has drifted from the schema. Review the diff and commit it." >&2
+  git --no-pager diff --stat -- "${fixtures_dirs[@]}" >&2
+  exit 1
+fi
+
+dir="$(mktemp -d)"
+out="$dir/rust-minted.json"
+deflate="$dir/rust-deflate.json"
+PQP_RUST_MINTED_OUT="$out" PQP_RUST_DEFLATE_OUT="$deflate" \
+  cargo test --manifest-path rust/Cargo.toml --all-targets
+node rust/scripts/verify-rust-tokens.mjs "$out"
+node rust/scripts/verify-rust-deflate.mjs "$deflate"
+# The fixtures are test material, and that claim has to be checked rather than
+# commented: no token may verify under a foreign key or at today's clock.
+node rust/scripts/prove-vectors-inert.mjs
+cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+cargo fmt --manifest-path rust/Cargo.toml --all --check
+echo "PASS: pqp-core and pqp-deflate agree with the shipped TypeScript in both directions"
