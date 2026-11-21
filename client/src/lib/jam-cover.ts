@@ -3,12 +3,12 @@ import {
   JAM_COVER_CONTENT_TYPES,
   JAM_COVER_MAX_BYTES,
   JAM_COVER_SIZE,
-  JAM_TITLE_MAX,
   type JamSongSummary,
 } from "@pqp/shared";
 import { cropImageToRect } from "@/lib/avatar";
 import type { CropRegion } from "@/lib/image-crop";
 import { createJamUpload } from "@/lib/jam-api";
+import { jamArtistCheck, jamTitleCheck } from "@/lib/jam-text";
 import { putWithProgress } from "@/lib/jam-upload";
 
 /**
@@ -179,10 +179,24 @@ export interface JamEditPlan {
 
 const oneLine = (value: string) => value.replace(/\s+/g, " ").trim();
 
-/** The title as the server will store it, or null when it is empty or too long. */
+/**
+ * The title as the server will store it (bidi controls out, one line), or null
+ * when it is empty, draws nothing or is too long. The rule is the server's own
+ * (`jam-text.ts`), so Save is never enabled for a title the server refuses.
+ */
 export function cleanSongTitle(value: string): string | null {
-  const title = oneLine(value);
-  return title.length > 0 && title.length <= JAM_TITLE_MAX ? title : null;
+  const checked = jamTitleCheck(value);
+  return checked.ok ? checked.title : null;
+}
+
+/**
+ * The artist as the server will store it: a string, null for "none" (an
+ * original), or undefined when it will be refused (text that draws nothing).
+ * Cut at the contract's limit first, like the field's own `maxLength`.
+ */
+export function cleanSongArtist(value: string): string | null | undefined {
+  const checked = jamArtistCheck(oneLine(value).slice(0, JAM_ARTIST_MAX));
+  return checked.ok ? checked.artist : undefined;
 }
 
 /**
@@ -193,13 +207,16 @@ export function cleanSongTitle(value: string): string | null {
  */
 export function planJamEdit(song: Pick<JamSongSummary, "title" | "artist" | "coverUrl">, draft: JamEditDraft): JamEditPlan {
   const patch: NonNullable<JamEditPlan["patch"]> = {};
+  // A row from before the server stripped bidi controls still holds them: it is
+  // compared as the server would store it, so opening the sheet is not a change.
   const title = cleanSongTitle(draft.title);
-  if (title !== null && title !== song.title) {
+  if (title !== null && title !== (cleanSongTitle(song.title) ?? song.title)) {
     patch.title = title;
   }
-  const artist = oneLine(draft.artist).slice(0, JAM_ARTIST_MAX);
-  if ((artist === "" ? null : artist) !== song.artist) {
-    patch.artist = artist === "" ? null : artist;
+  const artist = cleanSongArtist(draft.artist);
+  const was = song.artist === null ? null : cleanSongArtist(song.artist);
+  if (artist !== undefined && artist !== was) {
+    patch.artist = artist;
   }
   const hasPatch = Object.keys(patch).length > 0;
   const cover: JamEditPlan["cover"] =

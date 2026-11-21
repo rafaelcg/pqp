@@ -37,10 +37,19 @@
  *    address, only as "there is a cover", and a test fails on any `X-Amz` or
  *    `sig=` in a head.
  *
+ *  - Text a person typed (title, artist, who played, who started it) is stripped of
+ *    bidi override, embedding and isolate controls before it reaches a tag. The
+ *    server strips them from new input (`cleanLine` in `@pqp/shared`), but a song
+ *    stored before PR 1710 may still hold a right-to-left override, and the edge
+ *    writes the head from what the API returns. A `<title>` cannot hold an
+ *    isolate in any way a tab or an unfurler honours, so it is stripped, not
+ *    isolated. The character list is `lib/bidi.ts`'s, not a copy of it.
+ *
  * DELIBERATELY DEPENDENCY-FREE, like `community-meta.ts`: wrangler bundles the
- * middleware outside the pnpm workspace.
+ * middleware outside the pnpm workspace (`./bidi` has no imports either).
  */
 
+import { bidiClean } from "./bidi";
 import { escapeHtml, MANAGED_TAGS } from "./community-meta";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -136,8 +145,27 @@ function list(items: string[], locale: "pt-BR" | "en"): string {
 
 const clip = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`);
 
+/**
+ * The song as the head may say it: every piece of text a person typed with its
+ * bidi controls dropped. A name that was only controls ends up empty and falls
+ * out of the lists below like any other empty one.
+ */
+export function cleanJamSong(song: JamSongMeta): JamSongMeta {
+  return {
+    ...song,
+    title: bidiClean(song.title).trim(),
+    artist: song.artist === null ? null : bidiClean(song.artist).trim() || null,
+    parts: song.parts.map((part) => ({ ...part, person: { name: bidiClean(part.person.name) } })),
+    startedBy: {
+      name: bidiClean(song.startedBy.name),
+      handle: song.startedBy.handle === null ? null : bidiClean(song.startedBy.handle) || null,
+    },
+  };
+}
+
 /** The card's words for a song. No em dashes, `tu` in Portuguese. */
-export function jamSongCardText(song: JamSongMeta, locale: "pt-BR" | "en"): { title: string; description: string } {
+export function jamSongCardText(input: JamSongMeta, locale: "pt-BR" | "en"): { title: string; description: string } {
+  const song = cleanJamSong(input);
   const names = NAMES[locale];
   const people = [...new Set(song.parts.map((part) => part.person.name.trim()).filter(Boolean))];
   const needs = song.needs.map((instrument) => names[instrument] ?? names.other!);
@@ -145,7 +173,8 @@ export function jamSongCardText(song: JamSongMeta, locale: "pt-BR" | "en"): { ti
   const played =
     people.length > 0
       ? locale === "pt-BR"
-        ? `${list(people, locale)} tocaram.`
+        ? // "tocou" for one person, "tocaram" for more: the verb agrees with the list.
+          `${list(people, locale)} ${people.length === 1 ? "tocou" : "tocaram"}.`
         : `Played by ${list(people, locale)}.`
       : locale === "pt-BR"
         ? `Começada por ${by}.`
@@ -157,7 +186,7 @@ export function jamSongCardText(song: JamSongMeta, locale: "pt-BR" | "en"): { ti
         : ` Needs ${list(needs, locale)}: record your part.`
       : "";
   return {
-    title: clip(`${song.title} · pqp jam`, 90),
+    title: song.title === "" ? "pqp jam" : clip(`${song.title} · pqp jam`, 90),
     description: clip(`${played}${missing}`, 200),
   };
 }
@@ -203,7 +232,8 @@ interface Card {
 }
 
 function renderHead(card: Card, locale: "pt-BR" | "en"): string {
-  const e = escapeHtml;
+  // Last line of defence: whatever reaches a tag has no bidi control in it.
+  const e = (value: string) => escapeHtml(bidiClean(value));
   const lines = [
     `<title>${e(card.title)}</title>`,
     `<meta name="description" content="${e(card.description)}" />`,
@@ -245,7 +275,8 @@ export function renderJamHead(
   input: { target: JamTarget; song: JamSongMeta | null; enabled: boolean },
   options: JamMetaOptions,
 ): { head: string; noindex: boolean } {
-  const { target, song, enabled } = input;
+  const { target, enabled } = input;
+  const song = input.song ? cleanJamSong(input.song) : null;
   const generic = HOME_TEXT[options.locale];
   const canonical =
     target.kind === "song" ? `https://jam.pqp.gg/m/${target.songId}` : "https://jam.pqp.gg/";

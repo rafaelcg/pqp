@@ -55,6 +55,26 @@ describe("what the public routes return", () => {
     expect(out.coverUrl).toBe("https://api.pqp.gg/api/covers/c1");
   });
 
+  it("reads a song stored with a right-to-left override in the order it was typed", () => {
+    const RLO = "‮";
+    const out = normaliseSong(
+      song({
+        title: `Samba ${RLO}OLEH`,
+        artist: `${RLO}Gabi`,
+        startedBy: { name: `${RLO}Leco`, handle: "leco", avatarUrl: null },
+        origin: { name: `${RLO}Garagem`, iconUrl: null, slug: null },
+        parts: [{ instrument: "bass", hasVideo: false, person: { name: `${RLO}Bia`, handle: null, avatarUrl: null } }],
+      }),
+    );
+    expect(out.title).toBe("Samba OLEH");
+    expect(out.artist).toBe("Gabi");
+    expect(out.startedBy.name).toBe("Leco");
+    expect(out.origin?.name).toBe("Garagem");
+    expect(out.parts[0]?.person.name).toBe("Bia");
+    // Real right-to-left text carries its own direction and is not touched.
+    expect(normaliseSong(song({ title: "مرحبا بالعالم" })).title).toBe("مرحبا بالعالم");
+  });
+
   it("does it for a list and for a song's tracks, so the mosaic's faces load on jam.pqp.gg", async () => {
     vi.stubEnv("VITE_API_URL", API);
     const calls: string[] = [];

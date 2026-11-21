@@ -100,6 +100,7 @@
   "like.labelCount": "Like, {likes}",
   "share.label": "Share",
   "share.copied": "Link copied",
+  "share.manual": "Could not copy. The link: {url}",
   "share.text": "{title}, a jam by {who} on pqp",
   "lanes.title": "Who played what",
   "lanes.missing": "nobody has recorded yet",

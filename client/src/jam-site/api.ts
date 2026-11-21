@@ -4,6 +4,7 @@ import type {
   PublicJamSongDetail,
   PublicJamSort,
 } from "@pqp/shared";
+import { bidiClean } from "@/lib/bidi";
 import type { Instrument } from "./instruments";
 
 /**
@@ -49,8 +50,24 @@ export function resolveApiUrl<T extends string | null | undefined>(value: T, api
   return `${apiBase.replace(/\/+$/, "")}${value}` as T;
 }
 
-function resolvePerson<T extends { avatarUrl: string | null }>(person: T): T {
-  return person.avatarUrl ? { ...person, avatarUrl: resolveApiUrl(person.avatarUrl) } : person;
+/**
+ * Text a person typed, without bidi override, embedding and isolate controls.
+ * The server strips them from new input, but a row from before that may still
+ * hold a right-to-left override, which reverses what is drawn after it on the
+ * line and sets the tab title backwards. Dropping the controls here (the list
+ * is `lib/bidi.ts`'s) makes every screen and the document head read the text in
+ * the order it was typed, and leaves real Arabic and Hebrew alone.
+ */
+const clean = (value: string): string => bidiClean(value);
+const cleanOpt = (value: string | null): string | null => (value === null ? null : bidiClean(value));
+
+function resolvePerson<T extends { name: string; handle: string | null; avatarUrl: string | null }>(person: T): T {
+  return {
+    ...person,
+    name: clean(person.name),
+    handle: cleanOpt(person.handle),
+    avatarUrl: person.avatarUrl ? resolveApiUrl(person.avatarUrl) : person.avatarUrl,
+  };
 }
 
 async function read<T>(path: string, signal?: AbortSignal, init?: RequestInit): Promise<T> {
@@ -99,9 +116,11 @@ export function normaliseSong(raw: unknown): PublicJamListResponse["songs"][numb
   const song = raw as unknown as PublicJamListResponse["songs"][number];
   return {
     ...song,
+    title: clean(song.title),
+    artist: typeof song.artist === "string" ? clean(song.artist) : null,
     coverUrl: resolveApiUrl(song.coverUrl ?? null),
     startedBy: song.startedBy ? resolvePerson(song.startedBy) : song.startedBy,
-    origin: song.origin ? { ...song.origin, iconUrl: resolveApiUrl(song.origin.iconUrl) } : song.origin,
+    origin: song.origin ? { ...song.origin, name: clean(song.origin.name), iconUrl: resolveApiUrl(song.origin.iconUrl) } : song.origin,
     previewPeaks: Array.isArray(song.previewPeaks) ? song.previewPeaks : [],
     parts: Array.isArray(song.parts) ? song.parts.map((part) => ({ ...part, person: resolvePerson(part.person) })) : [],
     needs: Array.isArray(song.needs) ? song.needs : [],
@@ -142,6 +161,7 @@ export async function fetchJam(songId: string, signal?: AbortSignal): Promise<Pu
     const track = raw as unknown as PublicJamSongDetail["tracks"][number];
     return {
       ...track,
+      label: typeof track.label === "string" ? clean(track.label) : null,
       person: track.person ? resolvePerson(track.person) : track.person,
       peaks: Array.isArray(track.peaks) ? track.peaks : [],
       videoSources: Array.isArray(track.videoSources) ? track.videoSources : [],

@@ -12,7 +12,7 @@
     "dry-run": "wrangler deploy --dry-run --outdir .wrangler/dry-run"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20261114.1",
+    "@cloudflare/workers-types": "^5.20261115.1",
     "typescript": "^7.0.2",
     "wrangler": "^4.162.0"
   }
