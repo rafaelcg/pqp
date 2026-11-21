@@ -271,7 +271,41 @@ async function d2Check(stack, cfg, log) {
     await bob?.stop();
     await n.close();
   }
+  out.meshRoom = await meshRefusal(stack, cfg, log);
+  out.pass = out.pass && out.meshRoom.refused;
   return out;
+}
+
+/**
+ * The prototype declares only `livekit` in `transports`, so the server must
+ * refuse it in a peer-to-peer room (plan, D2). A new server with one member is
+ * a mesh room by policy; the prototype asks to join its Lobby and must be told no.
+ */
+async function meshRefusal(stack, cfg, log) {
+  const name = `Mesh check ${Date.now().toString(36)}`;
+  const r = await fetch(`${stack.apiUrl}/api/servers`, {
+    method: "POST",
+    headers: { Authorization: "Bearer dev-local-token", "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!r.ok) throw new Error(`create server: HTTP ${r.status}`);
+  const n = launchNative({ bin: cfg.bin, env: { ...nativeEnv(stack), PQP_SERVER_NAME: name }, log: () => {} });
+  try {
+    await n.waitLine("READY", 60_000);
+    await sleep(1_500); // the channel list is an HTTP read beside the socket
+    const since = Date.now();
+    n.send("join Lobby");
+    // Whichever comes first; the loser times out quietly.
+    const refused = await Promise.race([
+      n.waitLine("ERROR", 20_000, since).then((l) => ({ refused: true, reason: l.rest }), () => new Promise(() => {})),
+      n.waitLine("IN_CALL", 20_000, since).then(() => ({ refused: false, reason: "joined a mesh room" }), () => new Promise(() => {})),
+      sleep(21_000).then(() => ({ refused: false, reason: "no answer in 20 s" })),
+    ]);
+    log(`  mesh room: ${JSON.stringify(refused)}`);
+    return refused;
+  } finally {
+    await n.close();
+  }
 }
 
 async function s1(stack, cfg, log) {

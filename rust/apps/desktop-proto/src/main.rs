@@ -21,7 +21,10 @@ use pqp_desktop_proto::state::Shared;
 use pqp_desktop_proto::ui::ChatView;
 
 fn env_or(name: &str, default: &str) -> String {
-    std::env::var(name).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string())
+    std::env::var(name)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 fn main() {

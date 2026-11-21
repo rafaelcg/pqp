@@ -15,6 +15,7 @@
 
 use crate::state::{CallPhase, Shared, bench_line};
 use futures::StreamExt;
+use livekit::PlatformAudio;
 use livekit::options::TrackPublishOptions;
 use livekit::prelude::*;
 use livekit::rtc_engine::lk_runtime::LkRuntime;
@@ -23,7 +24,6 @@ use livekit::webrtc::audio_source::{AudioSourceOptions, RtcAudioSource};
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
 use livekit::webrtc::peer_connection_factory::native::PeerConnectionFactoryExt;
 use livekit::webrtc::prelude::AudioFrame;
-use livekit::PlatformAudio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::task::JoinHandle;
@@ -127,7 +127,9 @@ impl Call {
         let audio = PlatformAudio::new().map_err(|e| format!("platform audio: {e}"))?;
         if !real_mic {
             // Synthetic microphone: make sure nothing opens the real one.
-            LkRuntime::instance().pc_factory().set_adm_recording_enabled(false);
+            LkRuntime::instance()
+                .pc_factory()
+                .set_adm_recording_enabled(false);
         }
 
         let (room, mut events) = Room::connect(url, token, RoomOptions::default())
@@ -161,13 +163,17 @@ impl Call {
                             )));
                         }
                         RoomEvent::ActiveSpeakersChanged { speakers } => {
-                            let ids = speakers.iter().map(|p| p.identity().as_str().to_string()).collect();
+                            let ids = speakers
+                                .iter()
+                                .map(|p| p.identity().as_str().to_string())
+                                .collect();
                             shared.update(|s| s.call.speaking = ids);
                         }
                         RoomEvent::Disconnected { reason } => {
                             shared.update(|s| {
                                 if s.call.phase == CallPhase::Connected {
-                                    s.call.phase = CallPhase::Failed(format!("SFU disconnected: {reason:?}"));
+                                    s.call.phase =
+                                        CallPhase::Failed(format!("SFU disconnected: {reason:?}"));
                                 }
                             });
                             break;

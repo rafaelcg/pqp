@@ -82,7 +82,9 @@ const CLIENT_NOT_SENT: &[&str] = &[
 
 /// Value rules the prototype does not enforce on a received frame (C1's job).
 /// A violation of any other kind must be refused by the decoder.
-const NOT_ENFORCED: &[&str] = &["guid", "minLen", "maxLen", "safeint", "ge", "gt", "url", "maxItems", "minItems"];
+const NOT_ENFORCED: &[&str] = &[
+    "guid", "minLen", "maxLen", "safeint", "ge", "gt", "url", "maxItems", "minItems",
+];
 
 fn types(v: &Value, side: &str) -> BTreeSet<String> {
     v[side]["types"]
@@ -101,7 +103,10 @@ fn assert_partition(all: &BTreeSet<String>, handled: &[&str], not: &[&str], what
     let h: BTreeSet<String> = handled.iter().map(|s| s.to_string()).collect();
     let n: BTreeSet<String> = not.iter().map(|s| s.to_string()).collect();
     let both: Vec<_> = h.intersection(&n).collect();
-    assert!(both.is_empty(), "{what}: listed as handled AND not handled: {both:?}");
+    assert!(
+        both.is_empty(),
+        "{what}: listed as handled AND not handled: {both:?}"
+    );
     let listed: BTreeSet<String> = h.union(&n).cloned().collect();
     let new: Vec<_> = all.difference(&listed).collect();
     assert!(
@@ -109,13 +114,21 @@ fn assert_partition(all: &BTreeSet<String>, handled: &[&str], not: &[&str], what
         "{what}: arms in the fixtures that this prototype neither handles nor lists as not handled: {new:?}"
     );
     let gone: Vec<_> = listed.difference(all).collect();
-    assert!(gone.is_empty(), "{what}: arms listed here that the fixtures no longer have: {gone:?}");
+    assert!(
+        gone.is_empty(),
+        "{what}: arms listed here that the fixtures no longer have: {gone:?}"
+    );
 }
 
 #[test]
 fn every_arm_is_handled_or_listed() {
     let v = fixture("proto-vectors.json");
-    assert_partition(&types(&v, "server"), SERVER_HANDLED, SERVER_NOT_HANDLED, "server");
+    assert_partition(
+        &types(&v, "server"),
+        SERVER_HANDLED,
+        SERVER_NOT_HANDLED,
+        "server",
+    );
     assert_partition(&types(&v, "client"), CLIENT_SENT, CLIENT_NOT_SENT, "client");
 }
 
@@ -126,7 +139,9 @@ fn assert_subset(mine: &Value, canonical: &Value, path: &str) {
         (Value::Object(m), Value::Object(c)) => {
             for (k, mv) in m {
                 let cv = c.get(k).unwrap_or_else(|| {
-                    panic!("{path}.{k}: the prototype emits a key zod's canonical parse does not have")
+                    panic!(
+                        "{path}.{k}: the prototype emits a key zod's canonical parse does not have"
+                    )
                 });
                 assert_subset(mv, cv, &format!("{path}.{k}"));
             }
@@ -137,7 +152,10 @@ fn assert_subset(mine: &Value, canonical: &Value, path: &str) {
                 assert_subset(mv, cv, &format!("{path}[{i}]"));
             }
         }
-        _ => assert_eq!(mine, canonical, "{path}: value differs from the canonical parse"),
+        _ => assert_eq!(
+            mine, canonical,
+            "{path}: value differs from the canonical parse"
+        ),
     }
 }
 
@@ -151,15 +169,26 @@ fn every_valid_server_vector_decodes_to_its_canonical_form() {
         let frame: ServerFrame = serde_json::from_value(vec["input"].clone())
             .unwrap_or_else(|e| panic!("{label}: a frame zod accepts did not decode: {e}"));
         if SERVER_HANDLED.contains(&ty) {
-            assert_ne!(frame, ServerFrame::Other, "{label}: a handled arm fell through to Other");
+            assert_ne!(
+                frame,
+                ServerFrame::Other,
+                "{label}: a handled arm fell through to Other"
+            );
             let mine = serde_json::to_value(&frame).unwrap();
             assert_subset(&mine, &vec["canonical"], label);
             decoded += 1;
         } else {
-            assert_eq!(frame, ServerFrame::Other, "{label}: an ignored arm must decode as Other");
+            assert_eq!(
+                frame,
+                ServerFrame::Other,
+                "{label}: an ignored arm must decode as Other"
+            );
         }
     }
-    assert!(decoded >= SERVER_HANDLED.len(), "every handled arm has at least one vector");
+    assert!(
+        decoded >= SERVER_HANDLED.len(),
+        "every handled arm has at least one vector"
+    );
 }
 
 fn rules_for<'a>(c: &'a Value, side: &str, ty: &str) -> Vec<(&'a str, &'a Map<String, Value>)> {
@@ -218,7 +247,13 @@ fn sent_frames_obey_the_value_rules() {
     let sent = [
         ("join-voice-room", ClientFrame::join(id)),
         ("leave-voice-room", ClientFrame::LeaveVoiceRoom {}),
-        ("set-voice-state", ClientFrame::SetVoiceState { muted: true, deafened: false }),
+        (
+            "set-voice-state",
+            ClientFrame::SetVoiceState {
+                muted: true,
+                deafened: false,
+            },
+        ),
     ];
     let v = fixture("proto-vectors.json");
     for (ty, frame) in sent {
@@ -231,7 +266,10 @@ fn sent_frames_obey_the_value_rules() {
             .flat_map(|x| x["input"].as_object().unwrap().keys().cloned())
             .collect();
         for k in json.as_object().unwrap().keys() {
-            assert!(known.contains(k), "{ty}: sends `{k}`, which no valid vector of the arm has");
+            assert!(
+                known.contains(k),
+                "{ty}: sends `{k}`, which no valid vector of the arm has"
+            );
         }
         for (path, rule) in rules_for(&c, "client", ty) {
             let kind = rule["k"].as_str().unwrap();

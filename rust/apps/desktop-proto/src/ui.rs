@@ -60,13 +60,24 @@ impl ChatView {
         let _ = self.commands.send(cmd);
     }
 
-    fn render_row(&mut self, ix: usize, _w: &mut Window, _cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_row(
+        &mut self,
+        ix: usize,
+        _w: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let s = self.shared.read();
         let Some(m) = s.messages.get(ix) else {
             return div().into_any_element();
         };
         let color = color_for(&m.author);
-        let initial: String = m.author.chars().next().unwrap_or('?').to_uppercase().collect();
+        let initial: String = m
+            .author
+            .chars()
+            .next()
+            .unwrap_or('?')
+            .to_uppercase()
+            .collect();
         div()
             .px_4()
             .py_1()
@@ -96,7 +107,12 @@ impl ChatView {
                             .gap_2()
                             .items_center()
                             .child(div().text_color(rgb(color)).child(m.author.clone()))
-                            .child(div().text_xs().text_color(rgb(0x949ba4)).child(m.time.clone())),
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(0x949ba4))
+                                    .child(m.time.clone()),
+                            ),
                     )
                     .child(div().text_color(rgb(0xdbdee1)).child(m.body.clone())),
             )
@@ -128,7 +144,10 @@ impl Render for ChatView {
         if !self.first_content_printed && self.rows > 0 {
             self.first_content_printed = true;
             window.on_next_frame(|_, _| {
-                let ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+                let ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis();
                 bench_line("FIRST_CONTENT", ms);
             });
         }
@@ -143,7 +162,13 @@ impl Render for ChatView {
             .flex_col()
             .p_2()
             .gap_1()
-            .child(div().px_2().py_2().text_color(rgb(0xffffff)).child(s.server_name.clone()));
+            .child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_color(rgb(0xffffff))
+                    .child(s.server_name.clone()),
+            );
 
         for c in &s.channels {
             let selected = s.text_channel_id.as_deref() == Some(c.id.as_str());
@@ -194,12 +219,11 @@ impl Render for ChatView {
                                     .gap_2()
                                     .text_sm()
                                     .text_color(rgb(0xb5bac1))
-                                    .child(
-                                        div()
-                                            .size(px(8.))
-                                            .rounded_full()
-                                            .bg(rgb(if speaking { 0x23a55a } else { 0x4e5058 })),
-                                    )
+                                    .child(div().size(px(8.)).rounded_full().bg(rgb(if speaking {
+                                        0x23a55a
+                                    } else {
+                                        0x4e5058
+                                    })))
                                     .child(label),
                             );
                         }
@@ -240,20 +264,26 @@ impl Render for ChatView {
                             .flex()
                             .gap_1()
                             .child(
-                                button("mute", if muted { "Unmute" } else { "Mute" }, muted).on_click(
-                                    cx.listener(move |view, _: &ClickEvent, _, _| view.send(Command::Mute(!muted))),
-                                ),
-                            )
-                            .child(
-                                button("deafen", if deafened { "Undeafen" } else { "Deafen" }, deafened)
+                                button("mute", if muted { "Unmute" } else { "Mute" }, muted)
                                     .on_click(cx.listener(move |view, _: &ClickEvent, _, _| {
-                                        view.send(Command::Deafen(!deafened))
+                                        view.send(Command::Mute(!muted))
                                     })),
                             )
                             .child(
-                                button("leave", "Leave", false)
-                                    .on_click(cx.listener(|view, _: &ClickEvent, _, _| view.send(Command::Leave))),
-                            ),
+                                button(
+                                    "deafen",
+                                    if deafened { "Undeafen" } else { "Deafen" },
+                                    deafened,
+                                )
+                                .on_click(cx.listener(
+                                    move |view, _: &ClickEvent, _, _| {
+                                        view.send(Command::Deafen(!deafened))
+                                    },
+                                )),
+                            )
+                            .child(button("leave", "Leave", false).on_click(
+                                cx.listener(|view, _: &ClickEvent, _, _| view.send(Command::Leave)),
+                            )),
                     ),
             );
         }
@@ -318,7 +348,11 @@ impl Render for ChatView {
                             .child(div().text_xs().text_color(rgb(0x949ba4)).child(socket))
                             .child(div().text_xs().text_color(rgb(0xda373c)).child(error)),
                     )
-                    .child(list(self.list_state.clone(), cx.processor(Self::render_row)).flex_1().size_full()),
+                    .child(
+                        list(self.list_state.clone(), cx.processor(Self::render_row))
+                            .flex_1()
+                            .size_full(),
+                    ),
             )
     }
 }

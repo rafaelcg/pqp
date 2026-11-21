@@ -43,14 +43,20 @@ pub enum Transport {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ClientFrame {
     /// Not part of the voice union (the server hand-parses it, `ws/index.ts`).
-    Auth { token: String, caps: Vec<String> },
+    Auth {
+        token: String,
+        caps: Vec<String>,
+    },
     #[serde(rename_all = "camelCase")]
     JoinVoiceRoom {
         voice_channel_id: String,
         transports: Vec<Transport>,
     },
     LeaveVoiceRoom {},
-    SetVoiceState { muted: bool, deafened: bool },
+    SetVoiceState {
+        muted: bool,
+        deafened: bool,
+    },
 }
 
 impl ClientFrame {
@@ -127,10 +133,16 @@ pub enum ServerFrame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         can_speak: Option<bool>,
     },
-    PeerJoined { peer: Participant },
-    PeerUpdated { peer: Participant },
+    PeerJoined {
+        peer: Participant,
+    },
+    PeerUpdated {
+        peer: Participant,
+    },
     #[serde(rename_all = "camelCase")]
-    PeerLeft { peer_id: String },
+    PeerLeft {
+        peer_id: String,
+    },
     #[serde(rename_all = "camelCase")]
     VoiceRoster {
         voice_channel_id: String,
@@ -154,7 +166,10 @@ pub enum ServerFrame {
         left: Vec<String>,
     },
     #[serde(rename_all = "camelCase")]
-    VoiceRoomFull { voice_channel_id: String, limit: u64 },
+    VoiceRoomFull {
+        voice_channel_id: String,
+        limit: u64,
+    },
     #[serde(rename_all = "camelCase")]
     VoiceTransportUnsupported {
         voice_channel_id: String,
@@ -389,7 +404,9 @@ mod tests {
         muted.muted = true;
         r.apply(&ServerFrame::PeerUpdated { peer: muted });
         assert!(r.me().unwrap().muted);
-        r.apply(&ServerFrame::PeerLeft { peer_id: "b".into() });
+        r.apply(&ServerFrame::PeerLeft {
+            peer_id: "b".into(),
+        });
         assert_eq!(r.rooms["room"].len(), 1);
         r.leave();
         assert!(r.me().is_none());

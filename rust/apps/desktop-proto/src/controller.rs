@@ -109,7 +109,11 @@ impl Http {
         r.json().await.map_err(|e| format!("GET {path}: {e}"))
     }
 
-    async fn post<T: for<'de> Deserialize<'de>>(&self, path: &str, body: serde_json::Value) -> Result<T, String> {
+    async fn post<T: for<'de> Deserialize<'de>>(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<T, String> {
         let r = self
             .client
             .post(format!("{}{}", self.base, path))
@@ -133,7 +137,9 @@ async fn boot(http: &Http, cfg: &Config, shared: &Shared) -> Result<(), String> 
         .into_iter()
         .find(|s| s.name == cfg.server_name)
         .ok_or_else(|| format!("no server named {}", cfg.server_name))?;
-    let channels: ChannelsResponse = http.get(&format!("/api/servers/{}/channels", server.id)).await?;
+    let channels: ChannelsResponse = http
+        .get(&format!("/api/servers/{}/channels", server.id))
+        .await?;
     let text = channels
         .channels
         .iter()
@@ -141,7 +147,9 @@ async fn boot(http: &Http, cfg: &Config, shared: &Shared) -> Result<(), String> 
         .or_else(|| channels.channels.iter().find(|c| c.kind == "text"))
         .map(|c| c.id.clone())
         .ok_or("no text channel")?;
-    let page: MessagesResponse = http.get(&format!("/api/channels/{text}/messages?limit=50")).await?;
+    let page: MessagesResponse = http
+        .get(&format!("/api/channels/{text}/messages?limit=50"))
+        .await?;
     let mut messages: Vec<(String, Msg)> = page
         .messages
         .into_iter()
@@ -277,7 +285,9 @@ async fn handle_command(cmd: Command, session: &mut Session, shared: &Shared) ->
             if let Some(c) = &session.call {
                 c.set_muted(muted || deafened);
             }
-            session.send(ClientFrame::SetVoiceState { muted, deafened }).await;
+            session
+                .send(ClientFrame::SetVoiceState { muted, deafened })
+                .await;
         }
         Command::Deafen(deafened) => {
             let muted = shared.update(|s| {
@@ -288,7 +298,9 @@ async fn handle_command(cmd: Command, session: &mut Session, shared: &Shared) ->
                 c.set_deafened(deafened);
                 c.set_muted(muted || deafened);
             }
-            session.send(ClientFrame::SetVoiceState { muted, deafened }).await;
+            session
+                .send(ClientFrame::SetVoiceState { muted, deafened })
+                .await;
         }
         Command::Status => bench_line("STATUS", status_json(shared, session)),
         Command::Quit => {
@@ -305,16 +317,30 @@ async fn on_seated(http: &Http, shared: &Shared, seat: crate::wire::Seat) -> Res
     if seat.transport != Transport::Livekit {
         return Err("seated in a mesh room; this client only speaks livekit".into());
     }
-    bench_line("SEATED", json!({"peerId": seat.peer_id, "voiceChannelId": seat.voice_channel_id}));
+    bench_line(
+        "SEATED",
+        json!({"peerId": seat.peer_id, "voiceChannelId": seat.voice_channel_id}),
+    );
     let mut body = json!({"voiceChannelId": seat.voice_channel_id, "peerId": seat.peer_id});
     if let Some(t) = &seat.resume_token {
         body["resumeToken"] = json!(t);
     }
     let session: VoiceSession = http.post("/api/voice/token", body).await?;
-    Call::connect(&session.url, &session.token, session.speak.unwrap_or(true), shared.clone()).await
+    Call::connect(
+        &session.url,
+        &session.token,
+        session.speak.unwrap_or(true),
+        shared.clone(),
+    )
+    .await
 }
 
-pub async fn run(cfg: Config, shared: Shared, mut commands: UnboundedReceiver<Command>, self_tx: UnboundedSender<Command>) {
+pub async fn run(
+    cfg: Config,
+    shared: Shared,
+    mut commands: UnboundedReceiver<Command>,
+    self_tx: UnboundedSender<Command>,
+) {
     let http = Http {
         client: reqwest::Client::new(),
         base: cfg.api_url.clone(),
@@ -424,8 +450,13 @@ pub async fn run(cfg: Config, shared: Shared, mut commands: UnboundedReceiver<Co
         session.ready = false;
         // The seat went with the socket; the media goes too, and the Ready
         // handler rejoins if the user still wants the room.
-        if let Some(call) = session.call.take() { call.close().await; }
-        shared.update(|s| { s.rosters.leave(); s.socket = SocketState::Closed("socket closed".into()); });
+        if let Some(call) = session.call.take() {
+            call.close().await;
+        }
+        shared.update(|s| {
+            s.rosters.leave();
+            s.socket = SocketState::Closed("socket closed".into());
+        });
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(10));
     }

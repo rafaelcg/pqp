@@ -53,7 +53,7 @@ Numbers are from the 2026-11-20 audit (M5 Max, Node 26.13.1, rustc 1.99.1) and
 
 | # | Area | Baseline we have | Number that would prove a gain | Budget that makes it a win |
 |---|---|---|---|---|
-| 1 | **Desktop app (Electron)** | Measured 2026-11-20 on `main` at `168c46ab1` (B2; M5 Max, macOS 27.0.1, Electron 44.9.1, median of 5, `tools/desktop-bench/results/2026-11-20-darwin-arm64-168c46ab1.json`): 533 MB idle, 598 MB with 2,000 messages, 555 MB after leaving that channel; in a two-person SFU call 801 MB and 26% of a core, 830 MB and 36% sharing a 1080p screen (synthetic capture, a lower bound for CPU), 763 MB and 29% watching a share, 684 MB and 10% watching a watch party; first message painted 2.6 s after a cold launch. No Windows or Linux number yet (B3). Replaces the 428 MB idle and 1,170 MB with 2,000 messages from #1553, taken before message list windowing (#1556) and the startup split (#1557). GPUI prototype (#1553, older Electron numbers beside it): 79 MB idle, 412 to 422 MB after the same walk, cannot join a call | The go bar in Phase D, on the scenes Phase B measures: a native client at most 40% of Electron's memory idle and 50% in a call, at most 60% of its CPU in a call | Beta parity estimated at 9 months or less from Phase D's real pace; installer at most half the size of Electron's; accessibility, IME, share audio and push-to-talk at parity |
+| 1 | **Desktop app (Electron)** | Measured 2026-11-20 on `main` at `168c46ab1` (B2; M5 Max, macOS 27.0.1, Electron 44.9.1, median of 5, `tools/desktop-bench/results/2026-11-20-darwin-arm64-168c46ab1.json`): 533 MB idle, 598 MB with 2,000 messages, 555 MB after leaving that channel; in a two-person SFU call 801 MB and 26% of a core, 830 MB and 36% sharing a 1080p screen (synthetic capture, a lower bound for CPU), 763 MB and 29% watching a share, 684 MB and 10% watching a watch party; first message painted 2.6 s after a cold launch. No Windows or Linux number yet (B3). Replaces the 428 MB idle and 1,170 MB with 2,000 messages from #1553, taken before message list windowing (#1556) and the startup split (#1557). GPUI prototype that joins a real call (D2, 2026-11-21, same machine and harness, `2026-11-21-darwin-arm64-1e0a316af-native.json`): 45 MB idle at under 0.03% of a core, 50 MB and 2.1% in the same two-person SFU call, doing far less than the product (Phase D, D2) | The go bar in Phase D, on the scenes Phase B measures: a native client at most 40% of Electron's memory idle and 50% in a call, at most 60% of its CPU in a call | Beta parity estimated at 9 months or less from Phase D's real pace; installer at most half the size of Electron's; accessibility, IME, share audio and push-to-talk at parity |
 | 2 | **Shared client core (iOS, Android, desktop)** | Jam stem placement fixed three times in three languages in one week (#1594, #1595, #1598). Android, and iOS in mesh rooms, still drop out of voice on an API restart (CLAUDE.md pitfall 11), because each client has its own reconnect and resume code | A rule ported to the core changes once, in one PR, for every consumer; mismatch counter at zero across a release; client-rule fixes made in two or more languages per quarter go down (counted from git history in Phase A) | At most 2 MB per ABI per app, at most 6 minutes of warm CI per app, a cold `cargo build` of the core under 2 minutes, and anyone who never touches Rust builds either app from a clean checkout with one documented command |
 | 3 | WebSocket fan-out (server) | 92 KB roster to 1,000 sockets: 406 ms of server CPU and 328 KB RSS per socket today; compressed once, 17.6 ms and 24 KB. At 2,000: 839 ms against 33.5 ms | Per-container CPU at a party join storm, flag off and on | **Node, not Rust.** About 10 lines in `server/src/ws/fanout.ts` plus an ordering wrapper; built separately behind a runtime flag. Listed here because it is the bar for any future server Rust |
 | 4 | Everything else on the server | Worst GC pause 3.84 ms and event-loop p99 1.6 ms at 2,000 sockets; the API box at 3% CPU while its pool filled (pitfall 22). Frame validation: zod 4 409 ns (client frames) and 703 ns (server frames) against Rust 466 and 718, and the socket path runs no zod on client frames at all. Reads already coalesce (`READ_CACHE`). Rosters are hundreds of rows. Media is already native | n/a | No precondition. Out of scope |
@@ -202,6 +202,84 @@ above zero on the dashboard, every budget in section 3 met.
   two-person call with the web client in which both sides measure the other's
   audio level. **Can start now on a branch** with the spike's own socket code;
   it lands on `main` with D1.
+
+  **Status (2026-11-21): prototype built and measured, on a branch.**
+  `rust/apps/desktop-proto` (a Cargo workspace at `rust/`, outside pnpm) signs in
+  with the local dev bypass, reads the Sandbox hall over HTTP, holds `/ws`
+  (auth, rosters, join, leave, mute, deafen), and joins the SFU room on LiveKit
+  Rust SDK 0.10.1 with GPUI 0.2.2 for the window. Its frame types replay the A1
+  fixtures in `tests/wire_fixtures.rs` (every arm handled or listed, every valid
+  vector of a handled arm read as zod reads it, every violation refused unless
+  it is a value rule on the list C1 will enforce; `.github/workflows/rust.yml`
+  runs that half on Linux). The exit check passed against the web client
+  (`tools/desktop-bench/native-bench.mjs`, `d2Check` in the result file): each
+  side measured the other's audio level, mute and deafen round-tripped through
+  `/ws` and silenced the audio they should, and a mesh room refused the
+  prototype, which declares only `livekit`. Two corrections to the text above:
+  speaking state does not come from `/ws` (the socket deliberately carries no
+  `speaking`, `signaling.ts`), it comes from LiveKit's active speakers; and per
+  this plan the branch should not merge before D1 and C1 exist.
+
+  Measured with B1's harness, same machine, same scenes, same sampler
+  (`tools/desktop-bench/results/2026-11-21-darwin-arm64-1e0a316af-native.json`,
+  against `2026-11-20-darwin-arm64-168c46ab1.json`, one day apart, M5 Max on AC
+  power; medians of five, min to max; the mesh refusal is in the `-native-check`
+  file beside it):
+
+  | Scene | Metric | Native prototype | Electron 44 (B2) | Native / Electron | Bar |
+  |---|---|---|---|---|---|
+  | S1 idle on `#general` | memory, MB | 44.8 (44.5 to 45.1) | 533.4 (530.5 to 534.9) | 8.4% | at most 150 MB and 40%: met |
+  | S1 idle on `#general` | CPU, % of a core | under 0.03 in every run (below the sampler's 0.01 s resolution over 30 s) | 7.59 (6.38 to 9.56) | under 0.5% | none set |
+  | S4 two-person SFU call, mic on | memory, MB | 50.4 (50.0 to 50.5), peak 50.5 | 801.4 (748.7 to 814.3) | 6.3% | at most 50%: met |
+  | S4 two-person SFU call, mic on | CPU, % of a core | 2.08 (1.96 to 2.27) | 26.39 (22.26 to 32.81) | 7.9% | at most 60%: met |
+
+  One process, so the native totals are that process; Electron's are the sum of
+  its browser, renderer, GPU and utility processes. Launch to first message
+  painted was about 0.1 s (`extras.startup.contentMs`, a cold launch; not S8,
+  which also needs a warm launch and is not run).
+
+  **Reading against the go bar: no go yet, and not a no-go.** The two rows that
+  can be measured today pass by a wide margin (memory at a twelfth of
+  Electron's, call CPU at a thirteenth). The bar is all of its rows, and S5, S6,
+  S7, S8 and the Windows runner are not measured, because D3 and D4 do not
+  exist; nor is any of the non-numeric half (accessibility, IME, per-app share
+  audio, push-to-talk, the share picker, updater, signing, the parity estimate).
+  This is not like for like, and what the prototype does not do is listed so
+  nobody reads the margin as the product's:
+
+  - No chat send, composer, IME, markdown, embeds, attachments, reactions,
+    images or avatars (the avatar is a coloured letter), no member list, no
+    second server, no DMs, no notifications, no settings, no accessibility work,
+    no i18n, no Clerk, no profile on disk, no updater, no crash reporting.
+    Images (decode and cache), a full member list with presence, a message
+    cache, rich text and the accessibility tree would all add memory; none of
+    them should add steady CPU at idle.
+  - No screen share, no camera, no video decode (S5 and S6 are where the next
+    big CPU numbers are), no watch party (S7), no noise suppression beyond
+    WebRTC's own (the web client can also run RNNoise in a worklet).
+  - The microphone is synthetic (a beep in a `NativeAudioSource`, WebRTC's
+    echo canceller, noise suppressor and gain control on), published as
+    `TrackSource::Microphone`; a macOS microphone grant cannot be given
+    unattended. Real capture adds the CoreAudio input unit, a small cost.
+    Playout is real (WebRTC's CoreAudio device module, as in Chromium).
+  - The socket is uncompressed (the prototype does not offer
+    `permessage-deflate`); Electron inflates every frame. Small at this traffic.
+  - Speaking state is redrawn on LiveKit's active-speaker events and the
+    level text once a second; the web client animates speaking rings.
+
+  **Cost.** Cold `cargo build --release -j 6` 88 s on the M5 Max with the crates
+  already in `~/.cargo` (it downloads LiveKit's prebuilt libwebrtc, 1.1 GB
+  unpacked, into `target/`, which is 3.8 GB after the build); a one-file rebuild
+  15 s, most of it the thin-LTO link. Binary 35.0 MB (26.8 MB stripped, 13.2 MB
+  gzipped), unsigned, no `.app` bundle; the Electron arm64 `.dmg` of v0.2.11 is
+  163.9 MB. 522 crates in the macOS build graph (804 in `Cargo.lock` across
+  platforms), plus libwebrtc's C++. Two things hit on the way: the SDK needs
+  `-ObjC` at link time on macOS (WebRTC's Objective-C categories are otherwise
+  dropped and the first peer connection factory dies on an unrecognised
+  selector; `build.rs` adds it), and deafen has to ask the SFU to stop
+  forwarding (a locally disabled track still decodes and meters the full
+  signal). GPUI and the SDK's tokio runtime did not fight: tokio runs on its own
+  thread and pings the window over a channel.
 - **D3 (L). Screen share.** Watch a share, then publish one on macOS through the
   SDK's native capture. Per-app share audio is not built; its feasibility on
   macOS and Windows is written down as part of the go bar.
