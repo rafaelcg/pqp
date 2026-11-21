@@ -23,7 +23,7 @@
  *    expires within the hour (`mediaExpiresAt`), so an unfurl that WhatsApp, X
  *    or Discord cached and re-reads later would be broken; the route serves the
  *    current object from our origin, cacheable, 404 for anything not public
- *    (server `jam-public-routes.ts`, the Baú cover's pattern, #1260). The cover
+ *    (server `jam-public-routes.ts`, the Baú cover's pattern, PR 1260). The cover
  *    is a square, so its card is `summary`, and its size is not known here so
  *    none is stated (a wrong one is worse than none).
  *  - Everything else (a song with no cover yet, which until the scanner runs is
