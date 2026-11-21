@@ -57,7 +57,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import gg.pqp.app.R
+import gg.pqp.app.jam.JamBidi
 import gg.pqp.app.jam.JamInstrument
+import gg.pqp.app.jam.JamNaming
 import gg.pqp.app.jam.JamNeed
 import gg.pqp.app.jam.JamPreview
 import gg.pqp.app.jam.JamSongSummary
@@ -162,11 +164,13 @@ fun JamTile(
 
     val who = JamWho.line(song, JamTileInfo.contributorNames(song, preview))
     val subtitle = listOfNotNull(
-        song.artist?.takeIf { it.isNotBlank() } ?: stringResource(R.string.jam_original).takeIf { !empty },
+        // the artist and the people share a line with the app's own dot: each is an isolate (JamBidi)
+        JamNaming.drawn(song.artist, stringResource(R.string.jam_original).takeIf { !empty }),
         who.takeIf { it.isNotEmpty() },
     ).joinToString(" · ")
     val needText = need.text()
-    val description = stringResource(R.string.jam_tile_description, song.title, subtitle.ifEmpty { who }, needText)
+    // TalkBack reads in logical order: only the explicit bidi controls dropped, no isolate characters
+    val description = stringResource(R.string.jam_tile_description, JamBidi.clean(song.title), JamBidi.clean(subtitle.ifEmpty { who }), needText)
 
     Box(
         modifier = modifier
@@ -274,7 +278,7 @@ fun JamTile(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                text = song.title,
+                text = JamBidi.clean(song.title),
                 style = if (size == JamTileSize.Hero) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.ExtraBold,
                 color = onGround,

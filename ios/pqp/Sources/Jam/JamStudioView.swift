@@ -135,7 +135,7 @@ struct JamStudioView: View {
             .accessibilityLabel(Text("Back"))
             .accessibilityIdentifier("jam.studio.close")
             VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: model.songTitle.isEmpty ? String(localized: "New song") : model.songTitle)
+                Text(verbatim: model.songTitle.isEmpty ? String(localized: "New song") : JamBidi.clean(model.songTitle))
                     .font(JamFont.text(15, .bold))
                     .foregroundStyle(Palette.paper)
                     .lineLimit(1)
@@ -143,6 +143,7 @@ struct JamStudioView: View {
                     .font(JamFont.text(12))
                     .foregroundStyle(Palette.paperMuted)
                     .lineLimit(1)
+                    .accessibilityLabel(Text(verbatim: JamBidi.clean(subtitle)))
             }
             Spacer(minLength: 0)
         }
@@ -153,7 +154,8 @@ struct JamStudioView: View {
 
     private var subtitle: String {
         if model.isNewSong { return String(localized: "The first track of a new song") }
-        let names = model.band.compactMap(\.authorName)
+        // each name is an isolate inside the app's own sentence ("On top of ...")
+        let names = model.band.compactMap(\.authorName).map(JamBidi.isolate).filter { !$0.isEmpty }
         var seen = Set<String>()
         let unique = names.filter { seen.insert($0).inserted }
         if unique.isEmpty { return String(localized: "The first track of a new song") }

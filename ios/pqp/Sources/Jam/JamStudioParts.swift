@@ -128,7 +128,7 @@ struct JamStudioLanes: View {
                     .font(JamFont.text(12, .bold))
                     .foregroundStyle(strong ? Palette.paper : Palette.paperSubtle)
                 if let name, !name.isEmpty {
-                    Text(verbatim: name)
+                    Text(verbatim: JamBidi.clean(name))
                         .font(JamFont.text(10))
                         .foregroundStyle(Palette.paperMuted)
                 }

@@ -103,7 +103,9 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
 import gg.pqp.app.core.Backend
+import gg.pqp.app.jam.JamBidi
 import gg.pqp.app.jam.JamConfig
+import gg.pqp.app.jam.JamNaming
 import gg.pqp.app.jam.JamNeed
 import gg.pqp.app.jam.JamNotice
 import gg.pqp.app.jam.JamPeaks
@@ -516,7 +518,7 @@ private fun SongHeader(
         val textColor = if (tracks.isEmpty() && !hasCover) JamInk else Color.White
         Column(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
             Text(
-                text = song.title,
+                text = JamBidi.clean(song.title),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.ExtraBold,
                 color = textColor,
@@ -525,9 +527,9 @@ private fun SongHeader(
                 modifier = Modifier.testTag("jam.song.title"),
             )
             val sub = listOfNotNull(
-                song.artist?.takeIf { it.isNotBlank() } ?: stringResource(R.string.jam_original),
-                song.authorName ?: stringResource(R.string.jam_deleted_account),
-            ).joinToString(" · ")
+                JamNaming.drawn(song.artist, stringResource(R.string.jam_original)),
+                JamNaming.drawn(song.authorName, stringResource(R.string.jam_deleted_account)),
+            ).joinToString(JamNaming.SEPARATOR)
             Text(sub, style = MaterialTheme.typography.labelLarge, color = textColor.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -551,7 +553,7 @@ private fun VideoStage(model: JamSongViewModel, ui: JamSongUi) {
                         ) {
                             Icon(track.instrument.icon(), contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
                             Text(
-                                text = track.authorName ?: track.instrument.title(),
+                                text = JamBidi.clean(track.authorName ?: track.instrument.title()),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White,
                                 maxLines = 1,
@@ -609,7 +611,7 @@ private fun TrackRow(
     val colors = MaterialTheme.colorScheme
     val state = ui.state ?: return
     val tint = track.instrument.color()
-    val name = track.authorName ?: track.instrument.title()
+    val name = JamBidi.clean(track.authorName ?: track.instrument.title())
     val label = stringResource(R.string.jam_track_label, track.instrument.title(), name)
     val status = ui.stems[track.id] ?: JamStemStatus.Loading
     val audible = ui.audible(track.id)
@@ -646,7 +648,7 @@ private fun TrackRow(
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 Text(
-                    text = track.instrument.title() + (track.label?.let { " · $it" } ?: ""),
+                    text = JamNaming.heading(track.instrument.title(), track.label),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -942,7 +944,7 @@ private fun OtherTakeRow(
     val colors = MaterialTheme.colorScheme
     val haptics = LocalHapticFeedback.current
     val viewer = ui.state?.viewer ?: return
-    val name = track.authorName ?: track.instrument.title()
+    val name = JamBidi.clean(track.authorName ?: track.instrument.title())
     Column(
         modifier
             .fillMaxWidth()
@@ -958,7 +960,7 @@ private fun OtherTakeRow(
             }
             Column(Modifier.weight(1f)) {
                 Text(
-                    track.instrument.title() + (track.label?.let { " · $it" } ?: ""),
+                    JamNaming.heading(track.instrument.title(), track.label),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,

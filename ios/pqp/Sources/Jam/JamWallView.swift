@@ -470,7 +470,7 @@ struct JamRecordOnComputerSheet: View {
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     .accessibilityIdentifier("jam.record.copy")
-                    ShareLink(item: link, subject: Text(verbatim: title ?? "")) {
+                    ShareLink(item: link, subject: Text(verbatim: JamBidi.clean(title ?? ""))) {
                         Label("Share link", systemImage: "square.and.arrow.up")
                     }
                     .buttonStyle(SecondaryButtonStyle())

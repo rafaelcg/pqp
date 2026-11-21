@@ -573,8 +573,9 @@ final class JamSongModel {
         guard force || Date().timeIntervalSince(lastNowPlaying) > 1 else { return }
         lastNowPlaying = Date()
         JamNowPlaying.publish(
-            title: song.title,
-            artist: song.artist ?? song.authorName,
+            // the lock screen draws each in its own field: dropped controls only
+            title: JamBidi.clean(song.title),
+            artist: (song.artist ?? song.authorName).map(JamBidi.clean),
             positionMs: engine.positionMs,
             durationMs: engine.durationMs,
             isPlaying: isPlaying

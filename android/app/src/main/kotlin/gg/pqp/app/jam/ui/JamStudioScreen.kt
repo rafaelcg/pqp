@@ -112,6 +112,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
+import gg.pqp.app.jam.JamBidi
 import gg.pqp.app.jam.JamInstrument
 import gg.pqp.app.jam.JamPeaks
 import gg.pqp.app.jam.record.CutReason
@@ -224,7 +225,7 @@ fun JamStudioScreen(
                                     maxLines = 1,
                                 )
                                 Text(
-                                    songTitle?.takeIf { it.isNotBlank() } ?: stringResource(R.string.jam_rec_new_song),
+                                    songTitle?.let(JamBidi::clean)?.takeIf { it.isNotBlank() } ?: stringResource(R.string.jam_rec_new_song),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -911,7 +912,7 @@ private fun LaneRow(lane: StudioLane, originMs: Double, durationMs: Double, play
     LaunchedEffect(lane.id) { if (draw.value < 1f) draw.animateTo(1f, tween(600, easing = FastOutSlowInEasing)) }
     var width by remember { mutableIntStateOf(0) }
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val label = stringResource(R.string.jam_track_label, lane.instrument.title(), lane.name ?: stringResource(R.string.jam_rec_you))
+    val label = stringResource(R.string.jam_track_label, lane.instrument.title(), lane.name?.let(JamBidi::clean) ?: stringResource(R.string.jam_rec_you))
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
         Box(Modifier.size(36.dp).clip(CircleShape).background(tint), contentAlignment = Alignment.Center) {
             Icon(lane.instrument.icon(), contentDescription = null, tint = JamInk, modifier = Modifier.size(18.dp))
@@ -965,7 +966,7 @@ private fun LaneRow(lane: StudioLane, originMs: Double, durationMs: Double, play
                 )
             }
             Text(
-                text = lane.name ?: stringResource(R.string.jam_rec_you),
+                text = lane.name?.let(JamBidi::clean) ?: stringResource(R.string.jam_rec_you),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
                 color = colors.onSurface.copy(alpha = 0.85f),
