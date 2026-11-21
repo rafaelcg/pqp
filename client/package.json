@@ -75,7 +75,7 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vite-plugin-pwa": "^2.0.0",
-    "vitest": "^4.1.10",
+    "vitest": "^5.1.0",
     "workbox-window": "^7.4.1"
   }
 }
