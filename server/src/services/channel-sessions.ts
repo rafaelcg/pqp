@@ -6,6 +6,8 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { pushChannelSessionReminder } from "./push.js";
+import type { WebSocket } from "ws";
+import { broadcastEncoded, encodeFrame } from "../ws/fanout.js";
 import { forEachAuthenticatedSocket } from "../ws/sockets.js";
 import {
   isBusConnected,
@@ -511,7 +513,7 @@ export function deliverChannelSessionReminder(
   event: ChannelSessionReminderEvent,
 ): number {
   const recipients = new Set(event.userIds);
-  const frame = JSON.stringify({
+  const frame = encodeFrame({
     type: "channel-session-reminder",
     sessionId: event.sessionId,
     channelId: event.channelId,
@@ -524,14 +526,13 @@ export function deliverChannelSessionReminder(
   // recipient is mid-reconnect reaches nobody, and the caller must be able to
   // tell that apart from a delivery so it does not suppress the retry that
   // would have caught them a moment later.
-  let sent = 0;
+  const targets: WebSocket[] = [];
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && recipients.has(user.id)) {
-      socket.send(frame);
-      sent += 1;
+      targets.push(socket);
     }
   });
-  return sent;
+  return broadcastEncoded(targets, frame);
 }
 
 /**

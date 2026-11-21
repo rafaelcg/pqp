@@ -138,8 +138,8 @@ import {
   coalesceWindowFor,
   createCoalescer,
   encodeFrame,
+  broadcastEncoded,
   sendEncoded,
-  sendEncodedDroppable,
 } from "./fanout.js";
 import {
   isInvisible,
@@ -371,6 +371,22 @@ function encode(message: ChatServerMessage): string {
 }
 
 /**
+ * Every open socket on this process whose account is in `userIds`, for a frame
+ * addressed to a set of members rather than a channel's viewers. One walk of
+ * the socket table, as each of those deliveries did before, collected so the
+ * frame goes out through one `broadcastEncoded`.
+ */
+function socketsOfUsers(userIds: ReadonlySet<string>): WebSocket[] {
+  const targets: WebSocket[] = [];
+  forEachAuthenticatedSocket((socket, user) => {
+    if (socket.readyState === 1 && userIds.has(user.id)) {
+      targets.push(socket);
+    }
+  });
+  return targets;
+}
+
+/**
  * INVISIBILITY IS ENFORCED HERE, AT THE SOURCE.
  *
  * Channel presence is the loudest *passive* giveaway in the app: it says where
@@ -508,15 +524,27 @@ function sendPresence(channelId: string): void {
   // heartbeat inside a minute. A dropped snapshot is not a hole either: the
   // receiver's sequence stops advancing, so the next delta reads as a gap and
   // it waits for the following keyframe rather than patching a stale list.
+  //
+  // Sorted first and sent after, so each frame is one `broadcastEncoded` (which
+  // can compress it once for every recipient). Each socket gets one of the two
+  // frames from this pass, so its own order of frames does not change.
+  const deltaTargets: WebSocket[] = [];
+  const snapshotTargets: WebSocket[] = [];
   for (const conn of present) {
     if (deltaFrame && socketHasCap(conn.socket, SOCKET_CAPS.presenceDelta)) {
-      sendEncoded(conn.socket, deltaFrame);
-      presenceFramesSent.deltas += 1;
-      continue;
+      deltaTargets.push(conn.socket);
+    } else {
+      snapshotTargets.push(conn.socket);
     }
-    if (sendEncodedDroppable(conn.socket, fullFrame())) {
-      presenceFramesSent.snapshots += 1;
-    }
+  }
+  if (deltaFrame && deltaTargets.length > 0) {
+    presenceFramesSent.deltas += deltaTargets.length;
+    broadcastEncoded(deltaTargets, deltaFrame);
+  }
+  if (snapshotTargets.length > 0) {
+    presenceFramesSent.snapshots += broadcastEncoded(snapshotTargets, fullFrame(), {
+      droppable: true,
+    });
   }
 }
 
@@ -829,6 +857,7 @@ function deliverToChannel(
   // frame a client cannot recover by waiting for the next one.
   const payload = encodeFrame(message);
   let sentToAlso = false;
+  const targets: WebSocket[] = [];
   for (const conn of channelPresence.get(channelId) ?? []) {
     if (conn.socket.readyState !== 1) {
       continue;
@@ -836,14 +865,15 @@ function deliverToChannel(
     if (conn.socket === alsoSocket) {
       sentToAlso = true;
     }
-    sendEncoded(conn.socket, payload);
+    targets.push(conn.socket);
   }
   // The sender hears their own message even when they are not viewing the
   // channel — but only once, hence the flag: a sender who *is* viewing it was
   // already served by the loop, and two copies would double-render the bubble.
   if (alsoSocket && !sentToAlso) {
-    sendEncoded(alsoSocket, payload);
+    targets.push(alsoSocket);
   }
+  broadcastEncoded(targets, payload);
 }
 
 /**
@@ -908,12 +938,13 @@ export function broadcastProfileUpdate(update: ProfileUpdate): void {
 
 /** The local half, and the only thing a bus frame may call. See above. */
 function deliverProfileUpdate(update: ProfileUpdate): void {
-  const payload = encode(update);
+  const targets: WebSocket[] = [];
   forEachAuthenticatedSocket((socket) => {
     if (socket.readyState === 1) {
-      socket.send(payload);
+      targets.push(socket);
     }
   });
+  broadcastEncoded(targets, encodeFrame(update));
 }
 
 /**
@@ -1196,12 +1227,7 @@ export function deliverServerRemoved(
   userIds: readonly string[],
 ): void {
   const addressed = new Set(userIds);
-  const payload = encode(frame);
-  forEachAuthenticatedSocket((socket, user) => {
-    if (socket.readyState === 1 && addressed.has(user.id)) {
-      socket.send(payload);
-    }
-  });
+  broadcastEncoded(socketsOfUsers(addressed), encodeFrame(frame));
 }
 
 /**
@@ -1333,16 +1359,12 @@ export function deliverPermissionsUpdate(
     }
   }
   const allowed = new Set(memberIds);
-  const payload = encode({
+  const payload = encodeFrame({
     type: "permissions-update",
     serverId,
     version,
   } as const);
-  forEachAuthenticatedSocket((socket, user) => {
-    if (socket.readyState === 1 && allowed.has(user.id)) {
-      socket.send(payload);
-    }
-  });
+  broadcastEncoded(socketsOfUsers(allowed), payload);
 }
 
 /**
@@ -1508,18 +1530,14 @@ export function deliverCommunityHomeUpdate(
   change?: CommunityHomeSwitch,
 ): void {
   const allowed = new Set(memberIds);
-  const payload = encode({
+  const payload = encodeFrame({
     type: "community-home-update",
     serverId,
     ...(change === undefined
       ? {}
       : { enabled: change.enabled, version: change.version }),
   } as const);
-  forEachAuthenticatedSocket((socket, user) => {
-    if (socket.readyState === 1 && allowed.has(user.id)) {
-      socket.send(payload);
-    }
-  });
+  broadcastEncoded(socketsOfUsers(allowed), payload);
 }
 
 /**
@@ -1694,12 +1712,8 @@ export function deliverChannelsUpdate(
     // Mocked without the export; see above.
   }
   const allowed = new Set(recipientIds);
-  const payload = encode({ type: "channels-update", serverId } as const);
-  forEachAuthenticatedSocket((socket, user) => {
-    if (socket.readyState === 1 && allowed.has(user.id)) {
-      socket.send(payload);
-    }
-  });
+  const payload = encodeFrame({ type: "channels-update", serverId } as const);
+  broadcastEncoded(socketsOfUsers(allowed), payload);
 }
 
 /**
@@ -1841,15 +1855,17 @@ function deliverTypingToLists(
   recipients: readonly string[],
 ): void {
   const viewers = channelPresence.get(channelId);
+  const targets: WebSocket[] = [];
   for (const userId of recipients) {
     forEachSocketOfUser(userId, (socket) => {
       const conn = connections.get(socket);
       if (conn && viewers?.has(conn)) {
         return;
       }
-      sendEncodedDroppable(socket, encoded);
+      targets.push(socket);
     });
   }
+  broadcastEncoded(targets, encoded, { droppable: true });
 }
 
 /**
@@ -3058,11 +3074,13 @@ export async function handleChatMessage(
     // hottest fan-out and it must not walk every socket once per keystroke.
     // Droppable: an indicator a slow socket reads five seconds late is worse
     // than one it never sees.
+    const viewers: WebSocket[] = [];
     for (const other of channelPresence.get(payload.channelId) ?? []) {
       if (other !== conn) {
-        sendEncodedDroppable(other.socket, encoded);
+        viewers.push(other.socket);
       }
     }
+    broadcastEncoded(viewers, encoded, { droppable: true });
     // Conversas: a conversation's participants see "digitando…" in their
     // LIST too, not only with the conversation open. Same frame, so every
     // client that already filters by its open channel (web, iOS, Android) is
@@ -3460,9 +3478,11 @@ subscribeToCluster(TYPING_TOPIC, (data) => {
   // A `listOnly` frame is the late list copy of a frame whose viewers'
   // copy already went out (see the typing handler).
   if (frame?.listOnly !== true) {
-    for (const conn of channelPresence.get(channelId) ?? []) {
-      sendEncodedDroppable(conn.socket, encoded);
-    }
+    broadcastEncoded(
+      [...(channelPresence.get(channelId) ?? [])].map((conn) => conn.socket),
+      encoded,
+      { droppable: true },
+    );
   }
   const recipients = asStringArray(frame?.recipients);
   if (recipients && recipients.length > 0) {

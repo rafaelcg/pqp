@@ -1302,3 +1302,76 @@ Turn it off from controles → interruptores, or `PUT /api/admin/flags
 the mode it loaded with; the next `/api/me` (a reload) picks the change up.
 Pinned by `server/src/api/age-gate.test.ts` (the field, pending only, and the
 switch) and `client/src/components/user/age-gate-dialog.test.tsx`.
+
+## `ws_shared_deflate` (global, default off, server only)
+
+Compress-once fan-out. A frame that goes to many sockets (a voice roster, a
+presence snapshot, a message in a busy channel) is compressed by `ws` once per
+socket today: one 92 KB roster to 1,000 sockets is 1,000 zlib runs of the same
+bytes. With the flag on, `broadcastEncoded` (`server/src/ws/fanout.ts`, the one
+helper every identical-payload fan-out goes through) compresses it once and
+writes the same bytes to every socket that negotiated `permessage-deflate`,
+and the plain frame to every socket that did not. Measured with
+`tools/ws-shared-deflate-bench` (M5 Max, 1,000 sockets): server processor per
+fan-out 324 ms to 20 ms, memory per socket 326 KB to 18 KB.
+
+Behind `WS_SHARED_DEFLATE` (default **off**, only `true` turns the variable
+on, global: the fan-out has no server). Off is byte for byte the old path: one
+`socket.send(frame, { binary: false })` per socket. On, the shared path is
+taken only for frames of at least 1 KB (the compression threshold) going to
+at least 8 sockets, and per socket only when it is provably what `ws` would
+have written: the socket negotiated `server_no_context_takeover` (every
+socket does, `WS_PER_MESSAGE_DEFLATE` has always set it) and its sender is
+idle. Anything else is that socket's ordinary `socket.send`. No negotiated
+parameter changes, so it applies to clients that are already connected, and
+flipping it needs no restart. Why it is safe, in full:
+`server/src/lib/ws-shared-deflate.ts`.
+
+Counters: `runtime.wsSharedDeflate` on `GET /api/admin/metrics`, cumulative
+since boot: `broadcasts` and `sockets` that took the path, `plainSockets`,
+`compressions`, `compressionsAvoided` and `bytesNotCompressed` (the processor
+saving), `compressMs`, `skipped.fewRecipients`, and `fallbacks` by reason
+(`senderBusy`, `contextTakeover`, `wsInternals`, `compressFailed`,
+`verifyFailed`). The last two and `wsInternals` belong at zero; `wsInternals`
+for every socket means the installed `ws` is not one of the exact versions in
+`AUDITED_WS_VERSIONS` (a patch bump counts), and the path has turned itself
+off until someone re-reads the private fields it uses and adds that version.
+
+**Backpressure counts differently with the flag on (no behaviour change, by
+design).** While `ws` compresses a frame it counts the frame's UNCOMPRESSED
+size toward `bufferedAmount` (and queues anything behind it at uncompressed
+size too); a shared frame is written at once and counts at its COMPRESSED
+size, roughly a sixth for a roster. So for a slow socket `bufferedAmount`
+grows more slowly, `SEND_BACKPRESSURE_BYTES` (1 MB) is crossed later, and the
+low-value frames that rule drops (typing, presence and roster snapshots) are
+dropped for that socket less often: it is sent more of them before it is
+judged slow. Messages are never dropped either way. The number now measures
+bytes really waiting on the socket, not bytes waiting on zlib; nothing was
+retuned to compensate, so if slow clients start to hold more memory with the
+flag on, this is where to look.
+
+**Before flipping it on in production:**
+
+1. One rehearsal with the flag on: the `seat-churn` rehearsal in
+   `tools/watch-party-load` (on staging) or `tools/reconnect-herd-harness`
+   (local, two real APIs). Watch on `GET /api/admin/metrics`:
+   - `runtime.eventLoop` p99, which must not move against a run with the
+     flag off (the one compression per broadcast runs on the event loop);
+   - `runtime.wsSharedDeflate.compressMs / compressions`, the cost of one
+     compression plus its check (about 0.75 ms for a 92 KB roster on the
+     bench machine);
+   - the fallback counters `verifyFailed`, `compressFailed` and `wsInternals`
+     at 0, and `senderBusy` small next to `sockets`.
+2. A real iPhone (iOS `URLSessionWebSocketTask`) and a real Android phone
+   (OkHttp) on staging, in a server large enough for rosters and presence to
+   take the shared path (8 or more sockets on one frame), confirming both keep
+   decoding: rosters, presence and messages render, and the socket does not
+   reconnect. Chromium is the only engine verified so far
+   (`tools/ws-shared-deflate-bench/browser-decode.mts`).
+
+Then flip it on from controles → interruptores outside a live watch party,
+and off again the same way if any of those counters move. Pinned by `server/src/lib/ws-shared-deflate.test.ts`
+(real servers and clients, byte equality with `ws`'s own output, a receiver
+that keeps its window, interleaving, backpressure, 600 sockets) and
+`server/src/ws/shared-deflate-product.test.ts` (the chat fan-out over real
+compressed sockets).

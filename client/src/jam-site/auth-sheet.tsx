@@ -71,9 +71,11 @@ function intentFor(request: Ask): JamIntent {
 export function AskProvider({ children }: { children: ReactNode }) {
   const [request, setRequest] = useState<Ask | null>(null);
   const [open, setOpen] = useState(false);
+  const [nonce, setNonce] = useState(0);
   const ask = useCallback((next: Ask) => {
     setRequest(next);
     setOpen(true);
+    setNonce((count) => count + 1);
   }, []);
   const value = useMemo(() => ({ ask }), [ask]);
   const close = useCallback(() => setOpen(false), []);
@@ -92,7 +94,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
   return (
     <Context.Provider value={value}>
       {children}
-      <Sheet open={open} onClose={close} title={request ? jt(`ask.${request.kind}.title` as Parameters<typeof jt>[0]) : ""}>
+      <Sheet open={open} nonce={nonce} onClose={close} title={request ? jt(`ask.${request.kind}.title` as Parameters<typeof jt>[0]) : ""}>
         {request && (
           <div className="pr-8">
             <h2 className="text-xl font-extrabold leading-tight">

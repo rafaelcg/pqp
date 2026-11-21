@@ -30,6 +30,8 @@ vi.mock("../auth/clerk.js", () => ({
 
 const s3 = vi.hoisted(() => ({
   objects: new Map<string, { contentType: string; contentLength: number }>(),
+  /** Milliseconds each coming copy waits first, consumed one per call. */
+  copyDelaysMs: [] as number[],
 }));
 
 vi.mock("../lib/s3.js", () => ({
@@ -38,6 +40,10 @@ vi.mock("../lib/s3.js", () => ({
   presignGet: (key: string) => `https://bucket.test/${key}?get=1`,
   headObject: async (key: string) => s3.objects.get(key) ?? null,
   copyObject: async (from: string, to: string) => {
+    const delayMs = s3.copyDelaysMs.shift();
+    if (delayMs) {
+      await new Promise((done) => setTimeout(done, delayMs));
+    }
     const source = s3.objects.get(from);
     if (!source) {
       throw new Error("NoSuchKey");
@@ -106,6 +112,7 @@ describeDb("soundboard management audit rows", () => {
   beforeEach(async () => {
     resetApiRateLimits();
     s3.objects.clear();
+    s3.copyDelaysMs.length = 0;
     process.env.SOUNDBOARD = "true";
     vi.spyOn(console, "log").mockImplementation(() => {});
     await getPool().query(
@@ -160,6 +167,19 @@ describeDb("soundboard management audit rows", () => {
     expect(await audit()).toEqual([
       { action: "soundboard.create", changes: [{ key: "name", old: null, new: "airhorn" }] },
     ]);
+  });
+
+  it("answers a claim that reaches the copy after a parallel claim already finished", async () => {
+    // The winner commits and then deletes the upload file. A claim that read
+    // "no clip yet" before that and copies afterwards finds no source, which
+    // is not a missing upload: the clip exists. This held the copy of one of
+    // the two back until the other was done, which is a slow runner's timing.
+    const key = await upload();
+    s3.copyDelaysMs.push(0, 400);
+    const results = await Promise.all([claim(key), claim(key)]);
+    expect(results.map((result) => result.status)).toEqual([200, 200]);
+    expect(results[0]!.body.sound.id).toBe(results[1]!.body.sound.id);
+    expect(await audit()).toHaveLength(1);
   });
 
   it("writes one delete row when the same clip is deleted in parallel", async () => {

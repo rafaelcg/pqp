@@ -265,9 +265,8 @@ import {
 import {
   coalesceWindowFor,
   createCoalescer,
+  broadcastEncoded,
   encodeFrame,
-  sendEncoded,
-  sendEncodedDroppable,
 } from "./fanout.js";
 import { createHlsAudience, pickHlsSharer } from "./hls-audience.js";
 import {
@@ -2384,12 +2383,13 @@ function broadcastToRoom(
   message: VoiceSignalingMessage,
   excludePeerId?: string,
 ) {
-  const encoded = encodeFrame(message);
+  const targets: WebSocket[] = [];
   for (const peer of getRoomPeers(voiceChannelId)) {
     if (peer.id !== excludePeerId) {
-      sendEncoded(peer.socket, encoded);
+      targets.push(peer.socket);
     }
   }
+  broadcastEncoded(targets, encodeFrame(message));
 }
 
 /**
@@ -5668,6 +5668,13 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
           } satisfies VoiceSignalingMessage)
         : null;
 
+      // Sorted first, sent after, so each frame is ONE fan-out
+      // (`broadcastEncoded`, which can compress it once for the lot). Every
+      // socket gets exactly one of the two frames from this pass, so the
+      // order of frames on any one socket is what it was.
+      const deltaTargets: WebSocket[] = [];
+      const snapshotTargets: WebSocket[] = [];
+      const snapshotInRoom: boolean[] = [];
       forEachAuthenticatedSocket((socket, user, caps) => {
         if (!audience.has(user.id)) {
           return;
@@ -5678,17 +5685,28 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
         const inRoom = socketIsInRoom(socket, voiceChannelId);
         const owedSnapshot = inRoom ? roomSnapshot : audienceSnapshot;
         if (deltaFrame && !owedSnapshot && caps.has(SOCKET_CAPS.voiceRosterDelta)) {
-          sendEncoded(socket, deltaFrame);
-          rosterFramesSent.deltas += 1;
+          deltaTargets.push(socket);
           return;
         }
-        if (sendEncodedDroppable(socket, fullFrame())) {
-          rosterFramesSent.snapshots += 1;
-          if (!inRoom) {
-            rosterFramesSent.audienceSnapshots += 1;
-          }
-        }
+        snapshotTargets.push(socket);
+        snapshotInRoom.push(inRoom);
       });
+      if (deltaFrame && deltaTargets.length > 0) {
+        // Counted per socket that was owed it, open or not, as before.
+        rosterFramesSent.deltas += deltaTargets.length;
+        broadcastEncoded(deltaTargets, deltaFrame);
+      }
+      if (snapshotTargets.length > 0) {
+        broadcastEncoded(snapshotTargets, fullFrame(), {
+          droppable: true,
+          onSent: (_socket, index) => {
+            rosterFramesSent.snapshots += 1;
+            if (!snapshotInRoom[index]) {
+              rosterFramesSent.audienceSnapshots += 1;
+            }
+          },
+        });
+      }
     }
   }
   // After the local pass, whatever the audience lookup did: a `left` that
@@ -10131,15 +10149,13 @@ function sendToUserSockets(
   if (userIds.size === 0) {
     return 0;
   }
-  const encoded = JSON.stringify(frame);
-  let sent = 0;
+  const targets: WebSocket[] = [];
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && userIds.has(user.id)) {
-      socket.send(encoded);
-      sent += 1;
+      targets.push(socket);
     }
   });
-  return sent;
+  return broadcastEncoded(targets, encodeFrame(frame));
 }
 
 /**
@@ -10597,7 +10613,7 @@ async function postMissedCallMessage(ring: ConversationRing): Promise<void> {
     if (!audience) {
       return;
     }
-    const activity = JSON.stringify({
+    const activity = encodeFrame({
       type: "channel-activity",
       // Null by construction — a conversation has no server. Asserted rather
       // than assumed: a server id here would file this badge into a sidebar.
@@ -10606,6 +10622,7 @@ async function postMissedCallMessage(ring: ConversationRing): Promise<void> {
       channelId: ring.conversationId,
       mention: false,
     });
+    const activityTargets: WebSocket[] = [];
     forEachAuthenticatedSocket((socket, socketUser) => {
       if (
         socket.readyState !== 1 ||
@@ -10615,8 +10632,9 @@ async function postMissedCallMessage(ring: ConversationRing): Promise<void> {
       ) {
         return;
       }
-      socket.send(activity);
+      activityTargets.push(socket);
     });
+    broadcastEncoded(activityTargets, activity);
 
     // The Web Push leg the socket loop above cannot reach: the missed-call
     // record is created here, not through chat's message handler, so without

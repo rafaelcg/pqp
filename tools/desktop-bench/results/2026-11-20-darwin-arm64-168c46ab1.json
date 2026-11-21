@@ -1,0 +1,5597 @@
+{
+  "schema": 1,
+  "tool": "tools/desktop-bench",
+  "startedAt": "2026-11-20T21:15:41.485Z",
+  "finishedAt": "2026-11-20T23:17:22.611Z",
+  "smoke": false,
+  "machine": {
+    "model": "Mac17,6",
+    "cpu": "Apple M5 Max",
+    "cores": 18,
+    "memoryGB": 128,
+    "power": "Now drawing from 'AC Power'",
+    "lowPowerMode": false
+  },
+  "os": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "release": "27.0.0",
+    "version": "27.0.1"
+  },
+  "node": "26.13.1",
+  "build": {
+    "appSha": "168c46ab1605c64b6c6bcab40ca9330da448f5e2",
+    "benchHeadSha": "168c46ab1605c64b6c6bcab40ca9330da448f5e2",
+    "dirty": false,
+    "dirtyFiles": []
+  },
+  "config": {
+    "runsPerScene": 5,
+    "callSeconds": 300,
+    "cpuWindowSeconds": 30,
+    "stack": {
+      "livekit": true,
+      "fakeCapture": "Chromium fake device, 1920x1080; the share scenes do not capture the OS screen",
+      "participant": "headless Chromium, dev-local-token:bob, not measured",
+      "hlsEncoder": "ffmpeg 720p30 ran for the whole run, beside every scene (the harness at HEAD starts it only for S7)",
+      "apiListen": "all interfaces with the dev bypass (the harness at HEAD binds the API and livekit-server to 127.0.0.1)"
+    }
+  },
+  "thermalBefore": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+  "thermalAfter": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+  "electron": {
+    "electron": "44.9.1",
+    "chrome": "152.0.7977.167",
+    "display": {
+      "size": {
+        "width": 2056,
+        "height": 1329
+      },
+      "scaleFactor": 2
+    },
+    "window": {
+      "x": 388,
+      "y": 201,
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "scenes": {
+    "S8": {
+      "name": "launch to first message painted",
+      "summary": {
+        "runs": 5,
+        "okRuns": 5,
+        "failedRuns": 0,
+        "memTotalMB": {
+          "n": 5,
+          "median": 728.7,
+          "min": 724.4,
+          "max": 735.7,
+          "p25": 727.7,
+          "p75": 729.4,
+          "spreadPct": 1.55,
+          "values": [
+            728.7,
+            727.7,
+            729.4,
+            735.7,
+            724.4
+          ]
+        },
+        "cpuTotalPct": null,
+        "memByProcessKindMB": {
+          "Browser": {
+            "median": 61.4,
+            "min": 60.6,
+            "max": 64.3
+          },
+          "GPU": {
+            "median": 429.3,
+            "min": 427.7,
+            "max": 447.7
+          },
+          "Utility: Network Service": {
+            "median": 12.4,
+            "min": 12.3,
+            "max": 12.7
+          },
+          "Tab": {
+            "median": 202.4,
+            "min": 193.4,
+            "max": 203.2
+          },
+          "Utility: Audio Service": {
+            "median": 7,
+            "min": 7,
+            "max": 7.1
+          },
+          "Utility: Video Capture": {
+            "median": 13.8,
+            "min": 13.8,
+            "max": 13.9
+          }
+        },
+        "cpuByProcessKindPct": {},
+        "extras": {
+          "cold.windowMs": {
+            "n": 5,
+            "median": 286,
+            "min": 270,
+            "max": 314,
+            "p25": 283,
+            "p75": 286,
+            "spreadPct": 15.38,
+            "values": [
+              314,
+              283,
+              286,
+              286,
+              270
+            ]
+          },
+          "cold.contentMs": {
+            "n": 5,
+            "median": 2573,
+            "min": 1442,
+            "max": 3301,
+            "p25": 2355,
+            "p75": 2812,
+            "spreadPct": 72.25,
+            "values": [
+              3301,
+              2812,
+              2573,
+              1442,
+              2355
+            ]
+          },
+          "warm.windowMs": {
+            "n": 5,
+            "median": 264,
+            "min": 255,
+            "max": 282,
+            "p25": 261,
+            "p75": 270,
+            "spreadPct": 10.23,
+            "values": [
+              270,
+              282,
+              261,
+              264,
+              255
+            ]
+          },
+          "warm.contentMs": {
+            "n": 5,
+            "median": 3287,
+            "min": 1383,
+            "max": 3580,
+            "p25": 2365,
+            "p75": 3401,
+            "spreadPct": 66.84,
+            "values": [
+              3580,
+              3401,
+              3287,
+              1383,
+              2365
+            ]
+          },
+          "warm.memTotalMB": {
+            "n": 5,
+            "median": 646.2,
+            "min": 645.5,
+            "max": 655.8,
+            "p25": 645.8,
+            "p75": 647.8,
+            "spreadPct": 1.59,
+            "values": [
+              645.5,
+              647.8,
+              646.2,
+              655.8,
+              645.8
+            ]
+          }
+        }
+      },
+      "runs": [
+        {
+          "memory": {
+            "totalMB": 728.7,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 61.4,
+              "GPU": 430.8,
+              "Utility: Network Service": 12.4,
+              "Tab": 203.2,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.8
+            },
+            "byProcess": [
+              {
+                "pid": 66496,
+                "key": "Browser",
+                "mb": 61.4
+              },
+              {
+                "pid": 66500,
+                "key": "GPU",
+                "mb": 430.8
+              },
+              {
+                "pid": 66501,
+                "key": "Utility: Network Service",
+                "mb": 12.4
+              },
+              {
+                "pid": 66504,
+                "key": "Tab",
+                "mb": 203.2
+              },
+              {
+                "pid": 66507,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 66508,
+                "key": "Utility: Video Capture",
+                "mb": 13.8
+              }
+            ]
+          },
+          "extras": {
+            "cold": {
+              "windowMs": 314,
+              "contentMs": 3301
+            },
+            "warm": {
+              "windowMs": 270,
+              "contentMs": 3580,
+              "memTotalMB": 645.5
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 727.7,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 64.3,
+              "GPU": 427.7,
+              "Utility: Network Service": 12.3,
+              "Tab": 202.4,
+              "Utility: Audio Service": 7.1,
+              "Utility: Video Capture": 13.9
+            },
+            "byProcess": [
+              {
+                "pid": 89149,
+                "key": "Browser",
+                "mb": 64.3
+              },
+              {
+                "pid": 89150,
+                "key": "GPU",
+                "mb": 427.7
+              },
+              {
+                "pid": 89151,
+                "key": "Utility: Network Service",
+                "mb": 12.3
+              },
+              {
+                "pid": 89154,
+                "key": "Tab",
+                "mb": 202.4
+              },
+              {
+                "pid": 89160,
+                "key": "Utility: Audio Service",
+                "mb": 7.1
+              },
+              {
+                "pid": 89161,
+                "key": "Utility: Video Capture",
+                "mb": 13.9
+              }
+            ]
+          },
+          "extras": {
+            "cold": {
+              "windowMs": 283,
+              "contentMs": 2812
+            },
+            "warm": {
+              "windowMs": 282,
+              "contentMs": 3401,
+              "memTotalMB": 647.8
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 729.4,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 63.9,
+              "GPU": 429.3,
+              "Utility: Network Service": 12.3,
+              "Tab": 203.1,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.8
+            },
+            "byProcess": [
+              {
+                "pid": 15497,
+                "key": "Browser",
+                "mb": 63.9
+              },
+              {
+                "pid": 15498,
+                "key": "GPU",
+                "mb": 429.3
+              },
+              {
+                "pid": 15499,
+                "key": "Utility: Network Service",
+                "mb": 12.3
+              },
+              {
+                "pid": 15506,
+                "key": "Tab",
+                "mb": 203.1
+              },
+              {
+                "pid": 15511,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 15512,
+                "key": "Utility: Video Capture",
+                "mb": 13.8
+              }
+            ]
+          },
+          "extras": {
+            "cold": {
+              "windowMs": 286,
+              "contentMs": 2573
+            },
+            "warm": {
+              "windowMs": 261,
+              "contentMs": 3287,
+              "memTotalMB": 646.2
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 735.7,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 61.1,
+              "GPU": 447.7,
+              "Utility: Network Service": 12.5,
+              "Tab": 193.4,
+              "Utility: Audio Service": 7.1,
+              "Utility: Video Capture": 13.8
+            },
+            "byProcess": [
+              {
+                "pid": 30789,
+                "key": "Browser",
+                "mb": 61.1
+              },
+              {
+                "pid": 30790,
+                "key": "GPU",
+                "mb": 447.7
+              },
+              {
+                "pid": 30791,
+                "key": "Utility: Network Service",
+                "mb": 12.5
+              },
+              {
+                "pid": 30794,
+                "key": "Tab",
+                "mb": 193.4
+              },
+              {
+                "pid": 30797,
+                "key": "Utility: Audio Service",
+                "mb": 7.1
+              },
+              {
+                "pid": 30798,
+                "key": "Utility: Video Capture",
+                "mb": 13.8
+              }
+            ]
+          },
+          "extras": {
+            "cold": {
+              "windowMs": 286,
+              "contentMs": 1442
+            },
+            "warm": {
+              "windowMs": 264,
+              "contentMs": 1383,
+              "memTotalMB": 655.8
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 724.4,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 60.6,
+              "GPU": 428,
+              "Utility: Network Service": 12.7,
+              "Tab": 202.3,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.8
+            },
+            "byProcess": [
+              {
+                "pid": 45165,
+                "key": "Browser",
+                "mb": 60.6
+              },
+              {
+                "pid": 45166,
+                "key": "GPU",
+                "mb": 428
+              },
+              {
+                "pid": 45167,
+                "key": "Utility: Network Service",
+                "mb": 12.7
+              },
+              {
+                "pid": 45170,
+                "key": "Tab",
+                "mb": 202.3
+              },
+              {
+                "pid": 45173,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 45174,
+                "key": "Utility: Video Capture",
+                "mb": 13.8
+              }
+            ]
+          },
+          "extras": {
+            "cold": {
+              "windowMs": 270,
+              "contentMs": 2355
+            },
+            "warm": {
+              "windowMs": 255,
+              "contentMs": 2365,
+              "memTotalMB": 645.8
+            }
+          }
+        }
+      ]
+    },
+    "S1": {
+      "name": "idle on a light channel",
+      "summary": {
+        "runs": 5,
+        "okRuns": 5,
+        "failedRuns": 0,
+        "memTotalMB": {
+          "n": 5,
+          "median": 533.4,
+          "min": 530.5,
+          "max": 534.9,
+          "p25": 530.6,
+          "p75": 533.6,
+          "spreadPct": 0.82,
+          "values": [
+            534.9,
+            533.6,
+            533.4,
+            530.6,
+            530.5
+          ]
+        },
+        "cpuTotalPct": {
+          "n": 5,
+          "median": 7.59,
+          "min": 6.38,
+          "max": 9.56,
+          "p25": 6.4,
+          "p75": 8.87,
+          "spreadPct": 41.9,
+          "values": [
+            9.56,
+            8.87,
+            7.59,
+            6.38,
+            6.4
+          ]
+        },
+        "memByProcessKindMB": {
+          "Browser": {
+            "median": 55.7,
+            "min": 55.1,
+            "max": 58.7
+          },
+          "GPU": {
+            "median": 322.9,
+            "min": 321.9,
+            "max": 327.6
+          },
+          "Utility: Network Service": {
+            "median": 12.3,
+            "min": 12.1,
+            "max": 12.6
+          },
+          "Tab": {
+            "median": 119.6,
+            "min": 118.8,
+            "max": 120.2
+          },
+          "Utility: Audio Service": {
+            "median": 7,
+            "min": 7,
+            "max": 7
+          },
+          "Utility: Video Capture": {
+            "median": 13.7,
+            "min": 13.7,
+            "max": 13.8
+          }
+        },
+        "cpuByProcessKindPct": {
+          "Browser": {
+            "median": 0.11,
+            "min": 0.1,
+            "max": 0.11
+          },
+          "GPU": {
+            "median": 5.88,
+            "min": 5.07,
+            "max": 7.5
+          },
+          "Utility: Network Service": {
+            "median": 0.01,
+            "min": 0.01,
+            "max": 0.01
+          },
+          "Tab": {
+            "median": 1.59,
+            "min": 1.2,
+            "max": 1.94
+          },
+          "Utility: Audio Service": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "Utility: Video Capture": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "extras": {
+          "renderer.domNodes": {
+            "n": 5,
+            "median": 882,
+            "min": 882,
+            "max": 885,
+            "p25": 882,
+            "p75": 882,
+            "spreadPct": 0.34,
+            "values": [
+              885,
+              882,
+              882,
+              882,
+              882
+            ]
+          },
+          "renderer.jsHeapMB": {
+            "n": 5,
+            "median": 22.9,
+            "min": 22.9,
+            "max": 23,
+            "p25": 22.9,
+            "p75": 22.9,
+            "spreadPct": 0.44,
+            "values": [
+              23,
+              22.9,
+              22.9,
+              22.9,
+              22.9
+            ]
+          }
+        }
+      },
+      "runs": [
+        {
+          "memory": {
+            "totalMB": 534.9,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 55.1,
+              "GPU": 327.6,
+              "Utility: Network Service": 12.6,
+              "Tab": 118.8,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.7
+            },
+            "byProcess": [
+              {
+                "pid": 66997,
+                "key": "Browser",
+                "mb": 55.1
+              },
+              {
+                "pid": 67000,
+                "key": "GPU",
+                "mb": 327.6
+              },
+              {
+                "pid": 67001,
+                "key": "Utility: Network Service",
+                "mb": 12.6
+              },
+              {
+                "pid": 67005,
+                "key": "Tab",
+                "mb": 118.8
+              },
+              {
+                "pid": 67008,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 67009,
+                "key": "Utility: Video Capture",
+                "mb": 13.7
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 9.56,
+            "byKeyPct": {
+              "Browser": 0.11,
+              "GPU": 7.5,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.94,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 66997,
+                "key": "Browser",
+                "pct": 0.11
+              },
+              {
+                "pid": 67000,
+                "key": "GPU",
+                "pct": 7.5
+              },
+              {
+                "pid": 67001,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 67005,
+                "key": "Tab",
+                "pct": 1.94
+              },
+              {
+                "pid": 67008,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 67009,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "renderer": {
+              "domNodes": 885,
+              "jsHeapMB": 23
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 533.6,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 57.7,
+              "GPU": 323.2,
+              "Utility: Network Service": 12.3,
+              "Tab": 119.6,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.8
+            },
+            "byProcess": [
+              {
+                "pid": 89776,
+                "key": "Browser",
+                "mb": 57.7
+              },
+              {
+                "pid": 89777,
+                "key": "GPU",
+                "mb": 323.2
+              },
+              {
+                "pid": 89778,
+                "key": "Utility: Network Service",
+                "mb": 12.3
+              },
+              {
+                "pid": 89781,
+                "key": "Tab",
+                "mb": 119.6
+              },
+              {
+                "pid": 89786,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 89787,
+                "key": "Utility: Video Capture",
+                "mb": 13.8
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.3,
+            "totalPct": 8.87,
+            "byKeyPct": {
+              "Browser": 0.11,
+              "GPU": 6.93,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.82,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 89776,
+                "key": "Browser",
+                "pct": 0.11
+              },
+              {
+                "pid": 89777,
+                "key": "GPU",
+                "pct": 6.93
+              },
+              {
+                "pid": 89778,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 89781,
+                "key": "Tab",
+                "pct": 1.82
+              },
+              {
+                "pid": 89786,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 89787,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "renderer": {
+              "domNodes": 882,
+              "jsHeapMB": 22.9
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 533.4,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 58.7,
+              "GPU": 321.9,
+              "Utility: Network Service": 12.3,
+              "Tab": 119.7,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.8
+            },
+            "byProcess": [
+              {
+                "pid": 16056,
+                "key": "Browser",
+                "mb": 58.7
+              },
+              {
+                "pid": 16057,
+                "key": "GPU",
+                "mb": 321.9
+              },
+              {
+                "pid": 16058,
+                "key": "Utility: Network Service",
+                "mb": 12.3
+              },
+              {
+                "pid": 16061,
+                "key": "Tab",
+                "mb": 119.7
+              },
+              {
+                "pid": 16066,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 16067,
+                "key": "Utility: Video Capture",
+                "mb": 13.8
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 7.59,
+            "byKeyPct": {
+              "Browser": 0.11,
+              "GPU": 5.88,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.59,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 16056,
+                "key": "Browser",
+                "pct": 0.11
+              },
+              {
+                "pid": 16057,
+                "key": "GPU",
+                "pct": 5.88
+              },
+              {
+                "pid": 16058,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 16061,
+                "key": "Tab",
+                "pct": 1.59
+              },
+              {
+                "pid": 16066,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 16067,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "renderer": {
+              "domNodes": 882,
+              "jsHeapMB": 22.9
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 530.6,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 55.7,
+              "GPU": 322.1,
+              "Utility: Network Service": 12.1,
+              "Tab": 120.2,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.7
+            },
+            "byProcess": [
+              {
+                "pid": 31164,
+                "key": "Browser",
+                "mb": 55.7
+              },
+              {
+                "pid": 31165,
+                "key": "GPU",
+                "mb": 322.1
+              },
+              {
+                "pid": 31166,
+                "key": "Utility: Network Service",
+                "mb": 12.1
+              },
+              {
+                "pid": 31171,
+                "key": "Tab",
+                "mb": 120.2
+              },
+              {
+                "pid": 31175,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 31176,
+                "key": "Utility: Video Capture",
+                "mb": 13.7
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 6.38,
+            "byKeyPct": {
+              "Browser": 0.1,
+              "GPU": 5.07,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.2,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 31164,
+                "key": "Browser",
+                "pct": 0.1
+              },
+              {
+                "pid": 31165,
+                "key": "GPU",
+                "pct": 5.07
+              },
+              {
+                "pid": 31166,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 31171,
+                "key": "Tab",
+                "pct": 1.2
+              },
+              {
+                "pid": 31175,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 31176,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "renderer": {
+              "domNodes": 882,
+              "jsHeapMB": 22.9
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 530.5,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 55.4,
+              "GPU": 322.9,
+              "Utility: Network Service": 12.2,
+              "Tab": 119.3,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.7
+            },
+            "byProcess": [
+              {
+                "pid": 45571,
+                "key": "Browser",
+                "mb": 55.4
+              },
+              {
+                "pid": 45574,
+                "key": "GPU",
+                "mb": 322.9
+              },
+              {
+                "pid": 45575,
+                "key": "Utility: Network Service",
+                "mb": 12.2
+              },
+              {
+                "pid": 45580,
+                "key": "Tab",
+                "mb": 119.3
+              },
+              {
+                "pid": 45585,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 45586,
+                "key": "Utility: Video Capture",
+                "mb": 13.7
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 6.4,
+            "byKeyPct": {
+              "Browser": 0.11,
+              "GPU": 5.08,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.21,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 45571,
+                "key": "Browser",
+                "pct": 0.11
+              },
+              {
+                "pid": 45574,
+                "key": "GPU",
+                "pct": 5.08
+              },
+              {
+                "pid": 45575,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 45580,
+                "key": "Tab",
+                "pct": 1.21
+              },
+              {
+                "pid": 45585,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 45586,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "renderer": {
+              "domNodes": 882,
+              "jsHeapMB": 22.9
+            }
+          }
+        }
+      ]
+    },
+    "S2": {
+      "name": "2,000 messages loaded and scrolled",
+      "summary": {
+        "runs": 5,
+        "okRuns": 5,
+        "failedRuns": 0,
+        "memTotalMB": {
+          "n": 5,
+          "median": 597.5,
+          "min": 584.1,
+          "max": 625.6,
+          "p25": 586.2,
+          "p75": 601.9,
+          "spreadPct": 6.95,
+          "values": [
+            597.5,
+            625.6,
+            601.9,
+            586.2,
+            584.1
+          ]
+        },
+        "cpuTotalPct": {
+          "n": 5,
+          "median": 8.14,
+          "min": 7.55,
+          "max": 11.23,
+          "p25": 7.69,
+          "p75": 8.78,
+          "spreadPct": 45.21,
+          "values": [
+            8.78,
+            11.23,
+            8.14,
+            7.55,
+            7.69
+          ]
+        },
+        "memByProcessKindMB": {
+          "Browser": {
+            "median": 50.6,
+            "min": 50,
+            "max": 55.5
+          },
+          "GPU": {
+            "median": 352.2,
+            "min": 350.3,
+            "max": 367.2
+          },
+          "Utility: Network Service": {
+            "median": 11.2,
+            "min": 11.1,
+            "max": 11.3
+          },
+          "Tab": {
+            "median": 152.5,
+            "min": 149.9,
+            "max": 171.9
+          },
+          "Utility: Audio Service": {
+            "median": 7,
+            "min": 7,
+            "max": 8.1
+          },
+          "Utility: Video Capture": {
+            "median": 13.3,
+            "min": 13.3,
+            "max": 13.5
+          }
+        },
+        "cpuByProcessKindPct": {
+          "Browser": {
+            "median": 0.03,
+            "min": 0.02,
+            "max": 0.1
+          },
+          "GPU": {
+            "median": 6.33,
+            "min": 5.93,
+            "max": 8.15
+          },
+          "Utility: Network Service": {
+            "median": 0.01,
+            "min": 0.01,
+            "max": 0.01
+          },
+          "Tab": {
+            "median": 1.77,
+            "min": 1.58,
+            "max": 2.92
+          },
+          "Utility: Audio Service": {
+            "median": 0,
+            "min": 0,
+            "max": 0.04
+          },
+          "Utility: Video Capture": {
+            "median": 0,
+            "min": 0,
+            "max": 0.01
+          }
+        },
+        "extras": {
+          "toHeavyMs": {
+            "n": 5,
+            "median": 58,
+            "min": 55,
+            "max": 81,
+            "p25": 57,
+            "p75": 62,
+            "spreadPct": 44.83,
+            "values": [
+              58,
+              57,
+              81,
+              55,
+              62
+            ]
+          },
+          "history.iterations": {
+            "n": 5,
+            "median": 40,
+            "min": 40,
+            "max": 40,
+            "p25": 40,
+            "p75": 40,
+            "spreadPct": 0,
+            "values": [
+              40,
+              40,
+              40,
+              40,
+              40
+            ]
+          },
+          "history.ms": {
+            "n": 5,
+            "median": 10114,
+            "min": 10083,
+            "max": 10114,
+            "p25": 10095,
+            "p75": 10114,
+            "spreadPct": 0.31,
+            "values": [
+              10095,
+              10083,
+              10114,
+              10114,
+              10114
+            ]
+          },
+          "sweep.frames": {
+            "n": 5,
+            "median": 1356,
+            "min": 1356,
+            "max": 1356,
+            "p25": 1356,
+            "p75": 1356,
+            "spreadPct": 0,
+            "values": [
+              1356,
+              1356,
+              1356,
+              1356,
+              1356
+            ]
+          },
+          "sweep.p50": {
+            "n": 5,
+            "median": 8.3,
+            "min": 8.3,
+            "max": 8.3,
+            "p25": 8.3,
+            "p75": 8.3,
+            "spreadPct": 0,
+            "values": [
+              8.3,
+              8.3,
+              8.3,
+              8.3,
+              8.3
+            ]
+          },
+          "sweep.p95": {
+            "n": 5,
+            "median": 9.3,
+            "min": 9.1,
+            "max": 10,
+            "p25": 9.3,
+            "p75": 9.5,
+            "spreadPct": 9.68,
+            "values": [
+              10,
+              9.1,
+              9.5,
+              9.3,
+              9.3
+            ]
+          },
+          "sweep.max": {
+            "n": 5,
+            "median": 10.4,
+            "min": 9.4,
+            "max": 10.4,
+            "p25": 10.4,
+            "p75": 10.4,
+            "spreadPct": 9.62,
+            "values": [
+              10.4,
+              9.4,
+              10.4,
+              10.4,
+              10.4
+            ]
+          },
+          "sweep.over33ms": {
+            "n": 5,
+            "median": 0,
+            "min": 0,
+            "max": 0,
+            "p25": 0,
+            "p75": 0,
+            "spreadPct": null,
+            "values": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "sweep.longTasks": {
+            "n": 5,
+            "median": 0,
+            "min": 0,
+            "max": 0,
+            "p25": 0,
+            "p75": 0,
+            "spreadPct": null,
+            "values": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "sweep.longTaskMaxMs": {
+            "n": 5,
+            "median": 0,
+            "min": 0,
+            "max": 0,
+            "p25": 0,
+            "p75": 0,
+            "spreadPct": null,
+            "values": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "renderer.domNodes": {
+            "n": 5,
+            "median": 1379,
+            "min": 1379,
+            "max": 1379,
+            "p25": 1379,
+            "p75": 1379,
+            "spreadPct": 0,
+            "values": [
+              1379,
+              1379,
+              1379,
+              1379,
+              1379
+            ]
+          },
+          "renderer.jsHeapMB": {
+            "n": 5,
+            "median": 33.7,
+            "min": 33.7,
+            "max": 33.7,
+            "p25": 33.7,
+            "p75": 33.7,
+            "spreadPct": 0,
+            "values": [
+              33.7,
+              33.7,
+              33.7,
+              33.7,
+              33.7
+            ]
+          }
+        }
+      },
+      "runs": [
+        {
+          "memory": {
+            "totalMB": 597.5,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 50.6,
+              "GPU": 351.2,
+              "Utility: Network Service": 11.3,
+              "Tab": 164.2,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 67640,
+                "key": "Browser",
+                "mb": 50.6
+              },
+              {
+                "pid": 67642,
+                "key": "GPU",
+                "mb": 351.2
+              },
+              {
+                "pid": 67643,
+                "key": "Utility: Network Service",
+                "mb": 11.3
+              },
+              {
+                "pid": 67646,
+                "key": "Tab",
+                "mb": 164.2
+              },
+              {
+                "pid": 67649,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 67650,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 8.78,
+            "byKeyPct": {
+              "Browser": 0.03,
+              "GPU": 6.89,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.85,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 67640,
+                "key": "Browser",
+                "pct": 0.03
+              },
+              {
+                "pid": 67642,
+                "key": "GPU",
+                "pct": 6.89
+              },
+              {
+                "pid": 67643,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 67646,
+                "key": "Tab",
+                "pct": 1.85
+              },
+              {
+                "pid": 67649,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 67650,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "toHeavyMs": 58,
+            "history": {
+              "loaded": true,
+              "iterations": 40,
+              "ms": 10095
+            },
+            "sweep": {
+              "frames": 1356,
+              "p50": 8.3,
+              "p95": 10,
+              "max": 10.4,
+              "over33ms": 0,
+              "longTasks": 0,
+              "longTaskMaxMs": 0
+            },
+            "renderer": {
+              "domNodes": 1379,
+              "jsHeapMB": 33.7
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 625.6,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 55.5,
+              "GPU": 365.4,
+              "Utility: Network Service": 11.2,
+              "Tab": 171.9,
+              "Utility: Audio Service": 8.1,
+              "Utility: Video Capture": 13.5
+            },
+            "byProcess": [
+              {
+                "pid": 90643,
+                "key": "Browser",
+                "mb": 55.5
+              },
+              {
+                "pid": 90644,
+                "key": "GPU",
+                "mb": 365.4
+              },
+              {
+                "pid": 90645,
+                "key": "Utility: Network Service",
+                "mb": 11.2
+              },
+              {
+                "pid": 90650,
+                "key": "Tab",
+                "mb": 171.9
+              },
+              {
+                "pid": 90653,
+                "key": "Utility: Audio Service",
+                "mb": 8.1
+              },
+              {
+                "pid": 90654,
+                "key": "Utility: Video Capture",
+                "mb": 13.5
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.3,
+            "totalPct": 11.23,
+            "byKeyPct": {
+              "Browser": 0.1,
+              "GPU": 8.15,
+              "Utility: Network Service": 0.01,
+              "Tab": 2.92,
+              "Utility: Audio Service": 0.04,
+              "Utility: Video Capture": 0.01
+            },
+            "byProcess": [
+              {
+                "pid": 90643,
+                "key": "Browser",
+                "pct": 0.1
+              },
+              {
+                "pid": 90644,
+                "key": "GPU",
+                "pct": 8.15
+              },
+              {
+                "pid": 90645,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 90650,
+                "key": "Tab",
+                "pct": 2.92
+              },
+              {
+                "pid": 90653,
+                "key": "Utility: Audio Service",
+                "pct": 0.04
+              },
+              {
+                "pid": 90654,
+                "key": "Utility: Video Capture",
+                "pct": 0.01
+              }
+            ]
+          },
+          "extras": {
+            "toHeavyMs": 57,
+            "history": {
+              "loaded": true,
+              "iterations": 40,
+              "ms": 10083
+            },
+            "sweep": {
+              "frames": 1356,
+              "p50": 8.3,
+              "p95": 9.1,
+              "max": 9.4,
+              "over33ms": 0,
+              "longTasks": 0,
+              "longTaskMaxMs": 0
+            },
+            "renderer": {
+              "domNodes": 1379,
+              "jsHeapMB": 33.7
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 601.9,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 53.3,
+              "GPU": 367.2,
+              "Utility: Network Service": 11.1,
+              "Tab": 149.9,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.4
+            },
+            "byProcess": [
+              {
+                "pid": 16640,
+                "key": "Browser",
+                "mb": 53.3
+              },
+              {
+                "pid": 16641,
+                "key": "GPU",
+                "mb": 367.2
+              },
+              {
+                "pid": 16642,
+                "key": "Utility: Network Service",
+                "mb": 11.1
+              },
+              {
+                "pid": 16647,
+                "key": "Tab",
+                "mb": 149.9
+              },
+              {
+                "pid": 16652,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 16653,
+                "key": "Utility: Video Capture",
+                "mb": 13.4
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 8.14,
+            "byKeyPct": {
+              "Browser": 0.03,
+              "GPU": 6.33,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.77,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 16640,
+                "key": "Browser",
+                "pct": 0.03
+              },
+              {
+                "pid": 16641,
+                "key": "GPU",
+                "pct": 6.33
+              },
+              {
+                "pid": 16642,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 16647,
+                "key": "Tab",
+                "pct": 1.77
+              },
+              {
+                "pid": 16652,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 16653,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "toHeavyMs": 81,
+            "history": {
+              "loaded": true,
+              "iterations": 40,
+              "ms": 10114
+            },
+            "sweep": {
+              "frames": 1356,
+              "p50": 8.3,
+              "p95": 9.5,
+              "max": 10.4,
+              "over33ms": 0,
+              "longTasks": 0,
+              "longTaskMaxMs": 0
+            },
+            "renderer": {
+              "domNodes": 1379,
+              "jsHeapMB": 33.7
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 586.2,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 50,
+              "GPU": 352.2,
+              "Utility: Network Service": 11.3,
+              "Tab": 152.5,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 31738,
+                "key": "Browser",
+                "mb": 50
+              },
+              {
+                "pid": 31739,
+                "key": "GPU",
+                "mb": 352.2
+              },
+              {
+                "pid": 31740,
+                "key": "Utility: Network Service",
+                "mb": 11.3
+              },
+              {
+                "pid": 31747,
+                "key": "Tab",
+                "mb": 152.5
+              },
+              {
+                "pid": 31750,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 31751,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 7.55,
+            "byKeyPct": {
+              "Browser": 0.02,
+              "GPU": 5.93,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.58,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 31738,
+                "key": "Browser",
+                "pct": 0.02
+              },
+              {
+                "pid": 31739,
+                "key": "GPU",
+                "pct": 5.93
+              },
+              {
+                "pid": 31740,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 31747,
+                "key": "Tab",
+                "pct": 1.58
+              },
+              {
+                "pid": 31750,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 31751,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "toHeavyMs": 55,
+            "history": {
+              "loaded": true,
+              "iterations": 40,
+              "ms": 10114
+            },
+            "sweep": {
+              "frames": 1356,
+              "p50": 8.3,
+              "p95": 9.3,
+              "max": 10.4,
+              "over33ms": 0,
+              "longTasks": 0,
+              "longTaskMaxMs": 0
+            },
+            "renderer": {
+              "domNodes": 1379,
+              "jsHeapMB": 33.7
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 584.1,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 50.5,
+              "GPU": 350.3,
+              "Utility: Network Service": 11.1,
+              "Tab": 152,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 46156,
+                "key": "Browser",
+                "mb": 50.5
+              },
+              {
+                "pid": 46159,
+                "key": "GPU",
+                "mb": 350.3
+              },
+              {
+                "pid": 46160,
+                "key": "Utility: Network Service",
+                "mb": 11.1
+              },
+              {
+                "pid": 46163,
+                "key": "Tab",
+                "mb": 152
+              },
+              {
+                "pid": 46166,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 46167,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 7.69,
+            "byKeyPct": {
+              "Browser": 0.02,
+              "GPU": 6.07,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.59,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 46156,
+                "key": "Browser",
+                "pct": 0.02
+              },
+              {
+                "pid": 46159,
+                "key": "GPU",
+                "pct": 6.07
+              },
+              {
+                "pid": 46160,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 46163,
+                "key": "Tab",
+                "pct": 1.59
+              },
+              {
+                "pid": 46166,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 46167,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "toHeavyMs": 62,
+            "history": {
+              "loaded": true,
+              "iterations": 40,
+              "ms": 10114
+            },
+            "sweep": {
+              "frames": 1356,
+              "p50": 8.3,
+              "p95": 9.3,
+              "max": 10.4,
+              "over33ms": 0,
+              "longTasks": 0,
+              "longTaskMaxMs": 0
+            },
+            "renderer": {
+              "domNodes": 1379,
+              "jsHeapMB": 33.7
+            }
+          }
+        }
+      ]
+    },
+    "S3": {
+      "name": "back on the light channel after S2",
+      "summary": {
+        "runs": 5,
+        "okRuns": 5,
+        "failedRuns": 0,
+        "memTotalMB": {
+          "n": 5,
+          "median": 554.8,
+          "min": 554.1,
+          "max": 577.3,
+          "p25": 554.3,
+          "p75": 555.7,
+          "spreadPct": 4.18,
+          "values": [
+            555.7,
+            577.3,
+            554.1,
+            554.3,
+            554.8
+          ]
+        },
+        "cpuTotalPct": {
+          "n": 5,
+          "median": 6.97,
+          "min": 6.37,
+          "max": 8.96,
+          "p25": 6.46,
+          "p75": 8.23,
+          "spreadPct": 37.16,
+          "values": [
+            8.96,
+            8.23,
+            6.97,
+            6.37,
+            6.46
+          ]
+        },
+        "memByProcessKindMB": {
+          "Browser": {
+            "median": 50.3,
+            "min": 49.8,
+            "max": 55.1
+          },
+          "GPU": {
+            "median": 326.1,
+            "min": 324.2,
+            "max": 339.4
+          },
+          "Utility: Network Service": {
+            "median": 11.2,
+            "min": 11,
+            "max": 11.3
+          },
+          "Tab": {
+            "median": 147,
+            "min": 145.5,
+            "max": 150.3
+          },
+          "Utility: Audio Service": {
+            "median": 7,
+            "min": 7,
+            "max": 8
+          },
+          "Utility: Video Capture": {
+            "median": 13.3,
+            "min": 13.3,
+            "max": 13.4
+          }
+        },
+        "cpuByProcessKindPct": {
+          "Browser": {
+            "median": 0.02,
+            "min": 0.02,
+            "max": 0.03
+          },
+          "GPU": {
+            "median": 5.74,
+            "min": 5.33,
+            "max": 7.33
+          },
+          "Utility: Network Service": {
+            "median": 0.01,
+            "min": 0.01,
+            "max": 0.01
+          },
+          "Tab": {
+            "median": 1.2,
+            "min": 1.01,
+            "max": 1.95
+          },
+          "Utility: Audio Service": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "Utility: Video Capture": {
+            "median": 0,
+            "min": 0,
+            "max": 0.01
+          }
+        },
+        "extras": {
+          "toLightMs": {
+            "n": 5,
+            "median": 43,
+            "min": 29,
+            "max": 44,
+            "p25": 34,
+            "p75": 44,
+            "spreadPct": 34.88,
+            "values": [
+              29,
+              44,
+              44,
+              34,
+              43
+            ]
+          },
+          "renderer.domNodes": {
+            "n": 5,
+            "median": 882,
+            "min": 882,
+            "max": 882,
+            "p25": 882,
+            "p75": 882,
+            "spreadPct": 0,
+            "values": [
+              882,
+              882,
+              882,
+              882,
+              882
+            ]
+          },
+          "renderer.jsHeapMB": {
+            "n": 5,
+            "median": 26.7,
+            "min": 26.7,
+            "max": 26.8,
+            "p25": 26.7,
+            "p75": 26.8,
+            "spreadPct": 0.37,
+            "values": [
+              26.7,
+              26.8,
+              26.8,
+              26.7,
+              26.7
+            ]
+          }
+        }
+      },
+      "runs": [
+        {
+          "memory": {
+            "totalMB": 555.7,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 50.2,
+              "GPU": 326.8,
+              "Utility: Network Service": 11.3,
+              "Tab": 147.2,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 67640,
+                "key": "Browser",
+                "mb": 50.2
+              },
+              {
+                "pid": 67642,
+                "key": "GPU",
+                "mb": 326.8
+              },
+              {
+                "pid": 67643,
+                "key": "Utility: Network Service",
+                "mb": 11.3
+              },
+              {
+                "pid": 67646,
+                "key": "Tab",
+                "mb": 147.2
+              },
+              {
+                "pid": 67649,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 67650,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 8.96,
+            "byKeyPct": {
+              "Browser": 0.02,
+              "GPU": 7.33,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.59,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0.01
+            },
+            "byProcess": [
+              {
+                "pid": 67640,
+                "key": "Browser",
+                "pct": 0.02
+              },
+              {
+                "pid": 67642,
+                "key": "GPU",
+                "pct": 7.33
+              },
+              {
+                "pid": 67643,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 67646,
+                "key": "Tab",
+                "pct": 1.59
+              },
+              {
+                "pid": 67649,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 67650,
+                "key": "Utility: Video Capture",
+                "pct": 0.01
+              }
+            ]
+          },
+          "extras": {
+            "toLightMs": 29,
+            "renderer": {
+              "domNodes": 882,
+              "jsHeapMB": 26.7
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 577.3,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 55.1,
+              "GPU": 339.4,
+              "Utility: Network Service": 11.2,
+              "Tab": 150.3,
+              "Utility: Audio Service": 8,
+              "Utility: Video Capture": 13.4
+            },
+            "byProcess": [
+              {
+                "pid": 90643,
+                "key": "Browser",
+                "mb": 55.1
+              },
+              {
+                "pid": 90644,
+                "key": "GPU",
+                "mb": 339.4
+              },
+              {
+                "pid": 90645,
+                "key": "Utility: Network Service",
+                "mb": 11.2
+              },
+              {
+                "pid": 90650,
+                "key": "Tab",
+                "mb": 150.3
+              },
+              {
+                "pid": 90653,
+                "key": "Utility: Audio Service",
+                "mb": 8
+              },
+              {
+                "pid": 90654,
+                "key": "Utility: Video Capture",
+                "mb": 13.4
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 8.23,
+            "byKeyPct": {
+              "Browser": 0.03,
+              "GPU": 6.24,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.95,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 90643,
+                "key": "Browser",
+                "pct": 0.03
+              },
+              {
+                "pid": 90644,
+                "key": "GPU",
+                "pct": 6.24
+              },
+              {
+                "pid": 90645,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 90650,
+                "key": "Tab",
+                "pct": 1.95
+              },
+              {
+                "pid": 90653,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 90654,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "toLightMs": 44,
+            "renderer": {
+              "domNodes": 882,
+              "jsHeapMB": 26.8
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 554.1,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 53,
+              "GPU": 324.2,
+              "Utility: Network Service": 11,
+              "Tab": 145.5,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.4
+            },
+            "byProcess": [
+              {
+                "pid": 16640,
+                "key": "Browser",
+                "mb": 53
+              },
+              {
+                "pid": 16641,
+                "key": "GPU",
+                "mb": 324.2
+              },
+              {
+                "pid": 16642,
+                "key": "Utility: Network Service",
+                "mb": 11
+              },
+              {
+                "pid": 16647,
+                "key": "Tab",
+                "mb": 145.5
+              },
+              {
+                "pid": 16652,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 16653,
+                "key": "Utility: Video Capture",
+                "mb": 13.4
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 6.97,
+            "byKeyPct": {
+              "Browser": 0.02,
+              "GPU": 5.74,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.2,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 16640,
+                "key": "Browser",
+                "pct": 0.02
+              },
+              {
+                "pid": 16641,
+                "key": "GPU",
+                "pct": 5.74
+              },
+              {
+                "pid": 16642,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 16647,
+                "key": "Tab",
+                "pct": 1.2
+              },
+              {
+                "pid": 16652,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 16653,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "toLightMs": 44,
+            "renderer": {
+              "domNodes": 882,
+              "jsHeapMB": 26.8
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 554.3,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 49.8,
+              "GPU": 326.1,
+              "Utility: Network Service": 11.3,
+              "Tab": 146.9,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 31738,
+                "key": "Browser",
+                "mb": 49.8
+              },
+              {
+                "pid": 31739,
+                "key": "GPU",
+                "mb": 326.1
+              },
+              {
+                "pid": 31740,
+                "key": "Utility: Network Service",
+                "mb": 11.3
+              },
+              {
+                "pid": 31747,
+                "key": "Tab",
+                "mb": 146.9
+              },
+              {
+                "pid": 31750,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 31751,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 6.37,
+            "byKeyPct": {
+              "Browser": 0.02,
+              "GPU": 5.33,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.01,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 31738,
+                "key": "Browser",
+                "pct": 0.02
+              },
+              {
+                "pid": 31739,
+                "key": "GPU",
+                "pct": 5.33
+              },
+              {
+                "pid": 31740,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 31747,
+                "key": "Tab",
+                "pct": 1.01
+              },
+              {
+                "pid": 31750,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 31751,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "toLightMs": 34,
+            "renderer": {
+              "domNodes": 882,
+              "jsHeapMB": 26.7
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 554.8,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 50.3,
+              "GPU": 326.1,
+              "Utility: Network Service": 11.1,
+              "Tab": 147,
+              "Utility: Audio Service": 7,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 46156,
+                "key": "Browser",
+                "mb": 50.3
+              },
+              {
+                "pid": 46159,
+                "key": "GPU",
+                "mb": 326.1
+              },
+              {
+                "pid": 46160,
+                "key": "Utility: Network Service",
+                "mb": 11.1
+              },
+              {
+                "pid": 46163,
+                "key": "Tab",
+                "mb": 147
+              },
+              {
+                "pid": 46166,
+                "key": "Utility: Audio Service",
+                "mb": 7
+              },
+              {
+                "pid": 46167,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.2,
+            "totalPct": 6.46,
+            "byKeyPct": {
+              "Browser": 0.02,
+              "GPU": 5.4,
+              "Utility: Network Service": 0.01,
+              "Tab": 1.02,
+              "Utility: Audio Service": 0,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 46156,
+                "key": "Browser",
+                "pct": 0.02
+              },
+              {
+                "pid": 46159,
+                "key": "GPU",
+                "pct": 5.4
+              },
+              {
+                "pid": 46160,
+                "key": "Utility: Network Service",
+                "pct": 0.01
+              },
+              {
+                "pid": 46163,
+                "key": "Tab",
+                "pct": 1.02
+              },
+              {
+                "pid": 46166,
+                "key": "Utility: Audio Service",
+                "pct": 0
+              },
+              {
+                "pid": 46167,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "toLightMs": 43,
+            "renderer": {
+              "domNodes": 882,
+              "jsHeapMB": 26.7
+            }
+          }
+        }
+      ]
+    },
+    "S4": {
+      "name": "two-person SFU call, mic on",
+      "summary": {
+        "runs": 5,
+        "okRuns": 5,
+        "failedRuns": 0,
+        "memTotalMB": {
+          "n": 5,
+          "median": 801.4,
+          "min": 748.7,
+          "max": 814.3,
+          "p25": 749.3,
+          "p75": 803,
+          "spreadPct": 8.19,
+          "values": [
+            748.7,
+            801.4,
+            814.3,
+            749.3,
+            803
+          ]
+        },
+        "cpuTotalPct": {
+          "n": 5,
+          "median": 26.39,
+          "min": 22.26,
+          "max": 32.81,
+          "p25": 25.45,
+          "p75": 27.49,
+          "spreadPct": 39.98,
+          "values": [
+            27.49,
+            32.81,
+            25.45,
+            22.26,
+            26.39
+          ]
+        },
+        "memByProcessKindMB": {
+          "Browser": {
+            "median": 53.1,
+            "min": 52.3,
+            "max": 55.5
+          },
+          "GPU": {
+            "median": 490.5,
+            "min": 473,
+            "max": 513.1
+          },
+          "Utility: Network Service": {
+            "median": 12.1,
+            "min": 11.8,
+            "max": 12.3
+          },
+          "Tab": {
+            "median": 210.6,
+            "min": 186.9,
+            "max": 220.9
+          },
+          "Utility: Audio Service": {
+            "median": 9.7,
+            "min": 9.6,
+            "max": 9.7
+          },
+          "Utility: Video Capture": {
+            "median": 13.3,
+            "min": 13.3,
+            "max": 13.5
+          }
+        },
+        "cpuByProcessKindPct": {
+          "Browser": {
+            "median": 0.09,
+            "min": 0.09,
+            "max": 0.18
+          },
+          "GPU": {
+            "median": 10.12,
+            "min": 8.91,
+            "max": 12.19
+          },
+          "Utility: Network Service": {
+            "median": 0.49,
+            "min": 0.26,
+            "max": 0.54
+          },
+          "Tab": {
+            "median": 13.9,
+            "min": 11.29,
+            "max": 18.07
+          },
+          "Utility: Audio Service": {
+            "median": 1.75,
+            "min": 1.7,
+            "max": 1.88
+          },
+          "Utility: Video Capture": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "extras": {
+          "micOn": {
+            "n": 5,
+            "median": 1,
+            "min": 1,
+            "max": 1,
+            "p25": 1,
+            "p75": 1,
+            "spreadPct": 0,
+            "values": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      },
+      "runs": [
+        {
+          "memory": {
+            "totalMB": 748.7,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 53.1,
+              "GPU": 473,
+              "Utility: Network Service": 12.3,
+              "Tab": 187.4,
+              "Utility: Audio Service": 9.6,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 68901,
+                "key": "Browser",
+                "mb": 53.1
+              },
+              {
+                "pid": 68902,
+                "key": "GPU",
+                "mb": 473
+              },
+              {
+                "pid": 68903,
+                "key": "Utility: Network Service",
+                "mb": 12.3
+              },
+              {
+                "pid": 68907,
+                "key": "Tab",
+                "mb": 187.4
+              },
+              {
+                "pid": 68913,
+                "key": "Utility: Audio Service",
+                "mb": 9.6
+              },
+              {
+                "pid": 68914,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.3,
+            "totalPct": 27.49,
+            "byKeyPct": {
+              "Browser": 0.09,
+              "GPU": 11.13,
+              "Utility: Network Service": 0.5,
+              "Tab": 13.91,
+              "Utility: Audio Service": 1.86,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 68901,
+                "key": "Browser",
+                "pct": 0.09
+              },
+              {
+                "pid": 68902,
+                "key": "GPU",
+                "pct": 11.13
+              },
+              {
+                "pid": 68903,
+                "key": "Utility: Network Service",
+                "pct": 0.5
+              },
+              {
+                "pid": 68907,
+                "key": "Tab",
+                "pct": 13.91
+              },
+              {
+                "pid": 68913,
+                "key": "Utility: Audio Service",
+                "pct": 1.86
+              },
+              {
+                "pid": 68914,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 812.8,
+          "extras": {
+            "micOn": 1
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 801.4,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 54.9,
+              "GPU": 490.5,
+              "Utility: Network Service": 12.1,
+              "Tab": 220.7,
+              "Utility: Audio Service": 9.7,
+              "Utility: Video Capture": 13.5
+            },
+            "byProcess": [
+              {
+                "pid": 92275,
+                "key": "Browser",
+                "mb": 54.9
+              },
+              {
+                "pid": 92279,
+                "key": "GPU",
+                "mb": 490.5
+              },
+              {
+                "pid": 92280,
+                "key": "Utility: Network Service",
+                "mb": 12.1
+              },
+              {
+                "pid": 92283,
+                "key": "Tab",
+                "mb": 220.7
+              },
+              {
+                "pid": 92288,
+                "key": "Utility: Audio Service",
+                "mb": 9.7
+              },
+              {
+                "pid": 92289,
+                "key": "Utility: Video Capture",
+                "mb": 13.5
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 32.81,
+            "byKeyPct": {
+              "Browser": 0.18,
+              "GPU": 12.19,
+              "Utility: Network Service": 0.49,
+              "Tab": 18.07,
+              "Utility: Audio Service": 1.88,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 92275,
+                "key": "Browser",
+                "pct": 0.18
+              },
+              {
+                "pid": 92279,
+                "key": "GPU",
+                "pct": 12.19
+              },
+              {
+                "pid": 92280,
+                "key": "Utility: Network Service",
+                "pct": 0.49
+              },
+              {
+                "pid": 92283,
+                "key": "Tab",
+                "pct": 18.07
+              },
+              {
+                "pid": 92288,
+                "key": "Utility: Audio Service",
+                "pct": 1.88
+              },
+              {
+                "pid": 92289,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 812.7,
+          "extras": {
+            "micOn": 1
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 814.3,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 55.5,
+              "GPU": 513.1,
+              "Utility: Network Service": 12,
+              "Tab": 210.6,
+              "Utility: Audio Service": 9.7,
+              "Utility: Video Capture": 13.4
+            },
+            "byProcess": [
+              {
+                "pid": 17727,
+                "key": "Browser",
+                "mb": 55.5
+              },
+              {
+                "pid": 17728,
+                "key": "GPU",
+                "mb": 513.1
+              },
+              {
+                "pid": 17729,
+                "key": "Utility: Network Service",
+                "mb": 12
+              },
+              {
+                "pid": 17732,
+                "key": "Tab",
+                "mb": 210.6
+              },
+              {
+                "pid": 17737,
+                "key": "Utility: Audio Service",
+                "mb": 9.7
+              },
+              {
+                "pid": 17738,
+                "key": "Utility: Video Capture",
+                "mb": 13.4
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 25.45,
+            "byKeyPct": {
+              "Browser": 0.16,
+              "GPU": 9.69,
+              "Utility: Network Service": 0.34,
+              "Tab": 13.56,
+              "Utility: Audio Service": 1.7,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 17727,
+                "key": "Browser",
+                "pct": 0.16
+              },
+              {
+                "pid": 17728,
+                "key": "GPU",
+                "pct": 9.69
+              },
+              {
+                "pid": 17729,
+                "key": "Utility: Network Service",
+                "pct": 0.34
+              },
+              {
+                "pid": 17732,
+                "key": "Tab",
+                "pct": 13.56
+              },
+              {
+                "pid": 17737,
+                "key": "Utility: Audio Service",
+                "pct": 1.7
+              },
+              {
+                "pid": 17738,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 861.7,
+          "extras": {
+            "micOn": 1
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 749.3,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 53.1,
+              "GPU": 474.7,
+              "Utility: Network Service": 11.8,
+              "Tab": 186.9,
+              "Utility: Audio Service": 9.6,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 32816,
+                "key": "Browser",
+                "mb": 53.1
+              },
+              {
+                "pid": 32817,
+                "key": "GPU",
+                "mb": 474.7
+              },
+              {
+                "pid": 32818,
+                "key": "Utility: Network Service",
+                "mb": 11.8
+              },
+              {
+                "pid": 32821,
+                "key": "Tab",
+                "mb": 186.9
+              },
+              {
+                "pid": 32824,
+                "key": "Utility: Audio Service",
+                "mb": 9.6
+              },
+              {
+                "pid": 32825,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 22.26,
+            "byKeyPct": {
+              "Browser": 0.09,
+              "GPU": 8.91,
+              "Utility: Network Service": 0.26,
+              "Tab": 11.29,
+              "Utility: Audio Service": 1.7,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 32816,
+                "key": "Browser",
+                "pct": 0.09
+              },
+              {
+                "pid": 32817,
+                "key": "GPU",
+                "pct": 8.91
+              },
+              {
+                "pid": 32818,
+                "key": "Utility: Network Service",
+                "pct": 0.26
+              },
+              {
+                "pid": 32821,
+                "key": "Tab",
+                "pct": 11.29
+              },
+              {
+                "pid": 32824,
+                "key": "Utility: Audio Service",
+                "pct": 1.7
+              },
+              {
+                "pid": 32825,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 809.2,
+          "extras": {
+            "micOn": 1
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 803,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.3,
+              "GPU": 494.8,
+              "Utility: Network Service": 12.1,
+              "Tab": 220.9,
+              "Utility: Audio Service": 9.7,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 47286,
+                "key": "Browser",
+                "mb": 52.3
+              },
+              {
+                "pid": 47289,
+                "key": "GPU",
+                "mb": 494.8
+              },
+              {
+                "pid": 47290,
+                "key": "Utility: Network Service",
+                "mb": 12.1
+              },
+              {
+                "pid": 47295,
+                "key": "Tab",
+                "mb": 220.9
+              },
+              {
+                "pid": 47300,
+                "key": "Utility: Audio Service",
+                "mb": 9.7
+              },
+              {
+                "pid": 47301,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 26.39,
+            "byKeyPct": {
+              "Browser": 0.09,
+              "GPU": 10.12,
+              "Utility: Network Service": 0.54,
+              "Tab": 13.9,
+              "Utility: Audio Service": 1.75,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 47286,
+                "key": "Browser",
+                "pct": 0.09
+              },
+              {
+                "pid": 47289,
+                "key": "GPU",
+                "pct": 10.12
+              },
+              {
+                "pid": 47290,
+                "key": "Utility: Network Service",
+                "pct": 0.54
+              },
+              {
+                "pid": 47295,
+                "key": "Tab",
+                "pct": 13.9
+              },
+              {
+                "pid": 47300,
+                "key": "Utility: Audio Service",
+                "pct": 1.75
+              },
+              {
+                "pid": 47301,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 808.7,
+          "extras": {
+            "micOn": 1
+          }
+        }
+      ]
+    },
+    "S5": {
+      "name": "S4 while sharing a 1080p screen",
+      "summary": {
+        "runs": 5,
+        "okRuns": 5,
+        "failedRuns": 0,
+        "memTotalMB": {
+          "n": 5,
+          "median": 830.4,
+          "min": 711.3,
+          "max": 848.5,
+          "p25": 809.3,
+          "p75": 846.2,
+          "spreadPct": 16.52,
+          "values": [
+            830.4,
+            711.3,
+            846.2,
+            809.3,
+            848.5
+          ]
+        },
+        "cpuTotalPct": {
+          "n": 5,
+          "median": 36.13,
+          "min": 33.53,
+          "max": 51.81,
+          "p25": 34.68,
+          "p75": 39.95,
+          "spreadPct": 50.6,
+          "values": [
+            34.68,
+            51.81,
+            36.13,
+            33.53,
+            39.95
+          ]
+        },
+        "memByProcessKindMB": {
+          "Browser": {
+            "median": 52.7,
+            "min": 52.5,
+            "max": 55
+          },
+          "GPU": {
+            "median": 487,
+            "min": 355.8,
+            "max": 499.1
+          },
+          "Utility: Network Service": {
+            "median": 12.2,
+            "min": 12,
+            "max": 12.2
+          },
+          "Tab": {
+            "median": 252.8,
+            "min": 234.8,
+            "max": 258.5
+          },
+          "Utility: Audio Service": {
+            "median": 9.6,
+            "min": 9.6,
+            "max": 9.7
+          },
+          "Utility: Video Capture": {
+            "median": 20,
+            "min": 20,
+            "max": 20
+          }
+        },
+        "cpuByProcessKindPct": {
+          "Browser": {
+            "median": 0.36,
+            "min": 0.35,
+            "max": 0.38
+          },
+          "GPU": {
+            "median": 10.49,
+            "min": 9.84,
+            "max": 15.06
+          },
+          "Utility: Network Service": {
+            "median": 0.9,
+            "min": 0.74,
+            "max": 1.06
+          },
+          "Tab": {
+            "median": 21.76,
+            "min": 19.98,
+            "max": 32.3
+          },
+          "Utility: Audio Service": {
+            "median": 1.81,
+            "min": 1.71,
+            "max": 2.01
+          },
+          "Utility: Video Capture": {
+            "median": 0.9,
+            "min": 0.87,
+            "max": 1.01
+          }
+        },
+        "extras": {
+          "micOn": {
+            "n": 5,
+            "median": 1,
+            "min": 1,
+            "max": 1,
+            "p25": 1,
+            "p75": 1,
+            "spreadPct": 0,
+            "values": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          },
+          "receivedByOtherPerson.width": {
+            "n": 5,
+            "median": 1280,
+            "min": 1280,
+            "max": 1280,
+            "p25": 1280,
+            "p75": 1280,
+            "spreadPct": 0,
+            "values": [
+              1280,
+              1280,
+              1280,
+              1280,
+              1280
+            ]
+          },
+          "receivedByOtherPerson.height": {
+            "n": 5,
+            "median": 720,
+            "min": 720,
+            "max": 720,
+            "p25": 720,
+            "p75": 720,
+            "spreadPct": 0,
+            "values": [
+              720,
+              720,
+              720,
+              720,
+              720
+            ]
+          },
+          "receivedByOtherPerson.currentTime": {
+            "n": 5,
+            "median": 301.79,
+            "min": 301.78,
+            "max": 301.81,
+            "p25": 301.78,
+            "p75": 301.79,
+            "spreadPct": 0.01,
+            "values": [
+              301.79,
+              301.81,
+              301.79,
+              301.78,
+              301.78
+            ]
+          },
+          "receivedByOtherPerson.totalFrames": {
+            "n": 5,
+            "median": 9054,
+            "min": 9054,
+            "max": 9055,
+            "p25": 9054,
+            "p75": 9054,
+            "spreadPct": 0.01,
+            "values": [
+              9054,
+              9055,
+              9054,
+              9054,
+              9054
+            ]
+          },
+          "receivedByOtherPerson.droppedFrames": {
+            "n": 5,
+            "median": 2,
+            "min": 1,
+            "max": 343,
+            "p25": 2,
+            "p75": 3,
+            "spreadPct": 17100,
+            "values": [
+              3,
+              1,
+              2,
+              343,
+              2
+            ]
+          },
+          "receivedByOtherPerson.framesShown": {
+            "n": 5,
+            "median": 8108,
+            "min": 8107,
+            "max": 8109,
+            "p25": 8107,
+            "p75": 8108,
+            "spreadPct": 0.02,
+            "values": [
+              8107,
+              8109,
+              8107,
+              8108,
+              8108
+            ]
+          },
+          "receivedByOtherPerson.framesDropped": {
+            "n": 5,
+            "median": 0,
+            "min": 0,
+            "max": 341,
+            "p25": 0,
+            "p75": 1,
+            "spreadPct": null,
+            "values": [
+              0,
+              0,
+              0,
+              341,
+              1
+            ]
+          },
+          "receivedByOtherPerson.fps": {
+            "n": 5,
+            "median": 30,
+            "min": 30,
+            "max": 30,
+            "p25": 30,
+            "p75": 30,
+            "spreadPct": 0,
+            "values": [
+              30,
+              30,
+              30,
+              30,
+              30
+            ]
+          },
+          "captured.aspectRatio": {
+            "n": 5,
+            "median": 1.78,
+            "min": 1.78,
+            "max": 1.78,
+            "p25": 1.78,
+            "p75": 1.78,
+            "spreadPct": 0,
+            "values": [
+              1.78,
+              1.78,
+              1.78,
+              1.78,
+              1.78
+            ]
+          },
+          "captured.exposureTime": {
+            "n": 5,
+            "median": 50,
+            "min": 50,
+            "max": 50,
+            "p25": 50,
+            "p75": 50,
+            "spreadPct": 0,
+            "values": [
+              50,
+              50,
+              50,
+              50,
+              50
+            ]
+          },
+          "captured.focusDistance": {
+            "n": 5,
+            "median": 50,
+            "min": 50,
+            "max": 50,
+            "p25": 50,
+            "p75": 50,
+            "spreadPct": 0,
+            "values": [
+              50,
+              50,
+              50,
+              50,
+              50
+            ]
+          },
+          "captured.frameRate": {
+            "n": 5,
+            "median": 30,
+            "min": 30,
+            "max": 30,
+            "p25": 30,
+            "p75": 30,
+            "spreadPct": 0,
+            "values": [
+              30,
+              30,
+              30,
+              30,
+              30
+            ]
+          },
+          "captured.height": {
+            "n": 5,
+            "median": 1080,
+            "min": 1080,
+            "max": 1080,
+            "p25": 1080,
+            "p75": 1080,
+            "spreadPct": 0,
+            "values": [
+              1080,
+              1080,
+              1080,
+              1080,
+              1080
+            ]
+          },
+          "captured.pan": {
+            "n": 5,
+            "median": 100,
+            "min": 100,
+            "max": 100,
+            "p25": 100,
+            "p75": 100,
+            "spreadPct": 0,
+            "values": [
+              100,
+              100,
+              100,
+              100,
+              100
+            ]
+          },
+          "captured.tilt": {
+            "n": 5,
+            "median": 100,
+            "min": 100,
+            "max": 100,
+            "p25": 100,
+            "p75": 100,
+            "spreadPct": 0,
+            "values": [
+              100,
+              100,
+              100,
+              100,
+              100
+            ]
+          },
+          "captured.width": {
+            "n": 5,
+            "median": 1920,
+            "min": 1920,
+            "max": 1920,
+            "p25": 1920,
+            "p75": 1920,
+            "spreadPct": 0,
+            "values": [
+              1920,
+              1920,
+              1920,
+              1920,
+              1920
+            ]
+          },
+          "captured.zoom": {
+            "n": 5,
+            "median": 100,
+            "min": 100,
+            "max": 100,
+            "p25": 100,
+            "p75": 100,
+            "spreadPct": 0,
+            "values": [
+              100,
+              100,
+              100,
+              100,
+              100
+            ]
+          }
+        }
+      },
+      "runs": [
+        {
+          "memory": {
+            "totalMB": 830.4,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.5,
+              "GPU": 487,
+              "Utility: Network Service": 12,
+              "Tab": 249.3,
+              "Utility: Audio Service": 9.6,
+              "Utility: Video Capture": 20
+            },
+            "byProcess": [
+              {
+                "pid": 74670,
+                "key": "Browser",
+                "mb": 52.5
+              },
+              {
+                "pid": 74673,
+                "key": "GPU",
+                "mb": 487
+              },
+              {
+                "pid": 74674,
+                "key": "Utility: Network Service",
+                "mb": 12
+              },
+              {
+                "pid": 74679,
+                "key": "Tab",
+                "mb": 249.3
+              },
+              {
+                "pid": 74683,
+                "key": "Utility: Audio Service",
+                "mb": 9.6
+              },
+              {
+                "pid": 74684,
+                "key": "Utility: Video Capture",
+                "mb": 20
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.3,
+            "totalPct": 34.68,
+            "byKeyPct": {
+              "Browser": 0.35,
+              "GPU": 10.49,
+              "Utility: Network Service": 0.84,
+              "Tab": 20.22,
+              "Utility: Audio Service": 1.85,
+              "Utility: Video Capture": 0.93
+            },
+            "byProcess": [
+              {
+                "pid": 74670,
+                "key": "Browser",
+                "pct": 0.35
+              },
+              {
+                "pid": 74673,
+                "key": "GPU",
+                "pct": 10.49
+              },
+              {
+                "pid": 74674,
+                "key": "Utility: Network Service",
+                "pct": 0.84
+              },
+              {
+                "pid": 74679,
+                "key": "Tab",
+                "pct": 20.22
+              },
+              {
+                "pid": 74683,
+                "key": "Utility: Audio Service",
+                "pct": 1.85
+              },
+              {
+                "pid": 74684,
+                "key": "Utility: Video Capture",
+                "pct": 0.93
+              }
+            ]
+          },
+          "peakMemTotalMB": 830.4,
+          "extras": {
+            "micOn": 1,
+            "receivedByOtherPerson": {
+              "width": 1280,
+              "height": 720,
+              "paused": false,
+              "currentTime": 301.793927,
+              "totalFrames": 9054,
+              "droppedFrames": 3,
+              "framesShown": 8107,
+              "framesDropped": 0,
+              "fps": 30
+            },
+            "captured": {
+              "aspectRatio": 1.7777777777777777,
+              "deviceId": "706911dcebe887f1341993d9a9e335f714f3d6ce40df4ddfbf59dbb56db1f823",
+              "exposureMode": "manual",
+              "exposureTime": 50,
+              "focusDistance": 50,
+              "focusMode": "manual",
+              "frameRate": 30,
+              "groupId": "2c768ef61259f626f3fe3567d05c0231e2154b425cb8157199860692a3ac4254",
+              "height": 1080,
+              "pan": 100,
+              "resizeMode": "none",
+              "tilt": 100,
+              "width": 1920,
+              "zoom": 100
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 711.3,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 55,
+              "GPU": 355.8,
+              "Utility: Network Service": 12.2,
+              "Tab": 258.5,
+              "Utility: Audio Service": 9.7,
+              "Utility: Video Capture": 20
+            },
+            "byProcess": [
+              {
+                "pid": 96121,
+                "key": "Browser",
+                "mb": 55
+              },
+              {
+                "pid": 96122,
+                "key": "GPU",
+                "mb": 355.8
+              },
+              {
+                "pid": 96123,
+                "key": "Utility: Network Service",
+                "mb": 12.2
+              },
+              {
+                "pid": 96126,
+                "key": "Tab",
+                "mb": 258.5
+              },
+              {
+                "pid": 96132,
+                "key": "Utility: Audio Service",
+                "mb": 9.7
+              },
+              {
+                "pid": 96133,
+                "key": "Utility: Video Capture",
+                "mb": 20
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.3,
+            "totalPct": 51.81,
+            "byKeyPct": {
+              "Browser": 0.38,
+              "GPU": 15.06,
+              "Utility: Network Service": 1.06,
+              "Tab": 32.3,
+              "Utility: Audio Service": 2.01,
+              "Utility: Video Capture": 1.01
+            },
+            "byProcess": [
+              {
+                "pid": 96121,
+                "key": "Browser",
+                "pct": 0.38
+              },
+              {
+                "pid": 96122,
+                "key": "GPU",
+                "pct": 15.06
+              },
+              {
+                "pid": 96123,
+                "key": "Utility: Network Service",
+                "pct": 1.06
+              },
+              {
+                "pid": 96126,
+                "key": "Tab",
+                "pct": 32.3
+              },
+              {
+                "pid": 96132,
+                "key": "Utility: Audio Service",
+                "pct": 2.01
+              },
+              {
+                "pid": 96133,
+                "key": "Utility: Video Capture",
+                "pct": 1.01
+              }
+            ]
+          },
+          "peakMemTotalMB": 849.7,
+          "extras": {
+            "micOn": 1,
+            "receivedByOtherPerson": {
+              "width": 1280,
+              "height": 720,
+              "paused": false,
+              "currentTime": 301.814939,
+              "totalFrames": 9055,
+              "droppedFrames": 1,
+              "framesShown": 8109,
+              "framesDropped": 0,
+              "fps": 30
+            },
+            "captured": {
+              "aspectRatio": 1.7777777777777777,
+              "deviceId": "9bcb6853d6ca36d1dcffe6ec7a8d30ac221ee59560b29e3655f4b8efffac0eaa",
+              "exposureMode": "manual",
+              "exposureTime": 50,
+              "focusDistance": 50,
+              "focusMode": "manual",
+              "frameRate": 30,
+              "groupId": "f361bd8185353ee6cfbc171927c2076e3555b1461f69bff257c6c226f5974966",
+              "height": 1080,
+              "pan": 100,
+              "resizeMode": "none",
+              "tilt": 100,
+              "width": 1920,
+              "zoom": 100
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 846.2,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.5,
+              "GPU": 499.1,
+              "Utility: Network Service": 12.2,
+              "Tab": 252.8,
+              "Utility: Audio Service": 9.7,
+              "Utility: Video Capture": 20
+            },
+            "byProcess": [
+              {
+                "pid": 20920,
+                "key": "Browser",
+                "mb": 52.5
+              },
+              {
+                "pid": 20921,
+                "key": "GPU",
+                "mb": 499.1
+              },
+              {
+                "pid": 20922,
+                "key": "Utility: Network Service",
+                "mb": 12.2
+              },
+              {
+                "pid": 20925,
+                "key": "Tab",
+                "mb": 252.8
+              },
+              {
+                "pid": 20928,
+                "key": "Utility: Audio Service",
+                "mb": 9.7
+              },
+              {
+                "pid": 20929,
+                "key": "Utility: Video Capture",
+                "mb": 20
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.3,
+            "totalPct": 36.13,
+            "byKeyPct": {
+              "Browser": 0.36,
+              "GPU": 10.44,
+              "Utility: Network Service": 0.9,
+              "Tab": 21.76,
+              "Utility: Audio Service": 1.77,
+              "Utility: Video Capture": 0.9
+            },
+            "byProcess": [
+              {
+                "pid": 20920,
+                "key": "Browser",
+                "pct": 0.36
+              },
+              {
+                "pid": 20921,
+                "key": "GPU",
+                "pct": 10.44
+              },
+              {
+                "pid": 20922,
+                "key": "Utility: Network Service",
+                "pct": 0.9
+              },
+              {
+                "pid": 20925,
+                "key": "Tab",
+                "pct": 21.76
+              },
+              {
+                "pid": 20928,
+                "key": "Utility: Audio Service",
+                "pct": 1.77
+              },
+              {
+                "pid": 20929,
+                "key": "Utility: Video Capture",
+                "pct": 0.9
+              }
+            ]
+          },
+          "peakMemTotalMB": 849.6,
+          "extras": {
+            "micOn": 1,
+            "receivedByOtherPerson": {
+              "width": 1280,
+              "height": 720,
+              "paused": false,
+              "currentTime": 301.791829,
+              "totalFrames": 9054,
+              "droppedFrames": 2,
+              "framesShown": 8107,
+              "framesDropped": 0,
+              "fps": 30
+            },
+            "captured": {
+              "aspectRatio": 1.7777777777777777,
+              "deviceId": "b39c76c6f5baa0f9a088fb4857232df3cda0d97fc6a29f9f38e8fdd427a4374a",
+              "exposureMode": "manual",
+              "exposureTime": 50,
+              "focusDistance": 50,
+              "focusMode": "manual",
+              "frameRate": 30,
+              "groupId": "03910a51cdd7faf0a500143cdde4aa2ab528e048b959c8b16dc08540df4aa578",
+              "height": 1080,
+              "pan": 100,
+              "resizeMode": "none",
+              "tilt": 100,
+              "width": 1920,
+              "zoom": 100
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 809.3,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.9,
+              "GPU": 479.8,
+              "Utility: Network Service": 12.2,
+              "Tab": 234.8,
+              "Utility: Audio Service": 9.6,
+              "Utility: Video Capture": 20
+            },
+            "byProcess": [
+              {
+                "pid": 35850,
+                "key": "Browser",
+                "mb": 52.9
+              },
+              {
+                "pid": 35853,
+                "key": "GPU",
+                "mb": 479.8
+              },
+              {
+                "pid": 35854,
+                "key": "Utility: Network Service",
+                "mb": 12.2
+              },
+              {
+                "pid": 35857,
+                "key": "Tab",
+                "mb": 234.8
+              },
+              {
+                "pid": 35860,
+                "key": "Utility: Audio Service",
+                "mb": 9.6
+              },
+              {
+                "pid": 35861,
+                "key": "Utility: Video Capture",
+                "mb": 20
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 33.53,
+            "byKeyPct": {
+              "Browser": 0.36,
+              "GPU": 9.84,
+              "Utility: Network Service": 0.74,
+              "Tab": 19.98,
+              "Utility: Audio Service": 1.71,
+              "Utility: Video Capture": 0.89
+            },
+            "byProcess": [
+              {
+                "pid": 35850,
+                "key": "Browser",
+                "pct": 0.36
+              },
+              {
+                "pid": 35853,
+                "key": "GPU",
+                "pct": 9.84
+              },
+              {
+                "pid": 35854,
+                "key": "Utility: Network Service",
+                "pct": 0.74
+              },
+              {
+                "pid": 35857,
+                "key": "Tab",
+                "pct": 19.98
+              },
+              {
+                "pid": 35860,
+                "key": "Utility: Audio Service",
+                "pct": 1.71
+              },
+              {
+                "pid": 35861,
+                "key": "Utility: Video Capture",
+                "pct": 0.89
+              }
+            ]
+          },
+          "peakMemTotalMB": 829.9,
+          "extras": {
+            "micOn": 1,
+            "receivedByOtherPerson": {
+              "width": 1280,
+              "height": 720,
+              "paused": false,
+              "currentTime": 301.78309,
+              "totalFrames": 9054,
+              "droppedFrames": 343,
+              "framesShown": 8108,
+              "framesDropped": 341,
+              "fps": 30
+            },
+            "captured": {
+              "aspectRatio": 1.7777777777777777,
+              "deviceId": "9018809478e61e46243b7045102255673b1be0b89974911c0c4df8d15ce77a33",
+              "exposureMode": "manual",
+              "exposureTime": 50,
+              "focusDistance": 50,
+              "focusMode": "manual",
+              "frameRate": 30,
+              "groupId": "d4aaee5dd4273497231d5da975ddf910489e1d8dc67f420cb3712cfca082cca6",
+              "height": 1080,
+              "pan": 100,
+              "resizeMode": "none",
+              "tilt": 100,
+              "width": 1920,
+              "zoom": 100
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 848.5,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.7,
+              "GPU": 496.1,
+              "Utility: Network Service": 12.2,
+              "Tab": 257.9,
+              "Utility: Audio Service": 9.6,
+              "Utility: Video Capture": 20
+            },
+            "byProcess": [
+              {
+                "pid": 50507,
+                "key": "Browser",
+                "mb": 52.7
+              },
+              {
+                "pid": 50508,
+                "key": "GPU",
+                "mb": 496.1
+              },
+              {
+                "pid": 50509,
+                "key": "Utility: Network Service",
+                "mb": 12.2
+              },
+              {
+                "pid": 50517,
+                "key": "Tab",
+                "mb": 257.9
+              },
+              {
+                "pid": 50521,
+                "key": "Utility: Audio Service",
+                "mb": 9.6
+              },
+              {
+                "pid": 50522,
+                "key": "Utility: Video Capture",
+                "mb": 20
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.3,
+            "totalPct": 39.95,
+            "byKeyPct": {
+              "Browser": 0.35,
+              "GPU": 11.3,
+              "Utility: Network Service": 0.91,
+              "Tab": 24.71,
+              "Utility: Audio Service": 1.81,
+              "Utility: Video Capture": 0.87
+            },
+            "byProcess": [
+              {
+                "pid": 50507,
+                "key": "Browser",
+                "pct": 0.35
+              },
+              {
+                "pid": 50508,
+                "key": "GPU",
+                "pct": 11.3
+              },
+              {
+                "pid": 50509,
+                "key": "Utility: Network Service",
+                "pct": 0.91
+              },
+              {
+                "pid": 50517,
+                "key": "Tab",
+                "pct": 24.71
+              },
+              {
+                "pid": 50521,
+                "key": "Utility: Audio Service",
+                "pct": 1.81
+              },
+              {
+                "pid": 50522,
+                "key": "Utility: Video Capture",
+                "pct": 0.87
+              }
+            ]
+          },
+          "peakMemTotalMB": 851.8,
+          "extras": {
+            "micOn": 1,
+            "receivedByOtherPerson": {
+              "width": 1280,
+              "height": 720,
+              "paused": false,
+              "currentTime": 301.783696,
+              "totalFrames": 9054,
+              "droppedFrames": 2,
+              "framesShown": 8108,
+              "framesDropped": 1,
+              "fps": 30
+            },
+            "captured": {
+              "aspectRatio": 1.7777777777777777,
+              "deviceId": "b8658b168734c1981cbc4946c87bc4f77511373acb1667ca64796f448e0d8198",
+              "exposureMode": "manual",
+              "exposureTime": 50,
+              "focusDistance": 50,
+              "focusMode": "manual",
+              "frameRate": 30,
+              "groupId": "3962b8ac635451315fcbcf7d909db629a91e91038eed37fd42eec27016e0a905",
+              "height": 1080,
+              "pan": 100,
+              "resizeMode": "none",
+              "tilt": 100,
+              "width": 1920,
+              "zoom": 100
+            }
+          }
+        }
+      ]
+    },
+    "S6": {
+      "name": "S4 while watching the other person's share",
+      "summary": {
+        "runs": 5,
+        "okRuns": 5,
+        "failedRuns": 0,
+        "memTotalMB": {
+          "n": 5,
+          "median": 763.4,
+          "min": 727.8,
+          "max": 791.8,
+          "p25": 762.6,
+          "p75": 771,
+          "spreadPct": 8.38,
+          "values": [
+            762.6,
+            727.8,
+            763.4,
+            771,
+            791.8
+          ]
+        },
+        "cpuTotalPct": {
+          "n": 5,
+          "median": 28.88,
+          "min": 25.94,
+          "max": 31.91,
+          "p25": 26.19,
+          "p75": 30.54,
+          "spreadPct": 20.67,
+          "values": [
+            28.88,
+            31.91,
+            26.19,
+            25.94,
+            30.54
+          ]
+        },
+        "memByProcessKindMB": {
+          "Browser": {
+            "median": 52.7,
+            "min": 52.5,
+            "max": 55
+          },
+          "GPU": {
+            "median": 478.6,
+            "min": 478,
+            "max": 489.5
+          },
+          "Utility: Network Service": {
+            "median": 12.2,
+            "min": 12,
+            "max": 12.2
+          },
+          "Tab": {
+            "median": 194.8,
+            "min": 159.7,
+            "max": 225.5
+          },
+          "Utility: Audio Service": {
+            "median": 9.7,
+            "min": 9.6,
+            "max": 9.7
+          },
+          "Utility: Video Capture": {
+            "median": 13.3,
+            "min": 13.3,
+            "max": 13.4
+          }
+        },
+        "cpuByProcessKindPct": {
+          "Browser": {
+            "median": 0.09,
+            "min": 0.09,
+            "max": 0.09
+          },
+          "GPU": {
+            "median": 11.52,
+            "min": 10.37,
+            "max": 12.66
+          },
+          "Utility: Network Service": {
+            "median": 0.52,
+            "min": 0.47,
+            "max": 0.65
+          },
+          "Tab": {
+            "median": 14.72,
+            "min": 13.2,
+            "max": 16.69
+          },
+          "Utility: Audio Service": {
+            "median": 1.8,
+            "min": 1.73,
+            "max": 1.84
+          },
+          "Utility: Video Capture": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "extras": {
+          "micOn": {
+            "n": 5,
+            "median": 1,
+            "min": 1,
+            "max": 1,
+            "p25": 1,
+            "p75": 1,
+            "spreadPct": 0,
+            "values": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          },
+          "video.width": {
+            "n": 5,
+            "median": 1280,
+            "min": 1280,
+            "max": 1280,
+            "p25": 1280,
+            "p75": 1280,
+            "spreadPct": 0,
+            "values": [
+              1280,
+              1280,
+              1280,
+              1280,
+              1280
+            ]
+          },
+          "video.height": {
+            "n": 5,
+            "median": 720,
+            "min": 720,
+            "max": 720,
+            "p25": 720,
+            "p75": 720,
+            "spreadPct": 0,
+            "values": [
+              720,
+              720,
+              720,
+              720,
+              720
+            ]
+          },
+          "video.framesShown": {
+            "n": 5,
+            "median": 8108,
+            "min": 8107,
+            "max": 8115,
+            "p25": 8108,
+            "p75": 8108,
+            "spreadPct": 0.1,
+            "values": [
+              8108,
+              8115,
+              8107,
+              8108,
+              8108
+            ]
+          },
+          "video.framesDropped": {
+            "n": 5,
+            "median": 0,
+            "min": 0,
+            "max": 0,
+            "p25": 0,
+            "p75": 0,
+            "spreadPct": null,
+            "values": [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "video.fps": {
+            "n": 5,
+            "median": 30,
+            "min": 30,
+            "max": 30,
+            "p25": 30,
+            "p75": 30,
+            "spreadPct": 0,
+            "values": [
+              30,
+              30,
+              30,
+              30,
+              30
+            ]
+          }
+        }
+      },
+      "runs": [
+        {
+          "memory": {
+            "totalMB": 762.6,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.5,
+              "GPU": 479.9,
+              "Utility: Network Service": 12.2,
+              "Tab": 194.8,
+              "Utility: Audio Service": 9.7,
+              "Utility: Video Capture": 13.4
+            },
+            "byProcess": [
+              {
+                "pid": 79283,
+                "key": "Browser",
+                "mb": 52.5
+              },
+              {
+                "pid": 79284,
+                "key": "GPU",
+                "mb": 479.9
+              },
+              {
+                "pid": 79285,
+                "key": "Utility: Network Service",
+                "mb": 12.2
+              },
+              {
+                "pid": 79288,
+                "key": "Tab",
+                "mb": 194.8
+              },
+              {
+                "pid": 79294,
+                "key": "Utility: Audio Service",
+                "mb": 9.7
+              },
+              {
+                "pid": 79295,
+                "key": "Utility: Video Capture",
+                "mb": 13.4
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 28.88,
+            "byKeyPct": {
+              "Browser": 0.09,
+              "GPU": 11.57,
+              "Utility: Network Service": 0.65,
+              "Tab": 14.72,
+              "Utility: Audio Service": 1.84,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 79283,
+                "key": "Browser",
+                "pct": 0.09
+              },
+              {
+                "pid": 79284,
+                "key": "GPU",
+                "pct": 11.57
+              },
+              {
+                "pid": 79285,
+                "key": "Utility: Network Service",
+                "pct": 0.65
+              },
+              {
+                "pid": 79288,
+                "key": "Tab",
+                "pct": 14.72
+              },
+              {
+                "pid": 79294,
+                "key": "Utility: Audio Service",
+                "pct": 1.84
+              },
+              {
+                "pid": 79295,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 815.3,
+          "extras": {
+            "micOn": 1,
+            "video": {
+              "width": 1280,
+              "height": 720,
+              "framesShown": 8108,
+              "framesDropped": 0,
+              "fps": 30
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 727.8,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 55,
+              "GPU": 478,
+              "Utility: Network Service": 12,
+              "Tab": 159.7,
+              "Utility: Audio Service": 9.6,
+              "Utility: Video Capture": 13.4
+            },
+            "byProcess": [
+              {
+                "pid": 870,
+                "key": "Browser",
+                "mb": 55
+              },
+              {
+                "pid": 995,
+                "key": "GPU",
+                "mb": 478
+              },
+              {
+                "pid": 996,
+                "key": "Utility: Network Service",
+                "mb": 12
+              },
+              {
+                "pid": 1020,
+                "key": "Tab",
+                "mb": 159.7
+              },
+              {
+                "pid": 1030,
+                "key": "Utility: Audio Service",
+                "mb": 9.6
+              },
+              {
+                "pid": 1031,
+                "key": "Utility: Video Capture",
+                "mb": 13.4
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.3,
+            "totalPct": 31.91,
+            "byKeyPct": {
+              "Browser": 0.09,
+              "GPU": 12.66,
+              "Utility: Network Service": 0.64,
+              "Tab": 16.69,
+              "Utility: Audio Service": 1.82,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 870,
+                "key": "Browser",
+                "pct": 0.09
+              },
+              {
+                "pid": 995,
+                "key": "GPU",
+                "pct": 12.66
+              },
+              {
+                "pid": 996,
+                "key": "Utility: Network Service",
+                "pct": 0.64
+              },
+              {
+                "pid": 1020,
+                "key": "Tab",
+                "pct": 16.69
+              },
+              {
+                "pid": 1030,
+                "key": "Utility: Audio Service",
+                "pct": 1.82
+              },
+              {
+                "pid": 1031,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 820.2,
+          "extras": {
+            "micOn": 1,
+            "video": {
+              "width": 1280,
+              "height": 720,
+              "framesShown": 8115,
+              "framesDropped": 0,
+              "fps": 30
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 763.4,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.9,
+              "GPU": 478.6,
+              "Utility: Network Service": 12.2,
+              "Tab": 196.8,
+              "Utility: Audio Service": 9.7,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 24334,
+                "key": "Browser",
+                "mb": 52.9
+              },
+              {
+                "pid": 24338,
+                "key": "GPU",
+                "mb": 478.6
+              },
+              {
+                "pid": 24339,
+                "key": "Utility: Network Service",
+                "mb": 12.2
+              },
+              {
+                "pid": 24342,
+                "key": "Tab",
+                "mb": 196.8
+              },
+              {
+                "pid": 24345,
+                "key": "Utility: Audio Service",
+                "mb": 9.7
+              },
+              {
+                "pid": 24346,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 26.19,
+            "byKeyPct": {
+              "Browser": 0.09,
+              "GPU": 10.63,
+              "Utility: Network Service": 0.47,
+              "Tab": 13.2,
+              "Utility: Audio Service": 1.8,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 24334,
+                "key": "Browser",
+                "pct": 0.09
+              },
+              {
+                "pid": 24338,
+                "key": "GPU",
+                "pct": 10.63
+              },
+              {
+                "pid": 24339,
+                "key": "Utility: Network Service",
+                "pct": 0.47
+              },
+              {
+                "pid": 24342,
+                "key": "Tab",
+                "pct": 13.2
+              },
+              {
+                "pid": 24345,
+                "key": "Utility: Audio Service",
+                "pct": 1.8
+              },
+              {
+                "pid": 24346,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 831.6,
+          "extras": {
+            "micOn": 1,
+            "video": {
+              "width": 1280,
+              "height": 720,
+              "framesShown": 8107,
+              "framesDropped": 0,
+              "fps": 30
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 771,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.5,
+              "GPU": 489.5,
+              "Utility: Network Service": 12.2,
+              "Tab": 193.9,
+              "Utility: Audio Service": 9.7,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 38979,
+                "key": "Browser",
+                "mb": 52.5
+              },
+              {
+                "pid": 38980,
+                "key": "GPU",
+                "mb": 489.5
+              },
+              {
+                "pid": 38981,
+                "key": "Utility: Network Service",
+                "mb": 12.2
+              },
+              {
+                "pid": 38986,
+                "key": "Tab",
+                "mb": 193.9
+              },
+              {
+                "pid": 38989,
+                "key": "Utility: Audio Service",
+                "mb": 9.7
+              },
+              {
+                "pid": 38990,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 25.94,
+            "byKeyPct": {
+              "Browser": 0.09,
+              "GPU": 10.37,
+              "Utility: Network Service": 0.5,
+              "Tab": 13.25,
+              "Utility: Audio Service": 1.73,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 38979,
+                "key": "Browser",
+                "pct": 0.09
+              },
+              {
+                "pid": 38980,
+                "key": "GPU",
+                "pct": 10.37
+              },
+              {
+                "pid": 38981,
+                "key": "Utility: Network Service",
+                "pct": 0.5
+              },
+              {
+                "pid": 38986,
+                "key": "Tab",
+                "pct": 13.25
+              },
+              {
+                "pid": 38989,
+                "key": "Utility: Audio Service",
+                "pct": 1.73
+              },
+              {
+                "pid": 38990,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 815.3,
+          "extras": {
+            "micOn": 1,
+            "video": {
+              "width": 1280,
+              "height": 720,
+              "framesShown": 8108,
+              "framesDropped": 0,
+              "fps": 30
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 791.8,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.7,
+              "GPU": 478.4,
+              "Utility: Network Service": 12.2,
+              "Tab": 225.5,
+              "Utility: Audio Service": 9.6,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 53776,
+                "key": "Browser",
+                "mb": 52.7
+              },
+              {
+                "pid": 53777,
+                "key": "GPU",
+                "mb": 478.4
+              },
+              {
+                "pid": 53778,
+                "key": "Utility: Network Service",
+                "mb": 12.2
+              },
+              {
+                "pid": 53781,
+                "key": "Tab",
+                "mb": 225.5
+              },
+              {
+                "pid": 53786,
+                "key": "Utility: Audio Service",
+                "mb": 9.6
+              },
+              {
+                "pid": 53787,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 30.54,
+            "byKeyPct": {
+              "Browser": 0.09,
+              "GPU": 11.52,
+              "Utility: Network Service": 0.52,
+              "Tab": 16.69,
+              "Utility: Audio Service": 1.73,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 53776,
+                "key": "Browser",
+                "pct": 0.09
+              },
+              {
+                "pid": 53777,
+                "key": "GPU",
+                "pct": 11.52
+              },
+              {
+                "pid": 53778,
+                "key": "Utility: Network Service",
+                "pct": 0.52
+              },
+              {
+                "pid": 53781,
+                "key": "Tab",
+                "pct": 16.69
+              },
+              {
+                "pid": 53786,
+                "key": "Utility: Audio Service",
+                "pct": 1.73
+              },
+              {
+                "pid": 53787,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 812.2,
+          "extras": {
+            "micOn": 1,
+            "video": {
+              "width": 1280,
+              "height": 720,
+              "framesShown": 8108,
+              "framesDropped": 0,
+              "fps": 30
+            }
+          }
+        }
+      ]
+    },
+    "S7": {
+      "name": "watching a watch party",
+      "summary": {
+        "runs": 5,
+        "okRuns": 5,
+        "failedRuns": 0,
+        "memTotalMB": {
+          "n": 5,
+          "median": 684,
+          "min": 681.6,
+          "max": 697.6,
+          "p25": 681.7,
+          "p75": 687.1,
+          "spreadPct": 2.34,
+          "values": [
+            697.6,
+            681.6,
+            684,
+            681.7,
+            687.1
+          ]
+        },
+        "cpuTotalPct": {
+          "n": 5,
+          "median": 10.37,
+          "min": 10.26,
+          "max": 12.25,
+          "p25": 10.29,
+          "p75": 11.47,
+          "spreadPct": 19.19,
+          "values": [
+            11.47,
+            12.25,
+            10.26,
+            10.29,
+            10.37
+          ]
+        },
+        "memByProcessKindMB": {
+          "Browser": {
+            "median": 53.1,
+            "min": 52.5,
+            "max": 56
+          },
+          "GPU": {
+            "median": 317.6,
+            "min": 316.7,
+            "max": 330.7
+          },
+          "Utility: Network Service": {
+            "median": 10.9,
+            "min": 10.8,
+            "max": 11.2
+          },
+          "Tab": {
+            "median": 280.4,
+            "min": 276.3,
+            "max": 284.3
+          },
+          "Utility: Audio Service": {
+            "median": 8.2,
+            "min": 8.1,
+            "max": 8.2
+          },
+          "Utility: Video Capture": {
+            "median": 13.3,
+            "min": 13.3,
+            "max": 13.5
+          }
+        },
+        "cpuByProcessKindPct": {
+          "Browser": {
+            "median": 0.16,
+            "min": 0.15,
+            "max": 0.19
+          },
+          "GPU": {
+            "median": 7.02,
+            "min": 6.98,
+            "max": 8.33
+          },
+          "Utility: Network Service": {
+            "median": 0.07,
+            "min": 0.07,
+            "max": 0.07
+          },
+          "Tab": {
+            "median": 2.88,
+            "min": 2.79,
+            "max": 3.32
+          },
+          "Utility: Audio Service": {
+            "median": 0.27,
+            "min": 0.26,
+            "max": 0.35
+          },
+          "Utility: Video Capture": {
+            "median": 0,
+            "min": 0,
+            "max": 0.01
+          }
+        },
+        "extras": {
+          "video.width": {
+            "n": 5,
+            "median": 1280,
+            "min": 1280,
+            "max": 1280,
+            "p25": 1280,
+            "p75": 1280,
+            "spreadPct": 0,
+            "values": [
+              1280,
+              1280,
+              1280,
+              1280,
+              1280
+            ]
+          },
+          "video.height": {
+            "n": 5,
+            "median": 720,
+            "min": 720,
+            "max": 720,
+            "p25": 720,
+            "p75": 720,
+            "spreadPct": 0,
+            "values": [
+              720,
+              720,
+              720,
+              720,
+              720
+            ]
+          },
+          "video.framesShown": {
+            "n": 5,
+            "median": 8107,
+            "min": 8107,
+            "max": 8107,
+            "p25": 8107,
+            "p75": 8107,
+            "spreadPct": 0,
+            "values": [
+              8107,
+              8107,
+              8107,
+              8107,
+              8107
+            ]
+          },
+          "video.framesDropped": {
+            "n": 5,
+            "median": 0,
+            "min": 0,
+            "max": 4,
+            "p25": 0,
+            "p75": 0,
+            "spreadPct": null,
+            "values": [
+              4,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "video.fps": {
+            "n": 5,
+            "median": 30,
+            "min": 30,
+            "max": 30,
+            "p25": 30,
+            "p75": 30,
+            "spreadPct": 0,
+            "values": [
+              30,
+              30,
+              30,
+              30,
+              30
+            ]
+          }
+        }
+      },
+      "runs": [
+        {
+          "memory": {
+            "totalMB": 697.6,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 53.6,
+              "GPU": 330.7,
+              "Utility: Network Service": 11.2,
+              "Tab": 280.4,
+              "Utility: Audio Service": 8.2,
+              "Utility: Video Capture": 13.5
+            },
+            "byProcess": [
+              {
+                "pid": 84535,
+                "key": "Browser",
+                "mb": 53.6
+              },
+              {
+                "pid": 84538,
+                "key": "GPU",
+                "mb": 330.7
+              },
+              {
+                "pid": 84539,
+                "key": "Utility: Network Service",
+                "mb": 11.2
+              },
+              {
+                "pid": 84548,
+                "key": "Tab",
+                "mb": 280.4
+              },
+              {
+                "pid": 84551,
+                "key": "Utility: Audio Service",
+                "mb": 8.2
+              },
+              {
+                "pid": 84552,
+                "key": "Utility: Video Capture",
+                "mb": 13.5
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 11.47,
+            "byKeyPct": {
+              "Browser": 0.19,
+              "GPU": 7.62,
+              "Utility: Network Service": 0.07,
+              "Tab": 3.27,
+              "Utility: Audio Service": 0.31,
+              "Utility: Video Capture": 0.01
+            },
+            "byProcess": [
+              {
+                "pid": 84535,
+                "key": "Browser",
+                "pct": 0.19
+              },
+              {
+                "pid": 84538,
+                "key": "GPU",
+                "pct": 7.62
+              },
+              {
+                "pid": 84539,
+                "key": "Utility: Network Service",
+                "pct": 0.07
+              },
+              {
+                "pid": 84548,
+                "key": "Tab",
+                "pct": 3.27
+              },
+              {
+                "pid": 84551,
+                "key": "Utility: Audio Service",
+                "pct": 0.31
+              },
+              {
+                "pid": 84552,
+                "key": "Utility: Video Capture",
+                "pct": 0.01
+              }
+            ]
+          },
+          "peakMemTotalMB": 697.6,
+          "extras": {
+            "video": {
+              "width": 1280,
+              "height": 720,
+              "framesShown": 8107,
+              "framesDropped": 4,
+              "fps": 30
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 681.6,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 56,
+              "GPU": 316.7,
+              "Utility: Network Service": 11.1,
+              "Tab": 276.3,
+              "Utility: Audio Service": 8.1,
+              "Utility: Video Capture": 13.4
+            },
+            "byProcess": [
+              {
+                "pid": 11686,
+                "key": "Browser",
+                "mb": 56
+              },
+              {
+                "pid": 11689,
+                "key": "GPU",
+                "mb": 316.7
+              },
+              {
+                "pid": 11690,
+                "key": "Utility: Network Service",
+                "mb": 11.1
+              },
+              {
+                "pid": 11695,
+                "key": "Tab",
+                "mb": 276.3
+              },
+              {
+                "pid": 11698,
+                "key": "Utility: Audio Service",
+                "mb": 8.1
+              },
+              {
+                "pid": 11699,
+                "key": "Utility: Video Capture",
+                "mb": 13.4
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 12.25,
+            "byKeyPct": {
+              "Browser": 0.16,
+              "GPU": 8.33,
+              "Utility: Network Service": 0.07,
+              "Tab": 3.32,
+              "Utility: Audio Service": 0.35,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 11686,
+                "key": "Browser",
+                "pct": 0.16
+              },
+              {
+                "pid": 11689,
+                "key": "GPU",
+                "pct": 8.33
+              },
+              {
+                "pid": 11690,
+                "key": "Utility: Network Service",
+                "pct": 0.07
+              },
+              {
+                "pid": 11695,
+                "key": "Tab",
+                "pct": 3.32
+              },
+              {
+                "pid": 11698,
+                "key": "Utility: Audio Service",
+                "pct": 0.35
+              },
+              {
+                "pid": 11699,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 681.6,
+          "extras": {
+            "video": {
+              "width": 1280,
+              "height": 720,
+              "framesShown": 8107,
+              "framesDropped": 0,
+              "fps": 30
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 684,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 53.1,
+              "GPU": 317.6,
+              "Utility: Network Service": 10.9,
+              "Tab": 280.9,
+              "Utility: Audio Service": 8.2,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 27879,
+                "key": "Browser",
+                "mb": 53.1
+              },
+              {
+                "pid": 27880,
+                "key": "GPU",
+                "mb": 317.6
+              },
+              {
+                "pid": 27881,
+                "key": "Utility: Network Service",
+                "mb": 10.9
+              },
+              {
+                "pid": 27884,
+                "key": "Tab",
+                "mb": 280.9
+              },
+              {
+                "pid": 27887,
+                "key": "Utility: Audio Service",
+                "mb": 8.2
+              },
+              {
+                "pid": 27888,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 10.26,
+            "byKeyPct": {
+              "Browser": 0.16,
+              "GPU": 6.98,
+              "Utility: Network Service": 0.07,
+              "Tab": 2.79,
+              "Utility: Audio Service": 0.26,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 27879,
+                "key": "Browser",
+                "pct": 0.16
+              },
+              {
+                "pid": 27880,
+                "key": "GPU",
+                "pct": 6.98
+              },
+              {
+                "pid": 27881,
+                "key": "Utility: Network Service",
+                "pct": 0.07
+              },
+              {
+                "pid": 27884,
+                "key": "Tab",
+                "pct": 2.79
+              },
+              {
+                "pid": 27887,
+                "key": "Utility: Audio Service",
+                "pct": 0.26
+              },
+              {
+                "pid": 27888,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 684,
+          "extras": {
+            "video": {
+              "width": 1280,
+              "height": 720,
+              "framesShown": 8107,
+              "framesDropped": 0,
+              "fps": 30
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 681.7,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.9,
+              "GPU": 316.8,
+              "Utility: Network Service": 10.8,
+              "Tab": 279.7,
+              "Utility: Audio Service": 8.2,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 42113,
+                "key": "Browser",
+                "mb": 52.9
+              },
+              {
+                "pid": 42114,
+                "key": "GPU",
+                "mb": 316.8
+              },
+              {
+                "pid": 42115,
+                "key": "Utility: Network Service",
+                "mb": 10.8
+              },
+              {
+                "pid": 42120,
+                "key": "Tab",
+                "mb": 279.7
+              },
+              {
+                "pid": 42123,
+                "key": "Utility: Audio Service",
+                "mb": 8.2
+              },
+              {
+                "pid": 42124,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 10.29,
+            "byKeyPct": {
+              "Browser": 0.15,
+              "GPU": 7.02,
+              "Utility: Network Service": 0.07,
+              "Tab": 2.79,
+              "Utility: Audio Service": 0.27,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 42113,
+                "key": "Browser",
+                "pct": 0.15
+              },
+              {
+                "pid": 42114,
+                "key": "GPU",
+                "pct": 7.02
+              },
+              {
+                "pid": 42115,
+                "key": "Utility: Network Service",
+                "pct": 0.07
+              },
+              {
+                "pid": 42120,
+                "key": "Tab",
+                "pct": 2.79
+              },
+              {
+                "pid": 42123,
+                "key": "Utility: Audio Service",
+                "pct": 0.27
+              },
+              {
+                "pid": 42124,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 681.7,
+          "extras": {
+            "video": {
+              "width": 1280,
+              "height": 720,
+              "framesShown": 8107,
+              "framesDropped": 0,
+              "fps": 30
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 687.1,
+            "processCount": 6,
+            "byKeyMB": {
+              "Browser": 52.5,
+              "GPU": 317.9,
+              "Utility: Network Service": 10.9,
+              "Tab": 284.3,
+              "Utility: Audio Service": 8.1,
+              "Utility: Video Capture": 13.3
+            },
+            "byProcess": [
+              {
+                "pid": 57154,
+                "key": "Browser",
+                "mb": 52.5
+              },
+              {
+                "pid": 57155,
+                "key": "GPU",
+                "mb": 317.9
+              },
+              {
+                "pid": 57156,
+                "key": "Utility: Network Service",
+                "mb": 10.9
+              },
+              {
+                "pid": 57159,
+                "key": "Tab",
+                "mb": 284.3
+              },
+              {
+                "pid": 57162,
+                "key": "Utility: Audio Service",
+                "mb": 8.1
+              },
+              {
+                "pid": 57163,
+                "key": "Utility: Video Capture",
+                "mb": 13.3
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.2,
+            "totalPct": 10.37,
+            "byKeyPct": {
+              "Browser": 0.16,
+              "GPU": 6.99,
+              "Utility: Network Service": 0.07,
+              "Tab": 2.88,
+              "Utility: Audio Service": 0.27,
+              "Utility: Video Capture": 0
+            },
+            "byProcess": [
+              {
+                "pid": 57154,
+                "key": "Browser",
+                "pct": 0.16
+              },
+              {
+                "pid": 57155,
+                "key": "GPU",
+                "pct": 6.99
+              },
+              {
+                "pid": 57156,
+                "key": "Utility: Network Service",
+                "pct": 0.07
+              },
+              {
+                "pid": 57159,
+                "key": "Tab",
+                "pct": 2.88
+              },
+              {
+                "pid": 57162,
+                "key": "Utility: Audio Service",
+                "pct": 0.27
+              },
+              {
+                "pid": 57163,
+                "key": "Utility: Video Capture",
+                "pct": 0
+              }
+            ]
+          },
+          "peakMemTotalMB": 687.1,
+          "extras": {
+            "video": {
+              "width": 1280,
+              "height": 720,
+              "framesShown": 8107,
+              "framesDropped": 0,
+              "fps": 30
+            }
+          }
+        }
+      ]
+    }
+  },
+  "missingScenes": []
+}

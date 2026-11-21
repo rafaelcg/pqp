@@ -1,5 +1,7 @@
 import {
   JAM_AUDIO_CONTENT_TYPES,
+  JAM_AUDIO_MAX_BYTES,
+  JAM_ERRORS,
   JAM_VIDEO_CONTENT_TYPES,
   type AddJamTrackRequest,
   type CreateJamUploadRequest,
@@ -8,7 +10,10 @@ import {
   type JamUploadKind,
   type JamUploadTicket,
 } from "@pqp/shared";
+import { ApiError } from "@/lib/api";
 import { addJamTrack, createJamUpload } from "@/lib/jam-api";
+import { prepareStemUpload, type JamStemUpload } from "@/lib/jam/upload";
+import type { JamTake } from "@/lib/jam/recorder";
 
 /**
  * Posting a take: the three steps of `docs/JAM.md` ("Adding a track"), with the
@@ -83,6 +88,62 @@ export function bareContentType(kind: JamUploadKind, raw: string, fallback: stri
   const allowed: readonly string[] =
     kind === "audio" ? JAM_AUDIO_CONTENT_TYPES : JAM_VIDEO_CONTENT_TYPES;
   return allowed.includes(bare) ? bare : fallback;
+}
+
+export type StemSource = Pick<JamTake, "samples" | "sampleRate" | "offsetMs" | "trimStartMs" | "trimEndMs" | "video">;
+
+/**
+ * The take as the file to upload, within the audio limit (`JAM_AUDIO_MAX_BYTES`,
+ * 32 MiB, the server's own).
+ *
+ * The recorder's FLAC runs from 2.5 to 5 MB a minute of playing, so a take near
+ * the ten-minute ceiling can pass it. The server would answer 413 when the ticket
+ * is asked for, after the whole take was encoded, and a trim in the editor would
+ * not have helped: a trim HIDES audio at play time and the file stays whole. So
+ * when the whole take is too big and has audio hidden at its head or tail, the
+ * hidden part is cut out of the file instead (the offset moves by exactly the head
+ * that went and the trims go to zero, so every sample sounds at the same song time
+ * as before). That is only done with no picture: the camera file cannot be cut to
+ * match, and a cut audio against a whole video would drift. Past the limit with
+ * nothing left to cut, this throws the server's own 413 (`jam_upload_too_large`)
+ * with no request, which the studio reads like the real one: the take is kept, the
+ * person is told to trim, and the next try encodes again.
+ */
+export async function prepareStemWithinLimit(
+  source: StemSource,
+  options: { gain?: number } = {},
+  deps: { prepare: typeof prepareStemUpload; limitBytes: number } = {
+    prepare: prepareStemUpload,
+    limitBytes: JAM_AUDIO_MAX_BYTES,
+  },
+): Promise<JamStemUpload> {
+  {
+    // Block scoped: over the limit the whole file is of no use, so nothing holds it while the cut one is encoded.
+    const whole = await deps.prepare(source, options);
+    if (whole.audio.size <= deps.limitBytes) {
+      return whole;
+    }
+  }
+  if (source.video === null) {
+    const head = Math.max(0, Math.round((source.trimStartMs * source.sampleRate) / 1000));
+    const tail = Math.max(0, Math.round((source.trimEndMs * source.sampleRate) / 1000));
+    if ((head > 0 || tail > 0) && head + tail < source.samples.length) {
+      const cut = await deps.prepare(
+        {
+          ...source,
+          samples: source.samples.subarray(head, source.samples.length - tail),
+          offsetMs: source.offsetMs + Math.round(source.trimStartMs),
+          trimStartMs: 0,
+          trimEndMs: 0,
+        },
+        options,
+      );
+      if (cut.audio.size <= deps.limitBytes) {
+        return cut;
+      }
+    }
+  }
+  throw new ApiError(413, JAM_ERRORS.uploadTooLarge);
 }
 
 export function startJamPost(take: JamPostTake): JamPostState {

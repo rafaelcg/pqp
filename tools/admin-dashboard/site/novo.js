@@ -1939,6 +1939,7 @@
   var FLAG_RISK = {
     read_cache: "Desligado, toda leitura repetida vai direto ao banco. Com muita gente on (watch party, deploy), o banco pode chegar ao limite de conexões.",
     ws_auth_admission: "Desligado, uma rajada de reconexão (todo deploy) entra de uma vez e espera no pool do banco em vez de na porta do WebSocket. Volta ao comportamento de antes.",
+    ws_shared_deflate: "Ligado, um roster ou mensagem grande para muitos sockets é comprimido uma vez só e os mesmos bytes vão para todos (bem menos processador e memória na API num envio em massa). Desligado, o ws comprime de novo para cada socket, como antes. Os dois dão os mesmos bytes no fio. Contadores em runtime.wsSharedDeflate nas métricas.",
     turn_prefer_static: "Muda qual relay (TURN) as chamadas usam. Se o relay estático estiver ruim, chamadas entre redes diferentes podem falhar.",
     voice_mesh_resume_requires_cap: "Ligado, quem não declarou mesh-resume (os apps de celular) perde o lugar na chamada ponto a ponto ao reconectar, em vez de guardá-lo por 90 s.",
     sfu_region_scoped_calls: "Desligado, kick, ban e mute no SFU perguntam a todas as regiões e esperam a mais lenta (até 5 s): uma região com problema atrasa a moderação de salas de outras regiões. Ligado, só a região da sala é consultada nas repetições.",

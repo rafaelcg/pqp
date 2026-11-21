@@ -385,33 +385,82 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
 const uuid = z.string().guid();
 
-/** One line, whitespace collapsed, trimmed, 1 to `max`, no control characters. */
+/**
+ * Bidi OVERRIDE, EMBEDDING and ISOLATE controls (U+202A to U+202E, U+2066 to
+ * U+2069). They are STRIPPED, not refused: nobody types one on purpose into a
+ * song title (the phones' keyboards do not produce them), and a client that
+ * sends one by paste gets the same text without it instead of a 400 it cannot
+ * explain. An unclosed U+202E in an artist reverses whatever a screen draws
+ * after it on the same line ("started by you" becomes "uoy yb detrats"), which
+ * is why they never reach the database from here. Right-to-left TEXT is
+ * untouched: Arabic and Hebrew letters carry their own direction, and the
+ * implicit marks (U+200E, U+200F, U+061C) and the joiners (U+200C, U+200D, which
+ * emoji sequences and Persian need) stay. Rows written before this existed may
+ * still hold the controls, so every screen also isolates what it interpolates
+ * (`client/src/lib/bidi.ts`).
+ */
+const BIDI_CONTROLS = /[‪-‮⁦-⁩]/g;
+
+/**
+ * What draws nothing: whitespace, every format character (zero-width space,
+ * joiners, marks, the soft hyphen, tags), combining marks and variation
+ * selectors on their own, the fillers that Unicode files as letters and the
+ * Braille blank. A line made only of these looks empty and is not, so it is
+ * refused the way an empty one is. One visible character anywhere is enough:
+ * this is a "something to read" test, not a character whitelist, so a ZWJ emoji
+ * family, a flag, an Arabic or Hebrew word and a Vietnamese syllable with its
+ * tone marks all pass.
+ */
+const INVISIBLE =
+  // The class mixes combining marks and format characters on purpose.
+  // eslint-disable-next-line no-misleading-character-class
+  /[\s\p{Z}\p{Cc}\p{Cf}\p{M}͏ᅟᅠ឴឵⠀ㅤﾠ︀-️\u{E0100}-\u{E01EF}]/gu;
+
+function hasVisibleText(value: string): boolean {
+  return value.replace(INVISIBLE, "") !== "";
+}
+
+/** Bidi controls out, whitespace collapsed, trimmed. */
+function cleanLine(value: string): string {
+  return value.replace(BIDI_CONTROLS, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * One line, bidi controls stripped, whitespace collapsed, trimmed, 1 to `max`,
+ * no control characters, and something visible to read.
+ */
 function oneLine(max: number) {
   return z
     .string()
-    .transform((value) => value.replace(/\s+/g, " ").trim())
+    .transform(cleanLine)
     .pipe(
       z
         .string()
         .min(1)
         .max(max)
-        .refine((value) => !CONTROL_CHARS.test(value), "Invalid characters"),
+        .refine((value) => !CONTROL_CHARS.test(value), "Invalid characters")
+        .refine(hasVisibleText, "Nothing to read"),
     );
 }
 
 export const jamTitleSchema = oneLine(JAM_TITLE_MAX);
 
-/** An artist or a label: one line, or null / empty meaning "none". */
+/**
+ * An artist or a label: one line, or null / empty meaning "none". Text of
+ * nothing but invisible characters is refused like a title, not read as "none":
+ * somebody pasted something, and storing it would draw a blank.
+ */
 function optionalLine(max: number) {
   return z
     .string()
     .nullable()
-    .transform((value) => (value === null ? "" : value.replace(/\s+/g, " ").trim()))
+    .transform((value) => (value === null ? "" : cleanLine(value)))
     .pipe(
       z
         .string()
         .max(max)
-        .refine((value) => !CONTROL_CHARS.test(value), "Invalid characters"),
+        .refine((value) => !CONTROL_CHARS.test(value), "Invalid characters")
+        .refine((value) => value === "" || hasVisibleText(value), "Nothing to read"),
     )
     .transform((value) => (value === "" ? null : value));
 }

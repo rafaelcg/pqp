@@ -254,6 +254,14 @@ export const FEATURE_FLAGS = {
     codeDefault: true,
     perServer: false,
   },
+  ws_shared_deflate: {
+    description:
+      "Compressão uma vez só por envio em massa: um roster ou mensagem grande para muitos sockets é comprimido uma vez e os mesmos bytes vão para todos (desligado: o ws comprime de novo para cada socket).",
+    env: "WS_SHARED_DEFLATE",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: false,
+  },
   community_home: {
     description: "Baú (Community Home).",
     env: "COMMUNITY_HOME_ENABLED",

@@ -1,5 +1,12 @@
 import type { WebSocket } from "ws";
+import { isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
+import {
+  noteSharedDeflateSkipped,
+  SHARED_DEFLATE_MIN_RECIPIENTS,
+  SharedDeflateBroadcast,
+} from "../lib/ws-shared-deflate.js";
+import { WS_PER_MESSAGE_DEFLATE } from "../lib/ws-compression.js";
 
 /**
  * The three things every large-room fan-out on this process needs, kept in one
@@ -65,19 +72,101 @@ export function sendEncodedDroppable(socket: WebSocket, frame: Buffer): boolean 
   if (socket.readyState !== 1) {
     return false;
   }
-  if (socket.bufferedAmount > SEND_BACKPRESSURE_BYTES) {
-    droppedFrames += 1;
-    // Once per 1000 so a stuck socket cannot turn the log into the problem.
-    if (droppedFrames % 1000 === 1) {
-      logEvent("ws.backpressureDrop", {
-        bufferedAmount: socket.bufferedAmount,
-        dropped: droppedFrames,
-      });
-    }
+  if (overBackpressure(socket)) {
     return false;
   }
   socket.send(frame, TEXT);
   return true;
+}
+
+/** True, and counted, when a droppable frame must be skipped for `socket`. */
+function overBackpressure(socket: WebSocket): boolean {
+  // Written as the original `>` test, not its `<=` complement, so a socket
+  // whose `bufferedAmount` is not a number is served exactly as before.
+  if (!(socket.bufferedAmount > SEND_BACKPRESSURE_BYTES)) {
+    return false;
+  }
+  droppedFrames += 1;
+  // Once per 1000 so a stuck socket cannot turn the log into the problem.
+  if (droppedFrames % 1000 === 1) {
+    logEvent("ws.backpressureDrop", {
+      bufferedAmount: socket.bufferedAmount,
+      dropped: droppedFrames,
+    });
+  }
+  return true;
+}
+
+export interface BroadcastOptions {
+  /**
+   * Skip a socket over {@link SEND_BACKPRESSURE_BYTES} instead of queueing for
+   * it, exactly as {@link sendEncodedDroppable}. Only for frames a later frame
+   * supersedes (typing, presence and roster snapshots), never messages.
+   */
+  droppable?: boolean;
+  /** Called for each socket the frame was written to, with its index. */
+  onSent?: (socket: WebSocket, index: number) => void;
+}
+
+/**
+ * THE fan-out: one already-encoded frame to every socket in `sockets`, in
+ * order. Answers how many it was written to. Closed sockets are skipped, as
+ * are, with `droppable`, sockets over the backpressure threshold.
+ *
+ * Every site that sends one identical payload to many sockets goes through
+ * here, so that the runtime flag `ws_shared_deflate` can compress such a frame
+ * ONCE (`lib/ws-shared-deflate.ts`) instead of once per socket, which is what
+ * `ws` does. With the flag off, or the frame under the compression threshold,
+ * or fewer than {@link SHARED_DEFLATE_MIN_RECIPIENTS} recipients, this is the
+ * same `socket.send(frame, { binary: false })` per socket the callers made
+ * before it existed, byte for byte.
+ *
+ * Per socket, the shared path is taken only when it is provably what `ws`
+ * would have written (see that file); every other socket, including one whose
+ * sender is busy compressing something else, is sent the ordinary way, so the
+ * order of frames on any one socket never changes.
+ */
+export function broadcastEncoded(
+  sockets: readonly WebSocket[],
+  frame: Buffer,
+  options: BroadcastOptions = {},
+): number {
+  const shared = sharedBroadcastFor(frame, sockets.length);
+  let sent = 0;
+  for (let index = 0; index < sockets.length; index += 1) {
+    const socket = sockets[index]!;
+    if (socket.readyState !== 1) {
+      continue;
+    }
+    if (options.droppable && overBackpressure(socket)) {
+      continue;
+    }
+    if (shared?.trySend(socket) !== "shared") {
+      socket.send(frame, TEXT);
+    }
+    sent += 1;
+    options.onSent?.(socket, index);
+  }
+  return sent;
+}
+
+function sharedBroadcastFor(
+  frame: Buffer,
+  recipients: number,
+): SharedDeflateBroadcast | null {
+  // Cheapest test first: almost every fan-out is a small frame (typing,
+  // presence deltas), and those must not pay a flag read.
+  if (frame.length < (WS_PER_MESSAGE_DEFLATE.threshold ?? 1024)) {
+    return null;
+  }
+  if (!isEnabled("ws_shared_deflate")) {
+    return null;
+  }
+  if (recipients < SHARED_DEFLATE_MIN_RECIPIENTS) {
+    noteSharedDeflateSkipped("fewRecipients");
+    return null;
+  }
+  return new SharedDeflateBroadcast(frame);
 }
 
 /**

@@ -15,6 +15,7 @@ import { foldForSearch } from "@/lib/conversation-list";
 import { jamSongShareUrl } from "@/lib/jam-share";
 import { sendShareMessage, type ShareResult } from "@/lib/jam-share-send";
 import { cn } from "@/lib/utils";
+import { UserText } from "./user-text";
 
 /**
  * "Mandar no chat": the text channels of this song's server that the person may
@@ -215,7 +216,7 @@ function SongLine({ song }: { song: JamSongSummary }) {
       <span className="min-w-0">
         <span className="block truncate text-sm font-semibold text-text">{song.title}</span>
         <span className="block truncate text-xs text-text-secondary first-letter:uppercase">
-          {need.kind === "missing" ? needLabel(need) : (song.artist ?? t("jam.original"))}
+          {need.kind === "missing" ? needLabel(need) : (song.artist ? <UserText>{song.artist}</UserText> : t("jam.original"))}
         </span>
       </span>
     </div>

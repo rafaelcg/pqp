@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "tool": "tools/desktop-bench/native-bench.mjs",
+  "app": "rust/apps/desktop-proto (GPUI + LiveKit Rust SDK), plan step D2",
+  "startedAt": "2026-11-21T01:12:51.726Z",
+  "finishedAt": "2026-11-21T01:13:36.389Z",
+  "smoke": false,
+  "machine": {
+    "model": "Mac17,6",
+    "cpu": "Apple M5 Max",
+    "cores": 18,
+    "memoryGB": 128,
+    "power": "Now drawing from 'AC Power'"
+  },
+  "os": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "release": "27.0.0",
+    "version": "27.0.1"
+  },
+  "node": "26.13.1",
+  "build": {
+    "headSha": "1e0a316af3b117623bf43ce973e02bb98929265e",
+    "mainBase": "9d961a2818a67e10dcf0fccd12185c8c94352282",
+    "binary": {
+      "path": "rust/target/release/pqp-desktop-proto",
+      "sizeBytes": 34969024,
+      "sha256": "9ea0b091b4e8feb8b605ce50da14a2354c469f7f9e5dd63a58f276da4dcd9e6c",
+      "cargoLockPackages": 804,
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)"
+    }
+  },
+  "config": {
+    "runsPerScene": 5,
+    "callSeconds": 300,
+    "cpuWindowSeconds": 30,
+    "stack": {
+      "livekit": true,
+      "microphone": "synthetic 440 Hz beep (250 ms of every second) in a NativeAudioSource, published as TrackSource::Microphone, WebRTC AEC/NS/AGC on; the real microphone is never opened",
+      "playout": "WebRTC platform ADM (CoreAudio) through livekit::PlatformAudio",
+      "participant": "headless Chromium, dev-local-token:bob, not measured"
+    }
+  },
+  "thermalBefore": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+  "thermalAfter": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+  "d2Check": {
+    "call": {
+      "rosterSize": 2,
+      "roster": [
+        "Dev User bob",
+        "Dev User"
+      ],
+      "nativeHearsOther": {
+        "peakDbfs": -6.300000190734863,
+        "audibleSeconds": 11,
+        "framesIn": 1200
+      },
+      "otherHearsNative": {
+        "dbfs": -23.7,
+        "packets": 156,
+        "seconds": 6
+      },
+      "speakingSeen": [
+        "3f89f524-554e-4051-ad35-568f051ed28d"
+      ]
+    },
+    "mute": {
+      "selfMutedOnServer": true,
+      "otherHearsNative": {
+        "dbfs": null,
+        "packets": 0,
+        "seconds": 4
+      }
+    },
+    "unmute": {
+      "selfMutedOnServer": false,
+      "otherHearsNative": {
+        "dbfs": -23.7,
+        "packets": 104,
+        "seconds": 4
+      }
+    },
+    "deafen": {
+      "selfDeafenedOnServer": true,
+      "framesInWhileDeafened": 400,
+      "nativeLevelWhileDeafenedDbfs": null,
+      "otherHearsNative": {
+        "dbfs": null,
+        "packets": 0,
+        "seconds": 4
+      }
+    },
+    "undeafen": {
+      "selfDeafenedOnServer": false,
+      "framesInAfter": 300,
+      "nativeLevelDbfs": -6.699999809265137
+    },
+    "pass": true,
+    "meshRoom": {
+      "refused": true,
+      "reason": "voice: the room runs Mesh, this client only speaks livekit"
+    }
+  },
+  "scenes": {},
+  "comparison": {
+    "against": "tools/desktop-bench/results/2026-11-20-darwin-arm64-168c46ab1.json",
+    "electronAppSha": "168c46ab1605c64b6c6bcab40ca9330da448f5e2",
+    "scenes": {}
+  }
+}

@@ -58,6 +58,7 @@ import { getChannelAudience } from "../services/servers.js";
 import { findTimeoutForChannel } from "../services/sanctions.js";
 import { canAccessChannel } from "../services/users.js";
 import {
+  broadcastEncoded,
   createCoalescer,
   encodeFrame,
   sendEncoded,
@@ -131,12 +132,13 @@ async function deliverChannelAppNow(channelId: string, droppable: boolean): Prom
   }
   const session = await readLiveSummary(channelId);
   const payload = encodeFrame({ type: "channel-app", channelId, session });
-  const send = droppable ? sendEncodedDroppable : sendEncoded;
+  const targets: WebSocket[] = [];
   forEachAuthenticatedSocket((socket, user) => {
     if (audience.has(user.id)) {
-      send(socket, payload);
+      targets.push(socket);
     }
   });
+  broadcastEncoded(targets, payload, { droppable });
 }
 
 /**
@@ -335,9 +337,7 @@ export function dropSessionSockets(sessionId: string): void {
 async function deliverEndedLocally(frame: AppEnded): Promise<void> {
   const payload = encodeFrame(frame);
   const seated = sessionSocketsOf(frame.sessionId);
-  for (const socket of seated) {
-    sendEncoded(socket, payload);
-  }
+  broadcastEncoded([...seated], payload);
   dropSessionSockets(frame.sessionId);
   if (!hasAuthenticatedSockets()) {
     return;
@@ -355,11 +355,13 @@ async function deliverEndedLocally(frame: AppEnded): Promise<void> {
     if (!audience) {
       return;
     }
+    const targets: WebSocket[] = [];
     forEachAuthenticatedSocket((socket, user) => {
       if (!seated.has(socket) && audience.has(user.id)) {
-        sendEncoded(socket, payload);
+        targets.push(socket);
       }
     });
+    broadcastEncoded(targets, payload);
   };
   try {
     await fanOut();
@@ -595,9 +597,7 @@ function sendStateLocally(sessionId: string, rev: number, value: JsonValue): voi
     return;
   }
   const payload = encodeFrame({ type: "app-state", sessionId, rev, value });
-  for (const socket of sockets.keys()) {
-    sendEncoded(socket, payload);
-  }
+  broadcastEncoded([...sockets.keys()], payload);
 }
 
 const stateChains = new Map<string, Promise<void>>();
@@ -702,13 +702,14 @@ function deliverEventLocally(frame: AppEvent): void {
   if (!sockets || sockets.size === 0) {
     return;
   }
-  const payload = encodeFrame(frame);
+  const targets: WebSocket[] = [];
   for (const [socket, seat] of sockets) {
     // The other seats: an app is not told about its own seat's events.
     if (seat.seatId !== frame.fromSeatId) {
-      sendEncodedDroppable(socket, payload);
+      targets.push(socket);
     }
   }
+  broadcastEncoded(targets, encodeFrame(frame), { droppable: true });
 }
 
 subscribeToCluster(EVENT_TOPIC, (data) => {

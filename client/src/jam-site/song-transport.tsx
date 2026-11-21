@@ -30,7 +30,15 @@ function Seek({ player }: { player: PublicPlayer }) {
     if (label.current && !dragging.current) {
       label.current.textContent = clock(position);
     }
-  }, [player, duration]);
+    // The spoken value follows the value: written with it, and only when the second
+    // changes, so a screen reader is not handed a new string sixty times a second.
+    if (input.current && !dragging.current) {
+      const spoken = `${clock(position)} / ${clock(state.durationMs)}`;
+      if (spoken !== input.current.getAttribute("aria-valuetext")) {
+        input.current.setAttribute("aria-valuetext", spoken);
+      }
+    }
+  }, [player, duration, state.durationMs]);
   useClockDraw(player, draw);
 
   const commit = (value: number) => {
@@ -54,7 +62,7 @@ function Seek({ player }: { player: PublicPlayer }) {
         aria-label={jt("seek.label")}
         aria-valuetext={`${clock(drag ?? player.position())} / ${clock(state.durationMs)}`}
         data-jam-seek=""
-        className="jam-seek order-5 h-11 min-w-0 basis-full md:order-none md:h-6 md:basis-auto md:flex-1"
+        className="jam-seek order-5 h-11 min-w-0 basis-full md:order-none md:basis-auto md:flex-1"
         onKeyDown={(event) => {
           // Five seconds an arrow, a seventh of the song a page key; Home and End are the range's own.
           const step = event.key === "ArrowRight" || event.key === "ArrowUp" ? 5000 : event.key === "ArrowLeft" || event.key === "ArrowDown" ? -5000 : event.key === "PageUp" ? duration / 7 : event.key === "PageDown" ? -duration / 7 : 0;
@@ -149,9 +157,9 @@ export function SongTransport({
         <button
           type="button"
           onClick={onLike}
-          aria-label={jt("like.label")}
+          aria-label={likes > 1 ? jt("like.labelCount", { likes: jt("card.likes", { count: likes }) }) : jt("like.label")}
           data-jam-like=""
-          className={cn(buttonClass.base, "h-10 gap-1.5 px-3 text-sm text-text-secondary hover:bg-surface-2 hover:text-text pointer-coarse:h-11 pointer-coarse:min-w-11")}
+          className={cn(buttonClass.base, "h-11 min-w-11 gap-1.5 px-3 text-sm text-text-secondary hover:bg-surface-2 hover:text-text")}
         >
           <Heart className="h-[18px] w-[18px]" aria-hidden />
           {likes > 1 && <span className="tabular-nums">{likes}</span>}
@@ -160,7 +168,7 @@ export function SongTransport({
           type="button"
           onClick={onShare}
           data-jam-share=""
-          className={cn(buttonClass.base, "h-10 gap-2 px-3 text-sm text-text-secondary hover:bg-surface-2 hover:text-text pointer-coarse:h-11 pointer-coarse:min-w-11")}
+          className={cn(buttonClass.base, "h-11 min-w-11 gap-2 px-3 text-sm text-text-secondary hover:bg-surface-2 hover:text-text")}
         >
           <Share2 className="h-[18px] w-[18px]" aria-hidden />
           <span className="max-sm:sr-only">{jt("share.label")}</span>

@@ -563,6 +563,36 @@ describeDb("jam channels", () => {
     expect((await call(carol, "GET", `/api/jam-songs/${reply.body.song.id}`)).status).toBe(200);
   });
 
+  it("text a stranger types: bidi controls are stripped on the way in, invisible-only text is a 400, real scripts stay", async () => {
+    const RLO = "‮";
+    // An unclosed override in the artist reversed the app's own sentence around it; it never reaches the row.
+    const spoof = await createSong(bob, `Wonder${RLO}wall`, { artist: `${RLO}Oasis` });
+    expect(spoof.status, JSON.stringify(spoof.body)).toBe(201);
+    expect(spoof.body.song).toMatchObject({ title: "Wonderwall", artist: "Oasis" });
+    const edited = await call<{ song: JamSongSummary }>(bob, "PATCH", `/api/jam-songs/${spoof.body.song.id}`, {
+      artist: `Gabi${RLO}`,
+    });
+    expect(edited.body.song.artist).toBe("Gabi");
+    // The label of a take takes the same road.
+    const labelled = await addTrack(bob, spoof.body.song.id, "guitar", { label: `riff${RLO}` });
+    expect(labelled.status, JSON.stringify(labelled.body)).toBe(201);
+    expect(labelled.body.track.label).toBe("riff");
+    // A title that draws nothing was accepted and shown as a blank card.
+    for (const blank of ["​", "​​ ‍", "⠀", "ㅤ"]) {
+      expect((await createSong(bob, blank)).status).toBe(400);
+      expect((await createSong(bob, "x", { artist: blank })).status).toBe(400);
+      expect((await call(bob, "PATCH", `/api/jam-songs/${spoof.body.song.id}`, { title: blank })).status).toBe(400);
+      expect((await addTrack(bob, spoof.body.song.id, "bass", { label: blank })).status).toBe(400);
+    }
+    // What a person really types is kept as typed: right-to-left, ZWJ emoji, a flag, Vietnamese.
+    const real = ["مرحبا بالعالم", "שלום עולם", "\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466} Rock", "\u{1F1E7}\u{1F1F7}", "Nguyễn Văn"];
+    for (const title of real) {
+      const reply = await createSong(bob, title, { artist: title });
+      expect(reply.status, title).toBe(201);
+      expect(reply.body.song).toMatchObject({ title, artist: title });
+    }
+  });
+
   it("a nonce retry answers the same song with 200 and writes nothing", async () => {
     const first = await createSong(bob, "Mesma", { nonce: "n-1" });
     const second = await createSong(bob, "Mesma", { nonce: "n-1" });

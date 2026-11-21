@@ -1,0 +1,788 @@
+{
+  "schema": 1,
+  "tool": "tools/desktop-bench/native-bench.mjs",
+  "app": "rust/apps/desktop-proto (GPUI + LiveKit Rust SDK), plan step D2",
+  "startedAt": "2026-11-21T00:40:59.937Z",
+  "finishedAt": "2026-11-21T01:12:31.417Z",
+  "smoke": false,
+  "machine": {
+    "model": "Mac17,6",
+    "cpu": "Apple M5 Max",
+    "cores": 18,
+    "memoryGB": 128,
+    "power": "Now drawing from 'AC Power'"
+  },
+  "os": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "release": "27.0.0",
+    "version": "27.0.1"
+  },
+  "node": "26.13.1",
+  "build": {
+    "headSha": "1e0a316af3b117623bf43ce973e02bb98929265e",
+    "mainBase": "9d961a2818a67e10dcf0fccd12185c8c94352282",
+    "binary": {
+      "path": "rust/target/release/pqp-desktop-proto",
+      "sizeBytes": 34969024,
+      "sha256": "9ea0b091b4e8feb8b605ce50da14a2354c469f7f9e5dd63a58f276da4dcd9e6c",
+      "cargoLockPackages": 804,
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)"
+    }
+  },
+  "config": {
+    "runsPerScene": 5,
+    "callSeconds": 300,
+    "cpuWindowSeconds": 30,
+    "stack": {
+      "livekit": true,
+      "microphone": "synthetic 440 Hz beep (250 ms of every second) in a NativeAudioSource, published as TrackSource::Microphone, WebRTC AEC/NS/AGC on; the real microphone is never opened",
+      "playout": "WebRTC platform ADM (CoreAudio) through livekit::PlatformAudio",
+      "participant": "headless Chromium, dev-local-token:bob, not measured"
+    }
+  },
+  "thermalBefore": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+  "thermalAfter": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded",
+  "d2Check": {
+    "call": {
+      "rosterSize": 2,
+      "roster": [
+        "Dev User bob",
+        "Dev User"
+      ],
+      "nativeHearsOther": {
+        "peakDbfs": -6.5,
+        "audibleSeconds": 11,
+        "framesIn": 1200
+      },
+      "otherHearsNative": {
+        "dbfs": -23.8,
+        "packets": 300,
+        "seconds": 6
+      },
+      "speakingSeen": []
+    },
+    "mute": {
+      "selfMutedOnServer": true,
+      "otherHearsNative": {
+        "dbfs": null,
+        "packets": 0,
+        "seconds": 4
+      }
+    },
+    "unmute": {
+      "selfMutedOnServer": false,
+      "otherHearsNative": {
+        "dbfs": -24.2,
+        "packets": 200,
+        "seconds": 4
+      }
+    },
+    "deafen": {
+      "selfDeafenedOnServer": true,
+      "framesInWhileDeafened": 400,
+      "nativeLevelWhileDeafenedDbfs": null,
+      "otherHearsNative": {
+        "dbfs": null,
+        "packets": 0,
+        "seconds": 4
+      }
+    },
+    "undeafen": {
+      "selfDeafenedOnServer": false,
+      "framesInAfter": 302,
+      "nativeLevelDbfs": -6.300000190734863
+    },
+    "pass": true
+  },
+  "scenes": {
+    "S1": {
+      "summary": {
+        "runs": 5,
+        "okRuns": 5,
+        "failedRuns": 0,
+        "memTotalMB": {
+          "n": 5,
+          "median": 44.8,
+          "min": 44.5,
+          "max": 45.1,
+          "p25": 44.8,
+          "p75": 44.8,
+          "spreadPct": 1.34,
+          "values": [
+            45.1,
+            44.8,
+            44.8,
+            44.5,
+            44.8
+          ]
+        },
+        "cpuTotalPct": {
+          "n": 5,
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "p25": 0,
+          "p75": 0,
+          "spreadPct": null,
+          "values": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "memByProcessKindMB": {
+          "Main": {
+            "median": 44.8,
+            "min": 44.5,
+            "max": 45.1
+          }
+        },
+        "cpuByProcessKindPct": {
+          "Main": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          }
+        },
+        "extras": {
+          "startup.contentMs": {
+            "n": 5,
+            "median": 101,
+            "min": 99,
+            "max": 107,
+            "p25": 101,
+            "p75": 102,
+            "spreadPct": 7.92,
+            "values": [
+              107,
+              102,
+              101,
+              99,
+              101
+            ]
+          }
+        }
+      },
+      "runs": [
+        {
+          "memory": {
+            "totalMB": 45.1,
+            "processCount": 1,
+            "byKeyMB": {
+              "Main": 45.1
+            },
+            "byProcess": [
+              {
+                "pid": 96396,
+                "key": "Main",
+                "mb": 45.1
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.1,
+            "totalPct": 0,
+            "byKeyPct": {
+              "Main": 0
+            },
+            "byProcess": [
+              {
+                "pid": 96396,
+                "key": "Main",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "startup": {
+              "contentMs": 107
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 44.8,
+            "processCount": 1,
+            "byKeyMB": {
+              "Main": 44.8
+            },
+            "byProcess": [
+              {
+                "pid": 99228,
+                "key": "Main",
+                "mb": 44.8
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.1,
+            "totalPct": 0,
+            "byKeyPct": {
+              "Main": 0
+            },
+            "byProcess": [
+              {
+                "pid": 99228,
+                "key": "Main",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "startup": {
+              "contentMs": 102
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 44.8,
+            "processCount": 1,
+            "byKeyMB": {
+              "Main": 44.8
+            },
+            "byProcess": [
+              {
+                "pid": 2491,
+                "key": "Main",
+                "mb": 44.8
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.1,
+            "totalPct": 0,
+            "byKeyPct": {
+              "Main": 0
+            },
+            "byProcess": [
+              {
+                "pid": 2491,
+                "key": "Main",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "startup": {
+              "contentMs": 101
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 44.5,
+            "processCount": 1,
+            "byKeyMB": {
+              "Main": 44.5
+            },
+            "byProcess": [
+              {
+                "pid": 5371,
+                "key": "Main",
+                "mb": 44.5
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.1,
+            "totalPct": 0,
+            "byKeyPct": {
+              "Main": 0
+            },
+            "byProcess": [
+              {
+                "pid": 5371,
+                "key": "Main",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "startup": {
+              "contentMs": 99
+            }
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 44.8,
+            "processCount": 1,
+            "byKeyMB": {
+              "Main": 44.8
+            },
+            "byProcess": [
+              {
+                "pid": 8504,
+                "key": "Main",
+                "mb": 44.8
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 30.1,
+            "totalPct": 0,
+            "byKeyPct": {
+              "Main": 0
+            },
+            "byProcess": [
+              {
+                "pid": 8504,
+                "key": "Main",
+                "pct": 0
+              }
+            ]
+          },
+          "extras": {
+            "startup": {
+              "contentMs": 101
+            }
+          }
+        }
+      ]
+    },
+    "S4": {
+      "summary": {
+        "runs": 5,
+        "okRuns": 5,
+        "failedRuns": 0,
+        "memTotalMB": {
+          "n": 5,
+          "median": 50.4,
+          "min": 50,
+          "max": 50.5,
+          "p25": 50.2,
+          "p75": 50.4,
+          "spreadPct": 0.99,
+          "values": [
+            50.4,
+            50.5,
+            50.2,
+            50,
+            50.4
+          ]
+        },
+        "cpuTotalPct": {
+          "n": 5,
+          "median": 2.08,
+          "min": 1.96,
+          "max": 2.27,
+          "p25": 1.96,
+          "p75": 2.08,
+          "spreadPct": 14.9,
+          "values": [
+            1.96,
+            2.27,
+            2.08,
+            2.08,
+            1.96
+          ]
+        },
+        "memByProcessKindMB": {
+          "Main": {
+            "median": 50.4,
+            "min": 50,
+            "max": 50.5
+          }
+        },
+        "cpuByProcessKindPct": {
+          "Main": {
+            "median": 2.08,
+            "min": 1.96,
+            "max": 2.27
+          }
+        },
+        "extras": {
+          "micOn": {
+            "n": 5,
+            "median": 1,
+            "min": 1,
+            "max": 1,
+            "p25": 1,
+            "p75": 1,
+            "spreadPct": 0,
+            "values": [
+              1,
+              1,
+              1,
+              1,
+              1
+            ]
+          },
+          "otherHearsNative.dbfs": {
+            "n": 5,
+            "median": -23.9,
+            "min": -23.9,
+            "max": -23.9,
+            "p25": -23.9,
+            "p75": -23.9,
+            "spreadPct": 0,
+            "values": [
+              -23.9,
+              -23.9,
+              -23.9,
+              -23.9,
+              -23.9
+            ]
+          },
+          "otherHearsNative.packets": {
+            "n": 5,
+            "median": 7024,
+            "min": 7024,
+            "max": 13503,
+            "p25": 7024,
+            "p75": 7024,
+            "spreadPct": 92.24,
+            "values": [
+              7024,
+              13503,
+              7024,
+              7024,
+              7024
+            ]
+          },
+          "otherHearsNative.seconds": {
+            "n": 5,
+            "median": 270.1,
+            "min": 270.1,
+            "max": 270.1,
+            "p25": 270.1,
+            "p75": 270.1,
+            "spreadPct": 0,
+            "values": [
+              270.1,
+              270.1,
+              270.1,
+              270.1,
+              270.1
+            ]
+          },
+          "nativeHearsOther.peakDbfs": {
+            "n": 5,
+            "median": -6.4,
+            "min": -6.6,
+            "max": -6.1,
+            "p25": -6.5,
+            "p75": -6.2,
+            "spreadPct": -7.81,
+            "values": [
+              -6.6,
+              -6.2,
+              -6.4,
+              -6.5,
+              -6.1
+            ]
+          },
+          "nativeHearsOther.audibleSeconds": {
+            "n": 5,
+            "median": 296,
+            "min": 296,
+            "max": 297,
+            "p25": 296,
+            "p75": 297,
+            "spreadPct": 0.34,
+            "values": [
+              297,
+              296,
+              297,
+              296,
+              296
+            ]
+          },
+          "nativeHearsOther.framesIn": {
+            "n": 5,
+            "median": 30012,
+            "min": 30012,
+            "max": 30012,
+            "p25": 30012,
+            "p75": 30012,
+            "spreadPct": 0,
+            "values": [
+              30012,
+              30012,
+              30012,
+              30012,
+              30012
+            ]
+          },
+          "rosterSize": {
+            "n": 5,
+            "median": 2,
+            "min": 2,
+            "max": 2,
+            "p25": 2,
+            "p75": 2,
+            "spreadPct": 0,
+            "values": [
+              2,
+              2,
+              2,
+              2,
+              2
+            ]
+          }
+        }
+      },
+      "runs": [
+        {
+          "memory": {
+            "totalMB": 50.4,
+            "processCount": 1,
+            "byKeyMB": {
+              "Main": 50.4
+            },
+            "byProcess": [
+              {
+                "pid": 96781,
+                "key": "Main",
+                "mb": 50.4
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.1,
+            "totalPct": 1.96,
+            "byKeyPct": {
+              "Main": 1.96
+            },
+            "byProcess": [
+              {
+                "pid": 96781,
+                "key": "Main",
+                "pct": 1.96
+              }
+            ]
+          },
+          "peakMemTotalMB": 50.4,
+          "extras": {
+            "micOn": 1,
+            "otherHearsNative": {
+              "dbfs": -23.9,
+              "packets": 7024,
+              "seconds": 270.1
+            },
+            "nativeHearsOther": {
+              "peakDbfs": -6.599999904632568,
+              "audibleSeconds": 297,
+              "framesIn": 30012
+            },
+            "rosterSize": 2
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 50.5,
+            "processCount": 1,
+            "byKeyMB": {
+              "Main": 50.5
+            },
+            "byProcess": [
+              {
+                "pid": 99597,
+                "key": "Main",
+                "mb": 50.5
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.1,
+            "totalPct": 2.27,
+            "byKeyPct": {
+              "Main": 2.27
+            },
+            "byProcess": [
+              {
+                "pid": 99597,
+                "key": "Main",
+                "pct": 2.27
+              }
+            ]
+          },
+          "peakMemTotalMB": 50.5,
+          "extras": {
+            "micOn": 1,
+            "otherHearsNative": {
+              "dbfs": -23.9,
+              "packets": 13503,
+              "seconds": 270.1
+            },
+            "nativeHearsOther": {
+              "peakDbfs": -6.199999809265137,
+              "audibleSeconds": 296,
+              "framesIn": 30012
+            },
+            "rosterSize": 2
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 50.2,
+            "processCount": 1,
+            "byKeyMB": {
+              "Main": 50.2
+            },
+            "byProcess": [
+              {
+                "pid": 2906,
+                "key": "Main",
+                "mb": 50.2
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.1,
+            "totalPct": 2.08,
+            "byKeyPct": {
+              "Main": 2.08
+            },
+            "byProcess": [
+              {
+                "pid": 2906,
+                "key": "Main",
+                "pct": 2.08
+              }
+            ]
+          },
+          "peakMemTotalMB": 50.2,
+          "extras": {
+            "micOn": 1,
+            "otherHearsNative": {
+              "dbfs": -23.9,
+              "packets": 7024,
+              "seconds": 270.1
+            },
+            "nativeHearsOther": {
+              "peakDbfs": -6.400000095367432,
+              "audibleSeconds": 297,
+              "framesIn": 30012
+            },
+            "rosterSize": 2
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 50,
+            "processCount": 1,
+            "byKeyMB": {
+              "Main": 50
+            },
+            "byProcess": [
+              {
+                "pid": 5771,
+                "key": "Main",
+                "mb": 50
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.1,
+            "totalPct": 2.08,
+            "byKeyPct": {
+              "Main": 2.08
+            },
+            "byProcess": [
+              {
+                "pid": 5771,
+                "key": "Main",
+                "pct": 2.08
+              }
+            ]
+          },
+          "peakMemTotalMB": 50.1,
+          "extras": {
+            "micOn": 1,
+            "otherHearsNative": {
+              "dbfs": -23.9,
+              "packets": 7024,
+              "seconds": 270.1
+            },
+            "nativeHearsOther": {
+              "peakDbfs": -6.5,
+              "audibleSeconds": 296,
+              "framesIn": 30012
+            },
+            "rosterSize": 2
+          }
+        },
+        {
+          "memory": {
+            "totalMB": 50.4,
+            "processCount": 1,
+            "byKeyMB": {
+              "Main": 50.4
+            },
+            "byProcess": [
+              {
+                "pid": 8922,
+                "key": "Main",
+                "mb": 50.4
+              }
+            ]
+          },
+          "cpu": {
+            "windowSeconds": 270.1,
+            "totalPct": 1.96,
+            "byKeyPct": {
+              "Main": 1.96
+            },
+            "byProcess": [
+              {
+                "pid": 8922,
+                "key": "Main",
+                "pct": 1.96
+              }
+            ]
+          },
+          "peakMemTotalMB": 50.4,
+          "extras": {
+            "micOn": 1,
+            "otherHearsNative": {
+              "dbfs": -23.9,
+              "packets": 7024,
+              "seconds": 270.1
+            },
+            "nativeHearsOther": {
+              "peakDbfs": -6.099999904632568,
+              "audibleSeconds": 296,
+              "framesIn": 30012
+            },
+            "rosterSize": 2
+          }
+        }
+      ]
+    }
+  },
+  "comparison": {
+    "against": "tools/desktop-bench/results/2026-11-20-darwin-arm64-168c46ab1.json",
+    "electronAppSha": "168c46ab1605c64b6c6bcab40ca9330da448f5e2",
+    "scenes": {
+      "S1": {
+        "memMB": {
+          "native": 44.8,
+          "electron": 533.4,
+          "pctOfElectron": 8.4
+        },
+        "cpuPct": {
+          "native": 0,
+          "electron": 7.59,
+          "pctOfElectron": 0
+        }
+      },
+      "S4": {
+        "memMB": {
+          "native": 50.4,
+          "electron": 801.4,
+          "pctOfElectron": 6.3
+        },
+        "cpuPct": {
+          "native": 2.08,
+          "electron": 26.39,
+          "pctOfElectron": 7.9
+        }
+      }
+    }
+  }
+}

@@ -66,7 +66,9 @@ swap`). `jam-site/index.html` now preloads the three Latin files, like the app's
 
 **Hostname step still owed (not done in the PR):** add `jam.pqp.gg` as a custom
 domain on the Pages project `pqp` (DNS and the Pages dashboard). Until then the
-site is reachable at `pqp.gg/jam`.
+site is reachable at `pqp.gg/jam`. Accepted as a known gap for launch
+(2026-11-20), to follow up after: `docs/JAM_PUBLIC.md` §"Launch gaps accepted
+(2026-11-20)".
 
 ## The flag
 

@@ -94,6 +94,15 @@ export const WS_PER_MESSAGE_DEFLATE: PerMessageDeflateOptions = {
    * their full ratio, because a roster is overwhelmingly redundant WITHIN
    * itself, not against the previous one. Since #314 the repeated whole roster
    * — the one case cross-frame history would have helped most — is a delta.
+   *
+   * A THIRD REASON NOW: `serverNoContextTakeover` is what makes compress-once
+   * fan-out safe (`ws-shared-deflate.ts`, runtime flag `ws_shared_deflate`).
+   * Because the server's deflater is reset after every message, a frame
+   * compressed once from a fresh context is exactly what each socket's own
+   * deflater would have produced, and writing it never leaves that deflater
+   * out of step with the receiver. Turning this off would quietly turn that
+   * path off too (every socket would fall back as `contextTakeover`), which
+   * is safe but gives back the processor saving.
    */
   serverNoContextTakeover: true,
   clientNoContextTakeover: true,

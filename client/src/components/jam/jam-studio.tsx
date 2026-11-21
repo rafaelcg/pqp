@@ -1,5 +1,5 @@
 import type { JamInstrument, JamSongSummary, JamTrack } from "@pqp/shared";
-import { ArrowLeft, Camera, Check, ChevronDown, Loader2, MicOff, RotateCcw, Send, SlidersHorizontal, Square } from "lucide-react";
+import { ArrowLeft, Camera, Check, ChevronDown, Loader2, MicOff, RotateCcw, Send, SlidersHorizontal, Square, Timer } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -10,7 +10,10 @@ import { useEngineClock } from "@/hooks/use-jam-clock";
 import { useJamPublication } from "@/hooks/use-jam-publication";
 import { useJamStudio, type NewSongDraft } from "@/hooks/use-jam-studio";
 import { useJamPublicMe } from "@/lib/jam-public-store";
+import { isolate } from "@/lib/bidi";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { doneCopy } from "@/lib/jam-done-copy";
+import { latencyIsMeasured } from "@/lib/jam-latency-trust";
 import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
 import { liveTimelineEndMs } from "@/lib/jam-live";
 import { TAKE_STEM_ID } from "@/lib/jam-session";
@@ -214,7 +217,7 @@ export function JamStudio({
   const recording = phase === "countdown" || phase === "recording";
   const reviewing = phase === "review" || phase === "posting";
   const names = Array.from(
-    new Set(backing.filter((track) => track.authorId !== viewerId).map((track) => track.authorName ?? t("jam.tile.anonymous"))),
+    new Set(backing.filter((track) => track.authorId !== viewerId).map((track) => isolate(track.authorName ?? t("jam.tile.anonymous")))),
   );
   const instrumentName = t(JAM_INSTRUMENT_LOOK[studio.instrument].nameKey as MessageKey);
   // A new song is "Música nova" until it exists, and is itself once it does.
@@ -249,6 +252,23 @@ export function JamStudio({
   const need = song ? songNeed(song) : null;
   const wanted = need?.kind === "missing" ? need.instruments : (draft?.joinMode === "wanted" ? draft.wantedInstruments : []);
   const pickable = JAM_INSTRUMENT_ORDER.filter((one) => addable.includes(one));
+
+  // The take will be stored as another version, outside the mix: the instrument is already in it and
+  // the person is not swapping their own. Said before sending, not after.
+  const goesInAsVersion =
+    !outsideTake && backing.some((track) => track.instrument === studio.instrument) && !(studio.replaceTake && studio.wantsReplace);
+
+  // What the "done" screen says is what the take became (`lib/jam-done-copy.ts`), not what the screen hoped for.
+  const done = doneCopy({
+    existingSong: song !== null,
+    outsideTake,
+    autoAcceptOutside,
+    swapFailed: studio.swapFailed,
+    outcome: studio.outcome,
+    canSwitchMix,
+  });
+  const doneTitle = t(done.titleKey as MessageKey);
+  const doneBody = t(done.bodyKey as MessageKey);
 
   const stageVideo = useRef<HTMLVideoElement | null>(null);
   useEffect(() => {
@@ -349,7 +369,12 @@ export function JamStudio({
     studio.progress.stage === "claiming"
       ? t("jam.post.claiming")
       : t("jam.post.uploading", { percent: Math.round(studio.progress.fraction * 100) });
-  const errorText = studio.postError ? t(`jam.error.${studio.postError}` as MessageKey) : null;
+  // Too large is the one failure no plain retry can fix: the take is kept, and the way out is to trim
+  // it (or, with a picture, to send the sound alone), which is what the message and the buttons offer.
+  const tooLarge = studio.postError === "tooLarge";
+  const errorText = studio.postError
+    ? t(tooLarge && studio.take?.video ? "jam.error.tooLargeVideo" : (`jam.error.${studio.postError}` as MessageKey))
+    : null;
   const playingNow = transport === "playing";
   /** The camera is on, or a take with a picture is being looked at. */
   const videoOn = Boolean(studio.camera) || Boolean(studio.takeVideoUrl && (reviewing || phase === "done"));
@@ -536,7 +561,9 @@ export function JamStudio({
                         : t("jam.studio.stage.setupBodyAlone")
                       : recording
                         ? t("jam.studio.stage.recordingBody")
-                        : t("jam.studio.stage.reviewBody")}
+                        : backing.length === 0
+                          ? t("jam.studio.stage.reviewBodyAlone")
+                          : t("jam.studio.stage.reviewBody")}
                   </p>
                 </div>
               )}
@@ -632,6 +659,7 @@ export function JamStudio({
                       review={
                         phase === "review" && studio.take
                           ? {
+                              measured: latencyIsMeasured(studio.take.latency),
                               latency: t("jam.review.latencyUsed", {
                                 ms: Math.round(studio.take.latency.roundTripMs),
                                 method: words.method(studio.take.latency.method),
@@ -746,6 +774,17 @@ export function JamStudio({
 
               {phase === "review" && (
                 <>
+                  {goesInAsVersion && (
+                    <p
+                      data-jam-version-note=""
+                      role="status"
+                      className="rounded-[var(--radius-card)] bg-surface-1 px-4 py-2.5 text-[13px] font-semibold leading-snug text-text-secondary ring-1 ring-inset ring-border [text-wrap:pretty]"
+                    >
+                      {t(canSwitchMix ? "jam.review.versionNoteOwner" : "jam.review.versionNote", {
+                        instrument: instrumentName.toLowerCase(),
+                      })}
+                    </p>
+                  )}
                   {studio.replaceTake && (
                     <div data-jam-replace="" className="rounded-[var(--radius-card)] bg-surface-1 px-4 py-1 ring-1 ring-inset ring-border">
                       <Switch
@@ -823,16 +862,8 @@ export function JamStudio({
         {phase === "countdown" && <Countdown beat={studio.beat} total={studio.beats} beatMs={(60 / studio.countIn.bpm) * 1000} />}
         {phase === "done" && studio.posted && (
           <DoneOverlay
-            title={song ? t("jam.post.doneTitle") : t("jam.post.doneNewTitle")}
-            body={
-              studio.swapFailed
-                ? t("jam.post.swapFailed")
-                : outsideTake
-                  ? autoAcceptOutside
-                    ? t("jam.public.studio.doneOutsideAuto")
-                    : t("jam.public.studio.doneOutside")
-                  : t("jam.post.doneBody")
-            }
+            title={doneTitle}
+            body={doneBody}
             action={t("jam.post.view")}
             onAction={() => onPosted(studio.posted!)}
           />
@@ -935,7 +966,7 @@ export function JamStudio({
                 )}
                 {/* The take is kept: every way out is here, not only "try again". A song closed meanwhile can never take it, so no retry. */}
                 <div className="flex flex-wrap justify-center gap-2" data-jam-post-failed="">
-                  {!studio.songClosed && !studio.songGone && (
+                  {!studio.songClosed && !studio.songGone && !tooLarge && (
                     <Button className="h-12 rounded-full px-6" onClick={() => void studio.post()} data-jam-retry="">
                       {t("jam.post.retry")}
                     </Button>
@@ -945,7 +976,7 @@ export function JamStudio({
                       {t("jam.post.withoutVideo")}
                     </Button>
                   )}
-                  <Button variant="secondary" className="h-12 rounded-full px-5" onClick={studio.backToReview} data-jam-back-to-take="">
+                  <Button variant={tooLarge ? "default" : "secondary"} className="h-12 rounded-full px-5" onClick={studio.backToReview} data-jam-back-to-take="">
                     {t("jam.post.backToTake")}
                   </Button>
                   <Button variant="ghost" className="h-12 gap-2 rounded-full px-5 text-text-secondary" onClick={studio.discardTake} data-jam-again="">
@@ -1070,7 +1101,7 @@ const LANE_ICON_BUTTON =
 /** Who plays a backing lane: the instrument's badge, its name, and the person under it. */
 function StudioLaneIdentity({ track, mine }: { track: JamTrack; mine: boolean }) {
   const { t } = useTranslation();
-  const person = mine ? t("jam.lane.you") : (track.authorName ?? t("jam.tile.anonymous"));
+  const person = mine ? t("jam.lane.you") : isolate(track.authorName ?? t("jam.tile.anonymous"));
   return <JamLaneIdentity instrument={track.instrument} sub={person} subTitle={person} />;
 }
 
@@ -1116,7 +1147,7 @@ function YourLaneIdentity({
   instrument: JamInstrument;
   recording: boolean;
   /** After the take: it landed in time (the numbers in the tooltip). */
-  review: { latency: string; editing: boolean; edited: boolean; onAdjust: () => void } | null;
+  review: { latency: string; measured: boolean; editing: boolean; edited: boolean; onAdjust: () => void } | null;
 }) {
   const { t } = useTranslation();
   const sub = review ? (
@@ -1126,8 +1157,19 @@ function YourLaneIdentity({
         data-jam-take-latency=""
         className="inline-flex w-fit max-w-full items-center gap-1 whitespace-nowrap rounded-full align-top text-xs font-semibold text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
       >
-        <Check className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={3} aria-hidden />
-        <span className="truncate">{review.edited ? t("jam.review.editedShort") : t("jam.review.onTimeShort")}</span>
+        {review.measured || review.edited ? (
+          <Check className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={3} aria-hidden />
+        ) : (
+          // A guess is not good news: neutral, and the words say it is estimated.
+          <Timer className="h-3.5 w-3.5 shrink-0 text-text-tertiary" aria-hidden />
+        )}
+        <span className="truncate">
+          {review.edited
+            ? t("jam.review.editedShort")
+            : review.measured
+              ? t("jam.review.onTimeShort")
+              : t("jam.review.estimatedShort")}
+        </span>
       </span>
     </Tooltip>
   ) : (

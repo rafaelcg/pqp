@@ -369,6 +369,32 @@ zero) beside the original, and a track read offers it first.
   logs `jamVideo.transcode.failed trackId=... attempt=... next=... reason=...`
   and a success `jamVideo.transcode.done`.
 
+## Text a stranger types (title, artist, label)
+
+`jamTitleSchema`, `jamArtistSchema` and `jamLabelSchema` (`packages/shared/src/jam.ts`)
+apply to every write that carries one of the three: create and edit a song, the
+label of an uploaded take and of a take edit. One line, whitespace collapsed,
+control characters refused, and:
+
+- **Bidi override, embedding and isolate controls (U+202A to U+202E, U+2066 to
+  U+2069) are stripped, not refused.** An unclosed U+202E in an artist reversed the
+  app's own sentence around it ("started by you" drawn as "uoy yb detrats").
+  Stripped so a paste does not become a 400 nobody can explain. Right-to-left text
+  is untouched; so are the implicit marks (U+200E, U+200F, U+061C) and the joiners
+  (U+200C, U+200D: Persian and every emoji sequence need them).
+- **Text with nothing visible in it is a 400** (`Invalid request`): only
+  zero-width and other format characters, the fillers that Unicode files as
+  letters, the Braille blank, variation selectors or combining marks on their own.
+  One visible character anywhere is enough. Whitespace alone keeps its old
+  meaning: no title (400), no artist, no label (`null`).
+- Length is counted after the strip.
+
+Rows written before this may still hold the controls, so every screen also
+isolates what it puts inside its own sentences (`client/src/lib/bidi.ts`,
+`<UserText>`). The phones do not yet: new rows are clean for them through the
+server, isolating old rows (and display names) in the iOS and Android views is a
+follow-up.
+
 ## Phones and older clients
 
 Both native clients leave a channel type they do not know out of the list (iOS

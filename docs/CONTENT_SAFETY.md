@@ -1232,6 +1232,8 @@ at jam.pqp.gg. Like [Communities](#communities-the-public-directory), turning it
 on changes the instance's category: it is public content, not private
 messaging. The whole model, the limits and the operator runbook are
 `docs/JAM_PUBLIC.md`; this section is what it adds to the scanning story.
+The gaps the owner accepted for launch (2026-11-20) are listed in
+`docs/JAM_PUBLIC.md` §"Launch gaps accepted (2026-11-20)".
 
 - **What is scanned before it is public.** The cover (the image scanner) and
   each part's camera video (frames sampled by ffmpeg, each through the same

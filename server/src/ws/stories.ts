@@ -3,6 +3,8 @@ import { isBusEnabled, publishToCluster, subscribeToCluster } from "../lib/bus.j
 import { listServerMemberIds } from "../services/permissions.js";
 import { listFriendIds } from "../services/stories.js";
 import { bumpStoryStat } from "../services/story-metrics.js";
+import type { WebSocket } from "ws";
+import { broadcastEncoded, encodeFrame } from "./fanout.js";
 import { forEachSocketOfUser } from "./sockets.js";
 
 /**
@@ -163,17 +165,15 @@ function deliverToServer(frame: StoriesUpdate, memberIds: string[]): void {
 }
 
 function deliverToUsers(userIds: string[], frame: StoriesUpdate): void {
-  const payload = JSON.stringify(frame);
-  let sent = 0;
+  const targets: WebSocket[] = [];
   for (const userId of userIds) {
     forEachSocketOfUser(userId, (socket) => {
       if (socket.readyState === 1) {
-        socket.send(payload);
-        sent += 1;
+        targets.push(socket);
       }
     });
   }
-  bumpStoryStat("framesSent", sent);
+  bumpStoryStat("framesSent", broadcastEncoded(targets, encodeFrame(frame)));
 }
 
 subscribeToCluster(STORIES_TOPIC, (data) => {

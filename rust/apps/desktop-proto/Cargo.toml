@@ -1,0 +1,47 @@
+[package]
+name = "pqp-desktop-proto"
+version = "0.0.0"
+description = "Plan step D2 of docs/plans/RUST.md: a native GPUI desktop prototype that joins a real LiveKit call on a LOCAL stack, so its memory and CPU can be measured against the Electron baseline. A prototype to measure, not a product."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# `app` is the GPUI window, the socket and the call. Without it only the wire
+# module builds (serde and serde_json), which is what CI tests.
+default = ["app"]
+app = [
+  "dep:gpui",
+  "dep:livekit",
+  "dep:tokio",
+  "dep:tokio-tungstenite",
+  "dep:futures",
+  "dep:reqwest",
+  "dep:log",
+  "dep:env_logger",
+]
+
+[lib]
+name = "pqp_desktop_proto"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pqp-desktop-proto"
+path = "src/main.rs"
+required-features = ["app"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# runtime_shaders: compile the Metal shaders at launch instead of at build time,
+# because Xcode 26 ships the offline `metal` compiler as a separate download
+# (the same reason as the #1553 spike). It costs a little startup time.
+gpui = { version = "=0.2.2", features = ["runtime_shaders"], optional = true }
+livekit = { version = "=0.10.1", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"], optional = true }
+tokio-tungstenite = { version = "0.29", optional = true }
+futures = { version = "0.3", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
+log = { version = "0.4", optional = true }
+env_logger = { version = "0.11", default-features = false, optional = true }
