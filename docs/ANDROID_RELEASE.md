@@ -625,6 +625,28 @@ automatically**. Paste it by hand into either:
   from the internal track is being promoted to production, since Play asks
   for one string per locale there regardless of what the upload carried.
 
+### 0.4.37 (`versionCode` 44)
+
+Since 0.4.36 (`versionCode` 43): a call uses a connected wired, USB or
+Bluetooth headset instead of forcing the loudspeaker, and the call bar's audio
+button shows where the sound really is (#1703).
+
+**pt-BR**:
+
+```
+Se tu conectar um fone (com fio, USB ou Bluetooth), a chamada passa a usar ele
+em vez de forçar o viva-voz. O botão de áudio da barra da chamada mostra por
+onde o som está saindo de verdade.
+```
+
+**en-US**:
+
+```
+When a wired, USB or Bluetooth headset is connected, calls now use it instead
+of forcing the loudspeaker. The audio button in the call bar shows where the
+sound is really going.
+```
+
 ### 0.4.2 (`versionCode` 9)
 
 Watch party no celular: tela do filme com a câmera de quem apresenta, dá pra apresentar direto do celular, e a lista de canais mostra só a watch party ao vivo ou o botão pra criar uma.
