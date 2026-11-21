@@ -75,7 +75,7 @@ export async function stopShare(page) {
  * Bob: a headless Chromium in the same call. `share` makes him present the
  * fake 1080p display; the Electron shell under test then watches it (S6).
  */
-export async function startParticipant({ stack, share = false, route }) {
+export async function startParticipant({ stack, share = false, route, initScripts = [] }) {
   const browser = await chromium.launch({
     headless: true,
     args: ["--use-fake-device-for-media-stream=fps=30", "--use-fake-ui-for-media-stream"],
@@ -87,6 +87,7 @@ export async function startParticipant({ stack, share = false, route }) {
   });
   await ctx.addInitScript(() => localStorage.setItem("pqp:dev-user-suffix", "bob"));
   await ctx.addInitScript(FAKE_DISPLAY_INIT);
+  for (const script of initScripts) await ctx.addInitScript(script);
   const page = await ctx.newPage();
   try {
     await page.goto(`${stack.appUrl}${route}`);

@@ -1,0 +1,16 @@
+# The Rust workspace of docs/plans/RUST.md. Outside the pnpm workspace and not
+# built by any existing CI job; `.github/workflows/rust.yml` runs the cheap half
+# (the wire module and its fixture test) when these paths change.
+[workspace]
+resolver = "3"
+members = ["apps/desktop-proto"]
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[profile.release]
+debug = false
+lto = "thin"
+codegen-units = 16

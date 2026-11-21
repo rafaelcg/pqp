@@ -1,0 +1,48 @@
+name: rust
+
+# The Rust workspace of docs/plans/RUST.md (section 5). Its own workflow with
+# its own `paths`, like pqp-remux.yml: a Rust-only change does not start the
+# Node and Postgres suite, and a change anywhere else does not start this.
+#
+# Cheap on purpose. The desktop prototype (rust/apps/desktop-proto) is a macOS
+# GPUI and LiveKit build that needs a GPU stack and a prebuilt libwebrtc, so CI
+# does not build its `app` feature. What CI does build is the part that can
+# drift silently: the wire module and its replay of the A1 fixtures
+# (`--no-default-features` compiles only serde and serde_json).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rust/**"
+      - "packages/shared/fixtures/**"
+      - "packages/shared/scripts/**"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "rust/**"
+      - "packages/shared/fixtures/**"
+      - "packages/shared/scripts/**"
+      - ".github/workflows/rust.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked -p pqp-desktop-proto --no-default-features --all-targets -- -D warnings
+      - run: cargo test --locked -p pqp-desktop-proto --no-default-features

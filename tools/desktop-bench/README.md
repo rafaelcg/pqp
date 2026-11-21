@@ -142,8 +142,56 @@ A failed run stays in `runs` as an `error` and does not count in `okRuns`.
 | `electron-retention.mjs` | whether a channel's memory comes back after leaving it (forced GC), per step |
 | `footprint.mjs` | the per-platform memory and CPU readers the scenes use |
 | `seed.mjs` | what the scenes need in the database, through the dev bypass; refuses anything but a local `pqp_bench*` database |
+| `native-bench.mjs` | the native prototype's S1 and S4 and the D2 exit check, below |
 
-## What this does not do yet
+## The native runner (plan step D2)
+
+`native-bench.mjs` measures the native GPUI prototype in
+[`rust/apps/desktop-proto`](../../rust/apps/desktop-proto) against the same
+stack, the same second participant and the same sampler: `lib/native.mjs`
+reads `phys_footprint` and CPU seconds for the binary's pid and any children
+in the row shape `snapshot()` produces, and the S1 and S4 scenes go through the
+same `measureWindow` and `holdAndMeasure` as Electron's (exported from
+`lib/scenes.mjs`, with the snapshot reader as a parameter).
+
+```bash
+cargo build --release --manifest-path rust/Cargo.toml   # macOS; see rust/apps/desktop-proto
+node tools/desktop-bench/native-bench.mjs --check-only  # the D2 exit check alone, about a minute
+node tools/desktop-bench/native-bench.mjs --smoke       # the check plus one short S1 and S4
+node tools/desktop-bench/native-bench.mjs               # the check plus 5 interleaved runs of S1 and S4, about 40 minutes
+```
+
+It writes `results/<date>-<os>-<arch>-<sha>-native.json` with the same
+`scenes.<Sn>.summary` shape, a `d2Check` block and a `comparison` against the
+newest Electron result on this platform (`--compare FILE` for another).
+
+**The D2 exit check** (`d2Check`, run once before the measured runs): the
+prototype and the web client (headless Chromium as `bob`) in one SFU call;
+the prototype measures bob's level from the decoded audio, and bob measures the
+prototype's from his own `inbound-rtp` stats (`totalAudioEnergy` over
+`totalSamplesDuration`; the bench records his page's peer connections with an
+init script, nothing in the product changes). Then mute (the server's roster
+says muted, and bob's packets stop), unmute, deafen (the server says deafened,
+the prototype's decoded level goes silent because the SFU stops forwarding,
+and bob hears nothing because the microphone mutes with it) and undeafen.
+
+What is different from the Electron scenes, and must be said beside a number:
+
+- **The microphone is synthetic.** A 440 Hz beep (250 ms of every second)
+  pushed into a LiveKit `NativeAudioSource` with WebRTC's echo canceller, noise
+  suppressor and gain control on, published as `TrackSource::Microphone`. The
+  real microphone is never opened (ADM recording is switched off). Electron's
+  S4 uses Chromium's fake capture device through the product's own capture
+  path, including the web client's noise suppression setting.
+- **Playout is real:** WebRTC's platform audio device module on CoreAudio,
+  the same engine Chromium plays a call with.
+- **No profile on disk, no service worker, no Clerk.** The prototype reads
+  everything over HTTP and `/ws` at launch; `extras.startup.contentMs` in S1
+  is launch to first message painted and is not S8 (no warm launch is run).
+- **The socket is uncompressed.** The prototype does not offer
+  `permessage-deflate`; the server serves it plain. Electron inflates every
+  frame.
+
 
 B3 (Windows and Linux numbers from a `workflow_dispatch` workflow) and B4
 (attribution of where memory and CPU go) are separate steps of the plan. The
