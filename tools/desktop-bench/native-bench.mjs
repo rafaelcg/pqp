@@ -500,10 +500,15 @@ async function main() {
       }
     }
   } finally {
-    result.finishedAt = new Date().toISOString();
-    result.thermalAfter = mac ? sh("pmset", ["-g", "therm"]) : null;
-    refresh();
-    await stack.stop();
+    try {
+      result.finishedAt = new Date().toISOString();
+      result.thermalAfter = mac ? sh("pmset", ["-g", "therm"]) : null;
+      refresh();
+    } finally {
+      // Teardown runs even when the result cannot be written.
+      await closeOpen();
+      await stack.stop();
+    }
   }
   log(`wrote ${outFile}`);
 }

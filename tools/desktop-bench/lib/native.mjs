@@ -32,7 +32,10 @@ function processTree(root) {
 /** One snapshot in the Electron snapshot's shape: {at, rows:[{pid,key,memBytes,cpuSeconds}]}. */
 export function snapshotNative(pid) {
   const at = Date.now();
-  const rows = processTree(pid).map((r) => ({
+  const tree = processTree(pid);
+  // A prototype that died must fail the run, never read as a free one.
+  if (!tree.some((r) => r.pid === pid)) throw new Error(`the prototype (pid ${pid}) is not running`);
+  const rows = tree.map((r) => ({
     pid: r.pid,
     key: r.pid === pid ? "Main" : `Child: ${r.comm.split("/").pop()}`,
     memBytes: physFootprintBytes(r.pid),

@@ -293,16 +293,36 @@ impl Rosters {
                 voice_channel_id,
                 participants,
                 ..
-            }
-            | ServerFrame::VoiceTransportChanged {
-                voice_channel_id,
-                participants,
-                ..
             } => {
                 let room = self.room(voice_channel_id);
                 room.clear();
                 for p in participants {
                     room.insert(p.peer_id.clone(), p.clone());
+                }
+                RosterEffect::None
+            }
+            ServerFrame::VoiceTransportChanged {
+                voice_channel_id,
+                transport,
+                participants,
+            } => {
+                let room = self.room(voice_channel_id);
+                room.clear();
+                for p in participants {
+                    room.insert(p.peer_id.clone(), p.clone());
+                }
+                // Our room moved: the seat follows. This client only has the
+                // SFU path, so a move to anything else ends its call.
+                if let Some(seat) = self.seat.as_mut()
+                    && &seat.voice_channel_id == voice_channel_id
+                {
+                    seat.transport = *transport;
+                    if *transport != Transport::Livekit {
+                        self.leave();
+                        return RosterEffect::Refused(format!(
+                            "the room moved to {transport:?}, this client only speaks livekit"
+                        ));
+                    }
                 }
                 RosterEffect::None
             }
@@ -411,6 +431,26 @@ mod tests {
         r.leave();
         assert!(r.me().is_none());
         assert!(r.rooms["room"].is_empty());
+    }
+
+    #[test]
+    fn a_transport_change_away_from_the_sfu_ends_the_seat() {
+        let mut r = Rosters::default();
+        r.apply(&ServerFrame::Welcome {
+            peer_id: "a".into(),
+            peers: vec![p("a", "me")],
+            voice_channel_id: "room".into(),
+            transport: Transport::Livekit,
+            resume_token: None,
+            can_speak: None,
+        });
+        let eff = r.apply(&ServerFrame::VoiceTransportChanged {
+            voice_channel_id: "room".into(),
+            transport: Transport::Mesh,
+            participants: vec![p("a", "me")],
+        });
+        assert!(matches!(eff, RosterEffect::Refused(_)));
+        assert!(r.seat.is_none());
     }
 
     #[test]

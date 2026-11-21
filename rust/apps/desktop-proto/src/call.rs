@@ -25,7 +25,7 @@ use livekit::webrtc::audio_stream::native::NativeAudioStream;
 use livekit::webrtc::peer_connection_factory::native::PeerConnectionFactoryExt;
 use livekit::webrtc::prelude::AudioFrame;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use tokio::task::JoinHandle;
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -85,33 +85,42 @@ fn dbfs(peak_rms: f32) -> f32 {
     }
 }
 
-/// Measure one remote audio track: the loudest 10 ms RMS of each second, as
-/// dBFS, into the shared state. This is the "measure the other's audio level"
-/// half of the D2 exit on this side.
-async fn run_meter(track: RemoteAudioTrack, shared: Shared, frames_in: Arc<AtomicU64>) {
+/// Feed one remote audio track into the call-wide meter: the loudest 10 ms
+/// RMS seen in the current window, across every remote track.
+async fn run_meter(
+    track: RemoteAudioTrack,
+    window_peak: Arc<AtomicU32>,
+    frames_in: Arc<AtomicU64>,
+) {
     let mut stream = NativeAudioStream::new(track.rtc_track(), SAMPLE_RATE as i32, 1);
-    let mut window_peak = 0.0f32;
-    let mut window_start = std::time::Instant::now();
     while let Some(frame) = stream.next().await {
         frames_in.fetch_add(1, Ordering::Relaxed);
         let data = &frame.data;
         if !data.is_empty() {
             let sum: f64 = data.iter().map(|s| (*s as f64) * (*s as f64)).sum();
-            let rms = (sum / data.len() as f64).sqrt() as f32;
-            window_peak = window_peak.max(rms);
+            let rms = (sum / data.len() as f64).sqrt();
+            window_peak.fetch_max(rms.round() as u32, Ordering::Relaxed);
         }
-        if window_start.elapsed().as_millis() >= 1_000 {
-            let level = dbfs(window_peak);
-            shared.update(|s| {
-                s.call.remote_level_dbfs = level;
-                s.call.remote_peak_dbfs = s.call.remote_peak_dbfs.max(level);
-                if level > -60.0 {
-                    s.call.remote_audible_seconds += 1;
-                }
-            });
-            window_peak = 0.0;
-            window_start = std::time::Instant::now();
-        }
+    }
+}
+
+/// Once a second, the loudest remote audio of that second as dBFS, into the
+/// shared state: the "measure the other's audio level" half of the D2 exit on
+/// this side. One window for the whole call, so several remote tracks cannot
+/// count the same second twice.
+async fn run_meter_window(window_peak: Arc<AtomicU32>, shared: Shared) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    tick.tick().await;
+    loop {
+        tick.tick().await;
+        let level = dbfs(window_peak.swap(0, Ordering::Relaxed) as f32);
+        shared.update(|s| {
+            s.call.remote_level_dbfs = level;
+            s.call.remote_peak_dbfs = s.call.remote_peak_dbfs.max(level);
+            if level > -60.0 {
+                s.call.remote_audible_seconds += 1;
+            }
+        });
     }
 }
 
@@ -137,12 +146,17 @@ impl Call {
             .map_err(|e| format!("livekit connect: {e}"))?;
         let room = Arc::new(room);
         let frames_in = Arc::new(AtomicU64::new(0));
-        let mut tasks = Vec::new();
+        let window_peak = Arc::new(AtomicU32::new(0));
+        let mut tasks = vec![tokio::spawn(run_meter_window(
+            window_peak.clone(),
+            shared.clone(),
+        ))];
 
         // Room events: remote audio, who is speaking, an unplanned disconnect.
         {
             let shared = shared.clone();
             let frames_in = frames_in.clone();
+            let window_peak = window_peak.clone();
             tasks.push(tokio::spawn(async move {
                 let mut meters: Vec<JoinHandle<()>> = Vec::new();
                 while let Some(ev) = events.recv().await {
@@ -158,7 +172,7 @@ impl Call {
                             bench_line("REMOTE_AUDIO", participant.identity().as_str());
                             meters.push(tokio::spawn(run_meter(
                                 track,
-                                shared.clone(),
+                                window_peak.clone(),
                                 frames_in.clone(),
                             )));
                         }
@@ -206,7 +220,7 @@ impl Call {
                 RtcAudioSource::Native(native)
             };
             let track = LocalAudioTrack::create_audio_track("microphone", source);
-            let publication = room
+            let published = room
                 .local_participant()
                 .publish_track(
                     LocalTrack::Audio(track),
@@ -215,9 +229,19 @@ impl Call {
                         ..Default::default()
                     },
                 )
-                .await
-                .map_err(|e| format!("publish microphone: {e}"))?;
-            mic = Some(publication);
+                .await;
+            match published {
+                Ok(publication) => mic = Some(publication),
+                Err(e) => {
+                    // No `Call` exists yet to clean up on drop: stop the tone,
+                    // the meters and the room here.
+                    for t in &tasks {
+                        t.abort();
+                    }
+                    let _ = room.close().await;
+                    return Err(format!("publish microphone: {e}"));
+                }
+            }
         }
 
         Ok(Call {

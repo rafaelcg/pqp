@@ -195,12 +195,42 @@ struct Session {
     call: Option<Call>,
     /// The voice channel the user asked for, kept across a socket reconnect.
     wanted_room: Option<String>,
+    /// A write failed: the socket is dead even if no read has said so yet.
+    broken: bool,
 }
 
 impl Session {
+    /// Write a frame. A failed write marks the socket broken, and the read
+    /// loop reconnects (and rejoins `wanted_room`) instead of carrying on as
+    /// if the server had the frame.
     async fn send(&mut self, frame: ClientFrame) {
-        if let Some(sink) = self.sink.as_mut() {
-            let _ = sink.send(WsMessage::text(frame.to_json())).await;
+        if let Some(sink) = self.sink.as_mut()
+            && sink.send(WsMessage::text(frame.to_json())).await.is_err()
+        {
+            self.broken = true;
+        }
+    }
+}
+
+/// Wait out a reconnect delay while still obeying commands (a `quit` must not
+/// queue behind retries). Returns false when the caller should stop.
+async fn wait_obeying(
+    delay: Duration,
+    commands: &mut UnboundedReceiver<Command>,
+    session: &mut Session,
+    shared: &Shared,
+) -> bool {
+    let sleep = tokio::time::sleep(delay);
+    tokio::pin!(sleep);
+    loop {
+        tokio::select! {
+            _ = &mut sleep => return true,
+            cmd = commands.recv() => {
+                let Some(cmd) = cmd else { return false };
+                if !handle_command(cmd, session, shared).await {
+                    return false;
+                }
+            }
         }
     }
 }
@@ -357,25 +387,41 @@ pub async fn run(
         ready: false,
         call: None,
         wanted_room: None,
+        broken: false,
     };
     let mut backoff = Duration::from_millis(500);
     let mut announced_ready = false;
     'reconnect: loop {
         shared.update(|s| s.socket = SocketState::Connecting);
-        let ws = match tokio_tungstenite::connect_async(cfg.ws_url.as_str()).await {
-            Ok((ws, _)) => ws,
-            Err(e) => {
+        let connect = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio_tungstenite::connect_async(cfg.ws_url.as_str()),
+        );
+        let ws = match connect.await {
+            Ok(Ok((ws, _))) => ws,
+            Ok(Err(e)) => {
                 shared.update(|s| s.socket = SocketState::Closed(e.to_string()));
-                tokio::time::sleep(backoff).await;
+                if !wait_obeying(backoff, &mut commands, &mut session, &shared).await {
+                    break 'reconnect;
+                }
+                backoff = (backoff * 2).min(Duration::from_secs(10));
+                continue;
+            }
+            Err(_) => {
+                shared.update(|s| s.socket = SocketState::Closed("connect timed out".into()));
+                if !wait_obeying(backoff, &mut commands, &mut session, &shared).await {
+                    break 'reconnect;
+                }
                 backoff = (backoff * 2).min(Duration::from_secs(10));
                 continue;
             }
         };
         let (sink, mut stream) = ws.split();
         session.sink = Some(sink);
+        session.broken = false;
         session.send(ClientFrame::auth(&cfg.token)).await;
 
-        loop {
+        while !session.broken {
             tokio::select! {
                 msg = stream.next() => {
                     let text = match msg {
@@ -398,6 +444,14 @@ pub async fn run(
                             bench_line("READY", "");
                         }
                         session.ready = true;
+                        // The boot reads failed earlier (the API was down):
+                        // the API answers now, so read again.
+                        if shared.read().channels.is_empty() {
+                            match boot(&http, &cfg, &shared).await {
+                                Ok(()) => shared.update(|s| s.error = None),
+                                Err(e) => bench_line("ERROR", format!("boot: {e}")),
+                            }
+                        }
                         // A join asked for before `ready`, or a call the last
                         // socket dropped: (re)join as a new seat. No resume:
                         // the prototype keeps no media across a reconnect.
@@ -453,11 +507,23 @@ pub async fn run(
         if let Some(call) = session.call.take() {
             call.close().await;
         }
+        let rejoin = session.wanted_room.clone();
         shared.update(|s| {
             s.rosters.leave();
             s.socket = SocketState::Closed("socket closed".into());
+            // No media is up any more: say so, and keep the room the user
+            // wants so the next `ready` rejoins it.
+            let keep = (s.call.muted, s.call.deafened);
+            s.call = Default::default();
+            (s.call.muted, s.call.deafened) = keep;
+            if let Some(room) = rejoin {
+                s.call.phase = CallPhase::Joining;
+                s.call.voice_channel_id = Some(room);
+            }
         });
-        tokio::time::sleep(backoff).await;
+        if !wait_obeying(backoff, &mut commands, &mut session, &shared).await {
+            break 'reconnect;
+        }
         backoff = (backoff * 2).min(Duration::from_secs(10));
     }
     if let Some(mut sink) = session.sink.take() {
