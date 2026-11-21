@@ -505,9 +505,13 @@ async function main() {
       result.thermalAfter = mac ? sh("pmset", ["-g", "therm"]) : null;
       refresh();
     } finally {
-      // Teardown runs even when the result cannot be written.
-      await closeOpen();
-      await stack.stop();
+      // Teardown runs even when the result cannot be written, and the stack
+      // stops even when closing the prototype or the participant fails.
+      try {
+        await closeOpen();
+      } finally {
+        await stack.stop();
+      }
     }
   }
   log(`wrote ${outFile}`);
