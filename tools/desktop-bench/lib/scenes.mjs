@@ -79,11 +79,15 @@ async function open(stack, { url = lightUrl(stack), marker = LIGHT_MARKER, userD
   };
 }
 
-/** Two snapshots `seconds` apart: memory at the end, CPU across the window. */
-async function measureWindow(app, seconds) {
-  const a = await snapshot(app);
+/**
+ * Two snapshots `seconds` apart: memory at the end, CPU across the window.
+ * `snap` reads one snapshot of `app`; the native runner (native-bench.mjs)
+ * passes its own reader so both stacks go through this same code.
+ */
+export async function measureWindow(app, seconds, snap = snapshot) {
+  const a = await snap(app);
   await sleep(seconds * 1000);
-  const b = await snapshot(app);
+  const b = await snap(app);
   return { memory: memoryOf(b), cpu: cpuBetween(a, b) };
 }
 
@@ -91,17 +95,17 @@ async function measureWindow(app, seconds) {
  * The hold the call scenes share: warm up, then sample memory every 30 s to
  * `callSeconds` and take CPU over the whole window after the warm-up.
  */
-async function holdAndMeasure(app, callSeconds, onSample = async () => {}) {
+export async function holdAndMeasure(app, callSeconds, onSample = async () => {}, snap = snapshot) {
   const warm = Math.min(30, Math.floor(callSeconds / 4));
   await sleep(warm * 1000);
-  const first = await snapshot(app);
+  const first = await snap(app);
   await onSample("start");
   let last = first;
   const peak = { totalMB: memoryOf(first).totalMB };
   const deadline = Date.now() + (callSeconds - warm) * 1000;
   while (Date.now() < deadline) {
     await sleep(Math.min(30_000, Math.max(0, deadline - Date.now())));
-    last = await snapshot(app);
+    last = await snap(app);
     peak.totalMB = Math.max(peak.totalMB, memoryOf(last).totalMB);
   }
   await onSample("end");
