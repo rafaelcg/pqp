@@ -10,7 +10,8 @@ import { useEngineClock } from "@/hooks/use-jam-clock";
 import { useJamPublication } from "@/hooks/use-jam-publication";
 import { useJamStudio, type NewSongDraft } from "@/hooks/use-jam-studio";
 import { useJamPublicMe } from "@/lib/jam-public-store";
-import { isolate } from "@/lib/bidi";
+import { bidiClean, isolate } from "@/lib/bidi";
+import { UserText } from "./user-text";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { doneCopy } from "@/lib/jam-done-copy";
 import { latencyIsMeasured } from "@/lib/jam-latency-trust";
@@ -222,17 +223,20 @@ export function JamStudio({
   const instrumentName = t(JAM_INSTRUMENT_LOOK[studio.instrument].nameKey as MessageKey);
   // A new song is "Música nova" until it exists, and is itself once it does.
   const created = phase === "done" && !song && draft !== null;
-  const title = song
-    ? song.title
-    : created
-      ? draft!.title
-      : (draft?.title ?? t("jam.studio.new"));
+  // What a person typed (a draft's title is whatever the sheet handed over; a stored row may predate the
+  // server's stripping) goes through the same bidi cleaning the rest of the app uses, so an unclosed
+  // right-to-left override cannot draw "Hello" as "olleH" in the header.
+  const title = bidiClean(
+    song ? song.title : created ? draft!.title : (draft?.title ?? t("jam.studio.new")),
+  );
   const subtitle = song
     ? names.length > 0
       ? t("jam.studio.over", { names: formatList(names, locale) })
-      : (song.artist ?? "")
+      : bidiClean(song.artist ?? "")
     : created
-      ? (draft?.artist ?? t("jam.original"))
+      ? draft?.artist
+        ? bidiClean(draft.artist)
+        : t("jam.original")
       : t("jam.studio.newSub");
   const backingEnd = songTimeline(backing).endMs;
   const takeEnd =
@@ -412,7 +416,9 @@ export function JamStudio({
           })()}
         </span>
         <div className="flex min-w-0 flex-1 flex-col leading-tight">
-          <h2 className="truncate font-display text-lg font-extrabold text-text">{title}</h2>
+          <h2 className="truncate font-display text-lg font-extrabold text-text">
+            <UserText>{title}</UserText>
+          </h2>
           {subtitle && <p className="truncate text-xs text-text-secondary">{subtitle}</p>}
         </div>
         {phase !== "unsupported" && phase !== "done" && <LatencyChip studio={studio} />}

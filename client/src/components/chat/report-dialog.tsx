@@ -1,14 +1,14 @@
 import {
   REPORT_DETAILS_MAX_LENGTH,
   REPORT_REASONS,
-  REPORT_REASON_LABELS,
   type CreateReportRequest,
   type ReportReason,
 } from "@pqp/shared";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import { useTranslation } from "@/lib/i18n";
+import { isolate } from "@/lib/bidi";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { ApiError, createReport } from "@/lib/api";
 import { reportPublicJam } from "@/lib/jam-public-api";
 
@@ -266,7 +266,7 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
     >
       <div className="space-y-4 px-5 py-4">
         <p className="text-sm text-paper">
-          {t("report.targeting", { name: subject })}
+          {t("report.targeting", { name: isolate(subject) })}
         </p>
 
         <fieldset className="space-y-1.5">
@@ -287,7 +287,7 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
                 onChange={() => setReason(value)}
                 className="h-4 w-4 accent-[var(--color-signal)]"
               />
-              {REPORT_REASON_LABELS[value]}
+              {t(`report.reason.${value}` as MessageKey)}
             </label>
           ))}
         </fieldset>

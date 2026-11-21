@@ -286,6 +286,81 @@ describe("the middleware on a song", () => {
   });
 });
 
+describe("a song stored before the server stripped bidi controls", () => {
+  const RLO = "‮";
+  const BIDI = /[‪-‮⁦-⁩]/;
+  // What a row from before PR 1710 holds: an override in the title, the artist and a player's name.
+  const LEGACY = {
+    ...SONG,
+    song: {
+      ...SONG.song,
+      title: `Samba ${RLO}OLEH`,
+      artist: `${RLO}Gabi`,
+      parts: [{ instrument: "guitar", person: { name: `${RLO}Bia` } }],
+      startedBy: { name: `${RLO}Leco`, handle: null },
+    },
+  };
+
+  it("never writes a bidi control into a tag, in either language", async () => {
+    for (const lang of ["pt-BR", "en"]) {
+      stubApi({ [`/api/public/jams/${ID}`]: () => Response.json(LEGACY) });
+      const onRequest = await freshMiddleware();
+      const html = await (await onRequest(ctx(`https://jam.pqp.gg/m/${ID}`, { "accept-language": lang }))).text();
+      const head = html.slice(0, html.indexOf("</head>"));
+      expect(head).not.toMatch(BIDI);
+      expect(Buffer.from(head).includes(Buffer.from([0xe2, 0x80, 0xae]))).toBe(false);
+      expect(head).toContain("<title>Samba OLEH · pqp jam</title>");
+      expect(head).toContain('<meta property="og:title" content="Samba OLEH · pqp jam" />');
+      expect(head).toContain('<meta name="twitter:title" content="Samba OLEH · pqp jam" />');
+      expect(head).toContain('"name":"Samba OLEH"');
+      expect(head).toContain('"name":"Gabi"');
+      expect(head).toContain('<meta property="og:description" content="' + (lang === "en" ? "Played by Bia." : "Bia tocou."));
+    }
+  });
+
+  it("strips the starter's name and the cover alt too", () => {
+    const out = renderJamHead(
+      {
+        target: { kind: "song", mount: "host", songId: ID },
+        song: { ...LEGACY.song, parts: [] },
+        enabled: true,
+      },
+      { locale: "en", siteOrigin: "https://jam.pqp.gg", apiOrigin: "https://api.test" },
+    );
+    expect(out.head).not.toMatch(BIDI);
+    expect(out.head).toContain("Started by Leco.");
+    expect(out.head).toContain('<meta property="og:image:alt" content="Samba OLEH" />');
+  });
+
+  it("falls back to the site's name when the title was nothing but controls", () => {
+    const text = jamSongCardText({ ...LEGACY.song, title: `${RLO}${RLO}` }, "en");
+    expect(text.title).toBe("pqp jam");
+  });
+
+  it("leaves real right-to-left text alone", () => {
+    const text = jamSongCardText({ ...SONG.song, title: "مرحبا", artist: "שלום" }, "en");
+    expect(text.title).toBe("مرحبا · pqp jam");
+  });
+});
+
+describe("the verb agrees with who played", () => {
+  const one = { ...SONG.song, needs: [], parts: [{ instrument: "guitar", person: { name: "Bia" } }] };
+  it("says tocou for one person and tocaram for more, and counts a person once", () => {
+    expect(jamSongCardText(one, "pt-BR").description).toBe("Bia tocou.");
+    expect(jamSongCardText(one, "en").description).toBe("Played by Bia.");
+    const twice = {
+      ...one,
+      parts: [
+        { instrument: "guitar", person: { name: "Bia" } },
+        { instrument: "vocals", person: { name: "Bia" } },
+      ],
+    };
+    expect(jamSongCardText(twice, "pt-BR").description).toBe("Bia tocou.");
+    const two = { ...one, parts: [...one.parts, { instrument: "bass", person: { name: "Leco" } }] };
+    expect(jamSongCardText(two, "pt-BR").description).toBe("Bia e Leco tocaram.");
+  });
+});
+
 describe("the middleware on the home", () => {
   it("is indexable while the flag is on", async () => {
     stubApi({ "/api/public/jams/config": () => Response.json({ enabled: true }) });

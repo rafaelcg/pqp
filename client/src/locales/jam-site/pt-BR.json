@@ -100,6 +100,7 @@
   "like.labelCount": "Curtir, {likes}",
   "share.label": "Compartilhar",
   "share.copied": "Link copiado",
+  "share.manual": "Não deu pra copiar. O link: {url}",
   "share.text": "{title}, uma jam de {who} no pqp",
   "lanes.title": "Quem tocou o quê",
   "lanes.missing": "ninguém gravou ainda",

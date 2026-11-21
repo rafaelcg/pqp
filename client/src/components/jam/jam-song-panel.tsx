@@ -34,7 +34,7 @@ import {
 import type { JamDetail } from "@/lib/jam-state";
 import { competingInstruments, formatClock, orderTracks, songNeed, songTimeline } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
-import { isolate } from "@/lib/bidi";
+import { bidiClean, isolate } from "@/lib/bidi";
 import { UserText } from "./user-text";
 import { ContributorStack, Equalizer } from "./jam-art";
 import { useBarCount } from "./jam-bars";
@@ -282,7 +282,7 @@ export function JamSongPanel({
       durationMs={durationMs}
       onToggle={playback.toggle}
       onSeek={playback.seek}
-      title={song.title}
+      title={bidiClean(song.title)}
       scrubber={false}
       className="sm:flex-col sm:gap-1"
     />
@@ -394,7 +394,7 @@ export function JamSongPanel({
   ) : null;
 
   return (
-    <section aria-label={song.title} data-jam-song={song.id} className="flex h-full min-h-0 flex-col bg-surface-1">
+    <section aria-label={bidiClean(song.title)} data-jam-song={song.id} className="flex h-full min-h-0 flex-col bg-surface-1">
       <header
         data-jam-header={stageOn ? "compact" : "full"}
         className={cn(
@@ -421,7 +421,7 @@ export function JamSongPanel({
               "[@media(max-height:32rem)]:text-xl",
             )}
           >
-            {song.title}
+            <UserText>{song.title}</UserText>
           </h2>
           {/* with a stage the band is the lanes below, so the header does not repeat it: the key line stays whole */}
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-semibold text-text-secondary">

@@ -14,6 +14,7 @@ import type { CropRegion } from "@/lib/image-crop";
 import { jamErrorKind, removeJamCover, setJamCover, updateJamSong } from "@/lib/jam-api";
 import {
   checkCoverPicture,
+  cleanSongArtist,
   cleanSongTitle,
   isCoverPicture,
   JAM_COVER_MIN_SIDE,
@@ -23,6 +24,7 @@ import {
   uploadJamCover,
   type JamCoverChoice,
 } from "@/lib/jam-cover";
+import { jamTitleCheck } from "@/lib/jam-text";
 import { cn } from "@/lib/utils";
 import { BandArt } from "./jam-artwork";
 import { JamCoverPhoto, useJamCover } from "./jam-cover";
@@ -149,6 +151,12 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
   // Empty is said as soon as it is empty (an empty title also disables Save, and a
   // disabled button cannot be pressed to find out why).
   const showTitleError = titleMissing && (touched || title !== song.title);
+  // Text that is there but draws nothing (zero-width spaces) is told apart from an empty field, by the
+  // server's own rule (`jam-text.ts`): Save would otherwise be sent and refused with a generic line.
+  const titleCheck = jamTitleCheck(title);
+  const titleMessage = !titleCheck.ok && titleCheck.problem === "invisible" ? t("jam.start.titleInvisible") : t("jam.start.needTitle");
+  const artistInvalid = cleanSongArtist(artist) === undefined;
+  const showArtistError = artistInvalid && (touched || artist !== (song.artist ?? ""));
   const uploading = upload.status === "uploading";
   // Something would be lost by closing: a change that Save would send, or a photo going up.
   const dirty = !plan.empty || uploading;
@@ -241,7 +249,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
 
   async function save() {
     setTouched(true);
-    if (titleMissing || uploading || plan.empty || saving) return;
+    if (titleMissing || artistInvalid || uploading || plan.empty || saving) return;
     setSaving(true);
     setError(null);
     try {
@@ -287,7 +295,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
               type="submit"
               form={formId}
               data-jam-edit-save=""
-              disabled={plan.empty || uploading || saving}
+              disabled={plan.empty || uploading || saving || showTitleError || showArtistError}
               // Nothing to save reads as nothing to press: a flat surface, not a dimmed brand colour.
               className="min-w-24 gap-2 disabled:bg-surface-2 disabled:text-text-tertiary disabled:opacity-60"
             >
@@ -389,7 +397,7 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
                 />
                 {showTitleError && (
                   <span id={`${formId}-title-error`} role="alert" className="text-xs font-normal text-danger">
-                    {t("jam.start.needTitle")}
+                    {titleMessage}
                   </span>
                 )}
                 {title.length >= JAM_TITLE_MAX - 20 && (
@@ -411,9 +419,16 @@ export function JamEditSheet({ open, song, onClose, onSong, onDenied }: JamEditS
                   maxLength={JAM_ARTIST_MAX}
                   onChange={(event) => setArtistEdit(event.target.value)}
                   placeholder={t("jam.edit.artistPlaceholder")}
-                  className="bg-surface-2"
+                  aria-invalid={showArtistError ? true : undefined}
+                  aria-describedby={showArtistError ? `${formId}-artist-error` : undefined}
+                  className={cn("bg-surface-2", showArtistError && "border-danger")}
                   data-jam-edit-artist=""
                 />
+                {showArtistError && (
+                  <span id={`${formId}-artist-error`} role="alert" className="text-xs font-normal text-danger">
+                    {t("jam.start.artistInvisible")}
+                  </span>
+                )}
               </label>
               {error && (
                 <p role="alert" data-jam-edit-error="" className="rounded-[var(--radius-control)] bg-danger-soft px-3 py-2 text-sm text-on-danger-soft">

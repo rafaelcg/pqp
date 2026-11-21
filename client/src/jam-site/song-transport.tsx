@@ -188,7 +188,7 @@ export function SongTransport({
       </p>
       {shared && (
         <p
-          className="pointer-events-none absolute right-0 top-full z-10 mt-2 max-w-full truncate rounded-full bg-surface-3 px-3 py-1.5 text-sm font-semibold text-text shadow-[var(--shadow-2)]"
+          className="absolute right-0 top-full z-10 mt-2 max-w-full select-text truncate rounded-full bg-surface-3 px-3 py-1.5 text-sm font-semibold text-text shadow-[var(--shadow-2)]"
           aria-hidden="true"
         >
           {shared}
