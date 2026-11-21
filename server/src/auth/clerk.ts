@@ -131,6 +131,45 @@ function getAuthorizedParties(): string[] | undefined {
 }
 
 /**
+ * The `azp` rule, enforced here rather than by `@clerk/backend`.
+ *
+ * `azp` is the origin a session token was minted for, and Clerk only sets it
+ * when the Frontend API request that minted it carried an `Origin`. Browser
+ * tokens always do: the web client, and Electron, which loads the same site
+ * through the same clerk-js. Tokens from the native SDKs never do: clerk-ios
+ * and clerk-android call the Frontend API with `_is_native=true`, a device
+ * token in `Authorization` and no `Origin`, and Clerk issues the token with
+ * no `azp` claim at all (checked against the staging instance's real tokens,
+ * 2026-11-18, while bumping to @clerk/backend 3).
+ *
+ * @clerk/backend 3.11.1 started rejecting a missing `azp` whenever
+ * `authorizedParties` is passed. Passing our list would therefore 401 every
+ * iPhone and Android phone on HTTP and refuse them at WebSocket auth. So the
+ * SDK is not handed the list and this applies it, with the rule 1.x had:
+ *
+ * - no list configured: nothing to enforce;
+ * - a token that names an origin must name one of ours (unchanged, this is
+ *   what stops a token minted for somebody else's site);
+ * - a token with no `azp` claim at all is a native session token and is
+ *   accepted. An empty or non-string `azp` is not absent, and is refused.
+ *
+ * Signature, `cat` (session token category), `exp` / `nbf` / `iat` and `sub`
+ * are still checked by the SDK before this runs.
+ */
+export function authorizedPartyAllowed(
+  azp: unknown,
+  authorizedParties: string[] | undefined,
+): boolean {
+  if (!authorizedParties) {
+    return true;
+  }
+  if (azp === undefined) {
+    return true;
+  }
+  return typeof azp === "string" && authorizedParties.includes(azp);
+}
+
+/**
  * Clerk profile lookups are a network round trip, and one would otherwise run
  * on *every* authenticated request. The JWT already proves identity, so the
  * profile is only needed to fill in display name / avatar; cache it briefly.
@@ -898,9 +937,18 @@ export async function verifyAuthHeader(
   try {
     const payload = await verifyToken(token, {
       secretKey: process.env.CLERK_SECRET_KEY,
-      // Reject tokens minted for a different origin/app when configured.
-      authorizedParties: getAuthorizedParties(),
+      // Deliberately NOT `authorizedParties`: the SDK would refuse every
+      // phone. `authorizedPartyAllowed` below enforces the list instead.
     });
+
+    if (!authorizedPartyAllowed(payload.azp, getAuthorizedParties())) {
+      console.error(
+        "[auth] token rejected: azp",
+        JSON.stringify(payload.azp),
+        "is not in CLERK_AUTHORIZED_PARTIES",
+      );
+      return null;
+    }
 
     const clerkId = payload.sub;
     if (!clerkId) {
