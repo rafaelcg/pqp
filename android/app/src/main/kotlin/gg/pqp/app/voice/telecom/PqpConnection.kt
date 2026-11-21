@@ -51,6 +51,27 @@ class PqpConnection(private val roomId: String) : Connection() {
         setCallerDisplayName(displayName, TelecomManager.PRESENTATION_ALLOWED)
     }
 
+    /**
+     * Ask Telecom to move this call's sound ([android.telecom.CallAudioState]
+     * `ROUTE_*`). False once the connection has ended, so the caller routes
+     * with `AudioManager` instead.
+     *
+     * `setAudioRoute` is deprecated on API 34 in favour of
+     * `requestCallEndpointChange`, which needs a `CallEndpoint` that only
+     * exists from 34 on. `setAudioRoute` still works there and is the one
+     * call that covers every API level this app runs on.
+     */
+    /** Not ended, so [requestRoute] would reach Telecom. */
+    val isLive: Boolean get() = !ended
+
+    fun requestRoute(route: Int): Boolean {
+        if (ended) return false
+        return runCatching {
+            @Suppress("DEPRECATION")
+            setAudioRoute(route)
+        }.isSuccess
+    }
+
     /** The one path that actually tears this connection down. See [ended]. */
     fun end(cause: Int) {
         if (ended) return
@@ -101,6 +122,7 @@ class PqpConnection(private val roomId: String) : Connection() {
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onCallAudioStateChanged(state: CallAudioState) {
         TelecomBridge.callbacks?.onAudioStateChanged(roomId, state.isMuted)
+        TelecomBridge.callbacks?.onAudioRouteChanged(roomId, state.route)
     }
 
     override fun onShowIncomingCallUi() {

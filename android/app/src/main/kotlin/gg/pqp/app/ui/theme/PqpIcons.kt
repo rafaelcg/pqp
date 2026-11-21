@@ -208,6 +208,9 @@ private object Lucide {
         "m2 2 20 20",
         "M8.668 3.01A6 6 0 0 1 18 8c0 2.687.77 4.653 1.707 6.05",
     )
+    val bluetooth by lucide(
+        "m7 7 10 10-5 5V2l5 5L7 17",
+    )
     val check by lucide(
         "M20 6 9 17l-5-5",
     )
@@ -244,6 +247,10 @@ private object Lucide {
         "m2 2 20 20",
         "M20.414 20.414A2 2 0 0 1 19 21h-1a2 2 0 0 1-2-2v-3",
         "M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 2.636-6.364",
+    )
+    val headset by lucide(
+        "M3 11h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Zm0 0a9 9 0 1 1 18 0m0 0v5a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3Z",
+        "M21 16v2a4 4 0 0 1-4 4h-5",
     )
     val headphones by lucide(
         "M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3",
@@ -746,6 +753,14 @@ object PqpIcons {
     val Deafened get() = Lucide.headphoneOff
     val Speakerphone get() = Lucide.volume2
     val Earpiece get() = Lucide.phone
+
+    /**
+     * The call's route button on a headset. `headset`, not `headphones`:
+     * headphones are already the deafen button one place along, and two
+     * identical glyphs side by side would read as one control twice.
+     */
+    val WiredHeadset get() = Lucide.headset
+    val BluetoothHeadset get() = Lucide.bluetooth
     val HangUp get() = Lucide.phoneOff
 
     /** Place or answer a conversation call. */

@@ -48,13 +48,17 @@ below for exactly what to try.
    pqp has no server-side hold, so `onHold`/`onUnhold` are treated as mute/
    unmute — the true, safe meaning "pause this call" can have with nothing
    behind it to actually pause.
-5. **Audio routing** is unchanged from what `ANDROID.md`'s Voice section
-   already documents (`MODE_IN_COMMUNICATION`, the explicit push to the
-   speaker). `PqpConnection.onCallAudioStateChanged` is the *read* side —
-   Telecom telling this app what a Bluetooth or wired button did — and
-   nothing here changes how the audio route itself is chosen; Telecom
-   arbitrates that across concurrent self-managed calls, which for pqp is
-   always at most one.
+5. **Audio routing** is decided by the app (`AudioRoutePolicy`, see
+   `ANDROID.md`'s "Audio goes to a headset if one is connected, else the
+   speaker") and, while this connection is live, *asked of Telecom* through
+   `PqpConnection.requestRoute` (`Connection.setAudioRoute`) rather than set
+   underneath it with `AudioManager`, so Telecom's own route state machine and
+   the app never pull the route in opposite directions. Without a connection
+   (Telecom refused, or the connection is not built yet) the app routes with
+   `AudioManager` itself and hands over when `TelecomBridge.register` reports
+   the connection. `PqpConnection.onCallAudioStateChanged` is the *read* side:
+   the mute flag, and the route, which only labels the call bar's button and is
+   never answered with another request.
 6. **A `CallStyle` foreground notification** replaces the plain one
    `VoiceService` used to show, on API 31+ (a `NotificationCompat.Builder`
    with the same actions, unchanged, below that). Hang up and mute are both

@@ -3,11 +3,9 @@ package gg.pqp.app.voice
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
-import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.ConnectivityManager
-import android.os.Build
 import android.util.Log
 import gg.pqp.app.R
 import gg.pqp.app.core.IceServer
@@ -65,8 +63,17 @@ data class VoiceState(
      * Always true in a call that has no roles. See `SpeakRule.kt`.
      */
     val canSpeak: Boolean = true,
-    /** Speakerphone rather than the earpiece. See [VoiceController.applyAudioRoute]. */
-    val speakerphone: Boolean = true,
+    /**
+     * What the call bar's route button last asked for. Auto (a connected
+     * headset, else the loudspeaker) unless the person chose otherwise. See
+     * [AudioRoutePolicy].
+     */
+    val audioPreference: RoutePreference = RoutePreference.Auto,
+    /**
+     * Where the call's sound really is right now, for the route button's icon
+     * and label. Null outside a call. See [CallAudioRouter].
+     */
+    val audioRoute: AudioOutput? = null,
     /** This device is capturing and publishing its screen. */
     val sharingScreen: Boolean = false,
     /**
@@ -500,6 +507,23 @@ class VoiceController(
     private var focusRequest: AudioFocusRequest? = null
     private var previousAudioMode: Int = AudioManager.MODE_NORMAL
 
+    /** Where the call's sound goes. Started on `welcome`, stopped on teardown. */
+    private val audioRouter = CallAudioRouter(
+        context = context,
+        audioManager = audioManager,
+        telecomLive = {
+            val roomId = _state.value.channelId
+            roomId != null && telecomAudio?.hasLiveConnection(roomId) == true
+        },
+        telecomRequest = { output ->
+            val roomId = _state.value.channelId
+            roomId != null && telecomAudio?.requestRoute(roomId, output) == true
+        },
+        onChanged = { preference, route ->
+            _state.update { it.copy(audioPreference = preference, audioRoute = route) }
+        },
+    )
+
     /** Kept so a socket reconnect can rejoin the same room. */
     @Volatile private var wantedChannel: Pair<String, String?>? = null
 
@@ -597,7 +621,7 @@ class VoiceController(
             stage = VoiceStage.Joining,
             muted = _state.value.muted,
             deafened = _state.value.deafened,
-            speakerphone = _state.value.speakerphone,
+            audioPreference = _state.value.audioPreference,
         )
 
         // The notification comes up before the microphone is touched. Android
@@ -686,7 +710,7 @@ class VoiceController(
         teardown()
         _state.value = VoiceState(
             muted = _state.value.muted,
-            speakerphone = _state.value.speakerphone,
+            audioPreference = _state.value.audioPreference,
         )
     }
 
@@ -736,7 +760,7 @@ class VoiceController(
             stage = VoiceStage.Refused,
             refusal = Refusal.JoinTimedOut,
             muted = _state.value.muted,
-            speakerphone = _state.value.speakerphone,
+            audioPreference = _state.value.audioPreference,
         )
     }
 
@@ -770,7 +794,7 @@ class VoiceController(
             stage = VoiceStage.Refused,
             refusal = refusalFor(failure.kind),
             muted = _state.value.muted,
-            speakerphone = _state.value.speakerphone,
+            audioPreference = _state.value.audioPreference,
         )
     }
 
@@ -815,10 +839,26 @@ class VoiceController(
         pushVoiceState()
     }
 
-    fun toggleSpeakerphone() {
-        val speakerphone = !_state.value.speakerphone
-        _state.value = _state.value.copy(speakerphone = speakerphone)
-        applyAudioRoute(speakerphone)
+    /** The call bar's route button. See [AudioRoutePolicy.toggled] for what one tap means. */
+    fun toggleAudioRoute() = audioRouter.toggle()
+
+    /**
+     * Set by [gg.pqp.app.voice.telecom.TelecomController], the same way it
+     * sets [CallController.telecomHooks]: when this call has a live Telecom
+     * connection, the route is asked of Telecom rather than set underneath it.
+     */
+    var telecomAudio: TelecomAudioRoute? = null
+
+    /** Telecom finished building the connection for [roomId]; hand it the route. */
+    fun onTelecomConnectionReady(roomId: String) {
+        if (roomId != _state.value.channelId) return
+        audioRouter.onTelecomConnectionReady()
+    }
+
+    /** Telecom's own report of where [roomId]'s sound is (`CallAudioState.route`). */
+    fun onTelecomRouteReported(roomId: String, route: Int) {
+        if (roomId != _state.value.channelId) return
+        audioRouter.onTelecomRouteReported(AudioRoutePolicy.fromTelecomRoute(route))
     }
 
     fun dismissRefusal() {
@@ -1494,7 +1534,7 @@ class VoiceController(
         _state.value = VoiceState(
             stage = VoiceStage.Refused,
             refusal = refusal,
-            speakerphone = _state.value.speakerphone,
+            audioPreference = _state.value.audioPreference,
         )
     }
 
@@ -1589,51 +1629,13 @@ class VoiceController(
             .build()
         focusRequest = request
         audioManager.requestAudioFocus(request)
-        applyAudioRoute(_state.value.speakerphone)
-    }
-
-    /**
-     * Send the call to the speaker, not the earpiece.
-     *
-     * THIS IS NOT A PREFERENCE, IT IS THE DIFFERENCE BETWEEN AUDIBLE AND NOT.
-     * `MODE_IN_COMMUNICATION` on its own routes to the *earpiece*, which is the
-     * right default for a phone call held against a face and completely wrong
-     * for a voice channel somebody joined while doing something else: the audio
-     * is technically playing, at a volume nobody more than three centimetres
-     * away can hear, and it presents as "voice does not work".
-     *
-     * A wired headset or a Bluetooth device wins over both. Asking for the
-     * built-in speaker only when it is the device we mean leaves the platform's
-     * own preference order intact, which is what routes a headset correctly
-     * without this code knowing headsets exist.
-     */
-    private fun applyAudioRoute(speakerphone: Boolean) {
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (!speakerphone) {
-                    audioManager.clearCommunicationDevice()
-                    return@runCatching
-                }
-                val speaker = audioManager.availableCommunicationDevices.firstOrNull {
-                    it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
-                }
-                if (speaker != null) audioManager.setCommunicationDevice(speaker)
-            } else {
-                @Suppress("DEPRECATION")
-                audioManager.isSpeakerphoneOn = speakerphone
-            }
-        }
+        audioRouter.start(_state.value.audioPreference)
     }
 
     private fun releaseAudioFocus() {
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                audioManager.clearCommunicationDevice()
-            } else {
-                @Suppress("DEPRECATION")
-                audioManager.isSpeakerphoneOn = false
-            }
-        }
+        // Before the mode goes back: listeners off and any device this call
+        // asked for cleared, so no route outlives the call.
+        audioRouter.stop()
         focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         focusRequest = null
         audioManager.mode = previousAudioMode

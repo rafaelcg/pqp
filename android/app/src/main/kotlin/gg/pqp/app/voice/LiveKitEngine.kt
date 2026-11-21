@@ -543,9 +543,9 @@ class LiveKitEngine(
                 audioOptions = AudioOptions(
                     // THE AUDIO ROUTE IS NOT LIVEKIT'S TO DECIDE HERE.
                     //
-                    // `VoiceController.acquireAudioFocus` / `applyAudioRoute`
+                    // `VoiceController.acquireAudioFocus` and `CallAudioRouter`
                     // already set MODE_IN_COMMUNICATION, take audio focus and
-                    // pin the communication device, and that code is shared
+                    // choose the device, and that code is shared
                     // with the mesh path so both transports sound the same.
                     // LiveKit's default `AudioSwitchHandler` does all three
                     // itself and would fight it: two components taking focus

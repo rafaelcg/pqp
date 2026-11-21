@@ -723,23 +723,67 @@ device has to show: the phone stays in the call, the participant count does not
 flicker, audio comes back, and the notice reads *Essa call virou uma sala
 grande…*.
 
-### Audio goes to the speaker, and that is not a preference
+### Audio goes to a headset if one is connected, else the speaker
 
 `MODE_IN_COMMUNICATION` on its own routes to the **earpiece**. That is right for
 a phone call held against a face and completely wrong for a voice channel
 somebody joined while doing something else: the audio is technically playing, at
 a volume nobody more than three centimetres away can hear, and it presents as
-"voice does not work". This cost the previous session nothing only because that
-session never got as far as audible audio.
+"voice does not work". So with no headset the call goes to the loudspeaker.
 
-The call therefore asks for the built-in speaker explicitly
-(`setCommunicationDevice` on API 31+, `isSpeakerphoneOn` below it), and the call
-bar carries a toggle. Asking for the speaker *only when it is the device we
-mean* leaves the platform's own preference order intact, which is what routes a
-wired headset or a Bluetooth device correctly without this code knowing headsets
-exist.
+**A headset was never handled, and the old comment said it was.** The call used
+to ask for the loudspeaker unconditionally (`setCommunicationDevice(TYPE_BUILTIN_SPEAKER)`
+on API 31+, `isSpeakerphoneOn = true` below) on the theory that "a headset
+still wins". It does not: an explicit communication device or speakerphone
+request beats the platform's own preference, so a person with a wired, USB or
+Bluetooth headset heard the call on the loudspeaker and was heard through the
+phone's microphone. A user reported exactly that.
 
-Confirmed with `adb shell dumpsys audio` during a live call:
+Now the route is a preference, decided by pure functions in
+`voice/AudioRoutePolicy.kt` (pinned by `AudioRoutePolicyTest`) and applied by
+`voice/CallAudioRouter.kt`:
+
+- **Auto** (the default): a connected headset, in the order Bluetooth (SCO, LE
+  audio, hearing aid), USB headset, wired headset or headphones; the
+  loudspeaker when none is connected, which is what every call did before.
+- **Speaker**: the loudspeaker even with a headset connected.
+- **Earpiece**: a headset if one is connected, else the earpiece.
+
+The call bar's button reads where the sound **is** and moves it: headset to
+loudspeaker, loudspeaker back to the headset, and with no headset loudspeaker
+to earpiece and back (the old toggle, unchanged). Its icon and label are the
+real route. A headset connected mid-call takes the call in Auto and also ends
+an earlier forced loudspeaker; unplugging falls back to the loudspeaker. A
+forced loudspeaker does not carry into the next call; the earpiece choice does,
+as it always did.
+
+How it is applied, per API level and per actor:
+
+- **A live Telecom connection** (the usual case, see
+  [`ANDROID_TELECOM.md`](./ANDROID_TELECOM.md)): the route is asked of Telecom
+  with `Connection.setAudioRoute`, never set underneath it, because Telecom
+  runs its own route state machine for a self-managed call. Its
+  `onCallAudioStateChanged` route is read back for the button below API 31.
+- **No connection** (Telecom refused the account, or has not built the
+  connection yet): API 31+ picks from `availableCommunicationDevices` and calls
+  `setCommunicationDevice`, and `clearCommunicationDevice` on hangup. Below 31
+  it is `isSpeakerphoneOn` plus `startBluetoothSco`/`stopBluetoothSco`, with
+  `ACTION_SCO_AUDIO_STATE_UPDATED` deciding whether SCO actually came up; a
+  wired or USB headset needs neither switch. When the connection arrives,
+  the route is handed to Telecom and the direct request is released.
+- An `AudioDeviceCallback` re-decides on every device change, and on API 31+ an
+  `OnCommunicationDeviceChangedListener` keeps the button truthful. A route
+  report is shown, never answered with another request, so nothing here pulls
+  against Telecom or the system output switcher. Everything is unregistered on
+  hangup.
+
+`BLUETOOTH_CONNECT` is still not requested at runtime: none of these calls need
+it (`AudioManager` and Telecom do the Bluetooth work themselves).
+
+**Not verified on hardware** beyond the unit tests: plugging a headset during a
+call, Bluetooth SCO below API 31, and whether every OEM's Telecom honours
+`setAudioRoute` for a self-managed call. With no headset,
+`adb shell dumpsys audio` during a live call should still show:
 
 ```
 Active communication device: AudioDeviceAttributes: role:output type:speaker
