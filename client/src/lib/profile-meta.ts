@@ -179,7 +179,7 @@ export function profileCardText(
   const description = parts.length
     ? `${parts.join(" · ")}. ${tail}`
     : pt
-      ? `Garanta o seu @ no pqp.gg. ${tail}`
+      ? `Garante o teu @ no pqp.gg. ${tail}`
       : `Claim your @ on pqp.gg. ${tail}`;
 
   return { title, description };

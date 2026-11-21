@@ -127,7 +127,7 @@ describe("profileCardText", () => {
       { ...RAFA, badges: [], depoimentoCount: 0 },
       "pt-BR",
     );
-    expect(bare.description).toContain("Garanta o seu @");
+    expect(bare.description).toContain("Garante o teu @");
     expect(bare.description.length).toBeGreaterThan(10);
   });
 

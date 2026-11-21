@@ -863,7 +863,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fale com a gente ou denuncie abuso"
+            "value" : "Fala com a gente ou denuncia abuso"
           }
         }
       }
@@ -3173,7 +3173,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Para denunciar uma mensagem, um post ou comentário do Baú, uma pessoa ou uma comunidade, abra o menu e escolha Denunciar."
+            "value" : "Para denunciar uma mensagem, um post ou comentário do Baú, uma pessoa ou uma comunidade, abre o menu e escolhe Denunciar."
           }
         }
       }
@@ -3373,7 +3373,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "(você)"
+            "value" : "(tu)"
           }
         }
       }
@@ -3703,7 +3703,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A staff mutou você. Você só volta a falar quando desmutarem."
+            "value" : "A staff mutou tu. Tu só volta a falar quando desmutarem."
           }
         }
       }
@@ -3943,7 +3943,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Adiciona alguém pelo @ dele. O seu é %@, sai distribuindo."
+            "value" : "Adiciona alguém pelo @ dele. O teu é %@, sai distribuindo."
           }
         }
       }
@@ -4043,7 +4043,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Qualquer comunidade que seja só sua, sem mais ninguém dentro."
+            "value" : "Qualquer comunidade que seja só tua, sem mais ninguém dentro."
           }
         }
       }
@@ -4073,7 +4073,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Quem abrir seu perfil vai ler, com o nome de %@ embaixo. Dá pra tirar depois."
+            "value" : "Quem abrir teu perfil vai ler, com o nome de %@ embaixo. Dá pra tirar depois."
           }
         }
       }
@@ -4273,7 +4273,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Os bans que você deu. Tirar eles deixaria todo mundo que você baniu voltar pra comunidades com as quais você não tem mais nada a ver."
+            "value" : "Os bans que tu deu. Tirar eles deixaria todo mundo que tu baniu voltar pra comunidades com as quais tu não tem mais nada a ver."
           }
         }
       }
@@ -4503,7 +4503,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Por padrão, o aviso não diz quem te mandou mensagem nem o que foi dito. Você pode mudar isso nos Ajustes."
+            "value" : "Por padrão, o aviso não diz quem te mandou mensagem nem o que foi dito. Tu pode mudar isso nos Ajustes."
           }
         }
       }
@@ -4613,7 +4613,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O acesso à câmera está desligado. Ative nos Ajustes."
+            "value" : "O acesso à câmera está desligado. Ativa nos Ajustes."
           }
         }
       }
@@ -4693,7 +4693,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cancelar seu pedido para %@?"
+            "value" : "Cancelar teu pedido para %@?"
           }
         }
       }
@@ -4763,7 +4763,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escolha"
+            "value" : "Escolhe"
           }
         }
       }
@@ -4793,7 +4793,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escolha alguém"
+            "value" : "Escolhe alguém"
           }
         }
       }
@@ -4803,7 +4803,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Garanta seu link público. Qualquer um abre, mesmo sem conta."
+            "value" : "Garante teu link público. Qualquer um abre, mesmo sem conta."
           }
         }
       }
@@ -4813,7 +4813,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Garantir seu link"
+            "value" : "Garantir teu link"
           }
         }
       }
@@ -4993,7 +4993,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "As comunidades que são suas estão no caminho."
+            "value" : "As comunidades que são tuas estão no caminho."
           }
         }
       }
@@ -5033,7 +5033,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Confirme sua idade"
+            "value" : "Confirma tua idade"
           }
         }
       }
@@ -5133,7 +5133,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra montar sua exportação"
+            "value" : "Não deu pra montar tua exportação"
           }
         }
       }
@@ -5143,7 +5143,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra conectar ao servidor da transmissão. Verifique a sua conexão e tente de novo."
+            "value" : "Não deu pra conectar ao servidor da transmissão. Verifica a tua conexão e tenta de novo."
           }
         }
       }
@@ -5153,7 +5153,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra apagar sua conta"
+            "value" : "Não deu pra apagar tua conta"
           }
         }
       }
@@ -5273,7 +5273,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra falar com o servidor de voz, então você não entrou nesta call. Verifique a sua conexão e tente de novo."
+            "value" : "Não deu pra falar com o servidor de voz, então tu não entrou nesta call. Verifica a tua conexão e tenta de novo."
           }
         }
       }
@@ -5293,7 +5293,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra voltar pra essa call. Entre de novo."
+            "value" : "Não deu pra voltar pra essa call. Entra de novo."
           }
         }
       }
@@ -5303,7 +5303,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu para ligar a câmera. Feche o que estiver usando a câmera e tente de novo."
+            "value" : "Não deu para ligar a câmera. Fecha o que estiver usando a câmera e tenta de novo."
           }
         }
       }
@@ -5513,7 +5513,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Crie um e compartilhe o código com quem você quiser dentro."
+            "value" : "Cria um e compartilha o código com quem tu quiser dentro."
           }
         }
       }
@@ -5523,7 +5523,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Crie um para a sua turma, ou entre com um código de convite."
+            "value" : "Cria um para a tua turma, ou entra com um código de convite."
           }
         }
       }
@@ -5753,7 +5753,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Apagar sua conta"
+            "value" : "Apagar tua conta"
           }
         }
       }
@@ -5813,7 +5813,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Depoimentos esperando você"
+            "value" : "Depoimentos esperando por ti"
           }
         }
       }
@@ -5853,7 +5853,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "As mensagens diretas que você começar aparecem aqui."
+            "value" : "As mensagens diretas que tu começar aparecem aqui."
           }
         }
       }
@@ -5903,7 +5903,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Faça uma destas primeiro, pra cada comunidade que é sua"
+            "value" : "Faz uma destas primeiro, pra cada comunidade que é tua"
           }
         }
       }
@@ -6153,7 +6153,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cada mensagem que você escreveu, em todo lugar, inclusive nas mensagens diretas. As outras pessoas vão ver buracos onde estavam suas mensagens."
+            "value" : "Cada mensagem que tu escreveu, em todo lugar, inclusive nas mensagens diretas. As outras pessoas vão ver buracos onde estavam tuas mensagens."
           }
         }
       }
@@ -6253,7 +6253,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Acha sua gente"
+            "value" : "Acha tua gente"
           }
         }
       }
@@ -6553,7 +6553,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Os pedidos de amizade esperando você, e os que você mandou, aparecem aqui."
+            "value" : "Os pedidos de amizade esperando por ti, e os que tu mandou, aparecem aqui."
           }
         }
       }
@@ -6599,7 +6599,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Amigos, %lld esperando você"
+            "value" : "Amigos, %lld esperando por ti"
           }
         }
       }
@@ -6779,7 +6779,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Chat em grupo que é seu de verdade. Texto que voa, voz que não falha."
+            "value" : "Chat em grupo que é teu de verdade. Texto que voa, voz que não falha."
           }
         }
       }
@@ -7059,7 +7059,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vem com seu perfil, suas configurações, cada mensagem que você escreveu, as comunidades em que você está e quem você bloqueou. Não vem com mensagens que outras pessoas escreveram, nem o lado delas nas suas mensagens diretas. Aquilo é o que elas falaram, não é seu dado, e você continua lendo tudo aqui no app."
+            "value" : "Vem com teu perfil, tuas configurações, cada mensagem que tu escreveu, as comunidades em que tu tá e quem tu bloqueou. Não vem com mensagens que outras pessoas escreveram, nem o lado delas nas tuas mensagens diretas. Aquilo é o que elas falaram, não é teu dado, e tu continua lendo tudo aqui no app."
           }
         }
       }
@@ -7069,7 +7069,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tá no seu perfil."
+            "value" : "Tá no teu perfil."
           }
         }
       }
@@ -7209,7 +7209,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Saiba quando alguém precisa de você"
+            "value" : "Fica sabendo quando alguém precisa de ti"
           }
         }
       }
@@ -7319,7 +7319,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Só ouvindo. Você não tem permissão para falar neste canal."
+            "value" : "Só ouvindo. Tu não tem permissão para falar neste canal."
           }
         }
       }
@@ -7369,7 +7369,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Segure uma mensagem e escolha Criar tópico para puxar um assunto fora do canal principal."
+            "value" : "Segura uma mensagem e escolhe Criar tópico para puxar um assunto fora do canal principal."
           }
         }
       }
@@ -7379,7 +7379,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Segure uma mensagem e fixe para guardar aqui."
+            "value" : "Segura uma mensagem e fixa pra guardar aqui."
           }
         }
       }
@@ -7409,7 +7409,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cria um pra sua turma. Convites abrem neste app também."
+            "value" : "Cria um pra tua turma. Convites abrem neste app também."
           }
         }
       }
@@ -7569,7 +7569,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mensagem oculta. Você bloqueou essa pessoa."
+            "value" : "Mensagem oculta. Tu bloqueou essa pessoa."
           }
         }
       }
@@ -7599,7 +7599,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O acesso ao microfone está desligado. Ative nos Ajustes para ligar."
+            "value" : "O acesso ao microfone está desligado. Ativa nos Ajustes para ligar."
           }
         }
       }
@@ -7609,7 +7609,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O acesso ao microfone está desligado. Ative nos Ajustes para falar."
+            "value" : "O acesso ao microfone está desligado. Ativa nos Ajustes para falar."
           }
         }
       }
@@ -7629,7 +7629,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Registros de moderação do que você fez em comunidades dos outros, sem o seu nome. Apagar uma conta não pode apagar o registro de como ela foi usada pra moderar outra pessoa."
+            "value" : "Registros de moderação do que tu fez em comunidades dos outros, sem o teu nome. Apagar uma conta não pode apagar o registro de como ela foi usada pra moderar outra pessoa."
           }
         }
       }
@@ -7999,7 +7999,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Neste canal você não liga câmera nem compartilha tela."
+            "value" : "Neste canal tu não liga câmera nem compartilha tela."
           }
         }
       }
@@ -8099,7 +8099,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nenhum resultado. Tente o identificador completo, tipo nome#1234."
+            "value" : "Nenhum resultado. Tenta o identificador completo, tipo nome#1234."
           }
         }
       }
@@ -8409,7 +8409,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você não está conectado."
+            "value" : "Tu não tá conectado."
           }
         }
       }
@@ -8429,7 +8429,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nada com esse nome. Comunidade recém-criada só aparece se você digitar igualzinho."
+            "value" : "Nada com esse nome. Comunidade recém-criada só aparece se tu digitar igualzinho."
           }
         }
       }
@@ -8459,7 +8459,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nada por aqui ainda. Diga alguma coisa."
+            "value" : "Nada por aqui ainda. Diz alguma coisa."
           }
         }
       }
@@ -8599,7 +8599,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Uma escolha só, valendo para a sua câmera e para o compartilhamento de tela. Automático pede 720p da câmera e deixa a conexão decidir a partir daí. Uma escolha fixa pede aquele tamanho e envia a sua tela nesse tamanho também. No celular a tela é capturada em 720p, escolha o que escolher, então 1080p e 720p enviam a mesma imagem, com mais bits por trás. A imagem ainda cai abaixo da sua escolha quando o link não dá conta."
+            "value" : "Uma escolha só, valendo para a tua câmera e para o compartilhamento de tela. Automático pede 720p da câmera e deixa a conexão decidir a partir daí. Uma escolha fixa pede aquele tamanho e envia a tua tela nesse tamanho também. No celular a tela é capturada em 720p, escolha o que escolher, então 1080p e 720p enviam a mesma imagem, com mais bits por trás. A imagem ainda cai abaixo da tua escolha quando o link não dá conta."
           }
         }
       }
@@ -8659,7 +8659,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Só você vê isso aqui. Ninguém fica sabendo, aceite ou não."
+            "value" : "Só tu vê isso aqui. Ninguém fica sabendo, aceite ou não."
           }
         }
       }
@@ -8739,7 +8739,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Código aberto. Faça self-host ou use o hospedado. O mesmo produto dos dois jeitos."
+            "value" : "Código aberto. Faz self-host ou usa o hospedado. O mesmo produto dos dois jeitos."
           }
         }
       }
@@ -8769,7 +8769,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ou entre em um com um código de convite."
+            "value" : "Ou entra em um com um código de convite."
           }
         }
       }
@@ -8809,7 +8809,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ainda tem gente nessas comunidades, então a gente não vai apagar elas por baixo das pessoas. Nas configurações de cada comunidade, passe ela pra outro membro ou apague você mesmo."
+            "value" : "Ainda tem gente nessas comunidades, então a gente não vai apagar elas por baixo das pessoas. Nas configurações de cada comunidade, passa ela pra outro membro ou apaga tu mesmo."
           }
         }
       }
@@ -8829,7 +8829,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cole o convite que você recebeu, ou digite o código."
+            "value" : "Cola o convite que tu recebeu, ou digita o código."
           }
         }
       }
@@ -9219,7 +9219,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Publicar isso no seu perfil?"
+            "value" : "Publicar isso no teu perfil?"
           }
         }
       }
@@ -9709,7 +9709,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Denúncias que outras pessoas fizeram sobre você, sem o seu nome. A gente não pode deixar apagar a conta virar um jeito de limpar a própria ficha."
+            "value" : "Denúncias que outras pessoas fizeram sobre ti, sem o teu nome. A gente não pode deixar apagar a conta virar um jeito de limpar a própria ficha."
           }
         }
       }
@@ -10129,7 +10129,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O compartilhamento começou, mas nenhuma imagem está chegando. Pare a transmissão e comece de novo."
+            "value" : "O compartilhamento começou, mas nenhuma imagem está chegando. Para a transmissão e começa de novo."
           }
         }
       }
@@ -10309,7 +10309,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Serviço temporariamente indisponível. Tente de novo em instantes."
+            "value" : "Serviço temporariamente indisponível. Tenta de novo em instantes."
           }
         }
       }
@@ -10369,7 +10369,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Compartilhar sua tela"
+            "value" : "Compartilhar tua tela"
           }
         }
       }
@@ -10479,7 +10479,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sessão encerrada. Entre de novo para continuar."
+            "value" : "Sessão encerrada. Entra de novo para continuar."
           }
         }
       }
@@ -10659,7 +10659,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Comece o papo"
+            "value" : "Começa o papo"
           }
         }
       }
@@ -11039,7 +11039,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A câmera ligou, mas nenhuma imagem está chegando. Desligue e ligue de novo."
+            "value" : "A câmera ligou, mas nenhuma imagem está chegando. Desliga e liga de novo."
           }
         }
       }
@@ -11069,7 +11069,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A conexão com o servidor da transmissão caiu, então a transmissão parou. Tente de novo pra voltar."
+            "value" : "A conexão com o servidor da transmissão caiu, então a transmissão parou. Tenta de novo pra voltar."
           }
         }
       }
@@ -11129,7 +11129,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O handle completo é o único jeito de achar quem não está numa comunidade com você."
+            "value" : "O handle completo é o único jeito de achar quem não está numa comunidade contigo."
           }
         }
       }
@@ -11149,7 +11149,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Perde o acesso e não volta até você desbanir."
+            "value" : "Perde o acesso e não volta até tu desbanir."
           }
         }
       }
@@ -11179,7 +11179,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A pessoa não fica sabendo. Vocês podem se adicionar de novo depois."
+            "value" : "A pessoa não fica sabendo. Dá pra adicionar de novo depois."
           }
         }
       }
@@ -11219,7 +11219,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Essa call virou uma sala grande e o servidor de voz não respondeu, então a call caiu. Entre de novo pra voltar."
+            "value" : "Essa call virou uma sala grande e o servidor de voz não respondeu, então a call caiu. Entra de novo pra voltar."
           }
         }
       }
@@ -11229,7 +11229,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Essa call virou uma sala grande e esta versão do app não conseguiu acompanhar. Entre de novo pra voltar."
+            "value" : "Essa call virou uma sala grande e esta versão do app não conseguiu acompanhar. Entra de novo pra voltar."
           }
         }
       }
@@ -11299,7 +11299,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Isso não pode ser desfeito. Digite \"%@\" para confirmar."
+            "value" : "Isso não pode ser desfeito. Digita \"%@\" para confirmar."
           }
         }
       }
@@ -11309,7 +11309,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Isso não tem volta. A gente não guarda backup pra te restaurar, e ninguém no pqp consegue trazer sua conta de volta."
+            "value" : "Isso não tem volta. A gente não guarda backup pra te restaurar, e ninguém no pqp consegue trazer tua conta de volta."
           }
         }
       }
@@ -11359,7 +11359,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esse é você."
+            "value" : "Esse é tu."
           }
         }
       }
@@ -11579,7 +11579,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Muitas requisições. Tente de novo em %llds."
+            "value" : "Muitas requisições. Tenta de novo em %llds."
           }
         }
       }
@@ -11589,7 +11589,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Muitas requisições. Tente de novo daqui a pouco."
+            "value" : "Muitas requisições. Tenta de novo daqui a pouco."
           }
         }
       }
@@ -11739,7 +11739,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ligue sua câmera ou compartilhe sua tela durante uma chamada para ver o que está saindo de verdade."
+            "value" : "Liga tua câmera ou compartilha tua tela durante uma chamada para ver o que está saindo de verdade."
           }
         }
       }
@@ -11759,7 +11759,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Digite o nome da comunidade"
+            "value" : "Digita o nome da comunidade"
           }
         }
       }
@@ -11769,7 +11769,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Digite seu identificador pra confirmar"
+            "value" : "Digita teu identificador pra confirmar"
           }
         }
       }
@@ -12029,7 +12029,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Voz desligada. Sua tela vai ao ar, seu microfone não."
+            "value" : "Voz desligada. Tua tela vai ao ar, teu microfone não."
           }
         }
       }
@@ -12039,7 +12039,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Voz ligada. Seu microfone entra desligado."
+            "value" : "Voz ligada. Teu microfone entra desligado."
           }
         }
       }
@@ -12099,7 +12099,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esperando você"
+            "value" : "Esperando por ti"
           }
         }
       }
@@ -12429,7 +12429,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você está apresentando"
+            "value" : "Tu tá apresentando"
           }
         }
       }
@@ -12439,7 +12439,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você pode trocar de novo a partir de %@."
+            "value" : "Tu pode trocar de novo a partir de %@."
           }
         }
       }
@@ -12499,7 +12499,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agora você pode ligar a câmera ou compartilhar a tela."
+            "value" : "Agora tu pode ligar a câmera ou compartilhar a tela."
           }
         }
       }
@@ -12509,7 +12509,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agora você pode falar. Ligue o microfone quando quiser."
+            "value" : "Agora tu pode falar. Liga o microfone quando quiser."
           }
         }
       }
@@ -12549,7 +12549,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você não pode mandar mensagem neste canal"
+            "value" : "Tu não pode mandar mensagem neste canal"
           }
         }
       }
@@ -12579,7 +12579,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você não pode compartilhar sua tela neste canal."
+            "value" : "Tu não pode compartilhar tua tela neste canal."
           }
         }
       }
@@ -12599,7 +12599,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você entrou em outra sala de voz, então saiu desta."
+            "value" : "Tu entrou em outra sala de voz, então saiu desta."
           }
         }
       }
@@ -12609,7 +12609,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você saiu da sala, então sua tela não está indo ao ar. Volte pra continuar transmitindo."
+            "value" : "Tu saiu da sala, então tua tela não tá indo ao ar. Volta pra continuar transmitindo."
           }
         }
       }
@@ -12699,7 +12699,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você vai precisar de um novo convite para voltar."
+            "value" : "Tu vai precisar de um novo convite para voltar."
           }
         }
       }
@@ -12739,7 +12739,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você está aqui"
+            "value" : "Tu tá aqui"
           }
         }
       }
@@ -12759,7 +12759,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vocês são amigos agora."
+            "value" : "Agora são amigos."
           }
         }
       }
@@ -12769,7 +12769,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você tá mandando rápido demais"
+            "value" : "Tu tá mandando rápido demais"
           }
         }
       }
@@ -12779,7 +12779,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Só você por aqui"
+            "value" : "Só tu por aqui"
           }
         }
       }
@@ -12799,7 +12799,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você, perfil e ajustes"
+            "value" : "Tu, perfil e ajustes"
           }
         }
       }
@@ -12839,7 +12839,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sua transmissão parou, mas o servidor não confirmou o fim da watch party. Ela pode continuar aparecendo como ao vivo."
+            "value" : "Tua transmissão parou, mas o servidor não confirmou o fim da watch party. Ela pode continuar aparecendo como ao vivo."
           }
         }
       }
@@ -12869,7 +12869,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Seus dados"
+            "value" : "Teus dados"
           }
         }
       }
@@ -12879,7 +12879,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Seus arquivos e imagens, e as reações que você deixou."
+            "value" : "Teus arquivos e imagens, e as reações que tu deixou."
           }
         }
       }
@@ -12889,7 +12889,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Seu pedido de amizade foi aceito."
+            "value" : "Teu pedido de amizade foi aceito."
           }
         }
       }
@@ -12899,7 +12899,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Seus amigos aparecem aqui quando ficarem online."
+            "value" : "Teus amigos aparecem aqui quando ficarem online."
           }
         }
       }
@@ -12909,7 +12909,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sua turma.\nSua comunidade.\nSua bagunça."
+            "value" : "Tua turma.\nTua comunidade.\nTua bagunça."
           }
         }
       }
@@ -12919,7 +12919,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Suas participações em comunidades, suas conversas e a lista de quem você bloqueou."
+            "value" : "Tuas participações em comunidades, tuas conversas e a lista de quem tu bloqueou."
           }
         }
       }
@@ -12929,7 +12929,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra ligar o seu microfone no servidor de voz, então a call terminou. Tente de novo."
+            "value" : "Não deu pra ligar o teu microfone no servidor de voz, então a call terminou. Tenta de novo."
           }
         }
       }
@@ -12939,7 +12939,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra ligar o seu microfone, então ninguém está te ouvindo. A transmissão continua. Toque em ativar microfone pra tentar de novo."
+            "value" : "Não deu pra ligar o teu microfone, então ninguém está te ouvindo. A transmissão continua. Toca em ativar microfone pra tentar de novo."
           }
         }
       }
@@ -12949,7 +12949,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra ligar o seu microfone, então ninguém está te ouvindo. Você ainda consegue escutar. Toque em ativar microfone pra tentar de novo."
+            "value" : "Não deu pra ligar o teu microfone, então ninguém está te ouvindo. Tu ainda consegue escutar. Toca em ativar microfone pra tentar de novo."
           }
         }
       }
@@ -12959,7 +12959,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A conexão com o servidor de voz caiu, então a call terminou. Entre de novo pra voltar."
+            "value" : "A conexão com o servidor de voz caiu, então a call terminou. Entra de novo pra voltar."
           }
         }
       }
@@ -12969,7 +12969,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra ligar o seu microfone, então a transmissão parou. Tente de novo."
+            "value" : "Não deu pra ligar o teu microfone, então a transmissão parou. Tenta de novo."
           }
         }
       }
@@ -12979,7 +12979,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Seu perfil, seu identificador, seu avatar e suas configurações."
+            "value" : "Teu perfil, teu identificador, teu avatar e tuas configurações."
           }
         }
       }
@@ -12999,7 +12999,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Seu login. Você não vai conseguir entrar de novo."
+            "value" : "Teu login. Tu não vai conseguir entrar de novo."
           }
         }
       }
@@ -13049,7 +13049,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Seu para sempre."
+            "value" : "Teu pra sempre."
           }
         }
       }
@@ -13239,7 +13239,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "limitado pela sua conexão"
+            "value" : "limitado pela tua conexão"
           }
         }
       }
@@ -13279,7 +13279,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O pqp pode avisar no seu celular sobre mensagens diretas, menções, respostas e chamadas, só isso, e só quando você não estiver online em outro lugar. Sem aviso para cada mensagem de cada canal."
+            "value" : "O pqp pode avisar no teu celular sobre mensagens diretas, menções, respostas e chamadas, só isso, e só quando tu não estiver online em outro lugar. Sem aviso para cada mensagem de cada canal."
           }
         }
       }
@@ -13289,7 +13289,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O pqp é para maiores de 18 anos. Informe sua data de nascimento para continuar. Você só pode responder uma vez."
+            "value" : "O pqp é para maiores de 18 anos. Informa tua data de nascimento pra continuar. Tu só pode responder uma vez."
           }
         }
       }
@@ -13655,7 +13655,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Um nome nas mensagens, um @ pra te acharem. Os dois mudam quando você quiser."
+            "value" : "Um nome nas mensagens, um @ pra te acharem. Os dois mudam quando tu quiser."
           }
         }
       }
@@ -13695,7 +13695,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Veio da sua conta. Se não é como te chamam, troca."
+            "value" : "Veio da tua conta. Se não é como te chamam, troca."
           }
         }
       }
@@ -14275,7 +14275,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Escolhe um canal e dá um oi. Ninguém sabe que você chegou até você falar."
+            "value" : "Escolhe um canal e dá um oi. Ninguém sabe que tu chegou até tu falar."
           }
         }
       }
@@ -14385,7 +14385,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Guardando seu lugar…"
+            "value" : "Guardando teu lugar…"
           }
         }
       }
@@ -14425,7 +14425,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esse já tinha dono. Você ficou com %@."
+            "value" : "Esse já tinha dono. Tu ficou com %@."
           }
         }
       }
@@ -14625,7 +14625,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Voz, tela compartilhada e chat. Pra sua galera, do seu jeito."
+            "value" : "Voz, tela compartilhada e chat. Pra tua galera, do teu jeito."
           }
         }
       }
@@ -14695,7 +14695,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você entrou em %@"
+            "value" : "Tu entrou em %@"
           }
         }
       }
@@ -14705,7 +14705,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você foi convidado pra %@"
+            "value" : "Tu foi convidado pra %@"
           }
         }
       }
@@ -14715,7 +14715,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Seu @"
+            "value" : "Teu @"
           }
         }
       }
@@ -14735,7 +14735,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sua sala"
+            "value" : "Tua sala"
           }
         }
       }
@@ -14855,7 +14855,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sua câmera"
+            "value" : "Tua câmera"
           }
         }
       }
@@ -14885,7 +14885,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você é responsável pelo que transmite. Nada de conteúdo pirata ou que viole direitos de outras pessoas."
+            "value" : "Tu é responsável pelo que transmite. Nada de conteúdo pirata ou que viole direitos de outras pessoas."
           }
         }
       }
@@ -14895,7 +14895,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ligar seu microfone?"
+            "value" : "Ligar teu microfone?"
           }
         }
       }
@@ -14945,7 +14945,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sua tela está no ar. Seu microfone ainda está desligado, então a sala não consegue te ouvir comentando."
+            "value" : "Tua tela tá no ar. Teu microfone ainda está desligado, então a sala não consegue te ouvir comentando."
           }
         }
       }
@@ -14975,7 +14975,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dê um nome pra sua watch party"
+            "value" : "Dá um nome pra tua watch party"
           }
         }
       }
@@ -14995,7 +14995,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não há pré-visualização antes de você ir ao vivo. O que você compartilhar é o que a audiência vê."
+            "value" : "Não há pré-visualização antes de tu ir ao vivo. O que tu compartilhar é o que a audiência vê."
           }
         }
       }
@@ -15015,7 +15015,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você está ao vivo"
+            "value" : "Tu tá ao vivo"
           }
         }
       }
@@ -15035,7 +15035,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você ainda não está compartilhando a tela. Toque para compartilhar."
+            "value" : "Tu ainda não tá compartilhando a tela. Toca pra compartilhar."
           }
         }
       }
@@ -15045,7 +15045,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não foi possível ir ao vivo. O servidor não confirmou. Tente de novo."
+            "value" : "Não foi possível ir ao vivo. O servidor não confirmou. Tenta de novo."
           }
         }
       }
@@ -15055,7 +15055,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não foi possível iniciar a transmissão. A watch party foi encerrada. Tente de novo."
+            "value" : "Não foi possível iniciar a transmissão. A watch party foi encerrada. Tenta de novo."
           }
         }
       }
@@ -15065,7 +15065,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não foi possível iniciar a transmissão, e também não foi possível encerrar a watch party. Ela pode continuar aparecendo como ao vivo. Tente de novo daqui a pouco."
+            "value" : "Não foi possível iniciar a transmissão, e também não foi possível encerrar a watch party. Ela pode continuar aparecendo como ao vivo. Tenta de novo daqui a pouco."
           }
         }
       }
@@ -15075,7 +15075,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Algo deu errado. Tente de novo."
+            "value" : "Algo deu errado. Tenta de novo."
           }
         }
       }
@@ -15215,7 +15215,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Segure pra gravar um áudio"
+            "value" : "Segura pra gravar um áudio"
           }
         }
       }
@@ -15235,7 +15235,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Deslize pra cancelar"
+            "value" : "Desliza pra cancelar"
           }
         }
       }
@@ -15335,7 +15335,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Você está em uma call. Saia dela pra gravar um áudio."
+            "value" : "Tu tá numa call. Sai dela pra gravar um áudio."
           }
         }
       }
@@ -15345,7 +15345,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O acesso ao microfone está desligado. Ative nos Ajustes pra gravar áudios."
+            "value" : "O acesso ao microfone está desligado. Ativa nos Ajustes pra gravar áudios."
           }
         }
       }
@@ -15355,7 +15355,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu pra começar a gravar. Tente de novo."
+            "value" : "Não deu pra começar a gravar. Tenta de novo."
           }
         }
       }
@@ -15365,7 +15365,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Segure o microfone pra gravar um áudio."
+            "value" : "Segura o microfone pra gravar um áudio."
           }
         }
       }

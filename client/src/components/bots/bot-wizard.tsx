@@ -736,7 +736,7 @@ function StagePlan({ draft, name }: { draft: BotDraft; name: string }) {
   const { t } = useTranslation();
   const sample = botActionCardSchema.parse({
     kind: "plan",
-    confirmBy: "você",
+    confirmBy: "tu",
     confirmById: SAMPLE_VIEWER,
     planId: SAMPLE_VIEWER,
     expiresAt: new Date(Date.now() + 252_000).toISOString(),
