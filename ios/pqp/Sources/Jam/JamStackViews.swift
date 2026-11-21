@@ -56,7 +56,7 @@ struct JamStageView: View {
                     JamPlayerLayerView(player: player)
                         .aspectRatio(tracks.count == 1 ? 16.0 / 9.0 : 4.0 / 3.0, contentMode: .fit)
                         .overlay(alignment: .bottomLeading) {
-                            Text(verbatim: track.authorName ?? "")
+                            Text(verbatim: JamBidi.clean(track.authorName ?? ""))
                                 .font(JamFont.text(11, .bold))
                                 .foregroundStyle(Palette.paper)
                                 .padding(.horizontal, 7)
@@ -544,7 +544,7 @@ struct JamOtherTakesView: View {
                 Text(verbatim: track.instrument.title)
                     .font(JamFont.text(13, .bold))
                     .foregroundStyle(Palette.paper)
-                Text(verbatim: track.label ?? track.displayName)
+                Text(verbatim: JamBidi.clean(track.label ?? track.displayName))
                     .font(JamFont.text(12))
                     .foregroundStyle(Palette.paperMuted)
                     .lineLimit(1)

@@ -74,12 +74,14 @@ object JamWho {
     /**
      * "rafa, duda, leo" or "rafa, duda +2". [contributors] is the list of
      * people with a track once the detail has been read; before that the author
-     * stands in for the rest, with the count the summary carries.
+     * stands in for the rest, with the count the summary carries. Every name is an isolate ([JamBidi]): the line
+     * is drawn beside other text and a display name is not sanitised by the server. TalkBack gets
+     * `JamBidi.clean(line)`.
      */
     fun line(song: JamSongSummary, contributors: List<String>?, maxNames: Int = 3): String {
-        val names = contributors.orEmpty().filter { it.isNotEmpty() }
+        val names = contributors.orEmpty().map(JamBidi::isolate).filter { it.isNotEmpty() }
         if (names.isEmpty()) {
-            val author = song.authorName.orEmpty()
+            val author = JamBidi.isolateOpt(song.authorName)
             val rest = max(0, song.contributorCount - (if (song.authorName == null) 0 else 1))
             if (author.isEmpty()) return if (rest > 0) "+$rest" else ""
             return if (rest > 0) "$author +$rest" else author

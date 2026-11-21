@@ -1,6 +1,9 @@
 import XCTest
 @testable import pqp
 
+/// A first-strong isolate around a name, written out so the tests do not use the code they check.
+private func iso(_ text: String) -> String { "\u{2068}\(text)\u{2069}" }
+
 /// What a tile says it needs, which filter shows it, where it sits in the
 /// mosaic, what a frame does to the wall and to an open song, and who may do
 /// what. All pure.
@@ -59,10 +62,10 @@ final class JamRulesTests: XCTestCase {
 
     func testTheWhoLineNamesPeopleThenCounts() {
         let s = song(contributors: 5)
-        XCTAssertEqual(JamWho.line(song: song(contributors: 3), contributors: ["rafa", "duda", "leo"]), "rafa, duda, leo")
-        XCTAssertEqual(JamWho.line(song: s, contributors: ["a", "b", "c", "d", "e"]), "a, b +3")
-        XCTAssertEqual(JamWho.line(song: s, contributors: nil), "rafa +4", "before the detail is read, the author stands in")
-        XCTAssertEqual(JamWho.line(song: song(contributors: 1), contributors: nil), "rafa")
+        XCTAssertEqual(JamWho.line(song: song(contributors: 3), contributors: ["rafa", "duda", "leo"]), "\(iso("rafa")), \(iso("duda")), \(iso("leo"))")
+        XCTAssertEqual(JamWho.line(song: s, contributors: ["a", "b", "c", "d", "e"]), "\(iso("a")), \(iso("b")) +3")
+        XCTAssertEqual(JamWho.line(song: s, contributors: nil), "\(iso("rafa")) +4", "before the detail is read, the author stands in")
+        XCTAssertEqual(JamWho.line(song: song(contributors: 1), contributors: nil), iso("rafa"))
     }
 
     // MARK: The mosaic
