@@ -103,7 +103,7 @@ const counters = {
   songsQueuedForReview: 0,
   rateLimited: { songs: 0, takes: 0, likes: 0, reports: 0 },
   /** Refusals of the public routes' address buckets (`jam-public-routes.ts`). */
-  addressRefused: { config: 0, list: 0, song: 0, play: 0 },
+  addressRefused: { config: 0, list: 0, song: 0, play: 0, cover: 0 },
 };
 
 export function noteJamPublicAddressRefusal(kind: keyof typeof counters.addressRefused): void {
@@ -123,7 +123,7 @@ export function resetJamPublicCountersForTests(): void {
     if (key === "rateLimited") {
       counters.rateLimited = { songs: 0, takes: 0, likes: 0, reports: 0 };
     } else if (key === "addressRefused") {
-      counters.addressRefused = { config: 0, list: 0, song: 0, play: 0 };
+      counters.addressRefused = { config: 0, list: 0, song: 0, play: 0, cover: 0 };
     } else {
       (counters as Record<string, unknown>)[key] = 0;
     }
@@ -1230,6 +1230,42 @@ function publicVideoSources(
     });
   }
   return sources.filter((source) => source.url !== "");
+}
+
+/**
+ * The cover of a PUBLIC song, for `GET /api/public/jams/:songId/cover`, or null
+ * for everything else: an unknown id, a song that is not public (unpublished,
+ * hidden, taken down, in review, a blocked or leaving starter, a banned one),
+ * one with no public part, one with no cover, one whose cover has not passed the
+ * scanner, or storage that is not configured. The caller cannot tell those
+ * apart and neither can the person asking.
+ *
+ * It is the SAME rule `getPublicJam` applies (`PUBLIC_SONG_SQL` plus a public
+ * part, and `PUBLIC_COVER_KEY_SQL` for the picture), written once in
+ * `jam-public-sql.ts`, so the song page and its card cannot disagree about what
+ * is public. `signedUrl` is only what the route redirects to when it will not
+ * serve the bytes itself (over the size cap, or not an inert image type).
+ */
+export async function getPublicJamCover(
+  songId: string,
+): Promise<{ key: string; signedUrl: string } | null> {
+  if (!isStorageConfigured()) {
+    return null;
+  }
+  const result = await getPool().query<{ cover_key: string | null }>(
+    `SELECT ${PUBLIC_COVER_KEY_SQL} AS cover_key
+       FROM jam_public_songs p
+       JOIN jam_songs s ON s.id = p.song_id
+       JOIN users su ON su.id = s.author_id
+      WHERE s.id = $1 AND ${LISTED_SONG_SQL}`,
+    [songId],
+  );
+  const key = result.rows[0]?.cover_key;
+  if (!key) {
+    return null;
+  }
+  const signedUrl = jamPublicMediaUrl(key, Date.now());
+  return signedUrl ? { key, signedUrl } : null;
 }
 
 /** `GET /api/public/jams/:songId`, or null for anything that is not listed. */

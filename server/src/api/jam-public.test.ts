@@ -1309,6 +1309,205 @@ describeDb("public jams", () => {
     });
   });
 
+  // ------------------------------------------------------------ cover address
+
+  /**
+   * `GET|HEAD /api/public/jams/:songId/cover`: the address a link preview's
+   * `og:image` points at. Tested with the flag ON and a scanner configured, the
+   * way production runs, and asked with no Authorization header, the shape a
+   * crawler sends.
+   */
+  describe("the cover address (the picture a link preview uses)", () => {
+    const rawCover = (
+      id: string,
+      headers: Record<string, string> = {},
+      method = "GET",
+      suffix = "/cover",
+    ) => {
+      stubs.actor = null;
+      return fetch(`${baseUrl}/api/public/jams/${id}${suffix}`, { method, headers, redirect: "manual" });
+    };
+
+    beforeEach(async () => {
+      await publicFlag(true);
+      scannerOn();
+    });
+
+    /** A published song whose cover passed the scanner. */
+    async function songWithPassedCover(): Promise<string> {
+      const song = await channelSong(alice);
+      expect((await publish(alice, song)).status).toBe(200);
+      const cover = await upload(alice, song, "cover");
+      expect((await call(alice, "PUT", `/api/jam-songs/${song}/cover`, { uploadId: cover })).status).toBe(200);
+      await settleUploads();
+      expect(await processOneJamCover()).toBe("passed");
+      return song;
+    }
+
+    /** What a refusal looks like, to compare one against another byte for byte. */
+    async function refusal(response: Response) {
+      return {
+        status: response.status,
+        body: await response.text(),
+        cacheControl: response.headers.get("cache-control"),
+        contentType: response.headers.get("content-type"),
+        etag: response.headers.get("etag"),
+        location: response.headers.get("location"),
+      };
+    }
+
+    it("serves the picture itself from this origin, with a stable address and cache headers", async () => {
+      const song = await songWithPassedCover();
+      const reply = await rawCover(song);
+      expect(reply.status).toBe(200);
+      expect(reply.headers.get("content-type")).toBe("image/jpeg");
+      expect(reply.headers.get("content-length")).toBe(String(jpegBytes().length));
+      expect(reply.headers.get("accept-ranges")).toBe("bytes");
+      expect(reply.headers.get("cache-control")).toBe("public, max-age=300, s-maxage=300");
+      expect(reply.headers.get("cross-origin-resource-policy")).toBe("cross-origin");
+      expect(reply.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(reply.headers.get("etag")).toMatch(/^"[0-9a-f]{32}"$/);
+      expect(Buffer.from(await reply.arrayBuffer()).equals(jpegBytes())).toBe(true);
+      // No signature anywhere in the answer: not a redirect, not a header.
+      expect(reply.headers.get("location")).toBeNull();
+      // The address is the same on every call (the ETag too): that is the point.
+      const again = await rawCover(song);
+      expect(again.headers.get("etag")).toBe(reply.headers.get("etag"));
+      await again.arrayBuffer();
+    });
+
+    it("answers a HEAD as the GET without a body, a 304 for a held copy and a 206 for a range", async () => {
+      const song = await songWithPassedCover();
+      const get = await rawCover(song);
+      await get.arrayBuffer();
+      const head = await rawCover(song, {}, "HEAD");
+      expect(head.status).toBe(200);
+      expect(await head.text()).toBe("");
+      for (const name of ["content-type", "content-length", "etag", "cache-control", "accept-ranges"]) {
+        expect(head.headers.get(name), name).toBe(get.headers.get(name));
+      }
+      const etag = get.headers.get("etag")!;
+      const held = await rawCover(song, { "If-None-Match": etag });
+      expect(held.status).toBe(304);
+      expect(await held.text()).toBe("");
+      const part = await rawCover(song, { Range: "bytes=0-3" });
+      expect(part.status).toBe(206);
+      expect(part.headers.get("content-range")).toBe(`bytes 0-3/${jpegBytes().length}`);
+      expect(Buffer.from(await part.arrayBuffer()).equals(jpegBytes().subarray(0, 4))).toBe(true);
+    });
+
+    it("is the same 404, byte for byte, for unknown, malformed, private, unpublished, unscanned, rejected and cover-less", async () => {
+      const refused: Array<[string, Awaited<ReturnType<typeof refusal>>]> = [];
+      const note = async (label: string, id: string, method = "GET") =>
+        refused.push([`${method} ${label}`, await refusal(await rawCover(id, {}, method))]);
+
+      // Unknown and malformed ids.
+      await note("unknown", "00000000-0000-4000-8000-000000000000");
+      await note("malformed", "not-a-song-id");
+      await note("dashes", "-".repeat(36));
+      // A song nobody published, with a cover set.
+      const privateSong = await channelSong(alice);
+      const privateCover = await upload(alice, privateSong, "cover");
+      await call(alice, "PUT", `/api/jam-songs/${privateSong}/cover`, { uploadId: privateCover });
+      await note("private", privateSong);
+      // A song published with no cover at all.
+      const bare = await channelSong(alice);
+      expect((await publish(alice, bare)).status).toBe(200);
+      await note("no cover", bare);
+      // A published song whose cover has not been judged yet.
+      const pending = await channelSong(alice);
+      expect((await publish(alice, pending)).status).toBe(200);
+      await call(alice, "PUT", `/api/jam-songs/${pending}/cover`, {
+        uploadId: await upload(alice, pending, "cover"),
+      });
+      await note("cover pending", pending);
+      // A cover the scanner rejected.
+      scanner.verdict = "reject";
+      scanner.labels = ["gore"];
+      const rejected = await channelSong(alice);
+      expect((await publish(alice, rejected)).status).toBe(200);
+      await call(alice, "PUT", `/api/jam-songs/${rejected}/cover`, {
+        uploadId: await upload(alice, rejected, "cover"),
+      });
+      await settleUploads();
+      // The queue judges every cover waiting, `pending` included, with this verdict.
+      await processOneJamCover();
+      await processOneJamCover();
+      scanner.verdict = "pass";
+      scanner.labels = [];
+      await note("cover rejected", rejected);
+      // A song that WAS public with a passed cover, then unpublished.
+      const gone = await songWithPassedCover();
+      expect((await rawCover(gone)).status).toBe(200);
+      expect((await call(alice, "DELETE", `/api/jam-songs/${gone}/public`)).status).toBe(200);
+      await note("unpublished", gone);
+      await note("unpublished", gone, "HEAD");
+      await note("unknown", "00000000-0000-4000-8000-000000000000", "HEAD");
+
+      const [, first] = refused[0]!;
+      expect(first.status).toBe(404);
+      expect(first.cacheControl).toBe("no-store");
+      expect(first.etag).toBeNull();
+      expect(first.location).toBeNull();
+      for (const [label, got] of refused) {
+        const reference = label.startsWith("HEAD") ? { ...first, body: "" } : first;
+        expect(got, label).toEqual(reference);
+      }
+    });
+
+    it("an unpublish is out of the very next request, even for a client holding the validator", async () => {
+      const song = await songWithPassedCover();
+      const etag = (await rawCover(song)).headers.get("etag")!;
+      expect((await rawCover(song, { "If-None-Match": etag })).status).toBe(304);
+      expect((await call(alice, "DELETE", `/api/jam-songs/${song}/public`)).status).toBe(200);
+      const after = await rawCover(song, { "If-None-Match": etag });
+      expect(after.status).toBe(404);
+      expect(after.headers.get("cache-control")).toBe("no-store");
+    });
+
+    it("is not matched at all while the flag is off (the 401 of an unknown path)", async () => {
+      const song = await songWithPassedCover();
+      await publicFlag(false);
+      const off = await rawCover(song);
+      const unknownPath = await rawCover(song, {}, "GET", "/nonsense");
+      expect(off.status).toBe(401);
+      expect(unknownPath.status).toBe(401);
+      expect(await off.text()).toBe(await unknownPath.text());
+    });
+
+    it("takes only GET and HEAD", async () => {
+      const song = await songWithPassedCover();
+      expect((await rawCover(song, {}, "POST")).status).toBe(405);
+      expect((await rawCover(song, {}, "DELETE")).status).toBe(405);
+    });
+
+    it("has its own address bucket, and an unknown id is refused exactly as a real one", async () => {
+      const song = await songWithPassedCover();
+      const flood = async (id: string) => {
+        resetApiRateLimits();
+        let first429: Response | null = null;
+        for (let i = 0; i < 400 && !first429; i += 1) {
+          const reply = await rawCover(id, {}, "HEAD");
+          if (reply.status === 429) first429 = reply;
+        }
+        return first429;
+      };
+      const real = await flood(song);
+      const unknown = await flood("00000000-0000-4000-8000-000000000000");
+      expect(real).not.toBeNull();
+      expect(unknown).not.toBeNull();
+      expect(real!.headers.get("retry-after")).toBe(unknown!.headers.get("retry-after"));
+      expect(real!.headers.get("cache-control")).toBe(unknown!.headers.get("cache-control"));
+      expect(jamPublicCounters().addressRefused.cover).toBeGreaterThan(0);
+    });
+
+    it("leaves the song's own JSON alone: it still carries the signed URL the page plays from", async () => {
+      const song = await songWithPassedCover();
+      const detail = (await publicSong(song))!;
+      expect(detail.song.coverUrl).toContain(`/${BUCKET}/jam/`);
+    });
+  });
+
   // --------------------------------------------------------------- operator
 
   // ------------------------------------------------ auto-accept outside takes

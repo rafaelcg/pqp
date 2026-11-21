@@ -6,7 +6,8 @@
 // point at) and og-image-en.jpg (English variant, not referenced by any tag yet),
 // plus the /streamers cards og-streamers{,-en,-es}.jpg. Pass a word to render
 // only the files whose name contains it: `node render.mjs streamers`.
-// Needs network once, for Google Fonts (the same families the site loads), and a
+// Needs network once, for Google Fonts (the same families the site loads; the jam
+// card reads them from client/src/assets/fonts and needs none), and a
 // Playwright Chromium (`pnpm --filter @pqp/client exec playwright install chromium`).
 import { chromium } from "@playwright/test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -15,6 +16,7 @@ import { dirname, resolve } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const out = resolve(here, "../../public/images");
 const template = pathToFileURL(resolve(here, "template.html")).href;
+const jamTemplate = pathToFileURL(resolve(here, "jam-template.html")).href;
 
 const all = [
   { lang: "pt", file: "og-image.jpg" },
@@ -23,6 +25,11 @@ const all = [
   { lang: "pt", variant: "streamers", file: "og-streamers.jpg" },
   { lang: "en", variant: "streamers", file: "og-streamers-en.jpg" },
   { lang: "es", variant: "streamers", file: "og-streamers-es.jpg" },
+  // The public jam site's card (`jam-meta.ts`), its own template: the picture a
+  // song with no cover unfurls with, and the home. PNG, because it is flat
+  // opaque shapes and a JPEG's ringing is visible on them at thumbnail size.
+  { lang: "pt", jam: true, file: "og-jam.png" },
+  { lang: "en", jam: true, file: "og-jam-en.png" },
 ];
 // `render.mjs streamers` re-renders only the cards whose file name contains
 // the word, so one card can be redrawn without touching the others' bytes.
@@ -31,15 +38,14 @@ const targets = only ? all.filter((target) => target.file.includes(only)) : all;
 
 const browser = await chromium.launch();
 try {
-  for (const { lang, variant, file } of targets) {
+  for (const { lang, variant, jam, file } of targets) {
     const page = await browser.newPage({ viewport: { width: 1200, height: 630 }, deviceScaleFactor: 1 });
     const query = variant ? `?lang=${lang}&variant=${variant}` : `?lang=${lang}`;
-    await page.goto(`${template}${query}`, { waitUntil: "networkidle" });
+    await page.goto(`${jam ? jamTemplate : template}${query}`, { waitUntil: "networkidle" });
     await page.evaluate(() => document.fonts.ready);
     await page.screenshot({
       path: resolve(out, file),
-      type: "jpeg",
-      quality: 90,
+      ...(file.endsWith(".png") ? { type: "png" } : { type: "jpeg", quality: 90 }),
       clip: { x: 0, y: 0, width: 1200, height: 630 },
     });
     await page.close();

@@ -18,6 +18,7 @@ import {
   type JamPublicationResponse,
 } from "@pqp/shared";
 import { DatabaseUnavailableError, getPool } from "../db.js";
+import { serveCover } from "./public-bau-cover.js";
 import {
   corsHeaders,
   HttpError,
@@ -41,6 +42,7 @@ import {
   createPublicJam,
   getPublication,
   getPublicJam,
+  getPublicJamCover,
   getPublicJamForViewer,
   jamPublicConfigFor,
   jamPublicInboxFor,
@@ -90,6 +92,23 @@ const PREFIX = "/api/public/jams";
 const CONFIG_PATH = "/api/public/jams/config";
 const SONG_PATH = /^\/api\/public\/jams\/([0-9a-fA-F-]{36})$/;
 const PLAY_PATH = /^\/api\/public\/jams\/([0-9a-fA-F-]{36})\/play$/;
+// A real uuid shape, so a malformed id is the same 404 as an unknown one and
+// never reaches Postgres (where it would be a cast error and a 503).
+const COVER_PATH =
+  /^\/api\/public\/jams\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\/cover$/;
+
+/**
+ * What a served cover may be cached for, in a browser and at a shared cache.
+ * Five minutes, shorter than the Baú cover's hour on purpose: a song taken down
+ * (a copyright report, a withdrawn consent, a blocked publisher) keeps its
+ * CACHED picture at most this long, and the card itself is cached by the
+ * unfurler on its own terms either way. The bytes are immutable under the
+ * address (a replaced cover is a new object, and the ETag is a hash of its
+ * key), so a revalidation after the five minutes is a 304 and no storage call.
+ */
+export const JAM_COVER_CACHE = "public, max-age=300, s-maxage=300";
+/** What the redirect fallback (over the size cap, or not an inert image) may be cached for. */
+const JAM_COVER_REDIRECT_CACHE = "public, max-age=60";
 
 const configLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 1 });
 /** A page of the public site, scrolled: generous. */
@@ -102,17 +121,26 @@ const songLimiter = createRateLimiter({ capacity: 120, refillPerSecond: 4 });
  * by `jam-public-plays.ts` anyway.
  */
 const playLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 0.5 });
+/**
+ * A card's picture. Link crawlers fetch it a few times a song (a HEAD, a ranged
+ * GET, the GET), from addresses that are shared by thousands of senders, so the
+ * bucket is as generous as a song page's. Its own bucket, so a crawler walking
+ * covers cannot spend a person's song reads, and the refusal it earns is the
+ * same 429 whether the id is real or not: this route is not a way to probe ids.
+ */
+const coverLimiter = createRateLimiter({ capacity: 120, refillPerSecond: 4 });
 
 export function resetJamPublicRateLimits(): void {
   configLimiter.reset();
   listLimiter.reset();
   songLimiter.reset();
   playLimiter.reset();
+  coverLimiter.reset();
 }
 
 function take(
   limiter: ReturnType<typeof createRateLimiter>,
-  kind: "config" | "list" | "song" | "play",
+  kind: "config" | "list" | "song" | "play" | "cover",
   req: IncomingMessage,
   res: ServerResponse,
 ): boolean {
@@ -202,6 +230,36 @@ export async function handleJamPublicPublicRoute(
       jamPlays.note(play[1]!, jamPlayViewer("address", clientAddress(req as never)));
       res.writeHead(204, { ...SECURITY_HEADERS, ...corsHeaders(req) });
       res.end();
+      return true;
+    }
+    const cover = COVER_PATH.exec(pathname);
+    if (cover) {
+      if (!reads) {
+        methodNotAllowed(req, res, "GET, HEAD");
+        return true;
+      }
+      if (!take(coverLimiter, "cover", req, res)) {
+        return true;
+      }
+      const found = await getPublicJamCover(cover[1]!.toLowerCase());
+      if (!found) {
+        // Unknown, private, unpublished, no cover, cover not scanned: one
+        // answer, byte for byte (`no-store`, so it never lingers at a cache).
+        sendError(res, 404, "Not found", req);
+        return true;
+      }
+      const headers = (cacheControl: string): Record<string, string> => ({
+        "Cache-Control": cacheControl,
+        ...SECURITY_HEADERS,
+        ...corsHeaders(req),
+      });
+      await serveCover(req, res, found, {
+        headers,
+        notFound: () => sendError(res, 404, "Not found", req),
+        unavailable: () => sendError(res, 503, "Temporarily unavailable", req),
+        missCacheControl: JAM_COVER_REDIRECT_CACHE,
+        cacheControl: JAM_COVER_CACHE,
+      });
       return true;
     }
     const song = SONG_PATH.exec(pathname);
