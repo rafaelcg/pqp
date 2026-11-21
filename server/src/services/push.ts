@@ -1802,7 +1802,7 @@ export interface WatchPartyWaitlistApprovedPush {
 }
 
 const WAITLIST_APPROVED_BODY: Record<PushLocale, string> = {
-  "pt-BR": "Watch party liberada! Já dá pra criar a sua.",
+  "pt-BR": "Watch party liberada! Já dá pra criar a tua.",
   en: "Watch parties are on. You can start one now.",
 };
 
