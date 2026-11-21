@@ -82,7 +82,7 @@ object JamWho {
         val names = contributors.orEmpty().map(JamBidi::isolate).filter { it.isNotEmpty() }
         if (names.isEmpty()) {
             val author = JamBidi.isolateOpt(song.authorName)
-            val rest = max(0, song.contributorCount - (if (song.authorName == null) 0 else 1))
+            val rest = max(0, song.contributorCount - (if (author.isEmpty()) 0 else 1))
             if (author.isEmpty()) return if (rest > 0) "+$rest" else ""
             return if (rest > 0) "$author +$rest" else author
         }

@@ -78,7 +78,7 @@ enum JamWho {
         let names = (contributors ?? []).map(JamBidi.isolate).filter { !$0.isEmpty }
         if names.isEmpty {
             let author = JamBidi.isolateOpt(song.authorName)
-            let rest = max(0, song.contributorCount - (song.authorName == nil ? 0 : 1))
+            let rest = max(0, song.contributorCount - (author.isEmpty ? 0 : 1))
             if author.isEmpty { return rest > 0 ? "+\(rest)" : "" }
             return rest > 0 ? "\(author) +\(rest)" : author
         }

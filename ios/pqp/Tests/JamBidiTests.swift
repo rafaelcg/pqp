@@ -119,4 +119,11 @@ final class JamBidiTests: XCTestCase {
         XCTAssertEqual(JamBidi.clean(line), "rafa, duda +1")
         XCTAssertEqual(JamWho.line(song: song, contributors: nil), "\(fsi)rafa\(pdi) +2")
     }
+
+    func testAnAuthorWhoseNameWasOnlyControlsIsNotDrawnSoItIsNotSubtractedFromTheCount() {
+        let song = JamSongSummary(
+            id: "s", channelId: "c", serverId: "x", title: "In Bloom", authorName: rlo, trackCount: 2, contributorCount: 3
+        )
+        XCTAssertEqual(JamWho.line(song: song, contributors: nil), "+3")
+    }
 }

@@ -111,4 +111,10 @@ class JamBidiTest {
         assertEquals("rafa, duda +3", JamBidi.clean(line))
         assertEquals("${fsi}rafa$pdi +4", JamWho.line(song, null))
     }
+
+    @Test
+    fun `an author whose name was only controls is not drawn, so it is not subtracted from the count`() {
+        val song = JamSongSummary(id = "s", channelId = "c", title = "In Bloom", authorName = rlo, trackCount = 2, contributorCount = 3)
+        assertEquals("+3", JamWho.line(song, null))
+    }
 }
