@@ -30,11 +30,12 @@ async function ensureVoiceChannel(): Promise<void> {
   const { channels } = (await list.json()) as {
     channels: { name: string; type: string }[];
   };
-  if (
-    channels.some(
-      (c) => c.type === "voice" && c.name.toLowerCase() === "lobby",
-    )
-  ) {
+  // Exact name, because every test below finds the channel with the
+  // case-sensitive `/lobby/`. A case-insensitive check let the server's own
+  // "Lobby" count as present, so on a fresh database nothing made "lobby"
+  // and every dblclick waited out the test timeout (push-to-talk.spec.ts
+  // already matches exactly).
+  if (channels.some((c) => c.type === "voice" && c.name === "lobby")) {
     return;
   }
   await fetch(`${API}/api/servers/${serverId}/channels`, {
@@ -197,6 +198,28 @@ test.describe("voice lobby", () => {
       name: /Share your screen \(unavailable/,
     });
     await expect(share).toBeVisible();
+    // `force` because the button is `aria-disabled` (it stays focusable so it
+    // can explain itself), and Playwright treats that as disabled and would
+    // wait forever. But `force` also skips the checks that the button has
+    // stopped moving and is the thing under the pointer, and it is neither
+    // when the bar first shows: the dock opens by growing its row, and for
+    // about 100 ms the share tile slides up from y 807 to y 713 on this
+    // viewport. A click aimed at its box in that window landed on the
+    // composer's toolbar or its textarea, so no hint ever appeared (seen on
+    // main CI, and 14 of 15 locally). Waiting until a tap at the tile's centre
+    // reaches the tile is exactly the check `force` skipped.
+    await expect
+      .poll(() =>
+        share.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const hit = document.elementFromPoint(
+            r.x + r.width / 2,
+            r.y + r.height / 2,
+          );
+          return hit !== null && el.contains(hit);
+        }),
+      )
+      .toBe(true);
     await share.click({ force: true });
     await expect(
       page.getByText("Screen sharing isn't supported by this browser."),
