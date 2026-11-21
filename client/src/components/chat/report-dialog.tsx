@@ -1,14 +1,13 @@
 import {
   REPORT_DETAILS_MAX_LENGTH,
   REPORT_REASONS,
-  REPORT_REASON_LABELS,
   type CreateReportRequest,
   type ReportReason,
 } from "@pqp/shared";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import { useTranslation } from "@/lib/i18n";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { ApiError, createReport } from "@/lib/api";
 import { reportPublicJam } from "@/lib/jam-public-api";
 
@@ -287,7 +286,7 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
                 onChange={() => setReason(value)}
                 className="h-4 w-4 accent-[var(--color-signal)]"
               />
-              {REPORT_REASON_LABELS[value]}
+              {t(`report.reason.${value}` as MessageKey)}
             </label>
           ))}
         </fieldset>

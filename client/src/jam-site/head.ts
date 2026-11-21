@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { bidiClean } from "@/lib/bidi";
 
 /**
  * The document head, kept right in the browser. The edge writes the head a
@@ -23,7 +24,13 @@ function meta(attr: "name" | "property", key: string): HTMLMetaElement {
   return element;
 }
 
-export function applyHead(head: JamHead): void {
+export function applyHead(input: JamHead): void {
+  // A tab title cannot hold an isolate, so a right-to-left override that a song
+  // stored before the server stripped them still carries is dropped here too
+  // (the data layer already did; this is the last door every title goes through).
+  const title = bidiClean(input.title);
+  const description = input.description ? bidiClean(input.description) : undefined;
+  const head = { ...input, title, description };
   document.title = head.title;
   meta("property", "og:title").content = head.title;
   meta("name", "twitter:title").content = head.title;

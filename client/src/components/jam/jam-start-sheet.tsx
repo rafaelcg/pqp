@@ -9,6 +9,7 @@ import type { NewSongDraft } from "@/hooks/use-jam-studio";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
 import { newJamNonce } from "@/lib/jam-nonce";
+import { jamArtistCheck, jamTitleCheck } from "@/lib/jam-text";
 import { cn } from "@/lib/utils";
 
 /**
@@ -55,17 +56,26 @@ export function JamStartSheet({
     }
   }, [open]);
 
-  const cleanTitle = title.replace(/\s+/g, " ").trim();
-  const titleMissing = cleanTitle.length === 0;
+  // The server's own rule (`jam-text.ts`): bidi controls out, one line, and something to read. A
+  // title of only zero-width spaces is "invisible", told apart from an empty one, and never reaches
+  // the studio: the take would be recorded for a song the server then refuses.
+  const titleCheck = jamTitleCheck(title);
+  const artistCheck = jamArtistCheck(artist.replace(/\s+/g, " ").trim());
+  const cleanTitle = titleCheck.ok ? titleCheck.title : "";
+  const titleMissing = !titleCheck.ok;
+  const titleMessage = !titleCheck.ok && titleCheck.problem === "invisible" ? t("jam.start.titleInvisible") : t("jam.start.needTitle");
+  const artistInvalid = !artistCheck.ok;
+  // Empty waits for a press of Start; text that draws nothing is said as soon as it is typed.
+  const showTitleError = titleMissing && (touched || (!titleCheck.ok && titleCheck.problem === "invisible"));
   const wantedMissing = joinMode === "wanted" && wanted.length === 0;
-  const invalid = titleMissing || wantedMissing;
+  const invalid = titleMissing || artistInvalid || wantedMissing;
 
   function submit() {
     setTouched(true);
-    if (invalid) {
+    if (invalid || !titleCheck.ok || !artistCheck.ok) {
       return;
     }
-    const cleanArtist = artist.replace(/\s+/g, " ").trim();
+    const cleanArtist = artistCheck.artist ?? "";
     // The author's own instrument: the first one they are not asking others
     // for, so a song looking for a voice starts as the guitar it has.
     const mine = JAM_INSTRUMENT_ORDER.find((one) => !wanted.includes(one)) ?? "guitar";
@@ -122,14 +132,14 @@ export function JamStartSheet({
             maxLength={JAM_TITLE_MAX}
             onChange={(event) => setTitle(event.target.value)}
             placeholder={t("jam.start.songTitlePlaceholder")}
-            aria-invalid={touched && titleMissing ? true : undefined}
-            aria-describedby={touched && titleMissing ? `${formId}-title-error` : undefined}
-            className={cn(touched && titleMissing && "border-danger")}
+            aria-invalid={showTitleError ? true : undefined}
+            aria-describedby={showTitleError ? `${formId}-title-error` : undefined}
+            className={cn(showTitleError && "border-danger")}
             data-jam-start-title=""
           />
-          {touched && titleMissing && (
+          {showTitleError && (
             <span id={`${formId}-title-error`} role="alert" className="text-xs font-normal text-danger">
-              {t("jam.start.needTitle")}
+              {titleMessage}
             </span>
           )}
           {title.length >= JAM_TITLE_MAX - 20 && (
@@ -152,7 +162,15 @@ export function JamStartSheet({
             maxLength={JAM_ARTIST_MAX}
             onChange={(event) => setArtist(event.target.value)}
             placeholder={t("jam.start.artistPlaceholder")}
+            aria-invalid={artistInvalid ? true : undefined}
+            aria-describedby={artistInvalid ? `${formId}-artist-error` : undefined}
+            className={cn(artistInvalid && "border-danger")}
           />
+          {artistInvalid && (
+            <span id={`${formId}-artist-error`} role="alert" className="text-xs font-normal text-danger">
+              {t("jam.start.artistInvisible")}
+            </span>
+          )}
         </label>
 
         <div className="flex flex-col gap-2">

@@ -127,6 +127,8 @@ export type JamErrorKind =
   | "rateLimited"
   | "network"
   | "gone"
+  /** 400: the body did not parse. On a jam write that is text the shared rule refuses (a name, an artist or a label that draws nothing). */
+  | "invalid"
   | "other";
 
 export function jamErrorKind(error: unknown): JamErrorKind {
@@ -156,6 +158,11 @@ export function jamErrorKind(error: unknown): JamErrorKind {
     }
     if (error.status === 404) {
       return "gone";
+    }
+    // The client checks the text with the server's own rule before it asks, so this is a build or a
+    // draft from before that check: say what is wrong instead of a "try again" that can never work.
+    if (error.status === 400) {
+      return "invalid";
     }
     return "other";
   }

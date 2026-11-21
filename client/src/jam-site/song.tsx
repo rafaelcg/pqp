@@ -19,7 +19,7 @@ import { SongStage } from "./song-stage";
 import { SongTransport } from "./song-transport";
 import { button, Skeleton } from "./ui";
 import { useJamSong } from "./use-jam-data";
-import { ago, compactCount, clock, cn, initials, listOf, instrumentName, personLabel } from "./util";
+import { ago, compactCount, clock, cn, copyText, initials, listOf, instrumentName, personLabel } from "./util";
 
 /** The song page: the mosaic, one play button, the lanes, where it was born. */
 
@@ -164,13 +164,12 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
       // The sheet was dismissed: nothing to say. Anything else falls to the copy.
       if (error instanceof DOMException && error.name === "AbortError") return;
     }
-    try {
-      await navigator.clipboard.writeText(url);
-      setShared(jt("share.copied"));
-    } catch {
-      setShared(url);
-    }
-    window.setTimeout(() => setShared(null), 3500);
+    // "Link copied" only when the clipboard took it. When it did not (no
+    // permission, an insecure page), the toast is the link itself, said as
+    // what it is, and stays long enough to read and select.
+    const copied = await copyText(url);
+    setShared(copied ? jt("share.copied") : jt("share.manual", { url }));
+    window.setTimeout(() => setShared(null), copied ? 3500 : 9000);
   };
 
   useHead({
