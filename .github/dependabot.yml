@@ -7,7 +7,8 @@
 # the same window as `minimumReleaseAge` in pnpm-workspace.yaml, so a
 # compromised release that is yanked within days is never proposed. Minor and
 # patch bumps are grouped into one PR per ecosystem per week; a major bump
-# stays its own PR so it gets read.
+# stays its own PR so it gets read (in the workspace, one PR per dependency
+# across all its directories, see `group-by` below).
 version: 2
 
 updates:
@@ -51,11 +52,26 @@ updates:
       # once the Locadora frame or that spec is fixed and 1.65 can be taken by hand.
       - dependency-name: "@playwright/test"
         versions: ["1.65.x"]
+      # The types follow the Node the code RUNS on, not the newest release. The
+      # API image and every CI job run Node 24 and the packages are on 22, so
+      # 25 and later describe APIs the runtime does not have. Moving to 24 is a
+      # by-hand change with the runtime; 23 to 24 still flow.
+      - dependency-name: "@types/node"
+        versions: [">=25.0.0"]
     groups:
       npm-minor-patch:
         update-types:
           - minor
           - patch
+      # Everything else that is left (majors). Without this each directory got
+      # its own PR for the same bump, and those PRs changed one package.json and
+      # not pnpm-lock.yaml, so CI died at `pnpm install --frozen-lockfile`
+      # (vitest 5 in eight directories, @types/node in six: 1687 to 1702). With
+      # `group-by` it is one PR per dependency that moves it everywhere with the
+      # lockfile. Order matters: a dependency lands in the first group that
+      # matches, so minor and patch stay in the weekly group above.
+      npm-major-by-dependency:
+        group-by: dependency-name
 
   # The workspace root, on its own because of one ignore that must not reach
   # the packages. The root `typescript` exists for typescript-eslint, which
