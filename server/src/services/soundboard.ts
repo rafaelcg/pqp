@@ -528,21 +528,32 @@ export async function claimSoundboardSound(input: {
 
   // A repeated claim of an upload that already became a clip: the upload
   // file is gone, so answer from the row before touching storage.
-  const already = await getPool().query<SoundRow>(
-    `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
-            duration_ms, volume
-       FROM soundboard_sounds
-      WHERE storage_key = $1 AND server_id = $2`,
-    [clipKey, input.serverId],
-  );
-  if (already.rows[0]) {
-    return { sound: toSound(already.rows[0]), created: false };
+  const existingClip = async (): Promise<SoundRow | undefined> =>
+    (
+      await getPool().query<SoundRow>(
+        `SELECT id, server_id, name, emoji, storage_key, content_type, bytes,
+                duration_ms, volume
+           FROM soundboard_sounds
+          WHERE storage_key = $1 AND server_id = $2`,
+        [clipKey, input.serverId],
+      )
+    ).rows[0];
+  const already = await existingClip();
+  if (already) {
+    return { sound: toSound(already), created: false };
   }
 
   // Copy first, then check the copy: what is checked is what is stored.
   try {
     await copyObject(input.key, clipKey);
   } catch {
+    // A parallel claim of the same key may have finished between the check
+    // above and this copy: it commits, then deletes the upload file, so the
+    // source is gone because the clip exists, not because it never did.
+    const finished = await existingClip();
+    if (finished) {
+      return { sound: toSound(finished), created: false };
+    }
     throw new SoundboardError("missing");
   }
   const discardCopy = () => deleteObject(clipKey).catch(() => undefined);
