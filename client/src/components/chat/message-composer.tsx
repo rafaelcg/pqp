@@ -43,23 +43,29 @@ import {
   TextQuote,
   User,
   UserPlus,
+  LayoutGrid,
   X,
   type LucideIcon,
 } from "lucide-react";
+import type { AppLauncherMenuTrigger } from "@/components/apps/app-launcher";
 import {
   ArrowBendUpLeft,
   ArrowUp as ArrowUpGlyph,
+  Check as CheckGlyph,
   CheckCircle as CheckCircleGlyph,
   Code as CodeGlyph,
+  ChartBar as ChartBarGlyph,
   CodeBlock,
   File as FileGlyph,
   Gif as GifGlyph,
   Hourglass as HourglassGlyph,
   Info as InfoGlyph,
   ListBullets,
+  Paperclip as PaperclipGlyph,
   Plus as PlusGlyph,
   Quotes,
   Smiley,
+  SquaresFour as SquaresFourGlyph,
   TextAa,
   TextB,
   TextItalic,
@@ -69,7 +75,7 @@ import {
   type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
 import { ComposerFormatPreview } from "@/components/chat/composer-format-preview";
-import { Icon as Glyph } from "@/components/ui/icon";
+import { Icon as Glyph, IconSwap } from "@/components/ui/icon";
 import { MusicHintHostProvider } from "@/components/voice/call-dock";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { rememberFeatureHint } from "@/lib/feature-hints";
@@ -90,6 +96,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import {
@@ -169,6 +176,12 @@ import {
 } from "@/lib/composer-formatting";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { useMediaQuery } from "@/components/ui/use-media-query";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
+import { draftNeedsPreview } from "@/lib/composer-preview";
+import { alignPanelEnd } from "@/lib/composer-picker-place";
+import { fieldLineHeightPx, singleLineFits } from "@/lib/composer-field";
+import { ComposerStatusBar, textAsFile } from "@/components/chat/composer-status-bar";
 
 export interface ComposerSlashContext {
   updateDisplayName: (name: string) => Promise<void>;
@@ -276,7 +289,13 @@ interface MessageComposerProps {
    * channel and the permissions; the composer only gives it a place and its
    * own icon-button size. Absent in a thread, a DM, a forum and stream chat.
    */
-  appsLauncher?: (buttonClassName: string) => ReactNode;
+  appsLauncher?: (buttonClassName: string, menu?: AppLauncherMenuTrigger) => ReactNode;
+  /**
+   * Who is typing, drawn in the status line under the field under the
+   * redesign (`TypingLine`). The list then leaves people out of its own
+   * typing row.
+   */
+  typingLine?: ReactNode;
 }
 
 /**
@@ -296,6 +315,24 @@ const COMPOSER_ICON_ON = "bg-surface-3 text-text redesign:bg-[color:color-mix(in
  * text tint, round tools and a round accent send, Phosphor glyphs. What
  * stacks inside the well (reply, chips, format bar) sits on the same tint.
  */
+/*
+ * The one-row composer (the + left of the field, tools and send right of it).
+ * The tools row dissolves into the row, so its buttons line up beside the
+ * field and sit level with its bottom as it grows to several lines.
+ */
+const COMPOSER_ROW_REDESIGN =
+  "redesign:flex redesign:items-end redesign:gap-1 redesign:p-[7px]";
+/*
+ * A phone's finger target (44px) around a 36px tool, drawn by a pseudo
+ * element so the row keeps its look and its alignment with the 40px field.
+ * The phone row's gap is 8px, so two targets meet and never overlap.
+ */
+/** The GIF picker's width, `w-[21rem]` in gif-picker-panel.tsx. */
+const GIF_PICKER_WIDTH_PX = 336;
+const COMPOSER_PHONE_HIT = "relative after:absolute after:-inset-1 after:content-['']";
+const COMPOSER_TOOLS_ROW_REDESIGN =
+  "redesign:contents redesign:[&>*]:order-2 redesign:[&>*]:mb-0.5";
+
 const COMPOSER_WELL_REDESIGN =
   "redesign:rounded-[var(--composer-radius)] redesign:border-[color:var(--composer-border)] redesign:bg-[color:var(--composer-bg)] redesign:focus-within:border-[color:var(--composer-border-focus)]";
 
@@ -461,6 +498,8 @@ interface PendingAttachment {
   error: string | null;
 }
 
+type UploadDone = Promise<{ attachmentId: string; width: number | null; height: number | null }>;
+
 let localIdCounter = 0;
 function nextLocalId(): string {
   localIdCounter += 1;
@@ -489,8 +528,47 @@ export function MessageComposer({
   music,
   appsLauncher,
   embedded = null,
+  typingLine = null,
 }: MessageComposerProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
+  const redesign = useRedesign();
+  const oneRow = !embedded && variant !== "stream";
+  // Under the redesign the apps are a row of the + menu, not a button.
+  const appsInMenu = redesign && variant !== "stream" && Boolean(appsLauncher);
+  const [appsState, setAppsState] = useState({ available: false, running: false });
+  const [appsRequest, setAppsRequest] = useState(0);
+  const onAppsState = useCallback(
+    (next: { available: boolean; running: boolean }) =>
+      setAppsState((prev) =>
+        prev.available === next.available && prev.running === next.running ? prev : next,
+      ),
+    [],
+  );
+  // A narrow phone: @ suggestions sit above the keyboard as pills.
+  const phone = useMediaQuery(BELOW_SM_QUERY, false);
+  // The one-row composer on a phone, under the redesign: the +, the field,
+  // emoji and Send. Formatting and GIF move into the + menu.
+  const phoneRow = redesign && phone && oneRow;
+  // Where index.css forces fields to 16px (iOS zooms the page below that).
+  // Under the redesign the field follows the chat size, never below 16 there.
+  const zoomGuard = useMediaQuery(`${BELOW_SM_QUERY}, (pointer: coarse)`, false);
+  const fieldFontSize = redesign
+    ? zoomGuard
+      ? "max(16px, var(--chat-font-size))"
+      : "var(--chat-font-size)"
+    : undefined;
+  const formRef = useRef<HTMLFormElement>(null);
+  // Under the redesign at sm and up the pickers open over their own button,
+  // right edges aligned, inside the pane. A phone keeps the full width.
+  const anchorPickers = redesign && !phone;
+  const pickerAlignEndTo = useCallback(() => {
+    const form = formRef.current;
+    const button = form?.querySelector<HTMLElement>("[data-composer-emoji]");
+    return anchorPickers && form && button ? { anchor: button, bounds: form } : null;
+  }, [anchorPickers]);
+  // The GIF picker is positioned in the form, so its right offset is a
+  // variable on the form, measured when it opens.
+  const [gifRight, setGifRight] = useState<number | null>(null);
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
   // The draft outlives the mount: App remounts this component per channel,
   // so what was typed here is read back when the channel is reopened and
@@ -519,6 +597,15 @@ export function MessageComposer({
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [feedback, setFeedback] = useState<SlashFeedback | null>(null);
+  // Under the redesign: the count blinks when Enter is refused past the
+  // limit, a paste that crossed the limit offers a .txt, and a selection
+  // raises the format bar over the field.
+  const [countFlash, setCountFlash] = useState(false);
+  const countFlashTimer = useRef<number | null>(null);
+  // `pasted` is the text right after the paste. Any later edit drops the
+  // offer, so undoing it can never erase what was typed since.
+  const [pasteOffer, setPasteOffer] = useState<{ previous: string; pasted: string | null } | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
   const [isRunningSlash, setIsRunningSlash] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -542,6 +629,8 @@ export function MessageComposer({
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const uploadsRef = useRef(new Map<string, AbortController>());
+  /** Each running upload's result, so a send under the redesign can carry it. */
+  const uploadDoneRef = useRef(new Map<string, UploadDone>());
 
   useEffect(() => {
     if (!slowModeUntil || slowModeUntil <= Date.now()) {
@@ -706,7 +795,14 @@ export function MessageComposer({
   const iconButtonClass = cn(
     COMPOSER_ICON_BUTTON,
     embedded && "max-sm:h-11 max-sm:w-11",
+    phoneRow && COMPOSER_PHONE_HIT,
   );
+  // Something Send would send. On a phone under the redesign Send is drawn
+  // only then (or while slow mode counts down); elsewhere it is always drawn
+  // and this is what enables it.
+  const hasSendable =
+    !composerBodyIsEmpty(body) || readyCount > 0 || (redesign && isUploading);
+  const showSend = !phoneRow || hasSendable || slowModeRemaining > 0;
   // Embedded: the form reads the text and the files from here, through a ref
   // so a new callback identity per render does not report twice.
   const embeddedRef = useRef(embedded);
@@ -802,7 +898,18 @@ export function MessageComposer({
       return mentionMatches.map((member) => ({
         id: member.id,
         primary: `@${member.username}`,
-        secondary: member.displayName,
+        // A phone's pill names the person; @everyone and a role keep the @.
+        short:
+          member.mentionKind === "mass" || member.mentionKind === "role"
+            ? `@${member.username}`
+            : member.displayName,
+        // Under the redesign a mass or role mention says how many it reaches.
+        secondary:
+          redesign && member.reach !== undefined && member.mentionKind === "mass"
+            ? t("composer.mentionReach", { count: member.reach })
+            : redesign && member.reach !== undefined && member.mentionKind === "role"
+              ? t("composer.roleMembers", { count: member.reach })
+              : member.displayName,
         leading: (
           <UserAvatar
             name={member.displayName}
@@ -822,7 +929,7 @@ export function MessageComposer({
       }));
     }
     return [];
-  }, [emojiMatches, menuKind, mentionMatches, rollPresetOpen, rollPresets, slashMatches, t]);
+  }, [emojiMatches, menuKind, mentionMatches, redesign, rollPresetOpen, rollPresets, slashMatches, t]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -905,19 +1012,30 @@ export function MessageComposer({
       return;
     }
 
-    node.style.lineHeight = `${COMPOSER_LINE_PX}px`;
+    // Under the redesign the field is at the chat size, so its wrapped line
+    // box follows that size; the old look keeps 20px.
+    const linePx = redesign
+      ? fieldLineHeightPx(parseFloat(getComputedStyle(node).fontSize), COMPOSER_LINE_PX)
+      : COMPOSER_LINE_PX;
+    node.style.lineHeight = `${linePx}px`;
     node.style.paddingTop = `${COMPOSER_PAD_Y_PX}px`;
     node.style.paddingBottom = `${COMPOSER_PAD_Y_PX}px`;
     node.style.height = "0px";
     const hasBreak = body.includes("\n");
     const minHeight = hasBreak
-      ? COMPOSER_PAD_Y_PX * 2 + COMPOSER_LINE_PX * 2
+      ? COMPOSER_PAD_Y_PX * 2 + linePx * 2
       : COMPOSER_CONTROL_PX;
     const next = Math.min(
       Math.max(node.scrollHeight, minHeight),
       MAX_COMPOSER_HEIGHT_PX,
     );
-    if (next <= COMPOSER_CONTROL_PX && !hasBreak) {
+    // One line rests at the control height with the text centred. Under the
+    // redesign "one line" is asked of the measured lines, since a large chat
+    // size's padded line is taller than the control.
+    const oneLine = redesign
+      ? singleLineFits(node.scrollHeight, COMPOSER_PAD_Y_PX, linePx, COMPOSER_CONTROL_PX)
+      : next <= COMPOSER_CONTROL_PX;
+    if (oneLine && !hasBreak) {
       applyResting();
       setComposerBox({
         height: COMPOSER_CONTROL_PX,
@@ -932,11 +1050,12 @@ export function MessageComposer({
     node.style.overflowY = overflowY;
     setComposerBox({
       height: next,
-      lineHeight: COMPOSER_LINE_PX,
+      lineHeight: linePx,
       paddingY: COMPOSER_PAD_Y_PX,
       overflowY,
     });
-  }, [body]);
+    // The width moves with Send on a phone and the size with the zoom guard.
+  }, [body, redesign, fieldFontSize, showSend]);
 
   useEffect(() => {
     if (!insertText) {
@@ -1032,6 +1151,37 @@ export function MessageComposer({
 
   function syncCaret(input: HTMLTextAreaElement) {
     setCaret(input.selectionStart ?? input.value.length);
+    setHasSelection(
+      input.selectionStart !== null &&
+        input.selectionEnd !== null &&
+        input.selectionEnd > input.selectionStart,
+    );
+  }
+
+  /** Past the limit: the text goes out as a .txt instead. */
+  // Only the main composer has the count, the paste offer and send as file.
+  // The forum and watch party composers keep the hard cap.
+  const liftsLimit = redesign && !embedded && variant !== "stream";
+  const overLimit = liftsLimit && body.length > MESSAGE_MAX_LENGTH;
+  function sendBodyAsFile() {
+    if (!body) {
+      return;
+    }
+    // Refused (the attachment cap, say): the text stays, and the strip says why.
+    if (addFiles([textAsFile(body, t("composer.pastedFileName"))]) === 0) {
+      return;
+    }
+    setBody("");
+    setCaret(0);
+    setPasteOffer(null);
+    inputRef.current?.focus();
+  }
+  function refuseOverLimit() {
+    setCountFlash(true);
+    if (countFlashTimer.current !== null) {
+      window.clearTimeout(countFlashTimer.current);
+    }
+    countFlashTimer.current = window.setTimeout(() => setCountFlash(false), 600);
   }
 
   /** Put the caret back where the edit left it, after React repaints. */
@@ -1093,19 +1243,26 @@ export function MessageComposer({
       },
     ]);
 
+    const done = createGifAttachment(channelId, {
+      url: gif.url,
+      width: gif.width,
+      height: gif.height,
+      title: gif.title,
+    }).then(({ attachment }) => ({
+      attachmentId: attachment.id,
+      width: gif.width,
+      height: gif.height,
+    }));
+    uploadDoneRef.current.set(localId, done);
     try {
-      const { attachment } = await createGifAttachment(channelId, {
-        url: gif.url,
-        width: gif.width,
-        height: gif.height,
-        title: gif.title,
-      });
+      const { attachmentId } = await done;
       updatePending(localId, {
         status: "ready",
         progress: 1,
-        attachmentId: attachment.id,
+        attachmentId,
       });
     } catch (error) {
+      uploadDoneRef.current.delete(localId);
       updatePending(localId, {
         status: "failed",
         error: error instanceof Error ? error.message : t("composer.gifFailed"),
@@ -1150,10 +1307,12 @@ export function MessageComposer({
       },
     ]);
 
-    void uploadAttachment(targetChannelId, selected, {
+    const done = uploadAttachment(targetChannelId, selected, {
       signal: controller.signal,
       onProgress: (fraction) => updatePending(localId, { progress: fraction }),
-    })
+    });
+    uploadDoneRef.current.set(localId, done);
+    void done
       .then((uploaded) =>
         updatePending(localId, {
           status: "ready",
@@ -1166,6 +1325,7 @@ export function MessageComposer({
       .catch((error: unknown) => {
         // A cancel already removed the chip and revoked its URL; re-adding an
         // error to a row that is gone would resurrect it.
+        uploadDoneRef.current.delete(localId);
         if (error instanceof AttachmentAbortError) {
           return;
         }
@@ -1174,15 +1334,21 @@ export function MessageComposer({
           error: error instanceof Error ? error.message : t("composer.uploadFailed"),
         });
       })
-      .finally(() => uploadsRef.current.delete(localId));
+      .finally(() => {
+        uploadsRef.current.delete(localId);
+        // A landed upload keeps its entry until it is sent or removed: "ready"
+        // only arrives on the next commit, and an Enter in between still needs
+        // the promise to send the file with the message.
+      });
   }
 
-  function addFiles(files: File[], folders: string[] = []) {
+  /** Starts the uploads it can and returns how many it took. */
+  function addFiles(files: File[], folders: string[] = []): number {
     if (!channelId || !attachmentLimits?.enabled) {
-      return;
+      return 0;
     }
     if (files.length === 0 && folders.length === 0) {
-      return;
+      return 0;
     }
     const { accepted, rejected } = selectAttachments(files, {
       existingCount: pendingRef.current.length,
@@ -1206,6 +1372,7 @@ export function MessageComposer({
     for (const selected of accepted) {
       startUpload(channelId, selected);
     }
+    return accepted.length;
   }
 
   /**
@@ -1228,6 +1395,7 @@ export function MessageComposer({
     const target = pendingRef.current.find((item) => item.localId === localId);
     uploadsRef.current.get(localId)?.abort();
     uploadsRef.current.delete(localId);
+    uploadDoneRef.current.delete(localId);
     if (target) {
       revokePreviewUrl(target.previewUrl);
     }
@@ -1242,6 +1410,14 @@ export function MessageComposer({
    * into the textarea alongside the upload.
    */
   function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (liftsLimit) {
+      const text = event.clipboardData.getData("text/plain");
+      const input = event.currentTarget;
+      const replaced = (input.selectionEnd ?? 0) - (input.selectionStart ?? 0);
+      if (text && body.length - replaced + text.length > MESSAGE_MAX_LENGTH) {
+        setPasteOffer({ previous: body, pasted: null });
+      }
+    }
     if (!channelId || !attachmentLimits?.enabled) {
       return;
     }
@@ -1357,16 +1533,22 @@ export function MessageComposer({
     if (slowModeRemaining > 0) {
       return;
     }
+    if (overLimit) {
+      refuseOverLimit();
+      return;
+    }
     const trimmed = body.trim();
     const ready = pending.filter(
       (item) => item.status === "ready" && item.attachmentId,
     );
     // Sending mid-upload would silently drop whatever had not finished, so the
-    // send waits rather than sending a message the user did not compose.
-    if (isRunningSlash || isUploading) {
+    // send waits rather than sending a message the user did not compose. Under
+    // the redesign it goes at once instead and carries the unfinished files
+    // with it (see `commitSend`).
+    if (isRunningSlash || (isUploading && !redesign)) {
       return;
     }
-    if ((composerBodyIsEmpty(body) || !trimmed) && ready.length === 0) {
+    if ((composerBodyIsEmpty(body) || !trimmed) && ready.length === 0 && !(redesign && isUploading)) {
       return;
     }
 
@@ -1392,23 +1574,52 @@ export function MessageComposer({
     commitSend();
   }
 
+  function abortOf(controller: AbortController | undefined): (() => void) | undefined {
+    return controller ? () => controller.abort() : undefined;
+  }
+
   function commitSend() {
     const trimmed = body.trim();
     const ready = pending.filter(
       (item) => item.status === "ready" && item.attachmentId,
     );
+    // Under the redesign an upload still going travels with the message: the
+    // chat controller shows it at once and sends when it lands. Handed over,
+    // it is no longer this composer's to abort when the channel changes.
+    const waiting = redesign
+      ? pending.filter((item) => item.status === "uploading" && uploadDoneRef.current.has(item.localId))
+      : [];
     onSend(
       trimmed ? expandBody(trimmed) : "",
-      ready.map((item) => ({
-        attachmentId: item.attachmentId!,
-        filename: item.filename,
-        contentType: item.contentType,
-        byteSize: item.byteSize,
-        width: item.width,
-        height: item.height,
-        previewUrl: item.previewUrl,
-      })),
+      [
+        ...ready.map((item) => ({
+          attachmentId: item.attachmentId!,
+          filename: item.filename,
+          contentType: item.contentType,
+          byteSize: item.byteSize,
+          width: item.width,
+          height: item.height,
+          previewUrl: item.previewUrl,
+        })),
+        ...waiting.map((item) => ({
+          attachmentId: item.localId,
+          filename: item.filename,
+          contentType: item.contentType,
+          byteSize: item.byteSize,
+          width: item.width,
+          height: item.height,
+          previewUrl: item.previewUrl,
+          pending: uploadDoneRef.current.get(item.localId),
+          abort: abortOf(uploadsRef.current.get(item.localId)),
+        })),
+      ],
     );
+    for (const item of waiting) {
+      uploadsRef.current.delete(item.localId);
+    }
+    for (const item of [...ready, ...waiting]) {
+      uploadDoneRef.current.delete(item.localId);
+    }
     // The object URLs of everything just sent now belong to the chat
     // controller, which revokes them when the real message replaces the
     // optimistic one — revoking here would blank the image it is showing.
@@ -1611,13 +1822,15 @@ export function MessageComposer({
 
   /* What the + adds to a message. Emoji, GIF and formatting have their own
      buttons in the row, so the menu is the two things that need a form or a
-     file picker. */
-  const insertItems = [
+     file picker. On a phone under the redesign the row keeps only emoji, so
+     formatting and GIF are rows here instead. */
+  const insertItemCandidates: Array<ComposerInsertItem | null> = [
     isAttachmentsEnabled
       ? {
           id: "attach",
           label: t("composer.attach"),
           icon: Paperclip,
+          glyph: PaperclipGlyph,
           onSelect: () => {
             setIsInsertMenuOpen(false);
             fileInputRef.current?.click();
@@ -1629,6 +1842,7 @@ export function MessageComposer({
           id: "poll",
           label: t("composer.addPoll"),
           icon: BarChart3,
+          glyph: ChartBarGlyph,
           onSelect: () => {
             setIsInsertMenuOpen(false);
             setIsPickerOpen(false);
@@ -1637,13 +1851,135 @@ export function MessageComposer({
           },
         }
       : null,
-  ].filter((item): item is NonNullable<typeof item> => item !== null);
+    appsInMenu && appsState.available
+      ? {
+          id: "apps",
+          label: t("composer.serverApps"),
+          icon: LayoutGrid,
+          glyph: SquaresFourGlyph,
+          onSelect: () => {
+            setIsInsertMenuOpen(false);
+            setIsPickerOpen(false);
+            setIsGifPickerOpen(false);
+            setAppsRequest((n) => n + 1);
+          },
+        }
+      : null,
+    phoneRow && isGifSearchEnabled
+      ? {
+          id: "gif",
+          label: t("composer.addGif"),
+          glyph: GifGlyph,
+          onSelect: () => {
+            setIsInsertMenuOpen(false);
+            setIsPickerOpen(false);
+            setGifQuery("");
+            setIsGifPickerOpen(true);
+          },
+        }
+      : null,
+    phoneRow
+      ? {
+          id: "format",
+          label: t("composer.format"),
+          glyph: TextAa,
+          // A toggle: the row says whether the format bar is open.
+          checked: isFormatBarOpen,
+          onSelect: () => {
+            setIsInsertMenuOpen(false);
+            setIsFormatBarOpen((open) => !open);
+            // Back to the field, so the keyboard comes back with the bar.
+            inputRef.current?.focus();
+          },
+        }
+      : null,
+  ];
+  const insertItems = insertItemCandidates.filter(
+    (item): item is ComposerInsertItem => item !== null,
+  );
+
+  // One set of format buttons, for the bar inside the field and for the one
+  // a selection raises over it under the redesign.
+  const formatButtons = FORMAT_ACTIONS.map((action) => {
+              return (
+                <Tooltip key={action.id} label={t(action.labelKey)}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    disabled={disabled || isRunningSlash}
+                  onPointerDown={(event) => {
+                    // Pointer, not mouse: a tap never fires mousedown, and
+                    // without preventDefault the textarea blurs and loses the
+                    // selection before click. Apply here so touch and pen
+                    // wrap once even when the compatibility click is dropped.
+                    event.preventDefault();
+                    formatFromPointerRef.current = true;
+                    applyComposerFormat(action.kind);
+                  }}
+                  onClick={() => {
+                    if (formatFromPointerRef.current) {
+                      formatFromPointerRef.current = false;
+                      return;
+                    }
+                    applyComposerFormat(action.kind);
+                  }}
+                    className="h-7 min-w-7 flex-1 text-text-tertiary hover:text-text sm:w-7 sm:flex-none redesign:h-8 redesign:min-w-8 redesign:rounded-full redesign:text-text-secondary sm:redesign:w-8"
+                  >
+                    <ComposerGlyph old={action.icon} glyph={action.glyph} kind="symbol" size="sm" className="h-4 w-4" />
+                  </Button>
+                </Tooltip>
+              );
+            });
+  useLayoutEffect(() => {
+    if (!isGifPickerOpen || !anchorPickers) {
+      setGifRight(null);
+      return;
+    }
+    function place() {
+      const form = formRef.current;
+      const button = form?.querySelector<HTMLElement>("[data-composer-gif]");
+      if (!form || !button) {
+        setGifRight(null);
+        return;
+      }
+      setGifRight(
+        alignPanelEnd(button.getBoundingClientRect().right, form.getBoundingClientRect(), GIF_PICKER_WIDTH_PX)
+          .right,
+      );
+    }
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [isGifPickerOpen, anchorPickers]);
+
+  // Under the redesign the format preview shows only when it says something
+  // the field does not: markup the bubble draws differently.
+  const showFieldPreview = redesign && isFormatBarOpen && draftNeedsPreview(body);
+  const showSelectionFormatBar =
+    redesign && hasSelection && menuKind === null && !isFormatBarOpen && !embedded && variant !== "stream" && !disabled;
+  // Only where a file can go: without attachments the red count says enough.
+  const showPasteOffer =
+    redesign &&
+    pasteOffer !== null &&
+    (pasteOffer.pasted === null || pasteOffer.pasted === body) &&
+    overLimit &&
+    !embedded &&
+    isAttachmentsEnabled;
 
   return (
     <form
+      ref={formRef}
       data-chat-composer=""
       onSubmit={(event) => void handleSubmit(event)}
-      className={COMPOSER_FORM_CLASS}
+      // The one-row composer ends level with the user card beside it, which
+      // sits 0.5rem above the home indicator plus its 1px border.
+      className={cn(COMPOSER_FORM_CLASS, oneRow && "redesign:[--safe-pb-min:calc(0.5rem+1px)]")}
+      style={
+        gifRight === null
+          ? undefined
+          : ({ "--composer-gif-right": `${gifRight}px` } as CSSProperties)
+      }
     >
       {/* The call's coachmarks, above the WHOLE composer. The dock cannot
           hang them itself: its row animates open by collapsing and has to
@@ -1695,7 +2031,13 @@ export function MessageComposer({
           }
           options={options}
           selectedIndex={selectedIndex}
-          layout={rollPresetOpen ? "grid" : "list"}
+          layout={
+            rollPresetOpen
+              ? "grid"
+              : redesign && phone && menuKind === "mention"
+                ? "pills"
+                : "list"
+          }
           onSelect={applySelection}
           onHover={setSelectedIndex}
         />
@@ -1705,11 +2047,19 @@ export function MessageComposer({
           onSelect={insertEmoji}
           onClose={() => setIsPickerOpen(false)}
           customEmoji={serverEmoji}
+          alignEndTo={pickerAlignEndTo}
         />
       )}
       {isGifPickerOpen && !menuKind && (
         <GifPickerPanel
-          className="absolute bottom-[calc(100%-0.25rem)] left-3 sm:left-4"
+          className={cn(
+            "absolute bottom-[calc(100%-0.25rem)] left-3 sm:left-4",
+            // Under the redesign at sm and up: right edge on the GIF button.
+            gifRight !== null && "redesign:sm:left-auto redesign:sm:right-[var(--composer-gif-right)]",
+            // On a phone under the redesign it opens from the + menu and takes
+            // the composer's width rather than running off the screen.
+            phoneRow && "right-3 w-auto",
+          )}
           initialQuery={gifQuery}
           onSelect={stageGif}
           onClose={() => setIsGifPickerOpen(false)}
@@ -1798,6 +2148,7 @@ export function MessageComposer({
         {music}
         <MusicHintHostProvider value={callHintHost}>{dock}</MusicHintHostProvider>
         {(replyTarget ||
+          showPasteOffer ||
           isPollComposerOpen ||
           pending.length > 0 ||
           isFormatBarOpen) && (
@@ -1817,6 +2168,31 @@ export function MessageComposer({
             >
               <ComposerGlyph old={X} glyph={XGlyph} kind="symbol" size="sm" />
             </button>
+          </div>
+        )}
+        {showPasteOffer && (
+          <div
+            data-composer-paste-offer=""
+            className="chat-msg-in mb-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] bg-[color:var(--content-glyph-bg)] px-3 py-1.5 text-sm text-text-secondary"
+          >
+            <span className="min-w-0 flex-1">
+              {t("composer.pasteOffer", { max: new Intl.NumberFormat(locale).format(MESSAGE_MAX_LENGTH) })}
+            </span>
+            <Button type="button" variant="secondary" size="sm" onClick={sendBodyAsFile}>
+              {t("composer.sendAsFile")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setBody(pasteOffer.previous);
+                restoreCaret(pasteOffer.previous.length);
+                setPasteOffer(null);
+              }}
+            >
+              {t("composer.undoPaste")}
+            </Button>
           </div>
         )}
         {isPollComposerOpen && slashContext && (
@@ -1849,40 +2225,10 @@ export function MessageComposer({
             aria-label={t("composer.format")}
             className="mb-1 flex gap-0.5 border-b border-border/60 pb-1 redesign:border-[color:var(--pane-header-rule)] redesign:pb-1.5"
           >
-            {FORMAT_ACTIONS.map((action) => {
-              return (
-                <Tooltip key={action.id} label={t(action.labelKey)}>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    disabled={disabled || isRunningSlash}
-                  onPointerDown={(event) => {
-                    // Pointer, not mouse: a tap never fires mousedown, and
-                    // without preventDefault the textarea blurs and loses the
-                    // selection before click. Apply here so touch and pen
-                    // wrap once even when the compatibility click is dropped.
-                    event.preventDefault();
-                    formatFromPointerRef.current = true;
-                    applyComposerFormat(action.kind);
-                  }}
-                  onClick={() => {
-                    if (formatFromPointerRef.current) {
-                      formatFromPointerRef.current = false;
-                      return;
-                    }
-                    applyComposerFormat(action.kind);
-                  }}
-                    className="h-7 min-w-7 flex-1 text-text-tertiary hover:text-text sm:w-7 sm:flex-none redesign:h-8 redesign:min-w-8 redesign:rounded-full redesign:text-text-secondary sm:redesign:w-8"
-                  >
-                    <ComposerGlyph old={action.icon} glyph={action.glyph} kind="symbol" size="sm" className="h-4 w-4" />
-                  </Button>
-                </Tooltip>
-              );
-            })}
+            {formatButtons}
           </div>
         )}
-        {isFormatBarOpen && (
+        {isFormatBarOpen && !redesign && (
           <ComposerFormatPreview
             body={body}
             label={t("composer.formatPreview")}
@@ -1892,7 +2238,28 @@ export function MessageComposer({
           </div>
         )}
         {voiceNoteActive && <VoiceNotePanel controller={voiceNote} />}
-        <div className={cn("relative min-h-10 min-w-0", voiceNoteActive && "hidden")}>
+        {/* Under the redesign the main composer is one row: the +, the
+            field, then the tools and send, bottoms level, growing upward. */}
+        <div className={cn(oneRow && COMPOSER_ROW_REDESIGN, phoneRow && "redesign:gap-2")}>
+        <div
+          className={cn(
+            "relative min-h-10 min-w-0",
+            oneRow && "redesign:order-1 redesign:flex-1",
+            voiceNoteActive && "hidden",
+          )}
+        >
+          {/* Under the redesign the preview sits in the field's own column,
+              so its text starts where the field's does, and only when the
+              draft has markup the bubble draws differently. */}
+          {showFieldPreview && (
+            <ComposerFormatPreview
+              body={body}
+              label={t("composer.formatPreview")}
+              onActivate={() => inputRef.current?.focus()}
+              inField
+              fontSize={fieldFontSize}
+            />
+          )}
           {body.length === 0 && (
             <span
               aria-hidden
@@ -1902,7 +2269,9 @@ export function MessageComposer({
                 (disabled || isRunningSlash) && "opacity-50",
               )}
             >
-              <span className="min-w-0 truncate">{inputPlaceholder}</span>
+              <span className="min-w-0 truncate" style={fieldFontSize ? { fontSize: fieldFontSize } : undefined}>
+                {inputPlaceholder}
+              </span>
             </span>
           )}
           <textarea
@@ -1921,7 +2290,13 @@ export function MessageComposer({
                 setBody(nextValue);
                 setCaret(nextCaret);
               }
+              setHasSelection(false);
               const typingFrom = expanded?.value ?? nextValue;
+              // The first change after a paste is the paste itself. Any
+              // later one ends the undo offer.
+              setPasteOffer((offer) =>
+                offer === null ? null : offer.pasted === null ? { ...offer, pasted: typingFrom } : null,
+              );
               if (typingFrom.trim() && !typingFrom.startsWith("/")) {
                 onTyping?.();
               }
@@ -1933,7 +2308,9 @@ export function MessageComposer({
             onBlur={() => activityRef.current?.report({ focused: false })}
             onPaste={handlePaste}
             disabled={disabled || isRunningSlash}
-            maxLength={MESSAGE_MAX_LENGTH}
+            // Under the redesign the limit is a count and a refusal, never a
+            // paste cut short without a word.
+            maxLength={liftsLimit ? undefined : MESSAGE_MAX_LENGTH}
             placeholder={inputPlaceholder}
             style={{
               resize: "none",
@@ -1943,6 +2320,9 @@ export function MessageComposer({
               paddingTop: composerBox.paddingY,
               paddingBottom: composerBox.paddingY,
               overflowY: composerBox.overflowY,
+              // Inline, because index.css's 16px rule for phones is unlayered
+              // and would beat a utility.
+              ...(fieldFontSize ? { fontSize: fieldFontSize } : {}),
             }}
             className="block h-10 min-h-10 w-full resize-none overflow-hidden bg-transparent px-3 py-0 redesign:px-4 text-sm text-text placeholder:text-transparent focus-visible:outline-none disabled:opacity-50"
             role="combobox"
@@ -1957,15 +2337,27 @@ export function MessageComposer({
         <div
           className={cn(
             "flex items-center gap-0.5 px-1.5 pb-1.5 redesign:gap-1 redesign:px-2 redesign:pb-2",
-            voiceNoteActive && !voiceNoteHolding && "hidden",
+            // Hidden under a voice note's review. The one-row look's
+            // `redesign:contents` would beat a plain `hidden`, so it is only
+            // added while the row is shown.
+            voiceNoteActive && !voiceNoteHolding
+              ? "hidden"
+              : oneRow && COMPOSER_TOOLS_ROW_REDESIGN,
           )}
         >
           {!voiceNoteHolding && (
           <>
           {/* Hidden rather than empty: a self-host without attachments in a
               panel without slash commands has nothing for the + to add. */}
-          {insertItems.length > 0 && variant !== "stream" && (
-          <div ref={insertMenuRef} className="relative">
+          {(insertItems.length > 0 || appsInMenu) && variant !== "stream" && (
+          // With apps in the menu the wrapper mounts the launcher even before
+          // the + has anything: the launcher is what reports `available`, and
+          // the Apps row is itself an insert item. Hidden while it is empty.
+          <div
+            ref={insertMenuRef}
+            className={cn("relative", insertItems.length === 0 && "hidden", oneRow && "redesign:order-0!")}
+          >
+            {insertItems.length > 0 && (
             <Tooltip label={t("composer.insert")}>
               <Button
                 type="button"
@@ -1984,22 +2376,38 @@ export function MessageComposer({
                 onMouseDown={keepComposerFocused}
                 className={cn(
                   iconButtonClass,
+                  "relative",
                   isInsertMenuOpen && COMPOSER_ICON_ON,
                 )}
               >
                 <ComposerGlyph old={Plus} glyph={PlusGlyph} kind="symbol" />
+                {appsInMenu && appsState.running && (
+                  <span
+                    aria-hidden
+                    data-composer-apps-running=""
+                    className="absolute right-1 top-1 h-2 w-2 rounded-full bg-accent ring-2 ring-[color:var(--composer-bg)]"
+                  />
+                )}
               </Button>
             </Tooltip>
+            )}
             {isInsertMenuOpen && (
               <ComposerInsertMenu
                 labelledBy="composer-insert"
                 items={insertItems}
+                phone={phoneRow}
               />
             )}
+            {appsInMenu &&
+              appsLauncher?.(iconButtonClass, {
+                anchor: insertMenuRef,
+                openRequest: appsRequest,
+                onState: onAppsState,
+              })}
           </div>
           )}
-          {variant !== "stream" && appsLauncher?.(iconButtonClass)}
-          {variant !== "stream" && (
+          {variant !== "stream" && !appsInMenu && appsLauncher?.(iconButtonClass)}
+          {variant !== "stream" && !phoneRow && (
           <Tooltip label={t("composer.format")}>
             <Button
               type="button"
@@ -2030,6 +2438,7 @@ export function MessageComposer({
               size="icon"
               disabled={disabled}
               aria-expanded={isPickerOpen}
+              data-composer-emoji=""
               onClick={() => {
                 setIsGifPickerOpen(false);
                 setIsInsertMenuOpen(false);
@@ -2044,7 +2453,7 @@ export function MessageComposer({
               <ComposerGlyph old={Smile} glyph={Smiley} kind="symbol" />
             </Button>
           </Tooltip>
-          {isGifSearchEnabled && (
+          {isGifSearchEnabled && !phoneRow && (
             <Tooltip label={t("composer.addGif")}>
               <Button
                 type="button"
@@ -2052,6 +2461,7 @@ export function MessageComposer({
                 size="icon"
                 disabled={disabled}
                 aria-expanded={isGifPickerOpen}
+                data-composer-gif=""
                 onClick={() => {
                   setIsPickerOpen(false);
                   setIsInsertMenuOpen(false);
@@ -2072,7 +2482,7 @@ export function MessageComposer({
           )}
           </>
           )}
-          <span className="flex-1" />
+          <span className={cn("flex-1", oneRow && "redesign:hidden")} />
         {embedded ? (
           embedded.trailing ?? null
         ) : voiceNote.available &&
@@ -2083,12 +2493,13 @@ export function MessageComposer({
             slowModeRemaining <= 0 &&
             !isPollComposerOpen)) ? (
           <VoiceNoteMicButton controller={voiceNote} disabled={disabled || isRunningSlash} />
-        ) : (
+        ) : !showSend ? null : (
         <Button
           type="submit"
           size="icon"
           className={cn(
             "h-8 shrink-0 rounded-full tabular-nums",
+            phoneRow && COMPOSER_PHONE_HIT,
             slowModeRemaining > 0 ? "w-auto gap-1 px-2.5 text-xs" : "w-8",
             "redesign:h-9",
             // Slow mode's countdown is a wait, not a dead button: the soft
@@ -2103,8 +2514,8 @@ export function MessageComposer({
             disabled ||
             slowModeRemaining > 0 ||
             isRunningSlash ||
-            isUploading ||
-            (composerBodyIsEmpty(body) && readyCount === 0)
+            (isUploading && !redesign) ||
+            (composerBodyIsEmpty(body) && readyCount === 0 && !(redesign && isUploading))
           }
           aria-label={
             slowModeRemaining > 0
@@ -2126,7 +2537,28 @@ export function MessageComposer({
         </Button>
         )}
         </div>
+        </div>
       </div>
+      {redesign && !embedded && variant !== "stream" && (
+        <ComposerStatusBar
+          floating
+          typing={typingLine}
+          length={body.length}
+          max={MESSAGE_MAX_LENGTH}
+          flash={countFlash}
+          onSendAsFile={isAttachmentsEnabled ? sendBodyAsFile : undefined}
+        />
+      )}
+      {showSelectionFormatBar && (
+        <div
+          role="toolbar"
+          aria-label={t("composer.format")}
+          data-composer-selection-format=""
+          className="absolute bottom-full left-3 z-20 mb-2 flex gap-0.5 rounded-full border border-[color:var(--popover-border)] bg-[color:var(--popover-surface)] p-1 shadow-[var(--popover-shadow)] sm:left-4"
+        >
+          {formatButtons}
+        </div>
+      )}
       <p id={holdHintId} role="status" className="sr-only">
         {holdAnnouncement}
       </p>
@@ -2218,17 +2650,32 @@ function AttachmentChip({
   );
 }
 
+interface ComposerInsertItem {
+  id: string;
+  label: string;
+  /** The row's icon in the old look. */
+  icon?: LucideIcon;
+  /**
+   * The redesign's Phosphor glyph. Beside `icon` it is that icon's twin
+   * (`IconSwap`); alone, the row exists only under the redesign.
+   */
+  glyph?: PhosphorGlyph;
+  /** The glyph's weight (`ui/icon.tsx`): `object` beside `icon`, `symbol` alone. */
+  glyphKind?: "object" | "symbol";
+  /** Set on a toggle row: drawn as a menu checkbox with a tick when on. */
+  checked?: boolean;
+  onSelect: () => void;
+}
+
 function ComposerInsertMenu({
   labelledBy,
   items,
+  phone = false,
 }: {
   labelledBy: string;
-  items: Array<{
-    id: string;
-    label: string;
-    icon: LucideIcon;
-    onSelect: () => void;
-  }>;
+  items: ComposerInsertItem[];
+  /** The phone row under the redesign: every row is a 44px finger target. */
+  phone?: boolean;
 }) {
   // Toggle off draws main's markup exactly: the shared menu recipe's icon
   // column and row shape move the icon and label by a pixel or two.
@@ -2245,11 +2692,14 @@ function ComposerInsertMenu({
     >
       {items.map((item) => {
         const Icon = item.icon;
+        const toggle = item.checked !== undefined;
         return (
           <button
             key={item.id}
             type="button"
-            role="menuitem"
+            role={toggle ? "menuitemcheckbox" : "menuitem"}
+            aria-checked={toggle ? item.checked : undefined}
+            data-composer-insert-item={item.id}
             onClick={item.onSelect}
             // Under the redesign the pointer takes focus as it moves, so a
             // keyboard-focused row and a hovered one are never both filled.
@@ -2260,18 +2710,33 @@ function ComposerInsertMenu({
             }}
             className={
               redesign
-                ? MENU_ROW_BUTTON
+                ? cn(MENU_ROW_BUTTON, phone && "min-h-11")
                 : "flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2.5 py-1.5 text-left text-sm text-text hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none"
             }
           >
             {redesign ? (
               <span aria-hidden className={MENU_ICON_BOX}>
-                <Icon className={MENU_BUTTON_ICON} />
+                {Icon && item.glyph ? (
+                  <IconSwap
+                    off={Icon}
+                    on={item.glyph}
+                    kind={item.glyphKind ?? "object"}
+                    offClassName={MENU_BUTTON_ICON}
+                    className={MENU_BUTTON_ICON}
+                  />
+                ) : item.glyph ? (
+                  <Glyph icon={item.glyph} kind={item.glyphKind ?? "symbol"} size="sm" className={MENU_BUTTON_ICON} />
+                ) : Icon ? (
+                  <Icon className={MENU_BUTTON_ICON} />
+                ) : null}
               </span>
-            ) : (
+            ) : Icon ? (
               <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            ) : null}
+            {toggle ? <span className="min-w-0 flex-1 text-left">{item.label}</span> : item.label}
+            {toggle && item.checked && (
+              <Glyph icon={CheckGlyph} kind="symbol" size="sm" className="text-accent-text" />
             )}
-            {item.label}
           </button>
         );
       })}

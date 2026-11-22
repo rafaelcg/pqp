@@ -6,6 +6,8 @@ import {
   EMOJI_PICKER_SIZE,
   placeAnchoredPanel,
 } from "@/lib/anchored-panel";
+import { alignPanelEnd } from "@/lib/composer-picker-place";
+import { isRedesignOn } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 import { POPOVER_SURFACE } from "@/components/ui/popover";
 
@@ -29,6 +31,14 @@ interface EmojiPickerPanelProps {
    * stored (reactions, forum tags, Baú).
    */
   customEmoji?: readonly ServerEmoji[] | null;
+  /**
+   * Opt-in, for the composer under the redesign at sm and up: open upward
+   * from `bounds` (the composer) with the panel's right edge on `anchor`'s
+   * right edge (the emoji button), kept inside `bounds`. Read on each
+   * placement. Returning null, or leaving it out, keeps the default: the
+   * panel's left edge on this component's parent.
+   */
+  alignEndTo?: () => { anchor: HTMLElement; bounds: HTMLElement } | null;
 }
 
 export function EmojiPickerPanel({
@@ -36,6 +46,7 @@ export function EmojiPickerPanel({
   onClose,
   className,
   customEmoji,
+  alignEndTo,
 }: EmojiPickerPanelProps) {
   const slotRef = useRef<HTMLSpanElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -43,18 +54,30 @@ export function EmojiPickerPanel({
     typeof placeAnchoredPanel
   > | null>(null);
 
+  const alignEndToRef = useRef(alignEndTo);
+  alignEndToRef.current = alignEndTo;
+
   useLayoutEffect(() => {
     function place() {
+      const viewport = { width: window.innerWidth, height: window.innerHeight };
+      const endAligned = alignEndToRef.current?.();
+      if (endAligned) {
+        const bounds = endAligned.bounds.getBoundingClientRect();
+        const vertical = placeAnchoredPanel(bounds, EMOJI_PICKER_SIZE, viewport);
+        const across = alignPanelEnd(
+          endAligned.anchor.getBoundingClientRect().right,
+          bounds,
+          vertical.maxWidth,
+        );
+        setPlacement({ ...vertical, left: across.left, maxWidth: across.width });
+        return;
+      }
       const anchorEl = slotRef.current?.parentElement;
       if (!anchorEl) {
         return;
       }
       setPlacement(
-        placeAnchoredPanel(
-          anchorEl.getBoundingClientRect(),
-          EMOJI_PICKER_SIZE,
-          { width: window.innerWidth, height: window.innerHeight },
-        ),
+        placeAnchoredPanel(anchorEl.getBoundingClientRect(), EMOJI_PICKER_SIZE, viewport),
       );
     }
     place();
@@ -70,6 +93,12 @@ export function EmojiPickerPanel({
     }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        // This Escape is spent: the unread strip and other layers skip it.
+        // Only under the redesign, where the strip is; the old look's layers
+        // each still hear it.
+        if (isRedesignOn()) {
+          event.preventDefault();
+        }
         onClose?.();
       }
     }

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import en from "@/locales/en/translation.json";
 import ptBR from "@/locales/pt-BR/translation.json";
@@ -135,6 +136,22 @@ describe("translateMessage", () => {
       expect(en, `${key} needs base ${base}`).toHaveProperty(base);
     }
     void suffix;
+  });
+
+  it("reads a _redesign variant only while the new look is drawn", () => {
+    for (const key of Object.keys(en)) {
+      if (key.endsWith("_redesign")) {
+        expect(en, `${key} needs base`).toHaveProperty(key.slice(0, -"_redesign".length));
+      }
+    }
+    expect(translateMessage("music.title")).toBe(en["music.title"]);
+    document.documentElement.setAttribute("data-redesign", "");
+    try {
+      expect(translateMessage("music.title")).toBe(en["music.title_redesign"]);
+      expect(translateMessage("chat.copyText")).toBe(en["chat.copyText"]);
+    } finally {
+      document.documentElement.removeAttribute("data-redesign");
+    }
   });
 });
 

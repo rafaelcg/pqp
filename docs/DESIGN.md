@@ -124,7 +124,7 @@ Four families. `--font-sans` (Instrument Sans) is everything. `--font-display`
 is used for exactly one thing, somebody's `@`. `--font-brand` (Dela Gothic One)
 is the wordmark.
 
-Five type roles. Each has a size and a line height, and each size matches the
+Six type roles. Each has a size and a line height, and each size matches the
 Tailwind utility the components already use, so a primitive may keep writing
 `text-sm`. The tokens exist so plain CSS and any surface that cannot use a
 utility can name the role instead of the number.
@@ -136,9 +136,15 @@ utility can name the role instead of the number.
 | `--type-body-size` | 14px | 20px | The app default, and every control's label |
 | `--type-label-size` | 12px | 16px | A compact control, an eyebrow, a tooltip |
 | `--type-caption-size` | 11px | 16px | The quieter second line under a label |
+| `--chat-font-size` | 15px | `--chat-line-height` (22px) | Message text and the composer field |
 
-The equivalent utilities are `text-2xl`, `text-lg`, `text-sm`, `text-xs` and
-`text-[11px]`.
+The equivalent utilities are `text-2xl`, `text-lg`, `text-sm`, `text-xs`,
+`text-[11px]` and `text-[length:var(--chat-font-size)]`.
+
+The chat role is the only one a reader changes. Its default is 15px. The chat
+size setting in Appearance moves it between 12 and 24px, and the line height
+follows (`lib/chat-display.ts`). Use it for text a person wrote, never for
+chrome around it.
 
 One rule that is not a token: on a screen under 640px wide, or any coarse
 pointer, `input`, `select` and `textarea` are forced to 16px. Below that iOS
@@ -367,6 +373,9 @@ applies. Three ways to draw the new look, in order of preference:
 2. The `redesign:` variant, for an element nobody overrides from outside. It
    outranks any plain class on the same element.
 3. `useRedesign()`, when the markup itself differs.
+
+New redesign code sets type with the role utilities in "Typography". It never
+writes `text-[Npx]`, except `text-[11px]` for the caption role.
 
 ### What the toggle changes in the token layer
 

@@ -10,6 +10,7 @@ import {
   getMusicSnapshot,
   receiveMusic,
   resetMusicStoreForTests,
+  setListening,
   setMusicOpen,
   setMusicSession,
 } from "@/lib/music-store";
@@ -285,6 +286,27 @@ describe("the music panel on the room stage", () => {
     expect(composerBar(el)).toBeNull();
   });
 
+  it("invites somebody outside the Rádio instead of handing them its controls", () => {
+    receiveMusic(CHANNEL, musicState());
+    act(() => {
+      setListening(false);
+      setMusicOpen(true);
+    });
+    const el = mount(voiceWith());
+    const invite = panel(el)!.querySelector("[data-music-radio-invite]");
+    expect(invite).not.toBeNull();
+    expect(invite!.querySelector("[data-music-radio-invite-title]")?.textContent).toBe(LONG_TITLE);
+    expect(panel(el)!.querySelector("[data-music-play]")).toBeNull();
+    expect(panel(el)!.querySelector("[data-music-fila]")).toBeNull();
+    act(() => {
+      (invite!.querySelector("[data-music-join]") as HTMLButtonElement).click();
+    });
+    expect(getMusicSnapshot().listening).toBe(true);
+    expect(panel(el)!.querySelector("[data-music-radio-invite]")).toBeNull();
+    expect(panel(el)!.querySelector("[data-music-play]")).not.toBeNull();
+    expect(panel(el)!.querySelector("[data-music-fila]")).not.toBeNull();
+  });
+
   it("never mounts the YouTube embed", () => {
     receiveMusic(CHANNEL, musicState());
     act(() => setMusicOpen(true));
@@ -372,6 +394,42 @@ describe("the music panel on the room stage", () => {
     expect(composerBar(el)).toBeNull();
   });
 
+  it("shows a member's locked controls with a lock, and lets them vote to skip", () => {
+    receiveMusic(CHANNEL, musicState());
+    const el = mount({ ...voiceWith(), canManageMusic: false });
+    const drawn = panel(el)!;
+    const play = drawn.querySelector<HTMLButtonElement>("[data-music-play]")!;
+    expect(play.disabled).toBe(true);
+    expect(play.closest("[data-music-locked]")).not.toBeNull();
+    expect(drawn.querySelector("[data-music-previous]")?.closest("[data-music-locked]")).not.toBeNull();
+    expect(drawn.querySelector("[data-music-vote-skip]")).not.toBeNull();
+    expect(drawn.querySelector("[data-music-next]")).toBeNull();
+  });
+
+  it("says who paused it, in the header where it cannot move the picture", () => {
+    receiveMusic(CHANNEL, musicState({ status: "paused", actorId: "peer-friend" }));
+    // The roster is where a name comes from.
+    const el = mount({
+      ...voiceWith(),
+      occupancy: {
+        [CHANNEL]: [
+          { peerId: "peer-friend", userId: "user-friend", displayName: "Amigo", avatarUrl: null },
+        ],
+      } as unknown as VoiceState["occupancy"],
+    });
+    const bar = panel(el)!.querySelector("[data-music-state='paused']");
+    expect(bar?.textContent).toContain("Amigo");
+  });
+
+  it("holds the last song with play again and close when the queue runs dry", () => {
+    receiveMusic(CHANNEL, musicState({ queue: [] }));
+    receiveMusic(CHANNEL, musicState({ current: null, queue: [], rev: 2 }));
+    const el = mount(voiceWith());
+    const ended = panel(el)?.querySelector("[data-music-ended]");
+    expect(ended).not.toBeNull();
+    expect(ended!.querySelectorAll("button")).toHaveLength(2);
+  });
+
   it("gives the stage back when the music goes", () => {
     receiveMusic(CHANNEL, musicState());
     const el = mount(voiceWith());
@@ -427,28 +485,42 @@ describe("the music panel on the room stage", () => {
     expect(composerBar(el)).not.toBeNull();
   });
 
-  it("leaves the stage to the clip with placement stage", () => {
+  // "Ver no palco" used to draw the video as a picture of its own above the
+  // cards, which sent the player to the chat. The video is the panel's now.
+  it("keeps the player on the stage with the video in it, placement stage", () => {
     act(() => setMusicPlacement("stage"));
     receiveMusic(CHANNEL, musicState());
     const el = mount(voiceWith());
-    expect(panel(el)).toBeNull();
-    expect(isStageMusicPanelDrawn(CHANNEL)).toBe(false);
-    expect(composerBar(el)).not.toBeNull();
+    const drawn = panel(el);
+    expect(drawn).not.toBeNull();
+    expect(drawn!.querySelector("[data-music-stage-video] [data-music-stage-slot]")).not.toBeNull();
+    expect(drawn!.querySelector("[data-music-art]")).toBeNull();
+    expect(drawn!.querySelector("[data-music-play]")).not.toBeNull();
+    expect(drawn!.querySelector("[data-music-stage-watch]")?.getAttribute("aria-pressed")).toBe("true");
+    expect(isStageMusicPanelDrawn(CHANNEL)).toBe(true);
+    expect(composerBar(el)).toBeNull();
   });
 
-  // QA-051: the clip is a picture above the cards, like a share. The room
-  // keeps its cards and the dock, and the player stays in the composer.
-  it("keeps the room cards and the dock around the clip on the stage", () => {
+  // QA-051: the room keeps its cards and the dock around the video.
+  it("keeps the room cards and the dock around the video on the stage", () => {
     act(() => setMusicPlacement("stage"));
     receiveMusic(CHANNEL, musicState());
     const el = mount(voiceWith());
     const cards = el.querySelector("[data-testid=stage-room-cards]");
     expect(cards).not.toBeNull();
     expect(cards?.getAttribute("data-room-layout")).toBe("share");
-    expect(el.querySelector("[data-music-stage-tile]")).not.toBeNull();
-    expect(cards?.querySelector("[data-music-stage-tile]")).not.toBeNull();
+    expect(cards?.querySelector("[data-music-stage-video]")).not.toBeNull();
+    expect(el.querySelector("[data-music-stage-tile]")).toBeNull();
     expect(el.querySelector("[data-testid=call-controls-bar]")).not.toBeNull();
     expect(el.querySelector("[data-music-picture]")).toBeNull();
+  });
+
+  it("leaves the video a picture beside a share, with the player in the composer", () => {
+    act(() => setMusicPlacement("stage"));
+    receiveMusic(CHANNEL, musicState());
+    const el = mount(voiceWith({ friendShares: true }));
+    expect(panel(el)).toBeNull();
+    expect(composerBar(el)).not.toBeNull();
   });
 });
 

@@ -157,6 +157,20 @@ export interface AppLauncherProps {
   buttonClassName?: string;
   /** Moves the composer's other popups out of the way when this one opens. */
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Under the redesign the apps live in the composer's + menu ("Apps do
+   * servidor", the text channels canvas, "O + aberto"): no button of its
+   * own, the panel opens from the + whenever `openRequest` moves, and
+   * `onState` tells the menu whether to offer the row at all.
+   */
+  menuTrigger?: AppLauncherMenuTrigger;
+}
+
+/** See `AppLauncherProps.menuTrigger`. */
+export interface AppLauncherMenuTrigger {
+  anchor: React.RefObject<HTMLElement | null>;
+  openRequest: number;
+  onState: (state: { available: boolean; running: boolean }) => void;
 }
 
 type StartState =
@@ -179,6 +193,7 @@ export function AppLauncher({
   disabled = false,
   buttonClassName,
   onOpenChange,
+  menuTrigger,
 }: AppLauncherProps) {
   const { t, locale } = useTranslation();
   const config = useAppsConfig(serverId);
@@ -198,15 +213,62 @@ export function AppLauncher({
   );
 
   const hasApps = config.apps.length > 0;
+  const available = config.enabled && (hasApps || canManageServer);
+  const running = Boolean(live);
+  const onMenuState = menuTrigger?.onState;
+  useEffect(() => {
+    onMenuState?.({ available, running });
+  }, [onMenuState, available, running]);
+  const openRequest = menuTrigger?.openRequest ?? 0;
+  const lastRequest = useRef(openRequest);
+  useEffect(() => {
+    if (openRequest !== lastRequest.current) {
+      lastRequest.current = openRequest;
+      if (available) {
+        setOpen(true);
+      }
+    }
+  }, [openRequest, available, setOpen]);
+
   // Nothing at all while the platform is off for the server (or has not
   // answered). With apps released, everyone sees the button, because an app
   // running here turns it into Entrar for everyone; with none released only
   // the person who can ask for them does.
-  if (!config.enabled || (!hasApps && !canManageServer)) {
+  if (!available) {
     return null;
   }
 
-  const running = Boolean(live);
+  if (menuTrigger) {
+    // Laid over the + so the panel measures from the same corner.
+    return open ? (
+      <div className="pointer-events-none absolute inset-0 [&>*]:pointer-events-auto">
+        <LauncherPanel
+          id={panelId}
+          modal={!smUp}
+          anchor={menuTrigger.anchor}
+          serverId={serverId}
+          channelId={channelId}
+          channelName={channelName}
+          channelType={channelType}
+          viewerId={viewerId}
+          canStart={canStart}
+          canManageChannels={canManageChannels}
+          apps={config.apps}
+          builtIns={builtIns}
+          people={people}
+          online={online}
+          locale={locale}
+          onRequestAccess={onRequestAccess}
+          onClose={() => {
+            setOpen(false);
+            const anchor = menuTrigger.anchor.current;
+            (anchor?.querySelector<HTMLElement>("button") ?? anchor)?.focus();
+          }}
+        />
+      </div>
+    ) : null;
+  }
+
   return (
     <div className="relative">
       <Tooltip label={t("apps.name")}>
@@ -267,7 +329,7 @@ export function AppLauncher({
 interface PanelProps {
   id: string;
   modal: boolean;
-  anchor: React.RefObject<HTMLButtonElement | null>;
+  anchor: React.RefObject<HTMLElement | null>;
   serverId: string;
   channelId: string;
   channelName: string;

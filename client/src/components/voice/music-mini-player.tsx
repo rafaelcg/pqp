@@ -55,6 +55,7 @@ export function MusicMiniPlayer({
   compact = false,
   chrome = true,
   embed = true,
+  onOpenRadio,
 }: {
   voiceState: VoiceState;
   /** The icons-only sidebar: nothing drawn, but the chrome still decides. */
@@ -73,6 +74,12 @@ export function MusicMiniPlayer({
    * player that unmounted first.
    */
   embed?: boolean;
+  /**
+   * Take this person to the call, where the Rádio lives on the stage. Given,
+   * the sidebar opens no queue drawer of its own: one place for the Rádio,
+   * the call, instead of a sheet that dimmed the app over it.
+   */
+  onOpenRadio?: () => void;
 }) {
   const { t } = useTranslation();
   const music = useMusic();
@@ -189,7 +196,8 @@ export function MusicMiniPlayer({
     );
   }
 
-  const fila = <MusicFila variant="drawer" voiceState={voiceState} />;
+  const fila = onOpenRadio ? null : <MusicFila variant="drawer" voiceState={voiceState} />;
+  const openRadio = onOpenRadio ?? (() => setMusicOpen(true));
   const nowPlaying = current ? (
     <MusicNowPlaying
       current={current}
@@ -204,7 +212,7 @@ export function MusicMiniPlayer({
       volume={local.volume}
       muted={local.muted}
       ducking={prefs.ducking}
-      onOpenFila={() => setMusicOpen(true)}
+      onOpenFila={openRadio}
       onPlayPause={() => setPlaying(!playing)}
       onSkip={() => void skipToNext(musicRelatedTracks)}
       onTapToPlay={tapMusicLocalToPlay}
@@ -227,7 +235,7 @@ export function MusicMiniPlayer({
             size="icon"
             className="h-8 w-8 shrink-0 redesign:rounded-full redesign:focus-visible:ring-accent"
             aria-label={t("music.bar.start")}
-            onClick={() => setMusicOpen(true)}
+            onClick={openRadio}
           >
             <Music className="h-4 w-4 redesign:hidden" aria-hidden="true" />
             <Icon icon={MusicNotes} size="sm" className="hidden redesign:block" />
@@ -257,7 +265,7 @@ export function MusicMiniPlayer({
             "flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm text-paper hover:bg-ink-3",
             "redesign:gap-2.5 redesign:rounded-[var(--sidebar-card-radius)] redesign:p-1.5 redesign:font-medium redesign:text-text-secondary redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
           )}
-          onClick={() => setMusicOpen(true)}
+          onClick={openRadio}
         >
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-ink-3 text-paper-muted redesign:rounded-[calc(var(--sidebar-card-radius)-0.375rem)] redesign:bg-surface-3 redesign:text-text-secondary">
             <Music className="h-4 w-4 redesign:hidden" aria-hidden="true" />

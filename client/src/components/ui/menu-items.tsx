@@ -3,6 +3,7 @@ import { Check } from "lucide-react";
 import { useId, type ComponentType, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { POPOVER_SURFACE } from "@/components/ui/popover";
+import { IconSwap } from "@/components/ui/icon";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 
 /**
@@ -80,6 +81,28 @@ export const MENU_BUTTON_ICON = `${MENU_ICON} group-hover/menu-row:text-current 
 /** The column an icon sits in, so labels line up across rows. */
 export const MENU_ICON_BOX = "flex size-[var(--menu-icon-box,1rem)] shrink-0 items-center justify-center";
 
+/**
+ * A row's icon: `icon` alone, or with `glyph` the Lucide icon with the toggle
+ * off and its Phosphor twin under the redesign, both on the row's icon recipe.
+ */
+export function MenuRowIcon({ item }: { item: Pick<ContextMenuItemDef, "icon" | "glyph" | "glyphKind"> }) {
+  if (!item.icon) {
+    return null;
+  }
+  if (!item.glyph) {
+    return <item.icon className={MENU_ICON} />;
+  }
+  return (
+    <IconSwap
+      off={item.icon}
+      on={item.glyph}
+      kind={item.glyphKind}
+      offClassName={MENU_ICON}
+      className={MENU_ICON}
+    />
+  );
+}
+
 export const MENU_SEPARATOR = "my-1 redesign:my-1.5 h-px bg-[color:var(--menu-separator,var(--color-border))]";
 
 export interface MenuItemComponentProps {
@@ -148,7 +171,7 @@ export function MenuItemRows({
                 aria-hidden="true"
                 className={cn(item.detail ? "flex h-5 w-4 shrink-0 items-center justify-center" : MENU_ICON_BOX, DISABLED_PART)}
               >
-                {item.icon ? <item.icon className={MENU_ICON} /> : null}
+                <MenuRowIcon item={item} />
               </span>
             )}
             {item.detail ? (

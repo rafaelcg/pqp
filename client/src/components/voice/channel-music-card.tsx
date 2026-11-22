@@ -6,6 +6,8 @@ import { Icon } from "@/components/ui/icon";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { useRedesign } from "@/lib/redesign";
+import { markRadioJoinIntent } from "@/lib/music-prefs";
 import { setMusicOpen } from "@/lib/music-store";
 
 export type { ChannelMusicCardRights } from "@/components/voice/channel-music-card-rights";
@@ -37,11 +39,21 @@ export function ChannelMusicCard({
   roomSize?: number;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
+  // Already in the call: open the queue and stop, never join again. Outside
+  // it, the card is the way into the call, and under the redesign the join
+  // also means Entrar na Rádio.
+  const join = () => {
+    if (redesign) {
+      markRadioJoinIntent(channelId);
+    }
+    onJoin?.();
+  };
   const onTitleClick = () => {
     if (inCall) {
       setMusicOpen(true);
     } else {
-      onJoin?.();
+      join();
     }
   };
 
@@ -91,7 +103,7 @@ export function ChannelMusicCard({
           type="button"
           size="sm"
           className="h-6 shrink-0 px-2 text-[11px]"
-          onClick={() => onJoin?.()}
+          onClick={join}
         >
           {t("music.listen")}
         </Button>

@@ -1,6 +1,10 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
-import { Plus as PhPlus } from "@phosphor-icons/react";
-import { type LucideIcon } from "lucide-react";
+import {
+  CaretRight as PhCaretRight,
+  Plus as PhPlus,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
+import { ChevronRight, type LucideIcon } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -9,11 +13,17 @@ import {
   type ComponentType,
   type ReactNode,
 } from "react";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 import { horizontalShiftIntoView } from "@/lib/context-menu-placement";
+import { isRedesignOn } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
+import { Icon, type IconKind } from "@/components/ui/icon";
 import {
+  MENU_ICON_BOX,
+  MENU_ROW,
   MENU_SURFACE,
   MenuItemRows,
+  MenuRowIcon,
   type MenuItemComponentProps,
   type MenuSeparatorComponentProps,
 } from "@/components/ui/menu-items";
@@ -34,6 +44,14 @@ export interface ContextMenuItemDef {
   heading?: boolean;
   /** Left of the label. Menus that set this on any row reserve the column. */
   icon?: LucideIcon;
+  /**
+   * The Phosphor twin of `icon`, drawn instead of it under the redesign
+   * (`IconSwap`). Only read beside `icon`. Without it the row draws `icon`
+   * in both looks, exactly as before.
+   */
+  glyph?: PhosphorIcon;
+  /** The glyph's weight rule (`ui/icon.tsx`): `object` fill, `symbol` bold. */
+  glyphKind?: IconKind;
   /** Tick on the right. Used for exclusive choices like notification level. */
   checked?: boolean;
   /**
@@ -49,6 +67,13 @@ export interface ContextMenuItemDef {
    * row does.
    */
   trailing?: ReactNode;
+  /**
+   * Rows that open beside this one instead of a choice of its own (the
+   * message menu's "Copiar"). `ContextMenu` only: `Menu` draws the row and
+   * ignores this. Arrow right opens it, arrow left closes it. Keep it off a
+   * phone sheet, where a submenu has nowhere to open.
+   */
+  submenu?: ContextMenuItemDef[];
 }
 
 /**
@@ -88,7 +113,29 @@ interface ContextMenuProps {
   moreReactionsLabel?: string;
   children: ReactNode;
   disabled?: boolean;
+  /**
+   * The menu stays mounted but its trigger hears nothing: no right-click and
+   * no long-press timer. For a menu nested in another menu's trigger that
+   * must let a press through to the outer one (an image inside a message row,
+   * for a finger). Unlike `disabled` it does not change the tree, so it can
+   * flip in the middle of a press without remounting the child.
+   */
+  triggerDisabled?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Under the redesign, below `sm`, the menu rises from the bottom edge as a
+   * sheet instead of floating at the finger (the text channels canvas,
+   * "Segurando uma mensagem"). The rule lives in index.css, on
+   * `[data-sheet-on-phone]`, because Radix positions the wrapper inline.
+   */
+  sheetOnPhone?: boolean;
+  /**
+   * Drawn at the top of the phone sheet, under its grabber and above the
+   * reaction strip: what the sheet acts on (the message menu's author and
+   * excerpt). Opt-in, so the image menu and channel rows stay as they are.
+   * Only under the redesign, below `sm`, and only with `sheetOnPhone`.
+   */
+  sheetHeader?: ReactNode;
 }
 
 /** Keeps the menu clear of the very edge of the window on every side. */
@@ -102,7 +149,10 @@ export function ContextMenu({
   moreReactionsLabel,
   children,
   disabled = false,
+  triggerDisabled = false,
   onOpenChange,
+  sheetOnPhone = false,
+  sheetHeader,
 }: ContextMenuProps) {
   // Radix anchors the menu to a zero-size rect at the pointer, which is right —
   // but it hardcodes `side="right" align="start"`, so floating-ui handles
@@ -185,6 +235,26 @@ export function ContextMenu({
     setAlignOffset(openAbove ? -height : 0);
   }, []);
 
+  // The sheet rises under the cursor that asked for it, where a floating menu
+  // opens beside it. Radix selects whatever item a button is let go over, so
+  // on a narrow window the release of the right-click that opened the sheet
+  // chose a row nobody pressed ("Excluir" sits in that list). The press that
+  // opened the sheet is spent: its release selects nothing. A finger never
+  // gets here, since its release goes to the row it went down on.
+  const openingPressRef = useRef(false);
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      openingPressRef.current =
+        open &&
+        sheetOnPhone &&
+        isRedesignOn() &&
+        typeof window !== "undefined" &&
+        (window.matchMedia?.(BELOW_SM_QUERY).matches ?? false);
+      onOpenChange?.(open);
+    },
+    [onOpenChange, sheetOnPhone],
+  );
+
   const strip = reactions ?? [];
   const hasStrip = strip.length > 0;
   if (disabled || (items.length === 0 && !hasStrip)) {
@@ -192,12 +262,13 @@ export function ContextMenu({
   }
 
   return (
-    <ContextMenuPrimitive.Root onOpenChange={onOpenChange}>
+    <ContextMenuPrimitive.Root onOpenChange={handleOpenChange}>
       {/* Radix composes these with its own handlers, so the coordinates
           recorded here are exactly the ones it anchors to — for a right-click
           and for the touch long-press alike. */}
       <ContextMenuPrimitive.Trigger
         asChild
+        disabled={triggerDisabled}
         onContextMenu={recordPointer}
         onPointerDown={recordPointer}
       >
@@ -212,6 +283,7 @@ export function ContextMenu({
           // Named so a test can address the open menu and its rows without
           // matching on translated labels.
           data-context-menu=""
+          data-sheet-on-phone={sheetOnPhone ? "" : undefined}
           // `animate-fade-in` rather than `animate-rise`: the latter animates
           // `translateY(14px)` over 650ms, so the menu spends half a second
           // visibly detached from the point it is anchored to.
@@ -224,7 +296,38 @@ export function ContextMenu({
             hasStrip ? "min-w-[16.5rem]" : "min-w-[11.5rem]",
           )}
           onCloseAutoFocus={(e) => e.preventDefault()}
+          // A press that starts inside the sheet is a new one, and counts.
+          onPointerDownCapture={() => {
+            openingPressRef.current = false;
+          }}
+          onPointerUpCapture={(event) => {
+            if (openingPressRef.current) {
+              openingPressRef.current = false;
+              // Radix's own handler on the item skips a prevented event.
+              event.preventDefault();
+            }
+          }}
         >
+          {sheetOnPhone && (
+            // The sheet's grab handle, drawn only (the scrim or Escape
+            // closes it). The same mark the reactions sheet draws.
+            <span
+              aria-hidden
+              data-sheet-grabber=""
+              className="mx-auto mb-2 mt-0.5 hidden h-1 w-9 rounded-full bg-[color:var(--color-border-strong)] redesign:max-sm:block"
+            />
+          )}
+          {sheetOnPhone && sheetHeader && (
+            // A copy of what is on the page, so hidden from assistive tech:
+            // the menu's rows already say what they act on.
+            <div
+              data-sheet-header=""
+              aria-hidden
+              className="mb-1.5 hidden border-b border-[color:var(--menu-separator,var(--color-border))] px-2.5 pb-2.5 redesign:max-sm:block"
+            >
+              {sheetHeader}
+            </div>
+          )}
           {hasStrip && (
             <>
               {/* ONE ROW. `flex` with no wrapping and equal-basis cells is the
@@ -268,17 +371,107 @@ export function ContextMenu({
               )}
             </>
           )}
-          <MenuItemRows
-            items={items}
-            Item={
-              ContextMenuPrimitive.Item as ComponentType<MenuItemComponentProps>
-            }
-            Separator={
-              ContextMenuPrimitive.Separator as ComponentType<MenuSeparatorComponentProps>
-            }
-          />
+          {items.some((item) => item.submenu) ? (
+            <RowsWithSubmenus items={items} />
+          ) : (
+            <MenuItemRows items={items} Item={RadixItem} Separator={RadixSeparator} />
+          )}
+          {sheetOnPhone && (
+            // Clear of the home indicator. The sheet's own bottom padding
+            // (index.css) is `max(0.75rem, inset)`, which on a phone with an
+            // inset is the inset alone and put the last row right on the
+            // indicator. This adds the 0.75rem back there, and nothing on a
+            // screen without an inset.
+            <div
+              aria-hidden
+              data-sheet-safe-area=""
+              className="hidden h-[min(0.75rem,env(safe-area-inset-bottom))] redesign:max-sm:block"
+            />
+          )}
         </ContextMenuPrimitive.Content>
       </ContextMenuPrimitive.Portal>
     </ContextMenuPrimitive.Root>
+  );
+}
+
+const RadixItem = ContextMenuPrimitive.Item as ComponentType<MenuItemComponentProps>;
+const RadixSeparator =
+  ContextMenuPrimitive.Separator as ComponentType<MenuSeparatorComponentProps>;
+
+/**
+ * `items` with one or more `submenu` rows. Runs of plain rows still go
+ * through `MenuItemRows`, so they look exactly as in every other menu; a
+ * submenu row is drawn here, on the same row recipe. Each run reserves its
+ * own icon column, so a menu that mixes rows with and without icons around
+ * a submenu can misalign; the message menu puts an icon on every row.
+ */
+function RowsWithSubmenus({ items }: { items: ContextMenuItemDef[] }) {
+  const reserveIcon = items.some((item) => !item.separator && !item.heading && item.icon);
+  const parts: ReactNode[] = [];
+  let run: ContextMenuItemDef[] = [];
+  const flush = () => {
+    if (run.length > 0) {
+      parts.push(
+        <MenuItemRows key={`run-${run[0].id}`} items={run} Item={RadixItem} Separator={RadixSeparator} />,
+      );
+      run = [];
+    }
+  };
+  for (const item of items) {
+    if (!item.submenu || item.separator || item.heading) {
+      run.push(item);
+      continue;
+    }
+    flush();
+    parts.push(<SubmenuRow key={item.id} item={item} reserveIcon={reserveIcon} />);
+  }
+  flush();
+  return <>{parts}</>;
+}
+
+function SubmenuRow({ item, reserveIcon }: { item: ContextMenuItemDef; reserveIcon: boolean }) {
+  const rows = item.submenu ?? [];
+  return (
+    <ContextMenuPrimitive.Sub>
+      <ContextMenuPrimitive.SubTrigger
+        disabled={item.disabled || rows.length === 0}
+        data-menu-item={item.id}
+        className={cn(
+          MENU_ROW,
+          "text-left text-text data-[state=open]:bg-[color:var(--menu-row-hover,var(--color-surface-2))]",
+        )}
+      >
+        {reserveIcon && (
+          <span aria-hidden="true" className={MENU_ICON_BOX}>
+            <MenuRowIcon item={item} />
+          </span>
+        )}
+        <span className="min-w-0 flex-1 whitespace-normal">{item.label}</span>
+        <ChevronRight
+          aria-hidden="true"
+          className="ml-3 size-3.5 shrink-0 text-text-tertiary redesign:hidden"
+        />
+        <Icon
+          icon={PhCaretRight}
+          kind="symbol"
+          size="sm"
+          className="ml-3 hidden text-text-tertiary redesign:block"
+        />
+      </ContextMenuPrimitive.SubTrigger>
+      <ContextMenuPrimitive.Portal>
+        <ContextMenuPrimitive.SubContent
+          sideOffset={4}
+          alignOffset={-4}
+          collisionPadding={COLLISION_PADDING}
+          data-context-submenu={item.id}
+          className={cn(
+            MENU_SURFACE,
+            "z-[100] min-w-[11.5rem] max-h-[var(--radix-context-menu-content-available-height)]",
+          )}
+        >
+          <MenuItemRows items={rows} Item={RadixItem} Separator={RadixSeparator} />
+        </ContextMenuPrimitive.SubContent>
+      </ContextMenuPrimitive.Portal>
+    </ContextMenuPrimitive.Sub>
   );
 }

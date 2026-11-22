@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { formatByteSize } from "@/lib/attachments";
 import { fetchAttachmentUrl } from "@/lib/api";
+import { copyImageToClipboard, downloadImage } from "@/lib/image-actions";
 import { useTranslation } from "@/lib/i18n";
 import {
   canZoomToActualSize,
@@ -44,12 +45,26 @@ const COPY_FLASH_MS = 1500;
 /** How long the failure toast stays up. */
 const TOAST_MS = 3000;
 
+/** The one shared View Transition name: a thumbnail and the open picture. */
+export const LIGHTBOX_TRANSITION_NAME = "pqp-lightbox-image";
+
 interface ImageLightboxProps {
   /** Already filtered to images — the navigable strip for this message/post. */
   attachments: Attachment[];
   index: number;
   onClose: () => void;
   onIndexChange: (index: number) => void;
+  /**
+   * Closes the viewer and goes to the message the open image belongs to.
+   * Only passed under the redesign, from a message (never from a Baú post).
+   */
+  onViewInChannel?: (attachment: Attachment) => void;
+  /**
+   * The attachment the opening View Transition grows from its thumbnail.
+   * Its picture carries the shared transition name and is drawn at once,
+   * so the snapshot has something to grow into.
+   */
+  transitionId?: string | null;
 }
 
 /**
@@ -68,6 +83,8 @@ export function ImageLightbox({
   index,
   onClose,
   onIndexChange,
+  onViewInChannel,
+  transitionId = null,
 }: ImageLightboxProps) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -233,29 +250,6 @@ export function ImageLightbox({
 
   // ------------------------------------------------------------------ actions
 
-  async function convertToPng(blob: Blob): Promise<Blob> {
-    const bitmap = await createImageBitmap(blob);
-    try {
-      const canvas = document.createElement("canvas");
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        throw new Error("no 2d context");
-      }
-      ctx.drawImage(bitmap, 0, 0);
-      const pngBlob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(
-          (result) => (result ? resolve(result) : reject(new Error("toBlob failed"))),
-          "image/png",
-        );
-      });
-      return pngBlob;
-    } finally {
-      bitmap.close?.();
-    }
-  }
-
   /**
    * Copying the image failed; try the link instead, and say what actually
    * happened. Reporting "link copied" when `writeText` itself threw would be
@@ -273,27 +267,8 @@ export function ImageLightbox({
 
   async function handleCopyImage() {
     if (!current) return;
-    const plan = planImageCopy(current.contentType);
     try {
-      if (
-        typeof navigator.clipboard?.write !== "function" ||
-        typeof ClipboardItem === "undefined"
-      ) {
-        throw new Error("Clipboard image writes unsupported");
-      }
-      const response = await fetch(currentUrl);
-      if (!response.ok) {
-        throw new Error(`fetch failed: ${response.status}`);
-      }
-      const sourceBlob = await response.blob();
-      const pngBlob = plan.needsConversion
-        ? await convertToPng(sourceBlob)
-        : sourceBlob;
-      const items: Record<string, Blob> = { "image/png": pngBlob };
-      if (plan.includeLinkText) {
-        items["text/plain"] = new Blob([currentUrl], { type: "text/plain" });
-      }
-      await navigator.clipboard.write([new ClipboardItem(items)]);
+      await copyImageToClipboard(currentUrl, current.contentType);
       flashCopied("image");
     } catch {
       await copyLinkFallback(currentUrl);
@@ -312,26 +287,7 @@ export function ImageLightbox({
 
   async function handleDownload() {
     if (!current) return;
-    try {
-      const response = await fetch(currentUrl);
-      if (!response.ok) {
-        throw new Error(`fetch failed: ${response.status}`);
-      }
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = blobUrl;
-      anchor.download = current.filename;
-      anchor.rel = "noopener";
-      anchor.click();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-    } catch {
-      // The presigned GET for an image is not signed for a forced download
-      // (it has to render inline in the grid), and a cross-origin bucket
-      // ignores the `download` attribute anyway — opening it is the honest
-      // fallback rather than a download that silently never starts.
-      window.open(currentUrl, "_blank", "noopener,noreferrer");
-    }
+    await downloadImage(currentUrl, current.filename);
   }
 
   function toggleZoom() {
@@ -599,6 +555,21 @@ export function ImageLightbox({
           </span>
         )}
 
+        {onViewInChannel && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-11 shrink-0"
+            data-lightbox-view-in-channel=""
+            onClick={() => {
+              onClose();
+              onViewInChannel(current);
+            }}
+          >
+            {t("lightbox.viewInChannel")}
+          </Button>
+        )}
+
         <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto">
           <Tooltip
             label={
@@ -737,18 +708,19 @@ export function ImageLightbox({
               draggable={false}
               onLoad={(event) => handleLoad(current.id, event)}
               onError={() => handleImgError(current)}
-              style={
-                zoomed && natural
+              style={{
+                ...(zoomed && natural
                   ? {
                       width: natural.width,
                       height: natural.height,
                       transform: `translate(${pan.x}px, ${pan.y}px)`,
                     }
-                  : undefined
-              }
+                  : null),
+                ...(current.id === transitionId ? { viewTransitionName: LIGHTBOX_TRANSITION_NAME } : null),
+              }}
               className={cn(
                 "select-none object-contain transition-opacity duration-200",
-                isLoaded ? "opacity-100" : "opacity-0",
+                isLoaded || current.id === transitionId ? "opacity-100" : "opacity-0",
                 // No `touch-action` override here on purpose, in either state:
                 // the drag-to-pan gesture below only answers to mouse and pen
                 // pointer events, so a touch is never claimed by it, and native

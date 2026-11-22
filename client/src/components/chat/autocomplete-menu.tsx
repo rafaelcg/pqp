@@ -30,6 +30,8 @@ export interface AutocompleteOption {
    * though printing it is what made the menu too tall to use.
    */
   label?: string;
+  /** The pill's text when it differs from `primary` (a member's name). */
+  short?: ReactNode;
 }
 
 type Placement = "above" | "below" | "inline";
@@ -64,8 +66,13 @@ interface AutocompleteMenuProps {
    * eight small drawings of a die plus its notation. As rows they were ~410px
    * of menu, which no cap and no placement can make comfortable; as a grid
    * they are two rows of four and every one of them is simply on screen.
+   *
+   * `"pills"` is one row that scrolls sideways, for @ on a phone (the text
+   * channels canvas, "Escrevendo, com o teclado"): the keyboard leaves room
+   * for one line of people above the field, and a list there covers the
+   * conversation being answered.
    */
-  layout?: "list" | "grid";
+  layout?: "list" | "grid" | "pills";
   onSelect: (index: number) => void;
   onHover: (index: number) => void;
 }
@@ -201,6 +208,52 @@ export function AutocompleteMenu({
     );
     previousSelectedIndex.current = selectedIndex;
   }, [selectedIndex]);
+
+  if (layout === "pills" && options.length > 0) {
+    return (
+      <div
+        id={id}
+        role="listbox"
+        aria-label={label}
+        aria-orientation="horizontal"
+        data-autocomplete-pills=""
+        className={cn(
+          "animate-fade-in flex gap-2 overflow-x-auto overscroll-contain border p-2 [scrollbar-width:none]",
+          PLACEMENT_CLASS[placement],
+          SHELL_REDESIGN,
+        )}
+      >
+        {options.map((option, index) => {
+          const selected = index === selectedIndex;
+          return (
+            <button
+              key={option.id}
+              ref={(el) => {
+                optionRefs.current[index] = el;
+              }}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              aria-label={option.label}
+              className={cn(
+                "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 pl-1.5 pr-3 text-sm font-semibold text-text outline-none",
+                selected
+                  ? "shadow-[inset_0_0_0_1px_var(--color-accent)]"
+                  : "shadow-[inset_0_0_0_1px_var(--color-border)]",
+              )}
+              onMouseDown={(event: ReactMouseEvent) => {
+                event.preventDefault();
+                onSelect(index);
+              }}
+            >
+              {option.leading}
+              <span className="max-w-[10rem] truncate">{option.short ?? option.primary}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
 
   if (options.length === 0) {
     return (

@@ -1,4 +1,8 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { Copy } from "@phosphor-icons/react";
+import { Icon as Glyph } from "@/components/ui/icon";
+import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -70,8 +74,47 @@ function MarkdownSpan({
   return <span className={props.className}>{children}</span>;
 }
 
+/*
+ * A code block. Under the redesign it carries Copiar in its corner (the text
+ * channels canvas, "Link enorme e código largo"); the block still scrolls
+ * sideways and never widens the message. With the toggle off it is the
+ * plain <pre> it always was.
+ */
+function CodeBlock({ children }: { node?: unknown; children?: ReactNode }) {
+  const redesign = useRedesign();
+  const { t } = useTranslation();
+  const ref = useRef<HTMLPreElement>(null);
+  const [copied, setCopied] = useState(false);
+  if (!redesign) {
+    return <pre>{children}</pre>;
+  }
+  return (
+    <div className="pqp-code-block">
+      <pre ref={ref}>{children}</pre>
+      <button
+        type="button"
+        className="pqp-code-copy"
+        onClick={() => {
+          const text = ref.current?.textContent ?? "";
+          void navigator.clipboard?.writeText(text).then(
+            () => {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1500);
+            },
+            () => {},
+          );
+        }}
+      >
+        <Glyph icon={Copy} kind="symbol" size="sm" className="h-3 w-3" />
+        {copied ? t("chat.codeCopied") : t("chat.copyCode")}
+      </button>
+    </div>
+  );
+}
+
 const MARKDOWN_COMPONENTS = {
   span: MarkdownSpan,
+  pre: CodeBlock,
   // Links in user content are untrusted: never hand the opener a window
   // reference, and never leak the app URL as a referrer.
   a: ({ children, href }: { children?: ReactNode; href?: string }) => (
