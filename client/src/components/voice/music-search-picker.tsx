@@ -542,8 +542,8 @@ export function MusicSearchPicker({
               {...fieldProps}
               className={cn(
                 "h-8 text-xs",
-                big && "h-10 text-[13px]",
-                hero && "h-12 px-4 text-[15px]",
+                big && "h-10 text-sm",
+                hero && "h-12 px-4",
               )}
               onChange={(event) => onQueryChange(event.target.value)}
             />
@@ -581,7 +581,7 @@ export function MusicSearchPicker({
         />
       )}
       {showRecents && (
-        <p className="px-1 pt-2 text-[12px] font-semibold text-text-secondary">{t("music.recent.title")}</p>
+        <p className="px-1 pt-2 text-xs font-semibold text-text-secondary">{t("music.recent.title")}</p>
       )}
       {rows && rows.length > 0 && (
         <ul
@@ -645,8 +645,7 @@ export function MusicSearchPicker({
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-sm",
-                    big && "text-[13px] font-medium",
-                    hero && "text-[14px]",
+                    big && "font-medium",
                     rail ? "text-paper" : "text-text",
                     MUSIC_TEXT_REDESIGN,
                   )}
@@ -769,13 +768,13 @@ function StageResultRow({
         <StageCover track={track} wide={hero} />
         <span className="min-w-0 flex-1">
           <span
-            className={cn("block truncate font-medium text-text", hero ? "text-[14px]" : "text-[13px]")}
+            className="block truncate text-sm font-medium text-text"
             title={track.title}
           >
             {track.title}
           </span>
           {track.channel || long ? (
-            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-text-tertiary">
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-tertiary">
               {track.channel ? <span className="min-w-0 truncate">{track.channel}</span> : null}
               {long ? (
                 <span className="shrink-0 rounded bg-surface-3 px-1.5 text-[11px] font-medium leading-[18px] text-text-secondary">
@@ -788,7 +787,7 @@ function StageResultRow({
         {highlighted ? (
           <span
             data-music-enter-hint=""
-            className="hidden shrink-0 items-center gap-1.5 text-[12px] text-text-tertiary [@media(hover:hover)]:flex"
+            className="hidden shrink-0 items-center gap-1.5 text-xs text-text-tertiary [@media(hover:hover)]:flex"
           >
             <kbd className="rounded border border-[color:var(--card-border)] px-1 font-sans text-[11px] leading-[18px] text-text-secondary">
               Enter
@@ -847,10 +846,10 @@ function MusicLinkPreview({
       <div className="flex min-w-0 items-center gap-3">
         <StageCover track={first} wide={hero} />
         <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 text-[14px] font-semibold leading-snug text-text" title={first.title}>
+          <p className="line-clamp-2 text-sm font-semibold leading-snug text-text" title={first.title}>
             {first.title}
           </p>
-          <p className="mt-0.5 truncate text-[12px] text-text-tertiary">
+          <p className="mt-0.5 truncate text-xs text-text-tertiary">
             {many ? t("music.preview.tracks", { count: tracks.length }) : first.channel ?? ""}
           </p>
         </div>

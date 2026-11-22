@@ -1,7 +1,17 @@
-import { Expand, Headphones, Music, Pause, Play, RotateCcw, SkipForward, X } from "lucide-react";
+import {
+  ArrowCounterClockwise,
+  CornersOut,
+  Headphones,
+  MusicNotes,
+  Pause,
+  Play,
+  SkipForward,
+  X,
+} from "@phosphor-icons/react";
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { MusicTrack } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { VoiceState } from "@/hooks/use-voice";
@@ -137,11 +147,11 @@ export function MusicStagePanel({
         className="flex min-w-0 shrink-0 items-center gap-2.5 rounded-lg bg-surface-2 px-3 py-2 text-left shadow-[inset_0_0_0_1px_var(--card-border)] transition-colors hover:bg-surface-3"
         onClick={() => setMusicOpen(true)}
       >
-        <span className="shrink-0 text-[12px] text-text-tertiary">{t("music.queue")}</span>
-        <span className="min-w-0 truncate text-[13px] font-semibold text-text" title={next.title}>
+        <span className="shrink-0 text-xs text-text-tertiary">{t("music.queue")}</span>
+        <span className="min-w-0 truncate text-sm font-semibold text-text" title={next.title}>
           {next.title}
         </span>
-        <span className="hidden shrink-0 items-center gap-1 text-[12px] text-text-secondary @min-[28rem]:flex">
+        <span className="hidden shrink-0 items-center gap-1 text-xs text-text-secondary @min-[28rem]:flex">
           <UserAvatar
             name={nextBy.name}
             avatarUrl={nextBy.avatarUrl}
@@ -285,7 +295,7 @@ function MusicRadioInvite({
           {track.thumbnailUrl ? (
             <img src={track.thumbnailUrl} alt="" className="h-full w-full object-cover" />
           ) : (
-            <Music className="absolute inset-0 m-auto h-8 w-8 text-text-tertiary" aria-hidden="true" />
+            <Icon icon={MusicNotes} size="lg" className="absolute inset-0 m-auto h-8 w-8 text-text-tertiary" />
           )}
         </span>
         <div className="flex min-w-0 flex-1 flex-col items-center gap-2 text-center @min-[32rem]:items-start @min-[32rem]:text-left">
@@ -300,10 +310,10 @@ function MusicRadioInvite({
           >
             {track.title}
           </p>
-          <p className="text-[13px] text-text-secondary">
+          <p className="text-xs leading-5 text-text-secondary">
             {t("music.requestedBy", { name: addedBy.name })}
           </p>
-          <div className="flex min-w-0 items-center gap-2 text-[12px] text-text-secondary">
+          <div className="flex min-w-0 items-center gap-2 text-xs text-text-secondary">
             {listeners.length > 0 ? (
               <>
                 <span className="flex -space-x-1.5">
@@ -329,10 +339,10 @@ function MusicRadioInvite({
             className="mt-1 rounded-full px-4"
             onClick={() => setListening(true)}
           >
-            <Headphones className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            <Icon icon={Headphones} size="sm" className="mr-1.5" />
             {t("music.join")}
           </Button>
-          <p className="text-[12px] text-text-tertiary">{t("music.invite.hint")}</p>
+          <p className="text-xs text-text-tertiary">{t("music.invite.hint")}</p>
         </div>
       </div>
     </div>
@@ -397,7 +407,7 @@ export function MusicRoomCard({
         />
       ) : (
         <span className="absolute inset-0 flex items-center justify-center text-text-tertiary">
-          <Music className="h-8 w-8" aria-hidden="true" />
+          <Icon icon={MusicNotes} size="lg" className="h-8 w-8" />
         </span>
       )}
       <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
@@ -407,11 +417,11 @@ export function MusicRoomCard({
         type="button"
         data-music-room-card-expand=""
         aria-label={expandLabel}
-        className="absolute inset-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--color-focus-ring)]"
+        className="absolute inset-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
         onClick={onExpand}
       />
       <span className="pointer-events-none absolute left-2 top-2 inline-flex h-6 items-center gap-1 rounded-full bg-accent-soft px-2 text-[11px] font-semibold text-on-accent-soft">
-        <Music className="h-3 w-3" aria-hidden="true" />
+        <Icon icon={MusicNotes} size="sm" className="h-3 w-3" />
         {t("music.stage.tag")}
       </span>
       <Tooltip label={expandLabel}>
@@ -425,13 +435,13 @@ export function MusicRoomCard({
           )}
           onClick={onExpand}
         >
-          <Expand className="h-4 w-4" aria-hidden="true" />
+          <Icon icon={CornersOut} kind="symbol" size="sm" />
         </button>
       </Tooltip>
       <div className="pointer-events-none absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1.5 p-2">
         <p
           data-music-room-card-title=""
-          className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white"
+          className="min-w-0 flex-1 truncate text-sm font-semibold text-white"
           title={title}
         >
           {title}
@@ -440,10 +450,10 @@ export function MusicRoomCard({
           <button
             type="button"
             data-music-join=""
-            className="pointer-events-auto flex h-8 shrink-0 items-center gap-1 rounded-full bg-accent px-3 text-[12px] font-semibold text-on-accent hover:bg-accent-hover"
+            className="pointer-events-auto flex h-8 shrink-0 items-center gap-1 rounded-full bg-accent px-3 text-xs font-semibold text-on-accent hover:bg-accent-hover"
             onClick={() => setListening(true)}
           >
-            <Headphones className="h-3.5 w-3.5" aria-hidden="true" />
+            <Icon icon={Headphones} size="sm" className="h-3.5 w-3.5" />
             {t("music.listen")}
           </button>
         ) : current && local.needsTap ? (
@@ -453,7 +463,7 @@ export function MusicRoomCard({
             className={cn(control, "pointer-events-auto bg-accent text-on-accent hover:bg-accent-hover")}
             onClick={tapMusicLocalToPlay}
           >
-            <Play className="ml-0.5 h-4 w-4" fill="currentColor" aria-hidden="true" />
+            <Icon icon={Play} size="sm" className="ml-0.5" />
           </button>
         ) : current && canManage ? (
           <>
@@ -464,9 +474,9 @@ export function MusicRoomCard({
               onClick={() => setPlaying(!playing)}
             >
               {playing ? (
-                <Pause className="h-4 w-4" fill="currentColor" aria-hidden="true" />
+                <Icon icon={Pause} size="sm" />
               ) : (
-                <Play className="ml-0.5 h-4 w-4" fill="currentColor" aria-hidden="true" />
+                <Icon icon={Play} size="sm" className="ml-0.5" />
               )}
             </button>
             <button
@@ -475,7 +485,7 @@ export function MusicRoomCard({
               className={cn(control, "pointer-events-auto text-white hover:bg-white/15")}
               onClick={() => void skipToNext(musicRelatedTracks)}
             >
-              <SkipForward className="h-4 w-4" fill="currentColor" aria-hidden="true" />
+              <Icon icon={SkipForward} size="sm" />
             </button>
           </>
         ) : null}
@@ -523,12 +533,12 @@ function StageEnded({
     <div className={cn("flex flex-wrap items-center gap-2", !compact && "justify-center")}>
       {canAdd ? (
         <Button size="sm" className="rounded-full px-3" onClick={onPlayAgain}>
-          <RotateCcw className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
+          <Icon icon={ArrowCounterClockwise} kind="symbol" size="sm" className="mr-1.5 h-3.5 w-3.5" />
           {t("music.playAgain")}
         </Button>
       ) : null}
       <Button size="sm" variant="secondary" className="rounded-full px-3" onClick={onDismiss}>
-        <X className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
+        <Icon icon={X} kind="symbol" size="sm" className="mr-1.5 h-3.5 w-3.5" />
         {t("music.ended.dismiss")}
       </Button>
     </div>
@@ -536,7 +546,7 @@ function StageEnded({
   const lines = (
     <div className={cn("min-w-0", !compact && "text-center")}>
       <p className="font-display text-lg font-semibold text-text">{t("music.ended.title")}</p>
-      <p className="line-clamp-2 text-[13px] text-text-secondary" title={track.title}>
+      <p className="line-clamp-2 text-sm text-text-secondary" title={track.title}>
         {track.title}
       </p>
     </div>

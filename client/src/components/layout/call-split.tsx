@@ -21,7 +21,9 @@ import {
   Video,
   VideoOff,
 } from "lucide-react";
+import { ChatCircle } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { IconSwap } from "@/components/ui/icon";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Tabs } from "@/components/ui/tabs";
 import { useAppColumn } from "@/components/apps/app-column";
@@ -926,11 +928,11 @@ export function CallSplit({
             aria-label={t("call.split.restoreChat")}
             className={cn(
               "absolute right-2 top-10 z-20 flex items-center gap-1 rounded-full bg-ink/80 px-2.5 py-1 text-xs text-paper shadow backdrop-blur-sm hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-              "redesign:right-0 redesign:top-1/2 redesign:z-[55] redesign:-translate-y-1/2 redesign:flex-col redesign:gap-2 redesign:rounded-l-xl redesign:rounded-r-none redesign:bg-surface-2 redesign:px-1.5 redesign:py-3 redesign:text-[12px] redesign:font-medium redesign:text-text-secondary redesign:shadow-[inset_0_0_0_1px_var(--card-border)] redesign:backdrop-blur-none redesign:hover:bg-surface-3 redesign:hover:text-text",
+              "redesign:right-0 redesign:top-1/2 redesign:z-[55] redesign:-translate-y-1/2 redesign:flex-col redesign:gap-2 redesign:rounded-l-xl redesign:rounded-r-none redesign:bg-surface-2 redesign:px-1.5 redesign:py-3 redesign:text-xs redesign:font-medium redesign:text-text-secondary redesign:shadow-[inset_0_0_0_1px_var(--card-border)] redesign:backdrop-blur-none redesign:hover:bg-surface-3 redesign:hover:text-text redesign:focus-visible:ring-inset redesign:focus-visible:ring-focus-ring",
             )}
             onClick={() => setCollapsed("none")}
           >
-            <MessageSquare className="h-3.5 w-3.5 redesign:h-4 redesign:w-4" aria-hidden="true" />
+            <IconSwap off={MessageSquare} on={ChatCircle} size="sm" offClassName="h-3.5 w-3.5" />
             <span className="redesign:[writing-mode:vertical-rl]">{t("call.split.restoreChat")}</span>
           </button>
         )}

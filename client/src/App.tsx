@@ -12007,13 +12007,13 @@ function MainAppContent({
                 onOpenPins={() => setPinsOpen(true)}
                 actions={[
                   ...(canOpenChannelSettings
-                    ? [{ id: "channel-more-settings", label: t("chrome.channelSettings"), icon: Settings, onSelect: openChannelSettings }]
+                    ? [{ id: "channel-more-settings", label: t("chrome.channelSettings"), icon: Settings, glyph: HeaderSettingsIcon, onSelect: openChannelSettings }]
                     : []),
                   ...(canViewWatchPartyHistory
-                    ? [{ id: "channel-more-history", label: t("chrome.watchPartyHistory"), icon: History, onSelect: () => setWatchPartyHistoryChannelId(selectedChannel.id) }]
+                    ? [{ id: "channel-more-history", label: t("chrome.watchPartyHistory"), icon: History, glyph: HeaderHistoryIcon, onSelect: () => setWatchPartyHistoryChannelId(selectedChannel.id) }]
                     : []),
                   ...(canScheduleSession
-                    ? [{ id: "channel-more-schedule", label: t("watchPartySchedule.header.schedule"), icon: CalendarClock, onSelect: () => setScheduleSheetOpen(true) }]
+                    ? [{ id: "channel-more-schedule", label: t("watchPartySchedule.header.schedule"), icon: CalendarClock, glyph: HeaderCalendarIcon, onSelect: () => setScheduleSheetOpen(true) }]
                     : []),
                 ]}
                 className={HEADER_ACTION_TILE}
@@ -13814,11 +13814,11 @@ function MainAppContent({
           is hidden the same way and this row shrinks to the channel list,
           so the thread beside it gets the width. */}
       <div
-          threadTakeover && "flex-none",
         className={cn(
           "flex min-h-0 min-w-0 flex-1",
           PANE_ROW_REDESIGN,
           whatsNewOpen && "hidden",
+          threadTakeover && "flex-none",
         )}
       >
       {selection.kind === "dm" && retroOn ? (
@@ -14513,11 +14513,11 @@ function MainAppContent({
           put is what crushed #avisos on the QG. Stay mounted under Novidades
           so a half-typed thread reply survives. `contents` keeps the aside as
           the flex item when the feed is closed. Between md and xl under the
-          takeover={threadTakeover}
           redesign it takes `<main>`'s place instead (`takeover`). */}
       {openThread && (
       <div className={whatsNewOpen ? "hidden" : "contents"}>
         <ThreadPanel
+          takeover={threadTakeover}
           thread={openThread.thread}
           origin={openThread.origin}
           controller={threadChat}

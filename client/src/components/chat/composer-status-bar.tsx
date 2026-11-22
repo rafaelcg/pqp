@@ -59,7 +59,7 @@ export function ComposerStatusBar({
             <button
               type="button"
               onClick={onSendAsFile}
-              className="rounded font-semibold text-[color:var(--color-accent-text)] underline decoration-[color:var(--content-link-line)] underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              className="rounded font-semibold text-[color:var(--color-accent-text)] underline decoration-[color:var(--content-link-line)] underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-pane-main focus-visible:ring-focus-ring"
             >
               {t("composer.sendAsFile")}
             </button>

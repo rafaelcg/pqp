@@ -592,14 +592,14 @@ function StageFila({
       )}
     >
       <div className="flex h-12 shrink-0 items-center gap-2 pl-4 pr-2">
-        <p className="font-display text-[15px] font-semibold text-text">{t("music.title")}</p>
-        <span data-music-queue-count="" className="text-[12px] tabular-nums text-text-secondary">
+        <p className="font-display text-sm font-semibold text-text">{t("music.title")}</p>
+        <span data-music-queue-count="" className="text-xs tabular-nums text-text-secondary">
           {queue.length === 0
             ? t("music.stage.queueEmpty")
             : t("music.stage.queueCount", { count: queue.length })}
         </span>
         {length ? (
-          <span data-music-queue-length="" className="truncate text-[12px] text-text-tertiary">
+          <span data-music-queue-length="" className="truncate text-xs text-text-tertiary">
             {length}
           </span>
         ) : null}
@@ -652,7 +652,7 @@ function StageFila({
       >
         {queue.length > 0 ? (
           <>
-            <p className="px-2 pb-1 text-[13px] font-semibold text-text-secondary">{t("music.queue")}</p>
+            <p className="px-2 pb-1 text-xs font-semibold text-text-secondary">{t("music.queue")}</p>
             <MusicQueueList
               queue={queue}
               voiceState={voiceState}
@@ -663,7 +663,7 @@ function StageFila({
           </>
         ) : null}
         {music.state?.autoplay && queue.length === 0 && current ? (
-          <p data-music-autoplay-next="" className="px-2 py-1 text-[12px] text-text-secondary">
+          <p data-music-autoplay-next="" className="px-2 py-1 text-xs text-text-secondary">
             {t("music.autoplay.next")}
           </p>
         ) : null}

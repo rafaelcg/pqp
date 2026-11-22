@@ -67,7 +67,7 @@ function Fold({ children }: { children: ReactNode }) {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="mt-0.5 rounded text-[length:var(--chat-font-size)] font-medium text-[color:var(--color-accent-text)] underline decoration-[color:var(--content-link-line)] underline-offset-2 hover:decoration-current focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="mt-0.5 rounded text-[length:var(--chat-font-size)] font-medium text-[color:var(--color-accent-text)] underline decoration-[color:var(--content-link-line)] underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-pane-main focus-visible:ring-focus-ring"
         >
           {t("chat.showAll")}
         </button>

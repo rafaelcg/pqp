@@ -1,19 +1,26 @@
 import {
   HeadphoneOff,
   ListMusic,
-  Lock,
-  Maximize2,
   MonitorPlay,
   Music,
   Pause,
   Play,
-  Shrink,
   SkipBack,
   SkipForward,
-  Tv,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { MusicNotes } from "@phosphor-icons/react";
+import {
+  CornersIn,
+  CornersOut,
+  Lock as LockGlyph,
+  MusicNotes,
+  Pause as PauseGlyph,
+  Play as PlayGlyph,
+  Queue,
+  SkipBack as SkipBackGlyph,
+  SkipForward as SkipForwardGlyph,
+  Television,
+} from "@phosphor-icons/react";
 import { MUSIC_MAX_DURATION_MS } from "@pqp/shared";
 import type { MusicTrack, VoiceParticipant } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -817,7 +824,7 @@ function Locked({ locked, children }: { locked: boolean; children: ReactNode }) 
           aria-hidden="true"
           className="pointer-events-none absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-surface-2 text-text-tertiary shadow-[inset_0_0_0_1px_var(--card-border)]"
         >
-          <Lock className="h-2 w-2" strokeWidth={3} />
+          <Icon icon={LockGlyph} size="sm" className="h-2 w-2" />
         </span>
       ) : null}
     </span>
@@ -919,7 +926,7 @@ function StagePlayer({
           <button
             type="button"
             data-music-listen=""
-            className="flex h-7 shrink-0 items-center rounded-full bg-accent px-3 text-[12px] font-semibold text-on-accent"
+            className="flex h-7 shrink-0 items-center rounded-full bg-accent px-3 text-xs font-semibold text-on-accent"
             onClick={() => setListening(true)}
           >
             {t("music.listen")}
@@ -936,10 +943,10 @@ function StagePlayer({
               <button
                 type="button"
                 data-music-tap=""
-                className="flex h-7 shrink-0 items-center gap-1 rounded-full bg-accent px-3 text-[12px] font-semibold text-on-accent"
+                className="flex h-7 shrink-0 items-center gap-1 rounded-full bg-accent px-3 text-xs font-semibold text-on-accent"
                 onClick={onTapToPlay}
               >
-                <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                <Icon icon={PlayGlyph} size="sm" className="h-3.5 w-3.5" />
                 {t("music.stage.tapToListen")}
               </button>
             ),
@@ -969,7 +976,7 @@ function StagePlayer({
       data-music-unplayable={shown.kind === "unplayable" ? "" : undefined}
       role="status"
       className={cn(
-        "flex w-full min-w-0 items-center gap-2 rounded-lg bg-surface-2 py-1 pl-3 pr-1 text-left text-[12px] leading-snug text-text-secondary",
+        "flex w-full min-w-0 items-center gap-2 rounded-lg bg-surface-2 py-1 pl-3 pr-1 text-left text-xs leading-snug text-text-secondary",
         !shown.action && "py-1.5 pr-3",
         shown.kind === "unplayable" && "text-danger",
       )}
@@ -989,12 +996,12 @@ function StagePlayer({
         aria-pressed={onStage}
         aria-label={stageLabel}
         className={cn(
-          "flex h-8 shrink-0 items-center gap-1.5 rounded-full text-[12px] font-medium text-text-secondary transition-colors hover:bg-[color:var(--button-ghost-hover)] hover:text-text",
+          "flex h-8 shrink-0 items-center gap-1.5 rounded-full text-xs font-medium text-text-secondary transition-colors hover:bg-[color:var(--button-ghost-hover)] hover:text-text",
           compact ? "w-8 justify-center" : "px-2.5",
         )}
         onClick={() => setMusicPlacement(onStage ? "hidden" : "stage")}
       >
-        <Tv className="h-4 w-4" aria-hidden="true" />
+        <Icon icon={Television} size="sm" />
         {compact ? null : <span>{stageLabel}</span>}
       </button>
     </Tooltip>
@@ -1015,7 +1022,7 @@ function StagePlayer({
         aria-expanded={music.open}
         aria-label={queueLabel}
         className={cn(
-          "flex h-8 shrink-0 items-center gap-1.5 rounded-full text-[12px] font-medium transition-colors",
+          "flex h-8 shrink-0 items-center gap-1.5 rounded-full text-xs font-medium transition-colors",
           compact ? "px-2" : "px-2.5",
           music.open
             ? "bg-accent-soft text-on-accent-soft"
@@ -1023,7 +1030,7 @@ function StagePlayer({
         )}
         onClick={toggleMusicOpen}
       >
-        <ListMusic className="h-4 w-4" aria-hidden="true" />
+        <Icon icon={Queue} kind="symbol" size="sm" />
         {compact ? null : <span>{t("music.fila")}</span>}
         {queueCount > 0 ? (
           <span data-music-queue-count="" className="tabular-nums">
@@ -1045,7 +1052,7 @@ function StagePlayer({
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-[color:var(--button-ghost-hover)] hover:text-text"
         onClick={onShrink}
       >
-        <Shrink className="h-4 w-4" aria-hidden="true" />
+        <Icon icon={CornersIn} kind="symbol" size="sm" />
       </button>
     </Tooltip>
   ) : null;
@@ -1054,24 +1061,24 @@ function StagePlayer({
     <div className="flex h-8 w-full min-w-0 items-center gap-2">
       <span
         data-music-stage-tag=""
-        className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-accent-soft px-2 text-[12px] font-semibold text-on-accent-soft"
+        className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-accent-soft px-2 text-xs font-semibold text-on-accent-soft"
       >
-        <Music className="h-3 w-3" aria-hidden="true" />
+        <Icon icon={MusicNotes} size="sm" className="h-3 w-3" />
         {t("music.stage.tag")}
       </span>
       {headerState ? (
         <span
           data-music-state={headerState.kind}
           role="status"
-          className="flex min-w-0 items-center gap-1 truncate text-[12px] text-text-secondary"
+          className="flex min-w-0 items-center gap-1 truncate text-xs text-text-secondary"
         >
-          <Pause className="h-3 w-3 shrink-0" fill="currentColor" aria-hidden="true" />
+          <Icon icon={PauseGlyph} size="sm" className="h-3 w-3" />
           <span className="truncate">{headerState.text}</span>
         </span>
       ) : listeners ? (
         <span
           data-music-listeners=""
-          className="hidden min-w-0 truncate text-[12px] text-text-tertiary @min-[20rem]:inline"
+          className="hidden min-w-0 truncate text-xs text-text-tertiary @min-[20rem]:inline"
         >
           {listeners}
         </span>
@@ -1144,7 +1151,7 @@ function StagePlayer({
         title={current.title}
         className={cn(
           "line-clamp-2 animate-fade-in break-words font-semibold leading-snug",
-          compact ? "text-[15px]" : "text-lg",
+          compact ? "text-sm" : "text-lg",
           stopped ? "text-text-secondary" : "text-text",
         )}
       >
@@ -1152,7 +1159,7 @@ function StagePlayer({
       </p>
       <p
         className={cn(
-          "mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-text-secondary",
+          "mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary",
           !compact && "justify-center",
         )}
       >
@@ -1203,9 +1210,9 @@ function StagePlayer({
             onClick={onPlayPause}
           >
             {playing ? (
-              <Pause className={compact ? "h-4 w-4" : "h-5 w-5"} fill="currentColor" aria-hidden="true" />
+              <Icon icon={PauseGlyph} size={compact ? "sm" : "md"} />
             ) : (
-              <Play className={cn("ml-0.5", compact ? "h-4 w-4" : "h-5 w-5")} fill="currentColor" aria-hidden="true" />
+              <Icon icon={PlayGlyph} size={compact ? "sm" : "md"} className="ml-0.5" />
             )}
           </Button>
         </Locked>
@@ -1228,7 +1235,7 @@ function StagePlayer({
             disabled={!canManage || !onPrevious}
             onClick={onPrevious}
           >
-            <SkipBack className="h-5 w-5" fill="currentColor" aria-hidden="true" />
+            <Icon icon={SkipBackGlyph} size="md" />
           </Button>
         </Locked>
       </span>
@@ -1245,7 +1252,7 @@ function StagePlayer({
         aria-label={t("music.skip")}
         onClick={onSkip}
       >
-        <SkipForward className="h-5 w-5" fill="currentColor" aria-hidden="true" />
+        <Icon icon={SkipForwardGlyph} size="md" />
       </Button>
     </Tooltip>
   ) : (
@@ -1305,7 +1312,7 @@ function StagePlayer({
               aria-label={t("voice.share.fullscreen")}
               onClick={onToggleFullscreen}
             >
-              <Maximize2 className="h-4 w-4" aria-hidden="true" />
+              <Icon icon={CornersOut} kind="symbol" size="sm" />
             </Button>
           </Tooltip>
         ) : null}
@@ -1335,11 +1342,11 @@ function StagePlayer({
                 key={`stage-title-${current.id}`}
                 data-music-title=""
                 title={current.title}
-                className="truncate text-[14px] font-semibold leading-snug text-text"
+                className="truncate text-sm font-semibold leading-snug text-text"
               >
                 {current.title}
               </p>
-              <p className="truncate text-[12px] text-text-secondary">
+              <p className="truncate text-xs text-text-secondary">
                 {current.autoplayed
                   ? t("music.autoplayed")
                   : `${t("music.requestedBy", { name: addedBy.name })} · YouTube`}

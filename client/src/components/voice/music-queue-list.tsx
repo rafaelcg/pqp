@@ -1,6 +1,12 @@
-import { DotsSixVertical, DotsThree } from "@phosphor-icons/react";
-import { ChevronDown, ChevronUp, GripVertical, Infinity as InfinityIcon, MoreHorizontal } from "lucide-react";
-import { IconSwap } from "@/components/ui/icon";
+import {
+  CaretDown,
+  CaretUp,
+  DotsSixVertical,
+  DotsThree,
+  Infinity as InfinityGlyph,
+} from "@phosphor-icons/react";
+import { GripVertical, MoreHorizontal } from "lucide-react";
+import { Icon, IconSwap } from "@/components/ui/icon";
 import {
   MUSIC_COVER_REDESIGN,
   MUSIC_ICON_REDESIGN,
@@ -419,7 +425,7 @@ function StageQueueRow({
           ) : null}
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-[13px] font-medium leading-tight text-text" title={track.title}>
+          <span className="truncate text-sm font-medium leading-tight text-text" title={track.title}>
             {track.title}
           </span>
           {track.autoplayed ? (
@@ -427,7 +433,7 @@ function StageQueueRow({
               data-music-autoplayed=""
               className="mt-1 inline-flex w-fit items-center gap-1 rounded-full bg-surface-2 px-1.5 text-[11px] leading-4 text-text-secondary"
             >
-              <InfinityIcon className="h-3 w-3" aria-hidden="true" />
+              <Icon icon={InfinityGlyph} kind="symbol" size="sm" className="h-3 w-3" />
               {t("music.queue.similar")}
             </span>
           ) : (
@@ -469,7 +475,7 @@ function StageQueueRow({
                   disabled={index === 0}
                   onClick={() => moveInQueue(track.id, -1)}
                 >
-                  <ChevronUp className="h-4 w-4" aria-hidden="true" />
+                  <Icon icon={CaretUp} kind="symbol" size="sm" />
                 </button>
               </Tooltip>
               <Tooltip label={t("music.moveDown")}>
@@ -481,7 +487,7 @@ function StageQueueRow({
                   disabled={last}
                   onClick={() => moveInQueue(track.id, 1)}
                 >
-                  <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                  <Icon icon={CaretDown} kind="symbol" size="sm" />
                 </button>
               </Tooltip>
             </>

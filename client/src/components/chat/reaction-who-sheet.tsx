@@ -66,7 +66,7 @@ export function ReactionWhoSheet({
                   aria-selected={selected}
                   onClick={() => setPicked(reaction.emoji)}
                   className={cn(
-                    "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-sm font-semibold text-text shadow-[inset_0_0_0_1px_var(--color-border)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                    "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-sm font-semibold text-text shadow-[inset_0_0_0_1px_var(--color-border)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring",
                     selected && "bg-surface-3",
                   )}
                 >

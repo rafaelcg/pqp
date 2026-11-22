@@ -1,9 +1,16 @@
 import type { ReactNode } from "react";
-import { At, Bell, BellSlash, DotsThree, PushPin } from "@phosphor-icons/react";
+import {
+  At,
+  Bell,
+  BellSlash,
+  DotsThree,
+  PushPin,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
 import { Pin, type LucideIcon } from "lucide-react";
 import type { Channel } from "@pqp/shared";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
-import { Icon } from "@/components/ui/icon";
+import { Icon, type IconKind } from "@/components/ui/icon";
 import { Menu } from "@/components/ui/menu";
 import {
   notificationLevelItems,
@@ -49,7 +56,7 @@ export function ChannelPinsButton({
       data-channel-header-pins=""
       onClick={onOpen}
       aria-label={t("chrome.pinsCount", { count })}
-      className="flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-[color:var(--list-row-icon)] hover:bg-[color:var(--list-row-hover)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-pane-main max-sm:hidden"
+      className="flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-sm font-medium text-[color:var(--list-row-icon)] hover:bg-[color:var(--list-row-hover)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-pane-main max-sm:hidden"
     >
       <Icon icon={PushPin} size="sm" className="h-[1.125rem] w-[1.125rem]" />
       {t("chrome.pins")}
@@ -107,6 +114,9 @@ export interface ChannelMoreAction {
   id: string;
   label: string;
   icon: LucideIcon;
+  /** The redesign's twin of `icon` (`ContextMenuItemDef.glyph`). */
+  glyph?: PhosphorIcon;
+  glyphKind?: IconKind;
   onSelect: () => void;
 }
 
@@ -140,6 +150,7 @@ export function ChannelMoreButton({
       id: "channel-more-pins",
       label: count ? t("chrome.pinsCount", { count }) : t("chrome.pins"),
       icon: Pin,
+      glyph: PushPin,
       onSelect: onOpenPins,
     },
     ...actions,

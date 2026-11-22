@@ -40,7 +40,7 @@ export function ChannelIntro({ info, empty }: { info: ChannelIntroInfo; empty: b
       <h2 className="m-0 font-display text-[28px] font-extrabold leading-8 text-text">
         {t("chat.intro.title", { name: info.name })}
       </h2>
-      <p className="text-[15px] leading-[22px] text-text-secondary">
+      <p className="text-sm leading-[22px] text-text-secondary">
         {empty
           ? t("chat.intro.empty")
           : info.topic
@@ -111,7 +111,7 @@ function StarterCard({
       type="button"
       onClick={onClick}
       {...rest}
-      className="flex flex-col items-start gap-1 rounded-xl bg-surface-1 p-3 text-left ring-1 ring-inset ring-border hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="flex flex-col items-start gap-1 rounded-xl bg-surface-1 p-3 text-left ring-1 ring-inset ring-border hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
     >
       <span className="mb-1 grid h-8 w-8 place-items-center rounded-lg bg-surface-2 text-text-secondary">
         <Icon icon={icon} size="sm" className="h-[1.125rem] w-[1.125rem]" />

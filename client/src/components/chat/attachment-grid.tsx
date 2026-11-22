@@ -17,7 +17,11 @@ import {
   SmilePlus,
 } from "lucide-react";
 import {
+  ArrowBendUpLeft,
+  Copy as CopyGlyph,
   DownloadSimple,
+  LinkSimple,
+  Smiley,
   File as FileGlyph,
   FileAudio as FileAudioGlyph,
   FileText as FileTextGlyph,
@@ -474,6 +478,8 @@ function ImageMenu({
       id: "copy",
       label: t("chat.image.copy"),
       icon: Copy,
+      glyph: CopyGlyph,
+      glyphKind: "symbol",
       onSelect: () => {
         copyImageToClipboard(src, attachment.contentType)
           .then(() => show(t("chat.image.copied")))
@@ -484,12 +490,16 @@ function ImageMenu({
       id: "save",
       label: t("chat.image.save"),
       icon: Download,
+      glyph: DownloadSimple,
+      glyphKind: "symbol",
       onSelect: () => void downloadImage(src, attachment.filename),
     },
     {
       id: "copy-link",
       label: t("chat.image.copyLink"),
       icon: LinkIcon,
+      glyph: LinkSimple,
+      glyphKind: "symbol",
       onSelect: () => {
         navigator.clipboard
           .writeText(src)
@@ -502,10 +512,23 @@ function ImageMenu({
     items.push({ id: "sep", label: "", separator: true });
   }
   if (menu.onReply) {
-    items.push({ id: "reply", label: t("chat.reply"), icon: Reply, onSelect: menu.onReply });
+    items.push({
+      id: "reply",
+      label: t("chat.reply"),
+      icon: Reply,
+      glyph: ArrowBendUpLeft,
+      glyphKind: "symbol",
+      onSelect: menu.onReply,
+    });
   }
   if (menu.onReact) {
-    items.push({ id: "react", label: t("chat.image.react"), icon: SmilePlus, onSelect: menu.onReact });
+    items.push({
+      id: "react",
+      label: t("chat.image.react"),
+      icon: SmilePlus,
+      glyph: Smiley,
+      onSelect: menu.onReact,
+    });
   }
 
   return (

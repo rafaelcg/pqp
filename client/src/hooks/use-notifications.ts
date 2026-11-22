@@ -1,8 +1,16 @@
+import {
+  ArrowUUpLeft,
+  At,
+  Bell as BellGlyph,
+  BellSlash,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
 import { AtSign, Bell, BellOff, Undo2, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Channel } from "@pqp/shared";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
+import type { IconKind } from "@/components/ui/icon";
 import { getDesktop } from "@/lib/desktop";
 import { translateMessage } from "@/lib/i18n";
 import { isRedesignOn } from "@/lib/redesign";
@@ -130,10 +138,13 @@ const LEVEL_LABELS: {
   level: NotificationLevel;
   key: "notify.level.all" | "notify.level.mentions" | "notify.level.none";
   icon: LucideIcon;
+  /** The redesign's twin of `icon` (`ContextMenuItemDef.glyph`). */
+  glyph: PhosphorIcon;
+  glyphKind?: IconKind;
 }[] = [
-  { level: "all", key: "notify.level.all", icon: Bell },
-  { level: "mentions", key: "notify.level.mentions", icon: AtSign },
-  { level: "none", key: "notify.level.none", icon: BellOff },
+  { level: "all", key: "notify.level.all", icon: Bell, glyph: BellGlyph },
+  { level: "mentions", key: "notify.level.mentions", icon: AtSign, glyph: At, glyphKind: "symbol" },
+  { level: "none", key: "notify.level.none", icon: BellOff, glyph: BellSlash },
 ];
 
 /**
@@ -156,10 +167,12 @@ export function notificationLevelItems(
       label: translateMessage("notify.menu.heading"),
       disabled: true,
     },
-    ...LEVEL_LABELS.map(({ level: value, key, icon }) => ({
+    ...LEVEL_LABELS.map(({ level: value, key, icon, glyph, glyphKind }) => ({
       id: `${prefix}-${value}`,
       label: translateMessage(key),
       icon,
+      glyph,
+      glyphKind,
       checked: value === level,
       onSelect: () => setLevel(value),
     })),
@@ -177,6 +190,8 @@ export function notificationLevelItems(
             ? translateMessage("notify.menu.resetAccount")
             : translateMessage("notify.menu.reset", { inherits }),
       icon: Undo2,
+      glyph: ArrowUUpLeft,
+      glyphKind: "symbol",
       onSelect: () => setLevel(null),
     });
   }

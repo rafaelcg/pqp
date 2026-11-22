@@ -292,7 +292,7 @@ function PinsList({
         </p>
       )}
       {!loading && pins.length === 0 && !error && (
-        <p className="px-3.5 py-5 text-center text-[13px] text-text-tertiary">
+        <p className="px-3.5 py-5 text-center text-sm text-text-tertiary">
           {canUnpin ? t("pins.emptyCanPin") : t("pins.emptyStaff")}
         </p>
       )}
@@ -353,7 +353,7 @@ function PinsList({
                         type="button"
                         aria-label={t("pins.rowActions")}
                         title={t("pins.rowActions")}
-                        className="grid h-7 w-7 place-items-center rounded-full text-text-tertiary hover:bg-[color:var(--color-surface-3)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                        className="grid h-7 w-7 place-items-center rounded-full text-text-tertiary hover:bg-[color:var(--color-surface-3)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
                       >
                         <Icon icon={DotsThree} size="sm" kind="symbol" />
                       </button>
