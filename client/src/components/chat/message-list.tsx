@@ -4523,7 +4523,14 @@ const MessageRow = memo(function MessageRow({
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
-                    className={cn("block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline redesign:rounded-full", MESSAGE_AVATAR_REDESIGN)}
+                    className={cn(
+                      "block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline",
+                      // A person is a circle under the redesign. A bot's Breu
+                      // face is drawn in its own shape, edge to edge, so the
+                      // circle would cut its lower corners off.
+                      serverBot ? "redesign:overflow-visible" : "redesign:rounded-full",
+                      MESSAGE_AVATAR_REDESIGN,
+                    )}
                   >
                     {message.isAutomod ? (
                       <span
