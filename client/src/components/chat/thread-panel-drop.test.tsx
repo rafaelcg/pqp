@@ -50,10 +50,14 @@ const thread = {
   archived: false,
 } as unknown as ThreadSummary;
 
-function panelFor(canSend: boolean) {
+function panelFor(
+  canSend: boolean,
+  { takeover, onClose = () => {} }: { takeover?: boolean; onClose?: () => void } = {},
+) {
   return (
       <TooltipProvider>
         <ThreadPanel
+          takeover={takeover}
           thread={thread}
           origin={null}
           controller={controller}
@@ -66,18 +70,18 @@ function panelFor(canSend: boolean) {
           mentionCandidates={[]}
           isLoading={false}
           showLinkEmbeds={false}
-          onClose={() => {}}
+          onClose={onClose}
         />
       </TooltipProvider>
   );
 }
 
-async function mount(canSend: boolean) {
+async function mount(canSend: boolean, options?: Parameters<typeof panelFor>[1]) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
   await act(async () => {
-    root!.render(panelFor(canSend));
+    root!.render(panelFor(canSend, options));
   });
   await act(async () => {});
   return host.querySelector("aside")!;
@@ -163,5 +167,37 @@ describe("ThreadPanel composer", () => {
     expect(box.closest("[hidden]")).toBeNull();
     expect(box.disabled).toBe(false);
     expect(box.value).toBe("meio da frase");
+  });
+});
+
+/**
+ * Under the redesign between md and xl, the thread takes the conversation's
+ * place (`lib/thread-layout.ts`): it fills the width instead of being a 26rem
+ * column, and the phone's back bar is the way back to the channel.
+ */
+describe("ThreadPanel takeover", () => {
+  it("is a 26rem column with a phone-only back bar by default", async () => {
+    const panel = await mount(true);
+    expect(panel.className).toContain("md:w-[26rem]");
+    expect(panel.className).not.toContain("md:flex-1");
+    expect(panel.querySelector("[data-thread-back]")?.className).toContain("md:hidden");
+  });
+
+  it("fills the width and keeps the back bar on a desktop when it takes over", async () => {
+    const panel = await mount(true, { takeover: true });
+    expect(panel.className).toContain("md:flex-1");
+    expect(panel.className).not.toContain("md:w-[26rem]");
+    const back = panel.querySelector("[data-thread-back]")!;
+    expect(back.className).not.toContain("md:hidden");
+    expect(back.textContent).toBe("#general");
+  });
+
+  it("goes back to the channel from the back bar", async () => {
+    const onClose = vi.fn();
+    const panel = await mount(true, { takeover: true, onClose });
+    act(() => {
+      (panel.querySelector("[data-thread-back]") as HTMLButtonElement).click();
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

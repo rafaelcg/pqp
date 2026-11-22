@@ -24,3 +24,9 @@ export const BELOW_MD_QUERY = "(max-width: 47.999rem)";
 
 /** Tailwind's `lg` and up: room for a third column beside the conversation. */
 export const LG_UP_QUERY = "(min-width: 64rem)";
+
+/**
+ * Tailwind's `xl` and up: room for a thread beside the conversation without
+ * squeezing the conversation (see `lib/thread-layout.ts`).
+ */
+export const XL_UP_QUERY = "(min-width: 80rem)";

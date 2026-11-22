@@ -13,7 +13,9 @@ import {
   Plus,
   X,
 } from "lucide-react";
+import { CaretLeft } from "@phosphor-icons/react";
 import { useRef, useState, type ReactNode } from "react";
+import { IconSwap } from "@/components/ui/icon";
 import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { useAttachmentsEnabled } from "@/hooks/use-attachments-enabled";
 import { useFileDropZone } from "@/hooks/use-file-drop-zone";
@@ -83,6 +85,12 @@ interface ThreadPanelProps {
   /** `thread` (default) or a forum post; see `ThreadPanelForumPost`. */
   variant?: "thread" | "forum-post";
   forumPost?: ThreadPanelForumPost | null;
+  /**
+   * The thread has the conversation's place instead of a column beside it
+   * (the redesign between md and xl, `lib/thread-layout.ts`): it fills the
+   * width and shows the phone's back bar to return to the channel.
+   */
+  takeover?: boolean;
   /** The origin message, when it is on hand — the parent view usually has it. */
   origin: ChatMessage | null;
   /** The thread's own chat controller (THREAD_CHANNEL_FRAMES). */
@@ -137,6 +145,7 @@ export function ThreadPanel({
   thread,
   variant = "thread",
   forumPost = null,
+  takeover = false,
   origin,
   controller,
   currentUser,
@@ -254,7 +263,11 @@ export function ThreadPanel({
       data-forum-post-panel={forum ? thread.channelId : undefined}
       className={cn(
         "relative flex h-full min-h-0 w-full shrink-0 flex-col border-border/60 bg-surface-0 max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-[var(--shadow-2)]",
-        !forum && cn("md:w-[26rem] md:border-l", PANE_SIDE_REDESIGN),
+        !forum &&
+          cn(
+            takeover ? "md:min-w-0 md:flex-1 md:shrink" : "md:w-[26rem] md:border-l",
+            PANE_SIDE_REDESIGN,
+          ),
         forum?.layout === "side" && cn("md:w-[488px] md:border-l animate-toast-in", PANE_INSET_REDESIGN),
         forum?.layout === "full" && "md:min-w-0 md:flex-1 md:shrink animate-fade-in",
         forum && "max-md:animate-step-in",
@@ -283,13 +296,24 @@ export function ThreadPanel({
           is what made one sentence appear four times on one screen. */}
       <header className="shrink-0 border-b border-border/60">
         {/* Mobile: the panel is the whole viewport, so the way out is a back
-            bar naming what you left, not a ✕ in a corner. */}
+            bar naming what you left, not a ✕ in a corner. The same bar when
+            the thread has taken the conversation's place on a desktop. */}
         <button
           type="button"
           onClick={onClose}
-          className="flex min-h-11 w-full items-center gap-1 px-2 text-sm font-semibold text-accent hover:bg-surface-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring md:hidden"
+          data-thread-back=""
+          className={cn(
+            "flex min-h-11 w-full items-center gap-1 px-2 text-sm font-semibold text-accent hover:bg-surface-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+            !takeover && "md:hidden",
+          )}
         >
-          <ChevronLeft className="h-5 w-5 shrink-0" aria-hidden />
+          <IconSwap
+            off={ChevronLeft}
+            on={CaretLeft}
+            kind="symbol"
+            size="md"
+            offClassName="h-5 w-5 shrink-0"
+          />
           <span className="truncate">
             {parentChannelName ? `#${parentChannelName}` : t("thread.back")}
           </span>

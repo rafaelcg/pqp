@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 
@@ -26,10 +26,16 @@ export function UnreadStrip({
   escapeDisabled?: boolean;
 }) {
   const { t } = useTranslation();
+  const stripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented || escapeDisabled) {
+        return;
+      }
+      // Not on screen: the channel's log stays mounted and hidden while a
+      // thread has taken its place, and Esc there is about the thread.
+      if (stripRef.current?.checkVisibility?.() === false) {
         return;
       }
       if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) {
@@ -41,11 +47,16 @@ export function UnreadStrip({
     return () => window.removeEventListener("keydown", onKey);
   }, [onDismiss, escapeDisabled]);
 
+  // A size container, so what fits follows the log's own width and not the
+  // window's: a thread's 416px column is narrow on a wide screen. The Esc
+  // hint goes first, then (only on a phone, as before) the jump.
   return (
     <div
+      ref={stripRef}
       data-unread-strip=""
-      className="sticky -top-4 z-[4] mx-4 -mt-4 mb-2 flex h-8 items-center gap-2 rounded-b-lg bg-surface-2 pl-3 pr-1.5 text-[13px] font-semibold text-text ring-1 ring-inset ring-border"
+      className="@container sticky -top-4 z-[4] mx-4 -mt-4 mb-2 rounded-b-lg bg-surface-2 text-xs font-semibold text-text ring-1 ring-inset ring-border"
     >
+      <div className="flex h-8 min-w-0 items-center gap-2 pl-3 pr-1.5">
       <span className="min-w-0 flex-1 truncate">
         {t("chat.unread.strip", { count, time: since })}
         {mentions > 0 && (
@@ -57,15 +68,25 @@ export function UnreadStrip({
           </>
         )}
       </span>
-      <span className="shrink-0 font-medium text-text-tertiary max-md:hidden">
+      <span
+        data-unread-esc-hint=""
+        className="shrink-0 font-medium text-text-tertiary max-md:hidden @max-[36rem]:hidden"
+      >
         {t("chat.unread.escHint")}
       </span>
-      <Button variant="ghost" size="sm" className="h-6 shrink-0 max-sm:hidden" onClick={onJump}>
+      <Button
+        variant="ghost"
+        size="sm"
+        data-unread-jump=""
+        className="h-6 shrink-0 max-sm:hidden @max-[20rem]:hidden"
+        onClick={onJump}
+      >
         {t("chat.unread.jumpFirst")}
       </Button>
       <Button variant="secondary" size="sm" className="h-6 shrink-0" onClick={onDismiss}>
         {t("chat.markRead")}
       </Button>
+      </div>
     </div>
   );
 }

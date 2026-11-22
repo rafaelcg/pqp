@@ -761,6 +761,7 @@ import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { useRedesign } from "@/lib/redesign";
+import { useThreadTakesOver } from "@/lib/thread-layout";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useUpdateOffered } from "@/lib/update-prompt-state";
@@ -4775,13 +4776,24 @@ function MainAppContent({
   openThreadChannelIdRef.current = openThread?.thread.channelId ?? null;
   const openThreadRef = useRef<typeof openThread>(null);
   openThreadRef.current = openThread;
+  // Under the redesign, between md and xl, an open thread takes the chat
+  // column's place instead of squeezing it (`lib/thread-layout.ts`). `<main>`
+  // stays mounted and hidden, so a draft, the scroll and a call survive.
+  const threadLayoutTakesOver = useThreadTakesOver({
+    redesign,
+    voiceRoom: isVoiceRoomChannelType(
+      channels.find((one) => one.id === selectedChannelId)?.type ?? "",
+    ),
+  });
+  const threadTakeover = openThread !== null && threadLayoutTakesOver;
   // Anything that covers the chat pane while it stays mounted: What's New,
   // the Communities directory (an opaque full-screen overlay), and the thread
-  // panel where it sits on top of the transcript instead of beside it.
+  // panel where it sits on top of the transcript instead of beside it, or
+  // has taken the transcript's place.
   const transcriptObscured =
     whatsNewOpen ||
     (directoryOpen && communitiesEnabled) ||
-    (openThread !== null && !columnLayout);
+    (openThread !== null && (!columnLayout || threadTakeover));
   transcriptObscuredRef.current = transcriptObscured;
   useEffect(() => {
     if (!transcriptObscured) {
@@ -13801,8 +13813,12 @@ function MainAppContent({
       <MusicMiniPlayer voiceState={voiceState} chrome={false} />
 
       {/* Stay mounted under Novidades so a half-typed message is still there
-          when Escape puts the app back. `hidden` takes it out of layout. */}
+          when Escape puts the app back. `hidden` takes it out of layout.
+          When a thread takes the chat's place (`threadTakeover`), `<main>`
+          is hidden the same way and this row shrinks to the channel list,
+          so the thread beside it gets the width. */}
       <div
+          threadTakeover && "flex-none",
         className={cn(
           "flex min-h-0 min-w-0 flex-1",
           PANE_ROW_REDESIGN,
@@ -14051,7 +14067,13 @@ function MainAppContent({
         />
       )}
 
-      <main className={cn("flex min-w-0 flex-1 flex-col bg-transparent", PANE_MAIN_REDESIGN)}>
+      <main
+        className={cn(
+          "flex min-w-0 flex-1 flex-col bg-transparent",
+          PANE_MAIN_REDESIGN,
+          threadTakeover && "hidden",
+        )}
+      >
         {isDevAuthBypassEnabled() && (
           <Banner
             tone="warning"
@@ -14494,7 +14516,9 @@ function MainAppContent({
           same slot: overlaying it on the transcript while the roster stayed
           put is what crushed #avisos on the QG. Stay mounted under Novidades
           so a half-typed thread reply survives. `contents` keeps the aside as
-          the flex item when the feed is closed. */}
+          the flex item when the feed is closed. Between md and xl under the
+          takeover={threadTakeover}
+          redesign it takes `<main>`'s place instead (`takeover`). */}
       {openThread && (
       <div className={whatsNewOpen ? "hidden" : "contents"}>
         <ThreadPanel

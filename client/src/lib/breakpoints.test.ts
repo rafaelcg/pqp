@@ -5,6 +5,7 @@ import {
   LG_UP_QUERY,
   MD_UP_QUERY,
   SM_UP_QUERY,
+  XL_UP_QUERY,
 } from "@/lib/breakpoints";
 
 const rem = (query: string) => Number(/([\d.]+)rem/.exec(query)?.[1]);
@@ -14,6 +15,10 @@ describe("the app's breakpoints", () => {
     expect(rem(SM_UP_QUERY)).toBe(40);
     expect(rem(MD_UP_QUERY)).toBe(48);
     expect(rem(LG_UP_QUERY)).toBe(64);
+  });
+
+  it("include Tailwind's xl, in rem", () => {
+    expect(rem(XL_UP_QUERY)).toBe(80);
   });
 
   it("stop each 'below' query just short of its 'from' query, so the two never overlap", () => {
