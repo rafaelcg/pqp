@@ -26,7 +26,7 @@ import { DiscordImportPreview } from "@/components/layout/discord-import-preview
 import { BringCrewAnnouncement } from "@/components/onboarding/bring-crew-announcement";
 import { showsCrewAnnouncement } from "@/lib/bring-crew";
 import { ServerReadyPanel } from "@/components/onboarding/server-ready-panel";
-import { shareInviteUrl } from "@/lib/share-invite";
+import { shareInviteUrl, type InviteRef } from "@/lib/share-invite";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { rememberInviteCode } from "@/lib/invite-paste-copy";
 import { IdempotencyAttempt } from "@/lib/idempotency";
@@ -56,6 +56,17 @@ interface CreateServerDialogProps {
   startMode?: "name" | "import";
   /** Pre-fills the paste box when the link named a template. */
   startSource?: string | null;
+  /**
+   * Pre-fills the name field ("Sala de Rafa"), for a door that already knows
+   * what the room is for: the newcomer invite strip. Read on each open.
+   */
+  startName?: string | null;
+  /**
+   * The `?ref=` on the done step's invite link when the room was made by
+   * name. Default `convite`; the newcomer strip passes `chama` so the joins it
+   * brings are counted apart (`server_members.join_ref`).
+   */
+  inviteRef?: InviteRef;
   onClose: () => void;
   onCreated: (created: CreatedServerPayload) => Promise<void> | void;
 }
@@ -121,11 +132,12 @@ export function discordImportErrorKey(
 function inviteLink(
   code: string,
   fromImport: boolean,
+  byNameRef: InviteRef = "convite",
 ): string {
   return shareInviteUrl(
     window.location.origin,
     code,
-    fromImport ? "discord" : "convite",
+    fromImport ? "discord" : byNameRef,
   );
 }
 
@@ -133,6 +145,8 @@ export function CreateServerDialog({
   open,
   startMode = "name",
   startSource = null,
+  startName = null,
+  inviteRef = "convite",
   onClose,
   onCreated,
 }: CreateServerDialogProps) {
@@ -148,7 +162,7 @@ export function CreateServerDialog({
     if (open) {
       setStep(startMode === "import" ? "paste" : "name");
       setSource(startSource ?? "");
-      setName("");
+      setName(startName ?? "");
     }
   }
   const [plan, setPlan] = useState<DiscordImportPlan | null>(null);
@@ -395,7 +409,7 @@ export function CreateServerDialog({
       ? t("importDiscord.eyebrow")
       : undefined;
   const link = done?.invite
-    ? inviteLink(done.invite.code, done.fromImport)
+    ? inviteLink(done.invite.code, done.fromImport, inviteRef)
     : "";
   const pasteMessage =
     done?.invite
@@ -567,7 +581,7 @@ export function CreateServerDialog({
             )}
             <ServerReadyPanel
               invite={done.invite}
-              inviteRef={done.fromImport ? "discord" : "convite"}
+              inviteRef={done.fromImport ? "discord" : inviteRef}
               showPastes={!done.fromImport}
               retrying={busy}
               onRetry={() => void retryInvite()}

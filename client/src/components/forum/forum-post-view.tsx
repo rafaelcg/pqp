@@ -47,6 +47,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Dialog } from "@/components/ui/dialog";
 import { IconButton } from "@/components/ui/icon-button";
+import { useRedesign } from "@/lib/redesign";
 import { Menu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ChatController, ChatMessage } from "@/hooks/use-chat";
@@ -435,6 +436,7 @@ export function ForumPostView({
   notify,
 }: ForumPostViewProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const postId = post.id;
   const isAuthor = viewerId !== null && post.authorId === viewerId;
   const canEdit = isAuthor || isStaff;
@@ -921,6 +923,9 @@ export function ForumPostView({
             <IconButton
               label={maximized ? t("forum.post.collapse") : t("forum.post.expand")}
               onClick={onToggleMaximize}
+              // Main announced this button as a toggle. The redesign does not
+              // ("Collapse, pressed" is wrong for a label that swaps).
+              pressed={redesign ? undefined : maximized}
             >
               {maximized ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
             </IconButton>

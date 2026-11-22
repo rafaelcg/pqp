@@ -255,6 +255,11 @@ export interface DesktopUpdateBridge {
   download(): Promise<boolean>;
   /** Restarts the app into the downloaded update. False when there is none. */
   install(): Promise<boolean>;
+  /**
+   * The page no longer draws the update button (back to the old look): the
+   * shell downloads and asks by itself again. Absent in shells built before it.
+   */
+  release?(): Promise<boolean>;
   onState(cb: (state: DesktopUpdateState) => void): () => void;
 }
 

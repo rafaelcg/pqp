@@ -49,9 +49,13 @@ describe("Input", () => {
         "redesign:disabled:bg-transparent",
         "redesign:disabled:placeholder:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
         "redesign:disabled:text-text-tertiary",
+        "redesign:duration-[var(--duration-fast)]",
         "redesign:enabled:hover:not-aria-invalid:border-[color:var(--input-hover-border)]",
+        "redesign:transition-colors",
       ].sort(),
     );
+    // Main's field had no transition, so with the toggle off there is none.
+    expect(field).not.toContain("transition-colors");
   });
 
   it("draws the same box around a prefix, and a Textarea shares it", () => {

@@ -509,6 +509,7 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
           {availableTabs.length > 1 && (
             <Tabs
               label={t("roles.name")}
+              legacy="plain"
               variant="segmented"
               value={activeTab}
               onValueChange={setTab}

@@ -33,6 +33,7 @@ import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { BringCrewStrip } from "@/components/onboarding/bring-crew-strip";
 import { DiscordImportNotice } from "@/components/onboarding/discord-import-notice";
+import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
 import { UpcomingSessionCard } from "@/components/voice/upcoming-session-card";
 import { WatchNowBanner } from "@/components/watch-now/watch-now-banner";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
@@ -49,6 +50,7 @@ import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { LatestCard, LatestPreview } from "@/lib/community-home/latest";
 import { CornerCard } from "@/components/layout/corner-card";
+import { FirstRunCard } from "@/components/onboarding/first-run-card";
 import { Button } from "@/components/ui/button";
 import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import type { RatableCall } from "@/lib/call-rating";
@@ -538,6 +540,7 @@ function UserPanelBlock() {
     onOpenSettings: noop,
     onOpenFeedback: noop,
     onOpenProfile: noop,
+    hideDownloadHint: true,
   } as const;
   return (
     <div data-testid="qa-shell-user-panel" className="flex flex-wrap items-end gap-6">
@@ -545,7 +548,7 @@ function UserPanelBlock() {
           the mic off; deafened; muted by a moderator; Não Perturbe. Then
           invisible, and the 72px strip. */}
       <FooterPane>
-        <UserPanel {...base} handle="lia" />
+        <UserPanel {...base} handle="lia" hideDownloadHint={false} />
       </FooterPane>
       <FooterPane>
         <UserPanel {...base} inVoice isMuted />
@@ -593,7 +596,7 @@ function BannersBlock() {
     <div data-testid="qa-shell-banners" className="flex flex-col gap-6">
       {/* Top: a live share (with a second one folded under "more"), the
           arrival strip for a member, and the owner's with "Copiar convite".
-          Bottom: who came over from Discord, the Discord
+          Bottom: who came over from Discord, a newcomer alone, the Discord
           import notice, a scheduled session, and the connection strip as the
           banner they all follow. */}
       <MainPane>
@@ -611,6 +614,7 @@ function BannersBlock() {
       </MainPane>
       <MainPane>
         <BringCrewStrip kind="arrived" count={4} serverName="Turma do Fliperama" resolveInviteCode={() => Promise.resolve("abc123")} onDismiss={noop} />
+        <NewcomerInviteStrip onInvite={noop} onDismiss={noop} />
         <DiscordImportNotice serverId="fliperama" existing={false} onImport={noop} onDismiss={noop} />
         <UpcomingSessionCard
           session={{
@@ -1272,6 +1276,15 @@ function useUpdateWaitingFixture() {
   }, []);
 }
 
+const NEW_USER = {
+  id: "u-new",
+  username: "lia",
+  discriminator: "0369",
+  tag: "lia#0369",
+  displayName: "Lia",
+  avatarUrl: null,
+} as unknown as Parameters<typeof FirstRunCard>[0]["user"];
+
 const community = (n: number, name: string, tagline: string, category: string, memberCount: number, extra: Record<string, unknown> = {}) =>
   communitySummarySchema.parse({
     id: `00000000-0000-4000-8000-0000000009${String(n).padStart(2, "0")}`,
@@ -1655,7 +1668,8 @@ export function ShellSheet() {
         </RailFrame>
       </div>
       {/* Onboarding: the one corner card shell, inline as it sits beside the
-          control it explains, plain and with a hero. */}
+          control it explains, plain and with a hero; and the first-run card
+          for a new account with nothing done yet. */}
       <div data-testid="qa-onboarding" className="flex max-w-4xl items-start gap-6 p-4">
         <div className="flex w-[17rem] flex-col gap-4">
           <CornerCard
@@ -1679,6 +1693,31 @@ export function ShellSheet() {
             body="Assiste filme junto, com a voz da galera por cima."
             footer={<Button size="sm" variant="secondary" onClick={noop}>Ver como</Button>}
           />
+        </div>
+        <div className="min-w-0 flex-1">
+          <FirstRunCard
+            user={NEW_USER}
+            serverCount={0}
+            friendCount={0}
+            onCreateServer={noop}
+            onJoinServer={noop}
+            onAddFriend={noop}
+            onPickAvatar={noop}
+            onDismiss={noop}
+          />
+          {/* Two steps done: ticked, dimmed and kept in place. */}
+          <div className="mt-4">
+            <FirstRunCard
+              user={{ ...NEW_USER, avatarUrl: "https://api.dicebear.com/9.x/shapes/png?seed=lia" }}
+              serverCount={1}
+              friendCount={0}
+              onCreateServer={noop}
+              onJoinServer={noop}
+              onAddFriend={noop}
+              onPickAvatar={noop}
+              onDismiss={noop}
+            />
+          </div>
         </div>
       </div>
       {/* The music queue in a call's composer: three waiting, one played. */}

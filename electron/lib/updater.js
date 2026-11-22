@@ -78,6 +78,14 @@ function initAutoUpdate(getWindow, isBusy = () => false, hooks = {}) {
     attach: () => {
       pageDrives = true;
     },
+    /**
+     * The page stopped drawing the button (the old look came back). Nothing
+     * else is told apart: the updater downloads and asks by itself again, and
+     * picks up an update it already found or staged.
+     */
+    release: () => {
+      pageDrives = false;
+    },
     check: () => {},
     download: () => {},
     install: () => false,
@@ -266,6 +274,17 @@ function initAutoUpdate(getWindow, isBusy = () => false, hooks = {}) {
   controller.check = check;
   controller.download = download;
   controller.install = install;
+  controller.release = () => {
+    if (!pageDrives) {
+      return;
+    }
+    pageDrives = false;
+    if (state.status === "available") {
+      download();
+    } else if (state.status === "downloaded") {
+      void offer({ version: state.version });
+    }
+  };
 
   // Not on the first tick of the app: launch is already doing enough.
   setTimeout(check, 10_000).unref?.();

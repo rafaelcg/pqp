@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { WarningCircle } from "@phosphor-icons/react";
 import { Breu, type BreuMood } from "@/components/breu/breu";
 import { Icon } from "@/components/ui/icon";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 
 /**
@@ -18,11 +19,13 @@ import { cn } from "@/lib/utils";
  * label and a smaller line. A failure (`role="alert"`) draws its disc in the
  * warning tone, with the retry as its action.
  *
- * `mascot` draws Breu in place of the icon, in both looks: for the empty
+ * `mascot` draws Breu in place of the icon under the redesign: for the empty
  * states a person meets early and rarely (a new channel, no DMs yet, a forum
  * with no posts, a search that found nothing). Not for compact lists, where
- * Breu would take over the row. A page failure with an icon draws the warning
- * disc; with `mascot` (the sad face) there is no disc, the face carries it.
+ * Breu would take over the row. With the toggle off it is ignored and the
+ * caller's `icon` draws as it always did. A page failure with an icon draws
+ * the warning disc; with `mascot` (the sad face) there is no disc, the face
+ * carries it.
  */
 export type EmptyStateSize = "page" | "inline";
 
@@ -80,8 +83,9 @@ export function EmptyState({
   /** A glyph, drawn on a soft disc under the redesign. */
   icon?: ReactNode;
   /**
-   * Breu in place of the icon, with this face. It wins: `icon` and
-   * `iconClassName` are not drawn when it is set.
+   * Breu in place of the icon, with this face, under the redesign. There it
+   * wins: `icon` and `iconClassName` are not drawn. With the toggle off it is
+   * ignored.
    */
   mascot?: BreuMood;
   title: ReactNode;
@@ -110,6 +114,8 @@ export function EmptyState({
 } & { [key: `data-${string}`]: string | undefined }) {
   // A page failure always leads with its warning disc under the redesign;
   // a caller that drew no glyph gets one there, and none with the toggle off.
+  const redesign = useRedesign();
+  const face = redesign ? mascot : undefined;
   const glyph =
     icon ??
     (role === "alert" && size === "page" ? <Icon icon={WarningCircle} size="lg" /> : undefined);
@@ -120,9 +126,9 @@ export function EmptyState({
       {...data}
       className={cn("flex flex-col items-center text-center", className, ROOT[size], redesignClassName)}
     >
-      {mascot ? (
-        <div aria-hidden="true" data-empty-mascot={mascot} className={cn("mb-3 flex justify-center", MASCOT[size])}>
-          <Breu mood={mascot} size={size === "page" ? "md" : "sm"} />
+      {face ? (
+        <div aria-hidden="true" data-empty-mascot={face} className={cn("mb-3 flex justify-center", MASCOT[size])}>
+          <Breu mood={face} size={size === "page" ? "md" : "sm"} />
         </div>
       ) : glyph ? (
         <div

@@ -51,6 +51,7 @@ import {
 import { checkVersionNow } from "@/lib/version-watch";
 import { Icon } from "@/components/ui/icon";
 import { Spinner } from "@/components/ui/spinner";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 
 /**
@@ -170,10 +171,23 @@ export function UpdateIndicator({
   const inCall = useInCall();
   const watching = useWatchingParty();
   const { state: applying, start } = useApplyUpdate(apply);
-  const [bridge] = useState(() =>
+  const redesign = useRedesign();
+  // The shell's updater is driven only by the new look's button (and by a
+  // caller that draws it always). The old look leaves the shell to download
+  // and ask by itself, exactly as before.
+  const drivesShell = always || redesign;
+  const [shellBridgeFound] = useState(() =>
     shellBridge === undefined ? desktopUpdateBridge() : shellBridge,
   );
+  const bridge = drivesShell ? shellBridgeFound : null;
   const shell = useDesktopUpdate(bridge);
+  // Back to the old look in a running shell: hand the updater back to itself,
+  // so it downloads and asks on its own again.
+  useEffect(() => {
+    if (!drivesShell) {
+      void shellBridgeFound?.release?.();
+    }
+  }, [drivesShell, shellBridgeFound]);
   const [checking, setChecking] = useState(false);
   const [restartFailed, setRestartFailed] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -204,7 +218,7 @@ export function UpdateIndicator({
   // The list is read when somebody asks, never on a poll: most people who see
   // the dot never open it, and the file is small but it is not free.
   useEffect(() => {
-    if (!open || changes !== null) {
+    if (!open || !ready || changes !== null) {
       return;
     }
     let live = true;
@@ -216,7 +230,7 @@ export function UpdateIndicator({
     return () => {
       live = false;
     };
-  }, [open, changes]);
+  }, [open, ready, changes]);
 
   const place = useCallback(() => {
     const trigger = triggerRef.current;
@@ -289,13 +303,16 @@ export function UpdateIndicator({
     };
   }, [open, close]);
 
-  // Gone with the update: nothing left to take, so nothing to show.
+  // Gone with the update: nothing left to take, so nothing to show. A button
+  // drawn always keeps its popover, which then says where things stand.
   useEffect(() => {
     if (!ready) {
-      setOpen(false);
       setConfirming(false);
+      if (!always) {
+        setOpen(false);
+      }
     }
-  }, [ready]);
+  }, [ready, always]);
 
   const checkNow = useCallback(() => {
     setChecking(true);
@@ -394,9 +411,46 @@ export function UpdateIndicator({
       return;
     }
     if (phase.kind === "current" || phase.kind === "error") {
+      // The click checks, and opens a small popover that says the result and
+      // keeps the release notes one click away.
+      if (open) {
+        close();
+        return;
+      }
+      setOpen(true);
       checkNow();
     }
   };
+  const statusTitle =
+    phase.kind === "checking"
+      ? t("update.status.checking")
+      : phase.kind === "error"
+        ? t("update.status.error")
+        : phase.kind === "current"
+          ? t("update.status.current")
+          : label;
+
+  const moreLink = onOpenWhatsNew ? (
+    <button
+      type="button"
+      className="mt-2 text-sm text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+      onClick={() => {
+        close(false);
+        onOpenWhatsNew();
+      }}
+    >
+      {t("update.popover.more")}
+    </button>
+  ) : (
+    <a
+      href="/blog"
+      target="_blank"
+      rel="noreferrer"
+      className="mt-2 inline-block text-sm text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+    >
+      {t("update.popover.more")}
+    </a>
+  );
 
   const dotted = ready || phase.kind === "available";
   const glyph = (() => {
@@ -428,8 +482,8 @@ export function UpdateIndicator({
           data-update-phase={phase.kind}
           data-update-emphasis={emphasised ? "" : undefined}
           aria-label={label}
-          aria-haspopup={ready ? "dialog" : undefined}
-          aria-expanded={ready ? open : undefined}
+          aria-haspopup={ready || always ? "dialog" : undefined}
+          aria-expanded={ready || always ? open : undefined}
           aria-busy={phase.kind === "checking" || phase.kind === "downloading" ? true : undefined}
           disabled={phase.kind === "checking" || phase.kind === "downloading"}
           onClick={onTrigger}
@@ -485,6 +539,47 @@ export function UpdateIndicator({
           )}
         </button>
       </Tooltip>
+
+      {open && !ready && always &&
+        createPortal(
+          <div
+            ref={panelRef}
+            role="dialog"
+            aria-labelledby={titleId}
+            data-update-popover=""
+            data-update-status={phase.kind}
+            style={{
+              width: `min(${POPOVER_WIDTH}px, calc(100vw - ${EDGE * 2}px))`,
+              left: box?.left ?? 0,
+              top: box?.top ?? 0,
+              visibility: box ? "visible" : "hidden",
+            }}
+            className={cn(POPOVER_SURFACE, "fixed z-[100] p-4 text-text animate-pop-in")}
+          >
+            <div className="flex items-start gap-3">
+              <span
+                aria-hidden="true"
+                className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-secondary"
+              >
+                <Icon
+                  icon={glyph.on}
+                  kind="symbol"
+                  size="sm"
+                  className={cn(glyph.spin && "motion-safe:animate-spin")}
+                />
+              </span>
+              <h2
+                id={titleId}
+                aria-live="polite"
+                className="min-w-0 pt-1.5 text-sm font-semibold leading-5"
+              >
+                {statusTitle}
+              </h2>
+            </div>
+            {moreLink}
+          </div>,
+          document.body,
+        )}
 
       {open && ready &&
         createPortal(
@@ -558,27 +653,7 @@ export function UpdateIndicator({
                   )}
                 </>
               )}
-              {onOpenWhatsNew ? (
-                <button
-                  type="button"
-                  className="mt-2 text-sm text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-                  onClick={() => {
-                    close(false);
-                    onOpenWhatsNew();
-                  }}
-                >
-                  {t("update.popover.more")}
-                </button>
-              ) : (
-                <a
-                  href="/blog"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-2 inline-block text-sm text-accent underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  {t("update.popover.more")}
-                </a>
-              )}
+              {moreLink}
             </section>
 
             <div className="mt-4 space-y-3">

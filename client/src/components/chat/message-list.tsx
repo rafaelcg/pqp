@@ -10,6 +10,7 @@ import {
   Smiley,
   Play as PlayFill,
   PushPin as PushPinFill,
+  UsersThree,
   WarningCircle as WarningCircleFill,
   WifiSlash,
   ArrowDown as ArrowDownGlyph,
@@ -31,7 +32,7 @@ import {
   UserMinus as PhUserMinus,
   type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
-import { Icon as Glyph, type IconKind } from "@/components/ui/icon";
+import { Icon, Icon as Glyph, type IconKind } from "@/components/ui/icon";
 import { ChannelIntro, type ChannelIntroInfo } from "@/components/chat/channel-intro";
 import { UnreadStrip } from "@/components/chat/unread-strip";
 import { MessageFold } from "@/components/chat/message-fold";
@@ -3314,6 +3315,7 @@ function EmptyState({
     return (
       <EmptyStateView
         data-empty-owner=""
+        icon={<Icon icon={UsersThree} size="lg" />}
         mascot="curious"
         title={t("chat.empty.owner.title")}
         body={
@@ -3351,6 +3353,7 @@ function EmptyState({
 
   return (
     <EmptyStateView
+      icon={<Icon icon={ChatsCircle} size="lg" />}
       mascot="hello"
       title={t("chat.empty.title")}
       body={t("chat.empty.body")}

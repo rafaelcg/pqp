@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { useApplyUpdate } from "@/hooks/use-apply-update";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import { isBlockingUpdate } from "@/lib/update-policy";
 import { useBuildStaleness } from "@/lib/update-prompt-state";
 
@@ -36,6 +37,7 @@ export function ForcedUpdateScreen({
   apply?: (target: string | null) => Promise<unknown>;
 } = {}) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const build = useBuildStaleness();
   const { state, start } = useApplyUpdate(apply);
 
@@ -70,10 +72,16 @@ export function ForcedUpdateScreen({
         </Button>
       }
     >
-      <div className="flex items-center gap-3 px-5 py-4">
-        <Breu mood="focused" size="sm" />
-        <p className="text-sm text-text-secondary">{t("update.forced.detail")}</p>
-      </div>
+      {redesign ? (
+        <div className="flex items-center gap-3 px-5 py-4">
+          <Breu mood="focused" size="sm" />
+          <p className="text-sm text-text-secondary">{t("update.forced.detail")}</p>
+        </div>
+      ) : (
+        <p className="px-5 py-4 text-sm text-text-secondary">
+          {t("update.forced.detail")}
+        </p>
+      )}
       {/* The button is the person's again after a failure, and this says why.
           A blocking screen that fails silently is a lock-out. */}
       {state.status === "error" && (

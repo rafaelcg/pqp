@@ -77,6 +77,8 @@ import {
 import { ComposerFormatPreview } from "@/components/chat/composer-format-preview";
 import { Icon as Glyph, IconSwap } from "@/components/ui/icon";
 import { MusicHintHostProvider } from "@/components/voice/call-dock";
+import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
+import { rememberFeatureHint } from "@/lib/feature-hints";
 import { registerComposerActivity } from "@/lib/hint-quiet";
 import { VoiceNoteTranscriptionNotice } from "@/components/chat/voice-note-transcription-notice";
 import { PollComposer } from "@/components/chat/poll-composer";
@@ -114,6 +116,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useRedesign } from "@/lib/redesign";
 import { MENU_BUTTON_ICON, MENU_ICON_BOX, MENU_ROW_BUTTON, MENU_SURFACE } from "@/components/ui/menu-items";
 import {
   AttachmentAbortError,
@@ -173,7 +176,6 @@ import {
 } from "@/lib/composer-formatting";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { useRedesign } from "@/lib/redesign";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 import { draftNeedsPreview } from "@/lib/composer-preview";
@@ -585,6 +587,7 @@ export function MessageComposer({
   const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
   const [callHintHost, setCallHintHost] = useState<HTMLElement | null>(null);
   const [isFormatBarOpen, setIsFormatBarOpen] = useState(false);
+  const formatHintEnabled = useFeatureHintEnabled("composerFormat");
   const [gifQuery, setGifQuery] = useState("");
   const [isGifSearchEnabled, setIsGifSearchEnabled] = useState(false);
   const [attachmentLimits, setAttachmentLimits] = useState<{
@@ -673,6 +676,12 @@ export function MessageComposer({
       writeDraft(channelId, bodyRef.current);
     };
   }, [channelId]);
+
+  useEffect(() => {
+    if (isFormatBarOpen) {
+      rememberFeatureHint("composerFormat");
+    }
+  }, [isFormatBarOpen]);
 
   // Tells the hint queue (`lib/hint-quiet.ts`) whether somebody is in the
   // middle of a message: focus in the box, or text waiting in it. App cannot
@@ -1972,11 +1981,11 @@ export function MessageComposer({
           : ({ "--composer-gif-right": `${gifRight}px` } as CSSProperties)
       }
     >
-      {/* The call's hint line (push-to-talk focus), above the WHOLE composer.
-          The dock cannot hang it itself: its row animates open by collapsing
-          and has to be `overflow-hidden`, and the queue panel sits above it
-          in the same well, so a line anchored there was either clipped away
-          or laid over the field it names. */}
+      {/* The call's coachmarks, above the WHOLE composer. The dock cannot
+          hang them itself: its row animates open by collapsing and has to
+          be `overflow-hidden`, and the queue panel sits above it in the
+          same well, so a card anchored there was either clipped away or
+          laid over the field it names. */}
       <div
         ref={setCallHintHost}
         className="pointer-events-none absolute bottom-full left-3 right-3 z-30 mb-2 sm:left-4 sm:right-4 [&>*]:pointer-events-auto"
@@ -1985,6 +1994,17 @@ export function MessageComposer({
         recording={voiceNoteActive}
         serverId={voiceNotesServerId}
       />
+      {formatHintEnabled && !isFormatBarOpen && !feedback && !voiceNoteActive && (
+        <div className="absolute bottom-full left-3 z-20 mb-2 sm:left-4">
+          <FeatureHint
+            id="composerFormat"
+            enabled
+            body={t("featureHint.composerFormat.body", {
+              control: t("featureHint.composerFormat.aa"),
+            })}
+          />
+        </div>
+      )}
       {menuKind && (
         <AutocompleteMenu
           id={MENU_ID}
@@ -2657,11 +2677,18 @@ function ComposerInsertMenu({
   /** The phone row under the redesign: every row is a 44px finger target. */
   phone?: boolean;
 }) {
+  // Toggle off draws main's markup exactly: the shared menu recipe's icon
+  // column and row shape move the icon and label by a pixel or two.
+  const redesign = useRedesign();
   return (
     <div
       role="menu"
       aria-labelledby={labelledBy}
-      className={cn(MENU_SURFACE, "absolute bottom-full left-0 z-30 mb-2 min-w-48")}
+      className={
+        redesign
+          ? cn(MENU_SURFACE, "absolute bottom-full left-0 z-30 mb-2 min-w-48")
+          : "elevation-3 absolute bottom-full left-0 z-30 mb-2 min-w-48 rounded-[var(--radius-card)] p-1 animate-fade-in"
+      }
     >
       {items.map((item) => {
         const Icon = item.icon;
@@ -2681,23 +2708,31 @@ function ComposerInsertMenu({
                 event.currentTarget.focus({ preventScroll: true });
               }
             }}
-            className={cn(MENU_ROW_BUTTON, phone && "min-h-11")}
+            className={
+              redesign
+                ? cn(MENU_ROW_BUTTON, phone && "min-h-11")
+                : "flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2.5 py-1.5 text-left text-sm text-text hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none"
+            }
           >
-            <span aria-hidden className={MENU_ICON_BOX}>
-              {Icon && item.glyph ? (
-                <IconSwap
-                  off={Icon}
-                  on={item.glyph}
-                  kind={item.glyphKind ?? "object"}
-                  offClassName={MENU_BUTTON_ICON}
-                  className={MENU_BUTTON_ICON}
-                />
-              ) : item.glyph ? (
-                <Glyph icon={item.glyph} kind={item.glyphKind ?? "symbol"} size="sm" className={MENU_BUTTON_ICON} />
-              ) : Icon ? (
-                <Icon className={MENU_BUTTON_ICON} />
-              ) : null}
-            </span>
+            {redesign ? (
+              <span aria-hidden className={MENU_ICON_BOX}>
+                {Icon && item.glyph ? (
+                  <IconSwap
+                    off={Icon}
+                    on={item.glyph}
+                    kind={item.glyphKind ?? "object"}
+                    offClassName={MENU_BUTTON_ICON}
+                    className={MENU_BUTTON_ICON}
+                  />
+                ) : item.glyph ? (
+                  <Glyph icon={item.glyph} kind={item.glyphKind ?? "symbol"} size="sm" className={MENU_BUTTON_ICON} />
+                ) : Icon ? (
+                  <Icon className={MENU_BUTTON_ICON} />
+                ) : null}
+              </span>
+            ) : Icon ? (
+              <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            ) : null}
             {toggle ? <span className="min-w-0 flex-1 text-left">{item.label}</span> : item.label}
             {toggle && item.checked && (
               <Glyph icon={CheckGlyph} kind="symbol" size="sm" className="text-accent-text" />

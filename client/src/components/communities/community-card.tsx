@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 import {
   CATEGORY_EMOJI,
@@ -107,6 +108,7 @@ export function CommunityCard({
   iconUrl = null,
 }: CommunityCardProps) {
   const { t, locale } = useTranslation();
+  const redesign = useRedesign();
   const action = cardAction(community);
   const hue = communityHue(community.id);
   const [shared, setShared] = useState(false);
@@ -188,6 +190,9 @@ export function CommunityCard({
           className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-2 to-transparent redesign:from-[color:var(--community-card-bg)]"
         />
         <span
+          // Main hid the chip (the card's name and tagline carry the meaning).
+          // The redesign reads it, so the category is not sighted-only.
+          aria-hidden={redesign ? undefined : true}
           className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-ink/55 px-2.5 py-1 text-[11px] font-semibold text-paper backdrop-blur-sm redesign:h-[var(--badge-h)] redesign:px-[var(--badge-px)] redesign:py-0 redesign:text-[length:var(--badge-text)] redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-1 redesign:ring-[color:var(--glass-border)]"
         >
           <span aria-hidden="true">{CATEGORY_EMOJI[community.category]}</span>
