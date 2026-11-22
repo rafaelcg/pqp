@@ -10170,11 +10170,8 @@ function MainAppContent({
     },
     [refreshAfterBlock],
   );
-  // Stable, so the memoized message list keeps its memo: the row's Bloquear
-  // and the channel intro's two buttons (`channel-intro.tsx`).
-  const handleBlockAuthor = useStableCallback((userId: string) => {
-    void handleBlockUser(userId);
-  });
+  // Stable, so the memoized message list keeps its memo: the channel
+  // intro's two buttons (`channel-intro.tsx`).
   const introCopyInvite = useStableCallback(() =>
     selectedServerId
       ? copyInvitePaste({ serverId: selectedServerId, locale }).then(() => undefined)
@@ -13139,7 +13136,6 @@ function MainAppContent({
         messages={chat.getMessages()}
         participants={activeConversation?.participants}
         moderation={cardModeration}
-        onBlockUser={handleBlockAuthor}
         introName={
           selectedChannel.kind === "server" && selectedChannel.type === "text"
             ? selectedChannel.name

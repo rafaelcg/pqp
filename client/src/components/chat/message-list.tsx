@@ -14,9 +14,24 @@ import {
   WifiSlash,
   ArrowDown as ArrowDownGlyph,
   EyeSlash,
+  ArrowBendUpRight as PhArrowBendUpRight,
+  CheckCircle as PhCheckCircle,
+  ClockCounterClockwise as PhClockCounterClockwise,
+  Copy as PhCopy,
+  Envelope as PhEnvelope,
+  EnvelopeOpen as PhEnvelopeOpen,
+  Flag as PhFlag,
+  Gavel as PhGavel,
+  Hash as PhHash,
+  LinkSimple as PhLinkSimple,
+  ListChecks as PhListChecks,
+  PushPinSlash as PhPushPinSlash,
+  Timer as PhTimer,
+  Trash as PhTrash,
+  UserMinus as PhUserMinus,
   type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
-import { Icon as Glyph } from "@/components/ui/icon";
+import { Icon as Glyph, type IconKind } from "@/components/ui/icon";
 import { ChannelIntro, type ChannelIntroInfo } from "@/components/chat/channel-intro";
 import { UnreadStrip } from "@/components/chat/unread-strip";
 import { MessageFold } from "@/components/chat/message-fold";
@@ -31,6 +46,7 @@ import {
   type ProfileModerationContext,
 } from "@/components/user/profile-relations";
 import { applyMemberModeration, moderationActionLabel } from "@/lib/member-moderation";
+import { describeMessageForMenu } from "@/lib/message-menu-excerpt";
 import { orderMessageMenu } from "@/lib/message-menu-order";
 import { isJumboEmoji } from "@/lib/emoji-only";
 import { EmptyState as EmptyStateView } from "@/components/ui/empty-state";
@@ -79,7 +95,6 @@ import {
   Star,
   Crown,
   Trash2,
-  Ban,
   Gavel,
   TimerOff,
   TimerReset,
@@ -367,6 +382,39 @@ const MESSAGE_MODERATION_ICON: Record<ProfileModerationAction, LucideIcon> = {
   ban: Gavel,
 };
 
+/**
+ * Under the redesign, the Phosphor twin of each message menu row's Lucide
+ * icon (`ContextMenuItemDef.glyph`). Keyed by the icon, so a row whose icon
+ * follows its state (Fixar or Desafixar, lida or não lida) follows with it.
+ */
+const MESSAGE_MENU_GLYPHS = new Map<LucideIcon, { glyph: PhosphorGlyph; kind?: IconKind }>([
+  [Reply, { glyph: ArrowBendUpLeft, kind: "symbol" }],
+  [MessageSquareText, { glyph: ChatCircleText }],
+  [MessageSquarePlus, { glyph: ChatsCircle }],
+  [CircleCheck, { glyph: PhCheckCircle }],
+  [Copy, { glyph: PhCopy, kind: "symbol" }],
+  [Hash, { glyph: PhHash, kind: "symbol" }],
+  [Link, { glyph: PhLinkSimple, kind: "symbol" }],
+  [Forward, { glyph: PhArrowBendUpRight, kind: "symbol" }],
+  [Mail, { glyph: PhEnvelope }],
+  [MailOpen, { glyph: PhEnvelopeOpen }],
+  [Pencil, { glyph: PencilSimple }],
+  [Pin, { glyph: PushPinFill }],
+  [PinOff, { glyph: PhPushPinSlash }],
+  [Trash2, { glyph: PhTrash }],
+  [ListChecks, { glyph: PhListChecks, kind: "symbol" }],
+  [Flag, { glyph: PhFlag }],
+  [TimerOff, { glyph: PhTimer }],
+  [TimerReset, { glyph: PhClockCounterClockwise }],
+  [UserMinus, { glyph: PhUserMinus }],
+  [Gavel, { glyph: PhGavel }],
+]);
+
+function withMenuGlyph(item: ContextMenuItemDef): ContextMenuItemDef {
+  const twin = item.icon ? MESSAGE_MENU_GLYPHS.get(item.icon) : undefined;
+  return twin ? { ...item, glyph: twin.glyph, glyphKind: twin.kind } : item;
+}
+
 /** A staff rung's label in the message menu, which names the person. */
 function staffRungLabel(
   rung: ProfileModerationAction,
@@ -489,8 +537,6 @@ interface MessageListProps {
    * would refuse.
    */
   moderation?: ProfileModerationContext | null;
-  /** Blocks an author from the message menu (redesign only), after a confirm. */
-  onBlockUser?: (userId: string) => void;
   /** Client-render-only: the server unfurls and caches regardless, so turning
    * this off only stops this reader's own client from drawing the card. */
   showLinkEmbeds?: boolean;
@@ -926,7 +972,6 @@ export const MessageList = memo(function MessageList({
   onUnpinMessage,
   onReportMessage,
   moderation = null,
-  onBlockUser,
   showLinkEmbeds = true,
   onStartThread,
   onOpenThread,
@@ -1259,7 +1304,6 @@ export const MessageList = memo(function MessageList({
     /** Apagar e banir: the message the ban came from, deleted once it lands. */
     deleteMessageId?: string;
   } | null>(null);
-  const [pendingBlock, setPendingBlock] = useState<ModerationSubject | null>(null);
   const handleModerate = useCallback(
     (action: ProfileModerationAction, subject: ModerationSubject, deleteMessageId?: string) => {
       if (!moderation) {
@@ -1281,10 +1325,6 @@ export const MessageList = memo(function MessageList({
       setPendingModeration({ action, subject, deleteMessageId });
     },
     [moderation, onActionError, t],
-  );
-  const handleBlockAuthor = useCallback(
-    (subject: ModerationSubject) => setPendingBlock(subject),
-    [],
   );
   // `rows` (the array, not its contents) gets a new reference on every
   // message arrival even when almost every `Row` inside it is the cached,
@@ -2615,7 +2655,6 @@ export const MessageList = memo(function MessageList({
               blockedRun={blockedRuns.get(rowId)}
               moderation={moderation}
               onModerate={moderation ? handleModerate : undefined}
-              onBlockAuthor={onBlockUser ? handleBlockAuthor : undefined}
               onReveal={stableRowCallback(rowId, "reveal", [blockedRuns.get(rowId)?.ids.length], () => () => {
                 const run = blockedRuns.get(rowId);
                 const ids = run?.lead ? run.ids : [rowId];
@@ -3019,20 +3058,6 @@ export const MessageList = memo(function MessageList({
           }
         }}
         onClose={() => setPendingModeration(null)}
-      />
-    )}
-    {onBlockUser && (
-      <ConfirmDialog
-        open={pendingBlock !== null}
-        title={t("profile.block")}
-        description={t("profile.block.confirm", { name: pendingBlock?.displayName ?? "" })}
-        confirmLabel={t("profile.block")}
-        onConfirm={() => {
-          if (pendingBlock) {
-            onBlockUser(pendingBlock.id);
-          }
-        }}
-        onClose={() => setPendingBlock(null)}
       />
     )}
     </VoiceNoteNamesContext.Provider>
@@ -3648,7 +3673,6 @@ interface MessageRowProps {
     subject: ModerationSubject,
     deleteMessageId?: string,
   ) => void;
-  onBlockAuthor?: (subject: ModerationSubject) => void;
   onReveal: () => void;
   isFlashing: boolean;
   registerRow: (messageId: string, node: HTMLElement | null) => void;
@@ -3742,7 +3766,6 @@ const MessageRow = memo(function MessageRow({
   blockedRun,
   moderation = null,
   onModerate,
-  onBlockAuthor,
   onReveal,
   isFlashing,
   registerRow,
@@ -4290,8 +4313,10 @@ const MessageRow = memo(function MessageRow({
       : []),
   ];
 
-  // Under the redesign the menu also carries Bloquear and the staff block,
-  // and is regrouped (lib/message-menu-order.ts). The toggle off keeps `items`.
+  // Under the redesign the menu also carries the staff block and is
+  // regrouped (lib/message-menu-order.ts): on desktop the copy rows fold into
+  // one "Copiar" row with a submenu, on the phone sheet they stay flat.
+  // Bloquear lives on the author's profile card. The toggle off keeps `items`.
   const subject: ModerationSubject = { id: message.authorId, displayName: message.authorName };
   const canActOnAuthor = isReal && !isMine && !stream && !message.isWebhook && !message.isAutomod;
   const staffRungs = redesign && canActOnAuthor && onModerate
@@ -4301,16 +4326,6 @@ const MessageRow = memo(function MessageRow({
     ? orderMessageMenu(
         [
           ...items,
-          ...(canActOnAuthor && onBlockAuthor
-            ? [
-                {
-                  id: "block",
-                  label: t("profile.block"),
-                  icon: Ban,
-                  onSelect: selectAndClose(() => onBlockAuthor(subject), false),
-                },
-              ]
-            : []),
           ...staffRungs.map((rung) => {
             // On a message the ban also takes the message with it, when the
             // reader may delete it (the canvas's "Apagar e banir").
@@ -4326,9 +4341,12 @@ const MessageRow = memo(function MessageRow({
               ),
             };
           }),
-        ],
+        ].map(withMenuGlyph),
         isMine,
         t("chat.menu.staff"),
+        phone
+          ? {}
+          : { nestCopy: { label: t("common.copy"), icon: Copy, glyph: PhCopy, glyphKind: "symbol" } },
       )
     : items;
 
@@ -4380,21 +4398,16 @@ const MessageRow = memo(function MessageRow({
         }
         moreReactionsLabel={t("reactions.more")}
         sheetOnPhone
-        phonePreview={
-          redesign && phone && message.body.trim() ? (
-            <div data-held-message="" className="flex gap-2.5 px-3 py-2.5">
-              <UserAvatar
-                name={message.authorName}
-                avatarUrl={message.authorAvatarUrl}
-                rounded="full"
-                className="h-8 w-8 shrink-0"
-              />
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-text">{message.authorName}</p>
-                <p className="line-clamp-3 whitespace-pre-wrap break-words text-[0.9375rem] leading-[1.375rem] text-text">
-                  {message.body}
-                </p>
-              </div>
+        // The message the sheet acts on, at its top: the sheet covers the
+        // row itself. Name and up to two lines, the pins panel's excerpt so
+        // a message with only an image still says which file.
+        sheetHeader={
+          redesign && phone ? (
+            <div data-held-message="" className="min-w-0">
+              <p className="truncate text-sm font-semibold text-text">{message.authorName}</p>
+              <p className="line-clamp-2 break-words text-sm text-text-secondary">
+                {describeMessageForMenu(message, t)}
+              </p>
             </div>
           ) : undefined
         }

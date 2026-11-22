@@ -16,11 +16,11 @@ describe("orderMessageMenu", () => {
   });
 
   it("puts the staff block last on somebody else's message, with Apagar in it", () => {
-    const built = ["reply", "copy-text", "forward", "pin", "delete", "report", "block", "mod-timeout", "mod-ban"].map(item);
+    const built = ["reply", "copy-text", "forward", "pin", "delete", "report", "mod-timeout", "mod-ban"].map(item);
     expect(ids(orderMessageMenu(built, false, "Staff"))).toEqual([
       "reply", "forward", "pin", "|",
       "copy-text", "|",
-      "block", "report", "|",
+      "report", "|",
       "staff-heading", "mod-timeout", "delete", "mod-ban",
     ]);
   });
@@ -33,5 +33,24 @@ describe("orderMessageMenu", () => {
   it("draws no heading when there is nothing for staff", () => {
     const built = ["reply", "report"].map(item);
     expect(ids(orderMessageMenu(built, false, "Staff"))).toEqual(["reply", "|", "report"]);
+  });
+
+  it("folds the copy rows into one Copiar row on desktop, in the sheet's order", () => {
+    const built = ["reply", "copy-id", "copy-text", "copy-link", "mark-unread", "report"].map(item);
+    const flat = orderMessageMenu(built, false, "Staff");
+    const nested = orderMessageMenu(built, false, "Staff", { nestCopy: { label: "Copiar" } });
+    expect(ids(flat)).toEqual(["reply", "|", "mark-unread", "copy-text", "copy-link", "copy-id", "|", "report"]);
+    expect(ids(nested)).toEqual(["reply", "|", "mark-unread", "copy", "|", "report"]);
+    const copy = nested.find((one) => one.id === "copy")!;
+    expect(copy.label).toBe("Copiar");
+    // One source of order: the submenu lists what the sheet shows flat.
+    expect(ids(copy.submenu!)).toEqual(ids(flat).filter((id) => id.startsWith("copy-")));
+  });
+
+  it("keeps a lone copy row a row", () => {
+    const built = ["reply", "copy-text"].map(item);
+    expect(ids(orderMessageMenu(built, true, "Staff", { nestCopy: { label: "Copiar" } }))).toEqual([
+      "reply", "|", "copy-text",
+    ]);
   });
 });
