@@ -51,17 +51,21 @@ import type { AppLauncherMenuTrigger } from "@/components/apps/app-launcher";
 import {
   ArrowBendUpLeft,
   ArrowUp as ArrowUpGlyph,
+  Check as CheckGlyph,
   CheckCircle as CheckCircleGlyph,
   Code as CodeGlyph,
+  ChartBar as ChartBarGlyph,
   CodeBlock,
   File as FileGlyph,
   Gif as GifGlyph,
   Hourglass as HourglassGlyph,
   Info as InfoGlyph,
   ListBullets,
+  Paperclip as PaperclipGlyph,
   Plus as PlusGlyph,
   Quotes,
   Smiley,
+  SquaresFour as SquaresFourGlyph,
   TextAa,
   TextB,
   TextItalic,
@@ -71,7 +75,7 @@ import {
   type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
 import { ComposerFormatPreview } from "@/components/chat/composer-format-preview";
-import { Icon as Glyph } from "@/components/ui/icon";
+import { Icon as Glyph, IconSwap } from "@/components/ui/icon";
 import { MusicHintHostProvider } from "@/components/voice/call-dock";
 import { registerComposerActivity } from "@/lib/hint-quiet";
 import { VoiceNoteTranscriptionNotice } from "@/components/chat/voice-note-transcription-notice";
@@ -90,6 +94,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import {
@@ -171,6 +176,9 @@ import { cn } from "@/lib/utils";
 import { useRedesign } from "@/lib/redesign";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { BELOW_SM_QUERY } from "@/lib/breakpoints";
+import { draftNeedsPreview } from "@/lib/composer-preview";
+import { alignPanelEnd } from "@/lib/composer-picker-place";
+import { fieldLineHeightPx, singleLineFits } from "@/lib/composer-field";
 import { ComposerStatusBar, textAsFile } from "@/components/chat/composer-status-bar";
 
 export interface ComposerSlashContext {
@@ -312,6 +320,14 @@ const COMPOSER_ICON_ON = "bg-surface-3 text-text redesign:bg-[color:color-mix(in
  */
 const COMPOSER_ROW_REDESIGN =
   "redesign:flex redesign:items-end redesign:gap-1 redesign:p-[7px]";
+/*
+ * A phone's finger target (44px) around a 36px tool, drawn by a pseudo
+ * element so the row keeps its look and its alignment with the 40px field.
+ * The phone row's gap is 8px, so two targets meet and never overlap.
+ */
+/** The GIF picker's width, `w-[21rem]` in gif-picker-panel.tsx. */
+const GIF_PICKER_WIDTH_PX = 336;
+const COMPOSER_PHONE_HIT = "relative after:absolute after:-inset-1 after:content-['']";
 const COMPOSER_TOOLS_ROW_REDESIGN =
   "redesign:contents redesign:[&>*]:order-2 redesign:[&>*]:mb-0.5";
 
@@ -528,6 +544,29 @@ export function MessageComposer({
   );
   // A narrow phone: @ suggestions sit above the keyboard as pills.
   const phone = useMediaQuery(BELOW_SM_QUERY, false);
+  // The one-row composer on a phone, under the redesign: the +, the field,
+  // emoji and Send. Formatting and GIF move into the + menu.
+  const phoneRow = redesign && phone && oneRow;
+  // Where index.css forces fields to 16px (iOS zooms the page below that).
+  // Under the redesign the field follows the chat size, never below 16 there.
+  const zoomGuard = useMediaQuery(`${BELOW_SM_QUERY}, (pointer: coarse)`, false);
+  const fieldFontSize = redesign
+    ? zoomGuard
+      ? "max(16px, var(--chat-font-size))"
+      : "var(--chat-font-size)"
+    : undefined;
+  const formRef = useRef<HTMLFormElement>(null);
+  // Under the redesign at sm and up the pickers open over their own button,
+  // right edges aligned, inside the pane. A phone keeps the full width.
+  const anchorPickers = redesign && !phone;
+  const pickerAlignEndTo = useCallback(() => {
+    const form = formRef.current;
+    const button = form?.querySelector<HTMLElement>("[data-composer-emoji]");
+    return anchorPickers && form && button ? { anchor: button, bounds: form } : null;
+  }, [anchorPickers]);
+  // The GIF picker is positioned in the form, so its right offset is a
+  // variable on the form, measured when it opens.
+  const [gifRight, setGifRight] = useState<number | null>(null);
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
   // The draft outlives the mount: App remounts this component per channel,
   // so what was typed here is read back when the channel is reopened and
@@ -747,7 +786,14 @@ export function MessageComposer({
   const iconButtonClass = cn(
     COMPOSER_ICON_BUTTON,
     embedded && "max-sm:h-11 max-sm:w-11",
+    phoneRow && COMPOSER_PHONE_HIT,
   );
+  // Something Send would send. On a phone under the redesign Send is drawn
+  // only then (or while slow mode counts down); elsewhere it is always drawn
+  // and this is what enables it.
+  const hasSendable =
+    !composerBodyIsEmpty(body) || readyCount > 0 || (redesign && isUploading);
+  const showSend = !phoneRow || hasSendable || slowModeRemaining > 0;
   // Embedded: the form reads the text and the files from here, through a ref
   // so a new callback identity per render does not report twice.
   const embeddedRef = useRef(embedded);
@@ -874,7 +920,7 @@ export function MessageComposer({
       }));
     }
     return [];
-  }, [emojiMatches, menuKind, mentionMatches, rollPresetOpen, rollPresets, slashMatches, t]);
+  }, [emojiMatches, menuKind, mentionMatches, redesign, rollPresetOpen, rollPresets, slashMatches, t]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -957,19 +1003,30 @@ export function MessageComposer({
       return;
     }
 
-    node.style.lineHeight = `${COMPOSER_LINE_PX}px`;
+    // Under the redesign the field is at the chat size, so its wrapped line
+    // box follows that size; the old look keeps 20px.
+    const linePx = redesign
+      ? fieldLineHeightPx(parseFloat(getComputedStyle(node).fontSize), COMPOSER_LINE_PX)
+      : COMPOSER_LINE_PX;
+    node.style.lineHeight = `${linePx}px`;
     node.style.paddingTop = `${COMPOSER_PAD_Y_PX}px`;
     node.style.paddingBottom = `${COMPOSER_PAD_Y_PX}px`;
     node.style.height = "0px";
     const hasBreak = body.includes("\n");
     const minHeight = hasBreak
-      ? COMPOSER_PAD_Y_PX * 2 + COMPOSER_LINE_PX * 2
+      ? COMPOSER_PAD_Y_PX * 2 + linePx * 2
       : COMPOSER_CONTROL_PX;
     const next = Math.min(
       Math.max(node.scrollHeight, minHeight),
       MAX_COMPOSER_HEIGHT_PX,
     );
-    if (next <= COMPOSER_CONTROL_PX && !hasBreak) {
+    // One line rests at the control height with the text centred. Under the
+    // redesign "one line" is asked of the measured lines, since a large chat
+    // size's padded line is taller than the control.
+    const oneLine = redesign
+      ? singleLineFits(node.scrollHeight, COMPOSER_PAD_Y_PX, linePx, COMPOSER_CONTROL_PX)
+      : next <= COMPOSER_CONTROL_PX;
+    if (oneLine && !hasBreak) {
       applyResting();
       setComposerBox({
         height: COMPOSER_CONTROL_PX,
@@ -984,11 +1041,12 @@ export function MessageComposer({
     node.style.overflowY = overflowY;
     setComposerBox({
       height: next,
-      lineHeight: COMPOSER_LINE_PX,
+      lineHeight: linePx,
       paddingY: COMPOSER_PAD_Y_PX,
       overflowY,
     });
-  }, [body]);
+    // The width moves with Send on a phone and the size with the zoom guard.
+  }, [body, redesign, fieldFontSize, showSend]);
 
   useEffect(() => {
     if (!insertText) {
@@ -1755,13 +1813,15 @@ export function MessageComposer({
 
   /* What the + adds to a message. Emoji, GIF and formatting have their own
      buttons in the row, so the menu is the two things that need a form or a
-     file picker. */
-  const insertItems = [
+     file picker. On a phone under the redesign the row keeps only emoji, so
+     formatting and GIF are rows here instead. */
+  const insertItemCandidates: Array<ComposerInsertItem | null> = [
     isAttachmentsEnabled
       ? {
           id: "attach",
           label: t("composer.attach"),
           icon: Paperclip,
+          glyph: PaperclipGlyph,
           onSelect: () => {
             setIsInsertMenuOpen(false);
             fileInputRef.current?.click();
@@ -1773,6 +1833,7 @@ export function MessageComposer({
           id: "poll",
           label: t("composer.addPoll"),
           icon: BarChart3,
+          glyph: ChartBarGlyph,
           onSelect: () => {
             setIsInsertMenuOpen(false);
             setIsPickerOpen(false);
@@ -1786,6 +1847,7 @@ export function MessageComposer({
           id: "apps",
           label: t("composer.serverApps"),
           icon: LayoutGrid,
+          glyph: SquaresFourGlyph,
           onSelect: () => {
             setIsInsertMenuOpen(false);
             setIsPickerOpen(false);
@@ -1794,7 +1856,38 @@ export function MessageComposer({
           },
         }
       : null,
-  ].filter((item): item is NonNullable<typeof item> => item !== null);
+    phoneRow && isGifSearchEnabled
+      ? {
+          id: "gif",
+          label: t("composer.addGif"),
+          glyph: GifGlyph,
+          onSelect: () => {
+            setIsInsertMenuOpen(false);
+            setIsPickerOpen(false);
+            setGifQuery("");
+            setIsGifPickerOpen(true);
+          },
+        }
+      : null,
+    phoneRow
+      ? {
+          id: "format",
+          label: t("composer.format"),
+          glyph: TextAa,
+          // A toggle: the row says whether the format bar is open.
+          checked: isFormatBarOpen,
+          onSelect: () => {
+            setIsInsertMenuOpen(false);
+            setIsFormatBarOpen((open) => !open);
+            // Back to the field, so the keyboard comes back with the bar.
+            inputRef.current?.focus();
+          },
+        }
+      : null,
+  ];
+  const insertItems = insertItemCandidates.filter(
+    (item): item is ComposerInsertItem => item !== null,
+  );
 
   // One set of format buttons, for the bar inside the field and for the one
   // a selection raises over it under the redesign.
@@ -1829,6 +1922,31 @@ export function MessageComposer({
                 </Tooltip>
               );
             });
+  useLayoutEffect(() => {
+    if (!isGifPickerOpen || !anchorPickers) {
+      setGifRight(null);
+      return;
+    }
+    function place() {
+      const form = formRef.current;
+      const button = form?.querySelector<HTMLElement>("[data-composer-gif]");
+      if (!form || !button) {
+        setGifRight(null);
+        return;
+      }
+      setGifRight(
+        alignPanelEnd(button.getBoundingClientRect().right, form.getBoundingClientRect(), GIF_PICKER_WIDTH_PX)
+          .right,
+      );
+    }
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [isGifPickerOpen, anchorPickers]);
+
+  // Under the redesign the format preview shows only when it says something
+  // the field does not: markup the bubble draws differently.
+  const showFieldPreview = redesign && isFormatBarOpen && draftNeedsPreview(body);
   const showSelectionFormatBar =
     redesign && hasSelection && menuKind === null && !isFormatBarOpen && !embedded && variant !== "stream" && !disabled;
   // Only where a file can go: without attachments the red count says enough.
@@ -1842,11 +1960,17 @@ export function MessageComposer({
 
   return (
     <form
+      ref={formRef}
       data-chat-composer=""
       onSubmit={(event) => void handleSubmit(event)}
       // The one-row composer ends level with the user card beside it, which
       // sits 0.5rem above the home indicator plus its 1px border.
       className={cn(COMPOSER_FORM_CLASS, oneRow && "redesign:[--safe-pb-min:calc(0.5rem+1px)]")}
+      style={
+        gifRight === null
+          ? undefined
+          : ({ "--composer-gif-right": `${gifRight}px` } as CSSProperties)
+      }
     >
       {/* The call's hint line (push-to-talk focus), above the WHOLE composer.
           The dock cannot hang it itself: its row animates open by collapsing
@@ -1903,11 +2027,19 @@ export function MessageComposer({
           onSelect={insertEmoji}
           onClose={() => setIsPickerOpen(false)}
           customEmoji={serverEmoji}
+          alignEndTo={pickerAlignEndTo}
         />
       )}
       {isGifPickerOpen && !menuKind && (
         <GifPickerPanel
-          className="absolute bottom-[calc(100%-0.25rem)] left-3 sm:left-4"
+          className={cn(
+            "absolute bottom-[calc(100%-0.25rem)] left-3 sm:left-4",
+            // Under the redesign at sm and up: right edge on the GIF button.
+            gifRight !== null && "redesign:sm:left-auto redesign:sm:right-[var(--composer-gif-right)]",
+            // On a phone under the redesign it opens from the + menu and takes
+            // the composer's width rather than running off the screen.
+            phoneRow && "right-3 w-auto",
+          )}
           initialQuery={gifQuery}
           onSelect={stageGif}
           onClose={() => setIsGifPickerOpen(false)}
@@ -2021,7 +2153,7 @@ export function MessageComposer({
         {showPasteOffer && (
           <div
             data-composer-paste-offer=""
-            className="chat-msg-in mb-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] bg-[color:var(--content-glyph-bg)] px-3 py-1.5 text-[0.8125rem] text-text-secondary"
+            className="chat-msg-in mb-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] bg-[color:var(--content-glyph-bg)] px-3 py-1.5 text-sm text-text-secondary"
           >
             <span className="min-w-0 flex-1">
               {t("composer.pasteOffer", { max: new Intl.NumberFormat(locale).format(MESSAGE_MAX_LENGTH) })}
@@ -2076,7 +2208,7 @@ export function MessageComposer({
             {formatButtons}
           </div>
         )}
-        {isFormatBarOpen && (
+        {isFormatBarOpen && !redesign && (
           <ComposerFormatPreview
             body={body}
             label={t("composer.formatPreview")}
@@ -2088,7 +2220,7 @@ export function MessageComposer({
         {voiceNoteActive && <VoiceNotePanel controller={voiceNote} />}
         {/* Under the redesign the main composer is one row: the +, the
             field, then the tools and send, bottoms level, growing upward. */}
-        <div className={cn(oneRow && COMPOSER_ROW_REDESIGN)}>
+        <div className={cn(oneRow && COMPOSER_ROW_REDESIGN, phoneRow && "redesign:gap-2")}>
         <div
           className={cn(
             "relative min-h-10 min-w-0",
@@ -2096,6 +2228,18 @@ export function MessageComposer({
             voiceNoteActive && "hidden",
           )}
         >
+          {/* Under the redesign the preview sits in the field's own column,
+              so its text starts where the field's does, and only when the
+              draft has markup the bubble draws differently. */}
+          {showFieldPreview && (
+            <ComposerFormatPreview
+              body={body}
+              label={t("composer.formatPreview")}
+              onActivate={() => inputRef.current?.focus()}
+              inField
+              fontSize={fieldFontSize}
+            />
+          )}
           {body.length === 0 && (
             <span
               aria-hidden
@@ -2105,7 +2249,9 @@ export function MessageComposer({
                 (disabled || isRunningSlash) && "opacity-50",
               )}
             >
-              <span className="min-w-0 truncate">{inputPlaceholder}</span>
+              <span className="min-w-0 truncate" style={fieldFontSize ? { fontSize: fieldFontSize } : undefined}>
+                {inputPlaceholder}
+              </span>
             </span>
           )}
           <textarea
@@ -2154,6 +2300,9 @@ export function MessageComposer({
               paddingTop: composerBox.paddingY,
               paddingBottom: composerBox.paddingY,
               overflowY: composerBox.overflowY,
+              // Inline, because index.css's 16px rule for phones is unlayered
+              // and would beat a utility.
+              ...(fieldFontSize ? { fontSize: fieldFontSize } : {}),
             }}
             className="block h-10 min-h-10 w-full resize-none overflow-hidden bg-transparent px-3 py-0 redesign:px-4 text-sm text-text placeholder:text-transparent focus-visible:outline-none disabled:opacity-50"
             role="combobox"
@@ -2226,6 +2375,7 @@ export function MessageComposer({
               <ComposerInsertMenu
                 labelledBy="composer-insert"
                 items={insertItems}
+                phone={phoneRow}
               />
             )}
             {appsInMenu &&
@@ -2237,7 +2387,7 @@ export function MessageComposer({
           </div>
           )}
           {variant !== "stream" && !appsInMenu && appsLauncher?.(iconButtonClass)}
-          {variant !== "stream" && (
+          {variant !== "stream" && !phoneRow && (
           <Tooltip label={t("composer.format")}>
             <Button
               type="button"
@@ -2268,6 +2418,7 @@ export function MessageComposer({
               size="icon"
               disabled={disabled}
               aria-expanded={isPickerOpen}
+              data-composer-emoji=""
               onClick={() => {
                 setIsGifPickerOpen(false);
                 setIsInsertMenuOpen(false);
@@ -2282,7 +2433,7 @@ export function MessageComposer({
               <ComposerGlyph old={Smile} glyph={Smiley} kind="symbol" />
             </Button>
           </Tooltip>
-          {isGifSearchEnabled && (
+          {isGifSearchEnabled && !phoneRow && (
             <Tooltip label={t("composer.addGif")}>
               <Button
                 type="button"
@@ -2290,6 +2441,7 @@ export function MessageComposer({
                 size="icon"
                 disabled={disabled}
                 aria-expanded={isGifPickerOpen}
+                data-composer-gif=""
                 onClick={() => {
                   setIsPickerOpen(false);
                   setIsInsertMenuOpen(false);
@@ -2321,12 +2473,13 @@ export function MessageComposer({
             slowModeRemaining <= 0 &&
             !isPollComposerOpen)) ? (
           <VoiceNoteMicButton controller={voiceNote} disabled={disabled || isRunningSlash} />
-        ) : (
+        ) : !showSend ? null : (
         <Button
           type="submit"
           size="icon"
           className={cn(
             "h-8 shrink-0 rounded-full tabular-nums",
+            phoneRow && COMPOSER_PHONE_HIT,
             slowModeRemaining > 0 ? "w-auto gap-1 px-2.5 text-xs" : "w-8",
             "redesign:h-9",
             // Slow mode's countdown is a wait, not a dead button: the soft
@@ -2477,17 +2630,32 @@ function AttachmentChip({
   );
 }
 
+interface ComposerInsertItem {
+  id: string;
+  label: string;
+  /** The row's icon in the old look. */
+  icon?: LucideIcon;
+  /**
+   * The redesign's Phosphor glyph. Beside `icon` it is that icon's twin
+   * (`IconSwap`); alone, the row exists only under the redesign.
+   */
+  glyph?: PhosphorGlyph;
+  /** The glyph's weight (`ui/icon.tsx`): `object` beside `icon`, `symbol` alone. */
+  glyphKind?: "object" | "symbol";
+  /** Set on a toggle row: drawn as a menu checkbox with a tick when on. */
+  checked?: boolean;
+  onSelect: () => void;
+}
+
 function ComposerInsertMenu({
   labelledBy,
   items,
+  phone = false,
 }: {
   labelledBy: string;
-  items: Array<{
-    id: string;
-    label: string;
-    icon: LucideIcon;
-    onSelect: () => void;
-  }>;
+  items: ComposerInsertItem[];
+  /** The phone row under the redesign: every row is a 44px finger target. */
+  phone?: boolean;
 }) {
   return (
     <div
@@ -2497,11 +2665,14 @@ function ComposerInsertMenu({
     >
       {items.map((item) => {
         const Icon = item.icon;
+        const toggle = item.checked !== undefined;
         return (
           <button
             key={item.id}
             type="button"
-            role="menuitem"
+            role={toggle ? "menuitemcheckbox" : "menuitem"}
+            aria-checked={toggle ? item.checked : undefined}
+            data-composer-insert-item={item.id}
             onClick={item.onSelect}
             // Under the redesign the pointer takes focus as it moves, so a
             // keyboard-focused row and a hovered one are never both filled.
@@ -2510,12 +2681,27 @@ function ComposerInsertMenu({
                 event.currentTarget.focus({ preventScroll: true });
               }
             }}
-            className={MENU_ROW_BUTTON}
+            className={cn(MENU_ROW_BUTTON, phone && "min-h-11")}
           >
             <span aria-hidden className={MENU_ICON_BOX}>
-              <Icon className={MENU_BUTTON_ICON} />
+              {Icon && item.glyph ? (
+                <IconSwap
+                  off={Icon}
+                  on={item.glyph}
+                  kind={item.glyphKind ?? "object"}
+                  offClassName={MENU_BUTTON_ICON}
+                  className={MENU_BUTTON_ICON}
+                />
+              ) : item.glyph ? (
+                <Glyph icon={item.glyph} kind={item.glyphKind ?? "symbol"} size="sm" className={MENU_BUTTON_ICON} />
+              ) : Icon ? (
+                <Icon className={MENU_BUTTON_ICON} />
+              ) : null}
             </span>
-            {item.label}
+            {toggle ? <span className="min-w-0 flex-1 text-left">{item.label}</span> : item.label}
+            {toggle && item.checked && (
+              <Glyph icon={CheckGlyph} kind="symbol" size="sm" className="text-accent-text" />
+            )}
           </button>
         );
       })}

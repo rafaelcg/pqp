@@ -34,4 +34,13 @@ describe("ComposerFormatPreview", () => {
     expect(html).toContain("<strong>keep the markers</strong>");
     expect(render("")).toBe("");
   });
+
+  it("in the field, pads its text to the field's left edge", () => {
+    const html = renderToStaticMarkup(
+      <ComposerFormatPreview body="**x**" label="Preview" onActivate={() => {}} inField />,
+    );
+    expect(html).toContain('data-composer-format-preview="field"');
+    expect(html).toContain("px-[15px]");
+    expect(html).not.toMatch(/class="[^"]*\bpx-3\b/);
+  });
 });
