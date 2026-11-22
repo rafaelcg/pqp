@@ -160,4 +160,72 @@ describe("HeaderSearch", () => {
     });
     expect(searchServerMessages).toHaveBeenCalledTimes(1);
   });
+
+  it("names the filters in plain words", async () => {
+    await openPanel();
+    const labels = [...document.querySelectorAll<HTMLButtonElement>("[data-header-search-popover] button")]
+      .map((b) => b.textContent?.trim())
+      .filter(Boolean);
+    expect(labels).toEqual(expect.arrayContaining(["From", "In", "Has image", "Has file", "Before", "Mentions"]));
+    expect(labels.some((l) => l!.includes(":"))).toBe(false);
+  });
+
+  it("says the count once when the hits are in one channel", async () => {
+    searchServerMessages.mockResolvedValueOnce({ results: [HIT, { ...HIT, messageId: `${HIT.messageId.slice(0, -1)}9` }], hasMore: false });
+    const input = await openPanel();
+    await typeInto(input, "gato");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(document.querySelector("[data-search-count]")?.textContent).toBe("2 results");
+    expect(document.querySelector("[data-search-group]")).toBeNull();
+  });
+
+  it("keeps the count when an In chip hides the scope", async () => {
+    searchServerMessages.mockResolvedValue({ results: [HIT], hasMore: false });
+    const input = await openPanel();
+    await typeInto(input, "in:general ");
+    await typeInto(input, "gato");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(document.querySelector("[data-search-chip=em]")?.textContent).toContain("In #general");
+    expect(document.querySelector("[role=radiogroup]")).toBeNull();
+    expect(document.querySelector("[data-search-count]")?.textContent).toBe("1 result");
+  });
+
+  it("shows a person list in the results' place and closes it with Escape first", async () => {
+    const input = await openPanel([member("m1", "Ana"), member("m2", "Bia")]);
+    const fromButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "From",
+    )!;
+    await act(async () => {
+      fromButton.click();
+    });
+    const suggestions = document.querySelector("[data-search-suggestions]");
+    expect(suggestions?.closest("[role=listbox]")).not.toBeNull();
+    // The filters and the scope stay where they were.
+    expect(fromButton.isConnected).toBe(true);
+    expect(document.querySelector("[role=radiogroup]")).not.toBeNull();
+    await press(input, "Escape");
+    expect(document.querySelector("[data-search-suggestions]")).toBeNull();
+    expect(document.querySelector("input[role=combobox]")).not.toBeNull();
+    await press(input, "Escape");
+    expect(document.querySelector("input[role=combobox]")).toBeNull();
+  });
+
+  it("turns a typed from:<name> that names one person into that person's filter", async () => {
+    const input = await openPanel([member("m1", "Dev"), member("m2", "Bia")]);
+    await typeInto(input, "from:dev eae");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    expect(document.querySelector("[data-search-chip=de]")?.textContent).toContain("From Dev");
+    expect(input.value).toBe("eae");
+    expect(searchServerMessages).toHaveBeenLastCalledWith(
+      "server-1",
+      { q: "eae", filters: { channelId: "channel-1", authorId: "m1" } },
+      expect.anything(),
+    );
+  });
 });

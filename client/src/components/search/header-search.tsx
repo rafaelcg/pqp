@@ -14,9 +14,12 @@ import { useTranslation } from "@/lib/i18n";
 import {
   addChip,
   chipFilters,
+  extractTypedChips,
+  foldName,
   matchByName,
   searchWords,
   trailingChipToken,
+  uniqueMatch,
   type SearchChip,
   type SearchChipKind,
   type SearchChipPrefixes,
@@ -108,7 +111,7 @@ export function HeaderSearch({
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((was) => !was)}
-        className="hidden h-9 w-56 shrink-0 items-center gap-2 rounded-full border border-[color:var(--input-border)] bg-[color:var(--input-bg)] pl-3 pr-2 text-left text-[13px] text-text-tertiary hover:border-[color:var(--input-hover-border)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent min-[1100px]:flex"
+        className="hidden h-9 w-56 shrink-0 items-center gap-2 rounded-full border border-[color:var(--input-border)] bg-[color:var(--input-bg)] pl-3 pr-2 text-left text-sm text-text-tertiary hover:border-[color:var(--input-hover-border)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-pane-main focus-visible:ring-focus-ring min-[1100px]:flex"
       >
         <Icon icon={MagnifyingGlass} size="sm" kind="symbol" />
         <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -179,6 +182,9 @@ function SearchPanel({
   const [status, setStatus] = useState<Status>("idle");
   const [active, setActive] = useState(0);
   const [suggestionActive, setSuggestionActive] = useState(0);
+  // Escape closed the suggestions of the filter being typed; the next
+  // keystroke opens them again.
+  const [dismissed, setDismissed] = useState(false);
   const dateId = useId();
 
   const prefixes: SearchChipPrefixes = useMemo(
@@ -194,8 +200,17 @@ function SearchPanel({
   );
   const prefix = (kind: SearchChipKind) => prefixes[kind] ?? kind;
   const hasLabel = (value: HasValue) => t(`search.has.${value}`);
+  // What a person reads: plain words ("From", "Has image"). The prefixes
+  // above are only what the field's syntax accepts.
+  const filterLabel = (kind: Exclude<SearchChipKind, "tem">) => t(`search.filter.${kind}`);
+  const chipText = (chip: SearchChip) =>
+    chip.kind === "tem"
+      ? t(`search.hasChip.${chip.value}`)
+      : t(`search.chipValue.${chip.kind}`, { label: chip.label });
+  const dayLabel = (day: string) =>
+    new Date(`${day}T12:00:00`).toLocaleDateString(locale, { day: "numeric", month: "short" });
 
-  const token = trailingChipToken(text, prefixes);
+  const token = dismissed ? null : trailingChipToken(text, prefixes);
   const queryText = searchWords(text, prefixes);
   const channelChip = chips.some((chip) => chip.kind === "em");
   const filters = useMemo(
@@ -274,8 +289,40 @@ function SearchPanel({
   };
 
   const insertPrefix = (kind: SearchChipKind) => {
+    setDismissed(false);
     setText((prev) => `${prev.trimEnd()}${prev.trim() ? " " : ""}${prefix(kind)}:`);
     inputRef.current?.focus();
+  };
+
+  // A filter typed by hand and finished with a space (`from:bia `) becomes
+  // the same chip as picking it from the list, when it names exactly one
+  // person, channel, kind of attachment or day. Otherwise it stays as typed.
+  const resolveTyped = (kind: SearchChipKind, value: string): SearchChip | null => {
+    if (kind === "de" || kind === "menciona") {
+      const person = uniqueMatch(members, value, (m) => [memberDisplayName(m), m.displayName, m.username]);
+      return person ? { kind, id: person.id, label: memberDisplayName(person) } : null;
+    }
+    if (kind === "em") {
+      const place = uniqueMatch(channels, value, (c) => [c.name]);
+      return place ? { kind, id: place.id, label: `#${place.name}` } : null;
+    }
+    if (kind === "tem") {
+      const folded = foldName(value);
+      const has = HAS_VALUES.find((v) => v === folded || foldName(hasLabel(v)) === folded);
+      return has ? { kind, value: has, label: hasLabel(has) } : null;
+    }
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= "1000-01-01"
+      ? { kind, day: value, label: dayLabel(value) }
+      : null;
+  };
+
+  const changeText = (value: string) => {
+    setDismissed(false);
+    const typed = extractTypedChips(value, prefixes, resolveTyped);
+    if (typed.chips.length > 0) {
+      setChips((prev) => typed.chips.reduce<SearchChip[]>((all, chip) => addChip(all, chip), prev));
+    }
+    setText(typed.text);
   };
 
   // What the half-typed filter can become.
@@ -314,6 +361,30 @@ function SearchPanel({
     setSuggestionActive(0);
   }, [token?.kind, token?.partial]);
   const dateToken = token && (token.kind === "antes" || token.kind === "depois") ? token.kind : null;
+  // The list for the filter being typed takes the results' place, so
+  // nothing above the results moves while a person or a day is picked.
+  const suggesting = Boolean(token && (suggestions.length > 0 || dateToken));
+
+  // Escape closes that list before it closes the panel. The panel listens on
+  // the document in the capture phase, so this listens on the window, which
+  // hears the key first, and only for a key pressed inside this panel.
+  useEffect(() => {
+    if (!suggesting) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      const panel = inputRef.current?.closest('[role="dialog"]');
+      if (event.key !== "Escape" || !panel || !(event.target instanceof Node) || !panel.contains(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      setDismissed(true);
+      inputRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [suggesting, inputRef]);
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Backspace" && text === "" && chips.length > 0) {
@@ -348,7 +419,7 @@ function SearchPanel({
   const chipClass =
     "inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-[color:var(--color-accent-soft)] pl-2 pr-1 text-xs font-semibold text-[color:var(--color-on-accent-soft)]";
   const optionClass =
-    "inline-flex h-7 items-center rounded-full border border-[color:var(--input-border)] px-2.5 text-xs font-medium text-text-secondary hover:border-[color:var(--input-hover-border)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+    "inline-flex h-7 items-center rounded-full border border-[color:var(--input-border)] px-2.5 text-xs font-medium text-text-secondary hover:border-[color:var(--input-hover-border)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--elevation-3-surface)] focus-visible:ring-focus-ring";
 
   const activeSuggestion = suggestions[suggestionActive];
   const activeId = activeSuggestion
@@ -363,10 +434,10 @@ function SearchPanel({
         <Icon icon={MagnifyingGlass} size="sm" kind="symbol" className="text-text-tertiary" />
         {chips.map((chip) => (
           <span key={chip.kind} className={chipClass} data-search-chip={chip.kind}>
-            {prefix(chip.kind)}: {chip.label}
+            {chipText(chip)}
             <button
               type="button"
-              aria-label={t("search.removeChip", { label: `${prefix(chip.kind)}: ${chip.label}` })}
+              aria-label={t("search.removeChip", { label: chipText(chip) })}
               onClick={() => {
                 setChips((prev) => prev.filter((c) => c.kind !== chip.kind));
                 // The button goes with its chip, and focus would go with it:
@@ -382,7 +453,7 @@ function SearchPanel({
         <input
           ref={inputRef}
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => changeText(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={chips.length ? undefined : t("chrome.searchMessages")}
           aria-label={t("chrome.searchMessages")}
@@ -394,92 +465,39 @@ function SearchPanel({
         />
       </div>
 
-      {token && (suggestions.length > 0 || dateToken) ? (
-        <div className="shrink-0 border-b border-[color:var(--pane-header-rule)] py-1" data-search-suggestions="">
-          {dateToken ? (
-            <label htmlFor={dateId} className="flex items-center gap-2 px-3.5 py-1.5 text-xs text-text-secondary">
-              {prefix(dateToken)}:
-              <input
-                id={dateId}
-                type="date"
-                autoFocus
-                onChange={(event) => {
-                  const day = event.target.value;
-                  // Typing a year fires change at each digit (0002, 0020, 0202), so
-                  // wait for all four: every partial year is below 1000.
-                  if (day && day >= "1000-01-01") {
-                    const shown = new Date(`${day}T12:00:00`).toLocaleDateString(locale, {
-                      day: "numeric",
-                      month: "short",
-                    });
-                    placeChip({ kind: dateToken, day, label: shown });
-                  }
-                }}
-                className="rounded-md border border-[color:var(--input-border)] bg-[color:var(--input-bg)] px-2 py-1 text-text [color-scheme:dark] light:[color-scheme:light]"
-              />
-            </label>
-          ) : (
-            suggestions.map((item, index) => (
-              <button
-                key={item.key}
-                id={`header-search-suggestion-${item.key}`}
-                type="button"
-                onClick={() => placeChip(item.chip)}
-                onMouseEnter={() => setSuggestionActive(index)}
-                className={cn(
-                  "flex w-full items-center gap-2.5 px-3.5 py-1.5 text-left text-sm hover:bg-[color:var(--list-row-hover)]",
-                  index === suggestionActive && "bg-[color:var(--list-row-hover)]",
-                )}
-              >
-                {item.avatar ? (
-                  <UserAvatar
-                    name={item.label}
-                    avatarUrl={item.avatar.avatarUrl}
-                    rounded="full"
-                    className="h-6 w-6"
-                  />
-                ) : token.kind === "em" ? (
-                  <Icon icon={Hash} size="sm" kind="symbol" className="text-text-tertiary" />
-                ) : null}
-                <span className="truncate text-text">{item.label}</span>
-                {item.detail && <span className="truncate text-xs text-text-tertiary">{item.detail}</span>}
-              </button>
-            ))
-          )}
-        </div>
-      ) : (
-        <div className="flex shrink-0 flex-wrap gap-1.5 border-b border-[color:var(--pane-header-rule)] px-3.5 py-2">
-          <button type="button" className={optionClass} onClick={() => insertPrefix("de")}>
-            {prefix("de")}:
-          </button>
-          <button type="button" className={optionClass} onClick={() => insertPrefix("em")}>
-            {prefix("em")}:
-          </button>
-          <button
-            type="button"
-            className={optionClass}
-            onClick={() => placeChip({ kind: "tem", value: "image", label: hasLabel("image") })}
-          >
-            {prefix("tem")}: {hasLabel("image")}
-          </button>
-          <button
-            type="button"
-            className={optionClass}
-            onClick={() => placeChip({ kind: "tem", value: "file", label: hasLabel("file") })}
-          >
-            {prefix("tem")}: {hasLabel("file")}
-          </button>
-          <button type="button" className={optionClass} onClick={() => insertPrefix("antes")}>
-            {prefix("antes")}:
-          </button>
-          <button type="button" className={optionClass} onClick={() => insertPrefix("menciona")}>
-            {prefix("menciona")}:
-          </button>
-        </div>
-      )}
+      <div className="flex shrink-0 flex-wrap gap-1.5 border-b border-[color:var(--pane-header-rule)] px-3.5 py-2">
+        <button type="button" className={optionClass} onClick={() => insertPrefix("de")}>
+          {filterLabel("de")}
+        </button>
+        <button type="button" className={optionClass} onClick={() => insertPrefix("em")}>
+          {filterLabel("em")}
+        </button>
+        <button
+          type="button"
+          className={optionClass}
+          onClick={() => placeChip({ kind: "tem", value: "image", label: hasLabel("image") })}
+        >
+          {t("search.hasChip.image")}
+        </button>
+        <button
+          type="button"
+          className={optionClass}
+          onClick={() => placeChip({ kind: "tem", value: "file", label: hasLabel("file") })}
+        >
+          {t("search.hasChip.file")}
+        </button>
+        <button type="button" className={optionClass} onClick={() => insertPrefix("antes")}>
+          {filterLabel("antes")}
+        </button>
+        <button type="button" className={optionClass} onClick={() => insertPrefix("menciona")}>
+          {filterLabel("menciona")}
+        </button>
+      </div>
 
-      {!channelChip && (
-        <div className="flex shrink-0 items-center gap-1 px-3.5 pt-2.5 pb-1.5">
+      {/* One row, one count. It stays when an "In" chip hides the scope
+          radios, so the total still shows and the results do not move. */}
+      <div className="flex min-h-11 shrink-0 items-center gap-1 px-3.5 pt-2.5 pb-1.5">
+        {!channelChip && (
           <div role="radiogroup" aria-label={t("search.scopeLabel")} className="flex gap-1">
             {(["channel", "server"] as const).map((value) => (
               <button
@@ -489,7 +507,7 @@ function SearchPanel({
                 aria-checked={scope === value}
                 onClick={() => setScope(value)}
                 className={cn(
-                  "h-7 rounded-full px-3 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                  "h-7 rounded-full px-3 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--elevation-3-surface)] focus-visible:ring-focus-ring",
                   scope === value
                     ? "bg-[color:var(--color-surface-3)] text-text"
                     : "text-text-tertiary hover:text-text",
@@ -499,81 +517,141 @@ function SearchPanel({
               </button>
             ))}
           </div>
-          {status === "ready" && results.length > 0 && (
-            <span className="ml-auto text-xs text-text-tertiary tabular-nums">
-              {hasMore
-                ? t("search.countMore", { count: results.length })
-                : t("search.count", { count: results.length })}
-            </span>
-          )}
-        </div>
-      )}
+        )}
+        {status === "ready" && results.length > 0 && (
+          <span className="ml-auto text-xs text-text-tertiary tabular-nums" data-search-count="">
+            {hasMore
+              ? t("search.countMore", { count: results.length })
+              : t("search.count", { count: results.length })}
+          </span>
+        )}
+      </div>
 
       <div id={LIST_ID} role="listbox" className="min-h-0 flex-1 overflow-y-auto pb-1">
-        {status === "loading" && (
-          <p role="status" className="flex items-center gap-2 px-3.5 py-5 text-sm text-text-tertiary">
-            <Spinner className="h-4 w-4" />
-            {t("search.searching")}
-          </p>
-        )}
-        {status === "idle" && (
-          <p className="px-3.5 py-5 text-center text-[13px] text-text-tertiary">
-            {/* Chips with no words: say the words are still needed. */}
-            {t(queryText.length === 0 && chips.length > 0 ? "search.needWords" : "search.typeMore")}
-          </p>
-        )}
-        {status === "error" && (
-          <p role="alert" className="px-3.5 py-5 text-center text-[13px] text-danger">
-            {t("search.failed")}
-          </p>
-        )}
-        {status === "ready" && results.length === 0 && (
-          <p className="px-3.5 py-5 text-center text-[13px] text-text-tertiary">{t("search.nothing")}</p>
-        )}
-        {status === "ready" &&
-          groups.map(([channelId, group]) => (
-            <div key={channelId} role="group" aria-label={`#${group.name}`}>
-              <p className="px-3.5 pb-1 pt-2.5 text-xs font-semibold text-text-tertiary">
-                {group.name} · {group.rows.length}
-              </p>
-              {group.rows.map((result) => {
-                const index = ordered.indexOf(result);
-                return (
-                  <button
-                    key={result.messageId}
-                    id={`header-search-${result.messageId}`}
-                    type="button"
-                    role="option"
-                    aria-selected={index === active}
-                    onMouseMove={() => setActive(index)}
-                    onClick={() => openResult(result)}
-                    className={cn(
-                      "grid w-full grid-cols-[32px_minmax(0,1fr)] gap-2.5 px-3.5 py-2 text-left",
-                      index === active && "bg-[color:var(--list-row-hover)]",
-                    )}
-                  >
+        {suggesting && token ? (
+          <div className="py-1" data-search-suggestions="">
+            {dateToken ? (
+              <label htmlFor={dateId} className="flex items-center gap-2 px-3.5 py-1.5 text-xs text-text-secondary">
+                {filterLabel(dateToken)}
+                <input
+                  id={dateId}
+                  type="date"
+                  autoFocus
+                  onChange={(event) => {
+                    const day = event.target.value;
+                    // Typing a year fires change at each digit (0002, 0020, 0202), so
+                    // wait for all four: every partial year is below 1000.
+                    if (day && day >= "1000-01-01") {
+                      placeChip({ kind: dateToken, day, label: dayLabel(day) });
+                    }
+                  }}
+                  className="rounded-md border border-[color:var(--input-border)] bg-[color:var(--input-bg)] px-2 py-1 text-text [color-scheme:dark] light:[color-scheme:light]"
+                />
+              </label>
+            ) : (
+              suggestions.map((item, index) => (
+                <button
+                  key={item.key}
+                  id={`header-search-suggestion-${item.key}`}
+                  type="button"
+                  role="option"
+                  aria-selected={index === suggestionActive}
+                  onClick={() => placeChip(item.chip)}
+                  onMouseEnter={() => setSuggestionActive(index)}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 px-3.5 py-1.5 text-left text-sm hover:bg-[color:var(--list-row-hover)]",
+                    index === suggestionActive && "bg-[color:var(--list-row-hover)]",
+                  )}
+                >
+                  {item.avatar ? (
                     <UserAvatar
-                      name={result.authorName}
-                      avatarUrl={result.authorAvatarUrl}
+                      name={item.label}
+                      avatarUrl={item.avatar.avatarUrl}
                       rounded="full"
-                      className="h-8 w-8"
+                      className="h-6 w-6"
                     />
-                    <span className="min-w-0">
-                      <span className="flex items-baseline gap-2">
-                        <span className="truncate text-sm font-semibold text-text">{result.authorName}</span>
-                        <span className="shrink-0 text-xs text-text-tertiary">
-                          {formatRecency(result.createdAt, locale)}
+                  ) : token.kind === "em" ? (
+                    <Icon icon={Hash} size="sm" kind="symbol" className="text-text-tertiary" />
+                  ) : null}
+                  <span className="truncate text-text">{item.label}</span>
+                  {item.detail && <span className="truncate text-xs text-text-tertiary">{item.detail}</span>}
+                </button>
+              ))
+            )}
+          </div>
+        ) : (
+          <>
+            {status === "loading" && (
+              <p role="status" className="flex items-center gap-2 px-3.5 py-5 text-sm text-text-tertiary">
+                <Spinner className="h-4 w-4" />
+                {t("search.searching")}
+              </p>
+            )}
+            {status === "idle" && (
+              <p className="px-3.5 py-5 text-center text-sm text-text-tertiary">
+                {/* Chips with no words: say the words are still needed. */}
+                {t(queryText.length === 0 && chips.length > 0 ? "search.needWords" : "search.typeMore")}
+              </p>
+            )}
+            {status === "error" && (
+              <p role="alert" className="px-3.5 py-5 text-center text-sm text-danger">
+                {t("search.failed")}
+              </p>
+            )}
+            {status === "ready" && results.length === 0 && (
+              <p className="px-3.5 py-5 text-center text-sm text-text-tertiary">{t("search.nothing")}</p>
+            )}
+            {status === "ready" &&
+              groups.map(([channelId, group]) => (
+                <div key={channelId} role="group" aria-label={`#${group.name}`}>
+                  {/* The total is in the row above. A group says its own count only
+                      when there are several groups, and its name only when the
+                      search is not already about one channel. */}
+                  {(groups.length > 1 || (scope === "server" && !channelChip)) && (
+                    <p className="px-3.5 pb-1 pt-2.5 text-xs font-semibold text-text-tertiary" data-search-group="">
+                      {groups.length > 1 ? `${group.name} · ${group.rows.length}` : group.name}
+                    </p>
+                  )}
+                  {group.rows.map((result) => {
+                    const index = ordered.indexOf(result);
+                    return (
+                      <button
+                        key={result.messageId}
+                        id={`header-search-${result.messageId}`}
+                        type="button"
+                        role="option"
+                        aria-selected={index === active}
+                        onMouseMove={() => setActive(index)}
+                        onClick={() => openResult(result)}
+                        className={cn(
+                          "grid w-full grid-cols-[32px_minmax(0,1fr)] gap-2.5 px-3.5 py-2 text-left",
+                          index === active && "bg-[color:var(--list-row-hover)]",
+                        )}
+                      >
+                        <UserAvatar
+                          name={result.authorName}
+                          avatarUrl={result.authorAvatarUrl}
+                          rounded="full"
+                          className="h-8 w-8"
+                        />
+                        <span className="min-w-0">
+                          <span className="flex items-baseline gap-2">
+                            <span className="truncate text-sm font-semibold text-text">{result.authorName}</span>
+                            <span className="shrink-0 text-xs text-text-tertiary">
+                              {formatRecency(result.createdAt, locale)}
+                            </span>
+                          </span>
+                          <span className="mt-0.5 line-clamp-2 break-words text-sm leading-5 text-text-secondary">
+                            <Snippet snippet={result.snippet} />
+                          </span>
                         </span>
-                      </span>
-                      <span className="mt-0.5 line-clamp-2 break-words text-sm leading-5 text-text-secondary">
-                        <Snippet snippet={result.snippet} />
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+          </>
+        )}
       </div>
 
       <p className="shrink-0 border-t border-[color:var(--pane-header-rule)] px-3.5 py-2 text-xs text-text-tertiary">

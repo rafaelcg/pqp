@@ -90,6 +90,60 @@ export function foldName(value: string): string {
     .toLowerCase();
 }
 
+/**
+ * The one item a typed value names, or null when it names none or several.
+ * A name equal to the value wins over names that only start with it, so
+ * `from:ana` finds Ana even when Analu is there too.
+ */
+export function uniqueMatch<T>(
+  items: readonly T[],
+  value: string,
+  names: (item: T) => (string | null | undefined)[],
+): T | null {
+  const needle = foldName(value.replace(/^[@#]/, ""));
+  if (!needle) {
+    return null;
+  }
+  const exact = items.filter((item) =>
+    names(item).some((n) => n && foldName(n) === needle),
+  );
+  if (exact.length > 0) {
+    return exact.length === 1 ? exact[0]! : null;
+  }
+  const all = matchByName(items, needle, names, Number.POSITIVE_INFINITY);
+  return all.length === 1 ? all[0]! : null;
+}
+
+/**
+ * Typed filters that are finished (a space after them) and name exactly one
+ * thing become chips, and leave the text: `from:bia eae ` → a `de` chip and
+ * `eae `. A filter that names nothing or several things stays as typed. The
+ * half-typed one at the end is left to the suggestions.
+ */
+export function extractTypedChips(
+  text: string,
+  prefixes: SearchChipPrefixes,
+  resolve: (kind: SearchChipKind, value: string) => SearchChip | null,
+): { text: string; chips: SearchChip[] } {
+  const chips: SearchChip[] = [];
+  const replaced = text.replace(/(^|\s)([\p{L}]+):(\S+)(?=\s)/gu, (whole, lead: string, word: string, value: string) => {
+    const lower = word.toLowerCase();
+    const kind =
+      SEARCH_CHIP_KINDS.find((k) => k === lower) ??
+      SEARCH_CHIP_KINDS.find((k) => prefixes[k]?.toLowerCase() === lower);
+    const chip = kind ? resolve(kind, value) : null;
+    if (!chip) {
+      return whole;
+    }
+    chips.push(chip);
+    return lead;
+  });
+  // The space the token sat between is kept once, so the caret's next word
+  // still starts after a space.
+  const next = chips.length > 0 ? replaced.replace(/\s{2,}/g, " ").trimStart() : text;
+  return { text: next, chips };
+}
+
 /** Up to `limit` candidates whose name or handle starts with what was typed, then contains it. */
 export function matchByName<T>(
   items: readonly T[],
