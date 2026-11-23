@@ -270,6 +270,7 @@ import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
+import { ShareInviteChips } from "@/components/voice/share-invite-chips";
 import {
   useVoiceNotice,
   VoiceNoticeBar,
@@ -1447,6 +1448,9 @@ function ActiveCall({
     const active = voiceState.dismissedSharePeerIds.includes(tile.peerId);
     return {
       active,
+      // Held by opt-in watching rather than declined: the tile asks
+      // "Assistir" instead of saying the person stopped watching.
+      invite: voiceState.shareInvitePeerIds.includes(tile.peerId),
       onToggle: () =>
         active ? onWatchShare(tile.peerId) : onDismissShare(tile.peerId),
     };
@@ -2258,6 +2262,19 @@ function ActiveCall({
               className="ml-2 shrink-0 tabular-nums text-text-tertiary"
             />
           </p>
+          {onWatchShare && (
+            <ShareInviteChips
+              invites={screenTiles
+                .filter((tile) =>
+                  voiceState.shareInvitePeerIds.includes(tile.peerId),
+                )
+                .map((tile) => ({
+                  peerId: tile.peerId,
+                  presenterName: tile.presenterName,
+                }))}
+              onWatch={onWatchShare}
+            />
+          )}
           {/* With a picture on the stage the strip carries the full queue
               above its row (lower and allow included), so not this one too. */}
           {!(dockComposer && chromeExpanded) && (
@@ -5634,7 +5651,7 @@ export function ScreenTileFrame({
    * talking about is not on their stage. Silently falling back to faces would
    * leave them to rediscover their own decision.
    */
-  dismissed?: { active: boolean; onToggle: () => void };
+  dismissed?: { active: boolean; invite?: boolean; onToggle: () => void };
   className?: string;
   /** Party/presenter title for the watch player's lock-screen metadata. */
   mediaTitle?: string;
@@ -5723,7 +5740,9 @@ export function ScreenTileFrame({
       >
         <div className="text-center">
           <p className="text-sm text-paper-muted">
-            {t("voice.share.dismissed", { name: tile.presenterName })}
+            {dismissed.invite
+              ? t("voice.share.invite", { name: tile.presenterName })
+              : t("voice.share.dismissed", { name: tile.presenterName })}
           </p>
           <Button
             variant="secondary"
@@ -5731,7 +5750,9 @@ export function ScreenTileFrame({
             className="mt-2"
             onClick={dismissed.onToggle}
           >
-            {t("voice.share.watchAgain")}
+            {dismissed.invite
+              ? t("voice.share.inviteWatch")
+              : t("voice.share.watchAgain")}
           </Button>
         </div>
       </div>

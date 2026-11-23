@@ -295,6 +295,7 @@ import {
   setAppsViewer,
 } from "@/lib/apps/app-sessions-store";
 import { CallDockOutlet, CallDockProvider } from "@/components/voice/call-dock";
+import { useShareOptInSync } from "@/hooks/use-share-opt-in";
 import {
   canOfferWatchPartyCreate,
   isWatchPartyChannelType,
@@ -3350,6 +3351,17 @@ function MainAppContent({
       prefetchShareGuardFlag(voiceServerIdRef.current);
     }
   }, [voiceSeatChannelId]);
+  // Opt-in watching for the share popout (issue #1736): with `share_popout`
+  // on for the call's server, a wide window and an ordinary voice room, a new
+  // share waits for "Assistir" instead of arriving on screen. Read from the
+  // share config the effect above prefetches; until it answers, it is off.
+  // The ref is read during render on purpose: every voice event re-renders
+  // this component, and the ref is set before the join that starts the call.
+  useShareOptInSync(voice, {
+    callChannelId: voiceSeatChannelId,
+    callServerId: voiceServerIdRef.current,
+    channels,
+  });
   /**
    * A conversation whose call was started "with video": the camera should come
    * on as soon as that join is connected. A ref plus an effect rather than an

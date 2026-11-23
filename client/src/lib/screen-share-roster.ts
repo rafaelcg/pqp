@@ -195,3 +195,26 @@ export function videoLimitOf(
 ): number | null {
   return localLimit(kind, state.roomTransport, meshRoomLinkOf(state));
 }
+
+/**
+ * The shares that arrive unwatched when `share_popout` asks for opt-in
+ * watching (issue #1736): every id in `nextIds` that was not in `previousIds`,
+ * except our own.
+ *
+ * Same diff `nextScreenShareFocus` uses, and for the same reason: the wire has
+ * no start time, so "new" is "not here a moment ago". An empty previous set is
+ * a join into a room that already has shares, and every one of them is new to
+ * this person, which is the point: joining a call with three screens up starts
+ * with three "Assistir" chips and no video, not three pictures arriving at once.
+ *
+ * A resume keeps `screenSharePeerIds` across the welcome, so a share somebody
+ * was already watching is not new and does not go back to "Assistir".
+ */
+export function sharesArrivingUnwatched(
+  previousIds: readonly string[],
+  nextIds: readonly string[],
+  selfPeerId: string | null,
+): string[] {
+  const previous = new Set(previousIds);
+  return nextIds.filter((id) => !previous.has(id) && id !== selfPeerId);
+}

@@ -5,6 +5,7 @@ import {
   isScreenShareAtCap,
   videoLimitOf,
   nextScreenShareFocus,
+  sharesArrivingUnwatched,
 } from "./screen-share-roster";
 
 describe("nextScreenShareFocus", () => {
@@ -127,5 +128,19 @@ describe("videoLimitOf", () => {
     expect(
       videoLimitOf({ ...state, uplinkBps: 16_000_000 }, "screens"),
     ).toBeGreaterThan(1);
+  });
+});
+
+describe("sharesArrivingUnwatched", () => {
+  it("is every share not here a moment ago, never our own", () => {
+    expect(sharesArrivingUnwatched(["a"], ["a", "b", "me"], "me")).toEqual(["b"]);
+  });
+
+  it("treats every share as new on a join into a live room", () => {
+    expect(sharesArrivingUnwatched([], ["a", "b"], "me")).toEqual(["a", "b"]);
+  });
+
+  it("is nothing when the set did not grow", () => {
+    expect(sharesArrivingUnwatched(["a", "b"], ["b"], null)).toEqual([]);
   });
 });
