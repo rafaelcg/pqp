@@ -470,8 +470,10 @@ subscribes to (`client/src/lib/share-popout-flag.ts`), fed by the share config
 the call already asks for, so it makes no request of its own. Unknown is off.
 Behaviour, rollout and what it deliberately does not do:
 `docs/SHARE_POPOUT.md`. Turn it on for one server from controles →
-interruptores; a call picks it up when its share config arrives (at join),
-and turning it off mid-call gives back every share it held. Issue:
+interruptores. A flip reaches a call when its share config is asked again: at
+the next join, or when a share starts after the ten-minute cache expired. It
+does not reach a call already under way before then. Once a call does learn
+it is off, every share opt-in held is given back. Issue:
 github.com/rafaelcg/pqp/issues/1736.
 
 Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`

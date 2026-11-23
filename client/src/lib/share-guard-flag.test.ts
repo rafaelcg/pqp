@@ -99,3 +99,28 @@ describe("ensureShareGameCaptureHintFlag (share_game_capture_hint)", () => {
     expect(fetchShareConfig).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("an answer that lands after a newer one", () => {
+  it("never overwrites the newer answer in the cache or the popout store", async () => {
+    const { recordSharePopout, sharePopoutActive, resetSharePopoutForTests } =
+      await import("./share-popout-flag");
+    resetSharePopoutForTests();
+    recordSharePopout("s1", false);
+    // Request 1 (the flag still on) is slow; request 2 (after the operator
+    // turned it off) answers first.
+    let answerFirst: (value: unknown) => void = () => {};
+    fetchShareConfig.mockImplementationOnce(
+      () => new Promise((resolve) => (answerFirst = resolve)),
+    );
+    fetchShareConfig.mockResolvedValueOnce({ sharePopout: false, shareHighMotionGuard: false });
+    prefetchShareGuardFlag("s1");
+    const second = ensureShareGuardFlag("s1");
+    await vi.runAllTimersAsync().catch(() => {});
+    expect(await second).toBe(false);
+    answerFirst({ sharePopout: true, shareHighMotionGuard: true });
+    await vi.runAllTimersAsync().catch(() => {});
+    expect(sharePopoutActive("s1")).toBe(false);
+    // The cache kept the newer answer too.
+    expect(await ensureShareGuardFlag("s1")).toBe(false);
+  });
+});

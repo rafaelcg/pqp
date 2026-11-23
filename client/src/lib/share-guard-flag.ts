@@ -38,13 +38,26 @@ const OFF: ShareFlags = { guard: false, gameCaptureHint: false };
 
 const cache = new Map<string, { at: number; value: ShareFlags }>();
 const refreshing = new Set<string>();
+/**
+ * The latest request asked per server. Two can be in flight for one server
+ * (a prefetch at join and a share starting before it answered); if the
+ * operator flips a flag between them, the older one can land last. Only the
+ * newest request's answer is stored, so a stale "on" never overwrites a
+ * fresher "off" in the cache or in the stores fed from here.
+ */
+const latestAsk = new Map<string, number>();
+let askSeq = 0;
 
 export function resetShareGuardFlagForTests(): void {
   cache.clear();
   refreshing.clear();
+  latestAsk.clear();
 }
 
 function ask(serverId: string | null): Promise<ShareFlags | null> {
+  const key = serverId ?? "";
+  const seq = ++askSeq;
+  latestAsk.set(key, seq);
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), ENSURE_BUDGET_MS);
     fetchShareConfig(serverId)
@@ -54,7 +67,13 @@ function ask(serverId: string | null): Promise<ShareFlags | null> {
           guard: config.shareHighMotionGuard === true,
           gameCaptureHint: config.shareGameCaptureHint === true,
         };
-        cache.set(serverId ?? "", { at: Date.now(), value });
+        if (latestAsk.get(key) !== seq) {
+          // Superseded: this caller still gets the answer it asked for, but
+          // the shared state keeps the newer one.
+          resolve(value);
+          return;
+        }
+        cache.set(key, { at: Date.now(), value });
         recordShareFastStartQuality(serverId, config.shareFastStartQuality === true);
         recordSharePopout(serverId, config.sharePopout === true);
         resolve(value);

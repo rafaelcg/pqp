@@ -4705,6 +4705,27 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /**
+   * Shares the person declined before opt-in applied (in the old stage, with
+   * a narrow window or the flag off) become "Assistir" too. The popout draws
+   * no stage tile to undo a decline from, so without this such a share could
+   * not be watched again. They stay the person's decline: tracked with the
+   * ones closed under opt-in, so turning opt-in off leaves them declined.
+   */
+  function offerDeclinedShares() {
+    let offered = false;
+    for (const id of state.dismissedSharePeerIds) {
+      if (!optInDismissed.has(id) && !closedUnderOptIn.has(id)) {
+        closedUnderOptIn.add(id);
+        offered = true;
+      }
+    }
+    if (offered) {
+      syncShareInvites();
+      emit();
+    }
+  }
+
+  /**
    * The call's first settled "on" (see `optInSettled`): every share up right
    * now that this person did not choose goes back to waiting for "Assistir".
    */
@@ -8112,6 +8133,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       shareOptIn = on;
       if (on) {
+        offerDeclinedShares();
         if (firstAnswer) {
           holdUnchosenShares();
         }

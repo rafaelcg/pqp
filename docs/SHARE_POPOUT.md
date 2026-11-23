@@ -44,7 +44,7 @@ Your own share and camera are never candidates (`OwnShareStrip` says you are sha
 Two rules the code depends on:
 
 - **The popout never moves in the tree.** `lib/remote-video-delivery.ts` pauses an SFU publication when the last `<video>` bound to it goes away. Mounted once at the app root, the popout's video survives every navigation.
-- **Opt-in remembers what it held.** Shares opt-in held are tracked apart from shares the person declined, whether before opt-in applied or by closing them while it did. Turning opt-in off (flag off, window narrowed) gives back only what it held.
+- **Opt-in remembers what it held.** Shares opt-in held are tracked apart from shares the person declined, whether before opt-in applied or by closing them while it did. Every one of them is offered as "Assistir" while the popout applies, because it draws no stage tile to undo a decline from. Turning opt-in off (flag off, window narrowed) gives back only what opt-in held; the declines stay declines.
 - **Focus belongs to what is on screen.** While the popout floats, its share is the one heard. In the theater the stage owns focus (a tile put in fullscreen focuses its share) and the popout leaves it alone; a focus chosen there becomes the popout's pick, so minimizing shows that share.
 
 ## Bandwidth
@@ -59,7 +59,7 @@ A share waiting for "Assistir" has no `<video>` bound, so on an SFU its video is
 
 ## Rollout
 
-Turn `share_popout` on for one server from controles → interruptores, use it in a real call with two or three shares, then globally. A call picks it up when its share config arrives at join; turning it off mid-call gives back every share it held.
+Turn `share_popout` on for one server from controles → interruptores, use it in a real call with two or three shares, then globally. A flip reaches a call when its share config is asked again: at the next join, or when a share starts after the ten-minute cache expired, not in the middle of a call already under way. When a call learns it is off, every share opt-in held is given back.
 
 ## Tests
 

@@ -1533,7 +1533,9 @@ describe("screen share audio", () => {
       voice.dismissShare("p3");
       voice.setShareOptIn(true);
       voice.handleSignaling(rosterWithShare(["p2", "p3"]));
-      expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+      // Both are "Assistir": p2 held by opt-in, p3 the earlier decline,
+      // offered so the popout has a way back to it.
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2", "p3"]);
       voice.setShareOptIn(false);
       const state = voice.getState();
       expect(state.dismissedSharePeerIds).toEqual(["p3"]);
@@ -1568,6 +1570,23 @@ describe("screen share audio", () => {
       expect(state.dismissedSharePeerIds).toEqual(["p2"]);
       expect(state.shareInvitePeerIds).toEqual([]);
       expect(state.audibleScreenPeerIds).toEqual(["p3"]);
+    });
+
+    it("offers a share declined before opt-in applied as Assistir, still declined after", async () => {
+      const { voice } = await connectedMesh();
+      // Declined in the old stage (narrow window, or the flag off).
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.dismissShare("p2");
+      voice.setShareOptIn(true);
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+      // Watchable again from the chip...
+      voice.watchShare("p2");
+      expect(voice.getState().dismissedSharePeerIds).toEqual([]);
+      // ...and a decline that was never undone stays one when opt-in stops.
+      voice.dismissShare("p2");
+      voice.setShareOptIn(false);
+      expect(voice.getState().dismissedSharePeerIds).toEqual(["p2"]);
+      expect(voice.getState().shareInvitePeerIds).toEqual([]);
     });
 
     it("keeps a held share declined once the person closes it", async () => {

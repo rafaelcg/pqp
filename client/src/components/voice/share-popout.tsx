@@ -117,29 +117,31 @@ export function SharePopout({
   const dispatch = dispatchShareView;
 
   const peers = voiceState.remotePeers;
+  // One lookup table per roster change rather than a scan of the roster for
+  // every choice: a large SFU room can have dozens of cameras, and the popout
+  // re-renders on every speaking tick.
+  const peerById = useMemo(
+    () => new Map(peers.map((peer) => [peer.peerId, peer])),
+    [peers],
+  );
   const screens = useMemo(
     () =>
       voiceState.screenSharePeerIds.map((peerId) => {
-        const peer = peers.find((one) => one.peerId === peerId);
+        const peer = peerById.get(peerId);
         return {
           peerId,
           isSelf: peerId === voiceState.peerId,
           hasAudio: (peer?.screenAudioStream?.getAudioTracks().length ?? 0) > 0,
         };
       }),
-    [voiceState.screenSharePeerIds, voiceState.peerId, peers],
+    [voiceState.screenSharePeerIds, voiceState.peerId, peerById],
   );
-  const cameras = useMemo(
-    () =>
-      peers
-        .filter(
-          (peer) =>
-            peer.cameraStream !== null &&
-            !voiceState.dismissedCameraPeerIds.includes(peer.peerId),
-        )
-        .map((peer) => ({ key: peer.peerId, isSelf: false })),
-    [peers, voiceState.dismissedCameraPeerIds],
-  );
+  const cameras = useMemo(() => {
+    const hidden = new Set(voiceState.dismissedCameraPeerIds);
+    return peers
+      .filter((peer) => peer.cameraStream !== null && !hidden.has(peer.peerId))
+      .map((peer) => ({ key: peer.peerId, isSelf: false }));
+  }, [peers, voiceState.dismissedCameraPeerIds]);
   const speakingKeys = useMemo(
     () => new Set(voiceState.speakingPeerIds),
     [voiceState.speakingPeerIds],
@@ -248,7 +250,7 @@ export function SharePopout({
     <FloatingPopout
       target={target}
       choices={choices}
-      voiceState={voiceState}
+      peers={peerById}
       call={call}
       viewingCallChannel={viewingCallChannel}
       onGoToCall={onGoToCall}
@@ -285,13 +287,14 @@ export function SharePopout({
 
 type T = ReturnType<typeof useTranslation>["t"];
 
-function choiceName(choice: PopoutChoice, voiceState: VoiceState, t: T): string {
-  const peer = voiceState.remotePeers.find((one) => one.peerId === choice.key);
-  return peer?.displayName ?? t("voice.share.someone");
+type PeersById = ReadonlyMap<string, VoiceState["remotePeers"][number]>;
+
+function choiceName(choice: PopoutChoice, peers: PeersById, t: T): string {
+  return peers.get(choice.key)?.displayName ?? t("voice.share.someone");
 }
 
-function choiceStream(choice: PopoutChoice, voiceState: VoiceState): MediaStream | null {
-  const peer = voiceState.remotePeers.find((one) => one.peerId === choice.key);
+function choiceStream(choice: PopoutChoice, peers: PeersById): MediaStream | null {
+  const peer = peers.get(choice.key);
   if (!peer) {
     return null;
   }
@@ -373,7 +376,7 @@ interface Drag {
 function FloatingPopout({
   target,
   choices,
-  voiceState,
+  peers,
   call,
   viewingCallChannel,
   onGoToCall,
@@ -384,7 +387,7 @@ function FloatingPopout({
 }: {
   target: PopoutChoice;
   choices: PopoutChoice[];
-  voiceState: VoiceState;
+  peers: PeersById;
   call: SharePopoutCall | null;
   viewingCallChannel: boolean;
   onGoToCall: () => void;
@@ -401,8 +404,8 @@ function FloatingPopout({
   const boxRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const rect = dragRect ?? rest;
-  const name = choiceName(target, voiceState, t);
-  const stream = choiceStream(target, voiceState);
+  const name = choiceName(target, peers, t);
+  const stream = choiceStream(target, peers);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -607,10 +610,10 @@ function FloatingPopout({
               <option key={choice.id} value={choice.id}>
                 {choice.kind === "screen"
                   ? t("voice.popout.choiceScreen", {
-                      name: choiceName(choice, voiceState, t),
+                      name: choiceName(choice, peers, t),
                     })
                   : t("voice.popout.choiceCamera", {
-                      name: choiceName(choice, voiceState, t),
+                      name: choiceName(choice, peers, t),
                     })}
               </option>
             ))}
