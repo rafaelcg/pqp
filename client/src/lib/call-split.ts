@@ -448,25 +448,45 @@ export function resolveCollapsed(
  * share counts too, because a stage hidden from a previous call is exactly
  * how a person ended up sharing with no picture of what was going out.
  *
- * "New" is the same diff `nextScreenShareFocus` uses, because the wire
- * carries no start time: an id in `nextIds` that was not in `previousIds`.
- * An empty previous set is a join into a call that already has a share, and
- * that is the first report in issue 1589.
+ * "New" is a diff, because the wire carries no start time: somebody sharing
+ * now who was not a moment ago. The caller names sharers by PERSON (the
+ * stage's own key, `userId` falling back to the peer id), never by peer id
+ * alone, because a resume, a transport change or a rejoin of the same room
+ * mints a new peer id for a share that never stopped. A new call starts from
+ * nobody, so joining a call with a share already up counts, which is the first
+ * report in issue 1589. While the call is not connected (a rejoin in flight
+ * empties the roster first) nothing is compared and the last answer is kept.
  *
  * What it deliberately leaves alone: a share already up when the person hid
  * the stage, a share ending, and a camera. Hiding the stage during a share is
  * a choice about THAT share, and it holds until somebody starts another.
  */
-export function shareStartedUnderHiddenStage(input: {
-  collapsed: CallSplitCollapsed;
-  previousShareIds: readonly string[];
-  nextShareIds: readonly string[];
-}): boolean {
-  if (input.collapsed !== "stage") {
-    return false;
+export interface CallSharers {
+  /** The call these sharers belong to; `null` outside a call. */
+  channelId: string | null;
+  /** Who is sharing, by person key. */
+  keys: readonly string[];
+}
+
+export const NO_CALL_SHARERS: CallSharers = { channelId: null, keys: [] };
+
+export function trackCallSharers(
+  previous: CallSharers,
+  current: { channelId: string | null; connected: boolean; keys: readonly string[] },
+): { next: CallSharers; started: boolean } {
+  const baseline =
+    current.channelId === previous.channelId ? previous.keys : [];
+  if (!current.connected) {
+    return {
+      next: { channelId: current.channelId, keys: baseline },
+      started: false,
+    };
   }
-  const previous = new Set(input.previousShareIds);
-  return input.nextShareIds.some((id) => !previous.has(id));
+  const seen = new Set(baseline);
+  return {
+    next: { channelId: current.channelId, keys: current.keys },
+    started: current.keys.some((key) => !seen.has(key)),
+  };
 }
 
 const STORAGE_KEY = "pqp:call-split";

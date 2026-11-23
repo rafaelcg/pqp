@@ -15,6 +15,8 @@ vi.stubGlobal("localStorage", {
   },
 });
 
+import type { CallSharers } from "./call-split";
+
 const {
   fitToPictureDelta,
   CALL_SPLIT_DEFAULT,
@@ -31,7 +33,8 @@ const {
   resolveCollapsed,
   resolveOrientation,
   saveCallSplit,
-  shareStartedUnderHiddenStage,
+  NO_CALL_SHARERS,
+  trackCallSharers,
   splitAvailable,
   splitBounds,
   splitFraction,
@@ -620,50 +623,62 @@ describe("fitToPictureDelta", () => {
   });
 });
 
-describe("shareStartedUnderHiddenStage", () => {
-  const hidden = (previousShareIds: string[], nextShareIds: string[]) =>
-    shareStartedUnderHiddenStage({
-      collapsed: "stage",
-      previousShareIds,
-      nextShareIds,
-    });
+describe("trackCallSharers", () => {
+  const live = (keys: string[], channelId = "lobby") => ({
+    channelId,
+    connected: true,
+    keys,
+  });
+  const step = (previous: CallSharers, current: Parameters<typeof trackCallSharers>[1]) =>
+    trackCallSharers(previous, current);
 
-  it("brings the stage back when a friend starts sharing", () => {
-    expect(hidden(["p1"], ["p1", "p2"])).toBe(true);
+  it("counts a friend who starts sharing", () => {
+    const before = step(NO_CALL_SHARERS, live(["ana"])).next;
+    expect(step(before, live(["ana", "bia"])).started).toBe(true);
   });
 
-  it("brings it back on a join into a call that already has a share", () => {
+  it("counts a share already up when the call starts", () => {
     // Issue 1589: the stage was hidden in an earlier call, and the next call
     // opened on chat alone while a friend's screen was up.
-    expect(hidden([], ["p2"])).toBe(true);
+    expect(step(NO_CALL_SHARERS, live(["bia"])).started).toBe(true);
   });
 
-  it("brings it back when our own share starts", () => {
-    // Issue 1590: our own id is in the list like anybody else's, and a share
-    // with no picture of what is going out is the bug.
-    expect(hidden(["p2"], ["p2", "me"])).toBe(true);
+  it("counts our own share like anybody else's", () => {
+    // Issue 1590: a share with no picture of what is going out is the bug.
+    const before = step(NO_CALL_SHARERS, live(["bia"])).next;
+    expect(step(before, live(["bia", "me"])).started).toBe(true);
   });
 
   it("leaves a share the person hid the stage over alone", () => {
-    // Hiding the stage during a share is a choice about that share.
-    expect(hidden(["p1", "p2"], ["p1", "p2"])).toBe(false);
-    expect(hidden(["p1", "p2"], ["p2", "p1"])).toBe(false);
+    const before = step(NO_CALL_SHARERS, live(["ana", "bia"])).next;
+    expect(step(before, live(["bia", "ana"])).started).toBe(false);
   });
 
-  it("does nothing when a share ends", () => {
-    expect(hidden(["p1", "p2"], ["p1"])).toBe(false);
-    expect(hidden(["p1"], [])).toBe(false);
+  it("does not count a share that ends, and counts it again when it restarts", () => {
+    const both = step(NO_CALL_SHARERS, live(["ana", "bia"])).next;
+    const ended = step(both, live(["ana"]));
+    expect(ended.started).toBe(false);
+    expect(step(ended.next, live(["ana", "bia"])).started).toBe(true);
   });
 
-  it("never touches a stage that is not hidden", () => {
-    for (const collapsed of ["none", "chat"] as const) {
-      expect(
-        shareStartedUnderHiddenStage({
-          collapsed,
-          previousShareIds: [],
-          nextShareIds: ["p2"],
-        }),
-      ).toBe(false);
-    }
+  it("does not count a rejoin of the same room, which empties the roster first", () => {
+    // join() clears the share ids before the welcome; the status is not
+    // connected in between, so the empty list is never taken as an answer.
+    const before = step(NO_CALL_SHARERS, live(["bia"])).next;
+    const rejoining = step(before, { channelId: "lobby", connected: false, keys: [] });
+    expect(rejoining.started).toBe(false);
+    expect(step(rejoining.next, live(["bia"])).started).toBe(false);
+  });
+
+  it("starts from nobody in a different call", () => {
+    const before = step(NO_CALL_SHARERS, live(["bia"], "lobby")).next;
+    expect(step(before, live(["bia"], "games")).started).toBe(true);
+    const left = step(before, { channelId: null, connected: false, keys: [] }).next;
+    expect(step(left, live(["bia"], "lobby")).started).toBe(true);
+  });
+
+  it("is quiet when seeded with the sharers already up (a remount mid-call)", () => {
+    const seeded: CallSharers = { channelId: "lobby", keys: ["bia"] };
+    expect(step(seeded, live(["bia"])).started).toBe(false);
   });
 });

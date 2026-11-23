@@ -356,8 +356,10 @@ import {
   loadCallSplit,
   saveCallSplit,
   effectiveOrientation,
-  shareStartedUnderHiddenStage,
+  NO_CALL_SHARERS,
   strongestStageShape,
+  trackCallSharers,
+  type CallSharers,
   type CallSplitKind,
   type CallSplitPreference,
   type CallStageShape,
@@ -2694,10 +2696,13 @@ function MainAppContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presentingAParty]);
   // A stored "Esconder o vídeo" gives way to a share that just started, ours
-  // included (issues 1589, 1590; the rule is `shareStartedUnderHiddenStage`).
-  // Our own id is added from `isSharingScreen` because the roster that would
-  // echo it back can land after the preview is already up.
-  const callShareIds = useMemo(() => {
+  // included (issues 1589, 1590; the rule is `trackCallSharers`). Sharers are
+  // keyed by person the way the stage keys its tiles, so a peer id re-minted
+  // by a resume, a transport change or a rejoin is not a new share. Our own
+  // id is added from `isSharingScreen` because the roster that would echo it
+  // back can land after the preview is already up. A share this person has
+  // not chosen to watch (`dismissedSharePeerIds`) does not count until they do.
+  const callSharerKeys = useMemo(() => {
     const ids = [...voiceState.screenSharePeerIds];
     if (
       voiceState.isSharingScreen &&
@@ -2706,25 +2711,55 @@ function MainAppContent({
     ) {
       ids.push(voiceState.peerId);
     }
-    return ids;
-  }, [voiceState.screenSharePeerIds, voiceState.isSharingScreen, voiceState.peerId]);
-  const previousCallShareIds = useRef<string[]>([]);
+    const keyOf = (peerId: string) =>
+      peerId === voiceState.peerId
+        ? (voiceState.self?.userId ?? peerId)
+        : (voiceState.remotePeers.find((peer) => peer.peerId === peerId)
+            ?.userId ?? peerId);
+    const keys = ids
+      .filter((id) => !voiceState.dismissedSharePeerIds.includes(id))
+      .map(keyOf);
+    return [...new Set(keys)].sort().join("\n");
+  }, [
+    voiceState.screenSharePeerIds,
+    voiceState.isSharingScreen,
+    voiceState.peerId,
+    voiceState.self?.userId,
+    voiceState.remotePeers,
+    voiceState.dismissedSharePeerIds,
+  ]);
+  const callConnected = voiceState.status === "connected";
+  // Seeded with what is up right now, so a remount mid-call (the voice
+  // session lives outside React) does not take every live share as new.
+  const callSharers = useRef<CallSharers>(
+    callConnected
+      ? {
+          channelId: voiceState.voiceChannelId,
+          keys: callSharerKeys ? callSharerKeys.split("\n") : [],
+        }
+      : NO_CALL_SHARERS,
+  );
   useEffect(() => {
-    const previous = previousCallShareIds.current;
-    previousCallShareIds.current = callShareIds;
-    if (
-      shareStartedUnderHiddenStage({
-        collapsed: callSplit.collapsed,
-        previousShareIds: previous,
-        nextShareIds: callShareIds,
-      })
-    ) {
-      handleCallSplitChange({ ...callSplit, collapsed: "none" }, true);
+    const { next, started } = trackCallSharers(callSharers.current, {
+      channelId: voiceState.voiceChannelId,
+      connected: callConnected,
+      keys: callSharerKeys ? callSharerKeys.split("\n") : [],
+    });
+    callSharers.current = next;
+    if (!started) {
+      return;
     }
-    // Only a change in who is sharing matters; the split is read at that
-    // instant, like the presenter's rule above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [callShareIds]);
+    // A functional update, so a split change landing in the same commit (the
+    // presenter rule above, an orientation flip) is not written back stale.
+    setCallSplit((previous) => {
+      if (previous.collapsed !== "stage") {
+        return previous;
+      }
+      const restored: CallSplitPreference = { ...previous, collapsed: "none" };
+      saveCallSplit(restored);
+      return restored;
+    });
+  }, [callSharerKeys, callConnected, voiceState.voiceChannelId]);
   /**
    * "ATIVAR O MIC?" ONCE, AT GO-LIVE. The host always joins muted (see
    * `handleWatchPartyGoLive`), which used to leave a permanent red strip
