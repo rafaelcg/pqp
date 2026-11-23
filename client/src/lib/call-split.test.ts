@@ -31,6 +31,7 @@ const {
   resolveCollapsed,
   resolveOrientation,
   saveCallSplit,
+  shareStartedUnderHiddenStage,
   splitAvailable,
   splitBounds,
   splitFraction,
@@ -616,5 +617,53 @@ describe("fitToPictureDelta", () => {
         sideBySide: false,
       }),
     ).toBe(0);
+  });
+});
+
+describe("shareStartedUnderHiddenStage", () => {
+  const hidden = (previousShareIds: string[], nextShareIds: string[]) =>
+    shareStartedUnderHiddenStage({
+      collapsed: "stage",
+      previousShareIds,
+      nextShareIds,
+    });
+
+  it("brings the stage back when a friend starts sharing", () => {
+    expect(hidden(["p1"], ["p1", "p2"])).toBe(true);
+  });
+
+  it("brings it back on a join into a call that already has a share", () => {
+    // Issue 1589: the stage was hidden in an earlier call, and the next call
+    // opened on chat alone while a friend's screen was up.
+    expect(hidden([], ["p2"])).toBe(true);
+  });
+
+  it("brings it back when our own share starts", () => {
+    // Issue 1590: our own id is in the list like anybody else's, and a share
+    // with no picture of what is going out is the bug.
+    expect(hidden(["p2"], ["p2", "me"])).toBe(true);
+  });
+
+  it("leaves a share the person hid the stage over alone", () => {
+    // Hiding the stage during a share is a choice about that share.
+    expect(hidden(["p1", "p2"], ["p1", "p2"])).toBe(false);
+    expect(hidden(["p1", "p2"], ["p2", "p1"])).toBe(false);
+  });
+
+  it("does nothing when a share ends", () => {
+    expect(hidden(["p1", "p2"], ["p1"])).toBe(false);
+    expect(hidden(["p1"], [])).toBe(false);
+  });
+
+  it("never touches a stage that is not hidden", () => {
+    for (const collapsed of ["none", "chat"] as const) {
+      expect(
+        shareStartedUnderHiddenStage({
+          collapsed,
+          previousShareIds: [],
+          nextShareIds: ["p2"],
+        }),
+      ).toBe(false);
+    }
   });
 });

@@ -437,6 +437,38 @@ export function resolveCollapsed(
   return shape === "expanded" ? preferred : "none";
 }
 
+/**
+ * WHEN A HIDDEN STAGE COMES BACK ON ITS OWN: a share started that was not up
+ * a moment ago (issues 1589 and 1590).
+ *
+ * "Esconder o vídeo" is stored, so it used to outlive the call it was about:
+ * somebody who hid one boring share never saw another, not a friend's game
+ * in next week's call and not the preview of their own screen, and nothing
+ * on screen said the stage was put away. So a NEW share undoes it. Our own
+ * share counts too, because a stage hidden from a previous call is exactly
+ * how a person ended up sharing with no picture of what was going out.
+ *
+ * "New" is the same diff `nextScreenShareFocus` uses, because the wire
+ * carries no start time: an id in `nextIds` that was not in `previousIds`.
+ * An empty previous set is a join into a call that already has a share, and
+ * that is the first report in issue 1589.
+ *
+ * What it deliberately leaves alone: a share already up when the person hid
+ * the stage, a share ending, and a camera. Hiding the stage during a share is
+ * a choice about THAT share, and it holds until somebody starts another.
+ */
+export function shareStartedUnderHiddenStage(input: {
+  collapsed: CallSplitCollapsed;
+  previousShareIds: readonly string[];
+  nextShareIds: readonly string[];
+}): boolean {
+  if (input.collapsed !== "stage") {
+    return false;
+  }
+  const previous = new Set(input.previousShareIds);
+  return input.nextShareIds.some((id) => !previous.has(id));
+}
+
 const STORAGE_KEY = "pqp:call-split";
 
 /**
