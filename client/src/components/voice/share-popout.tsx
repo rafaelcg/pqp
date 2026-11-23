@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -169,6 +170,18 @@ export function SharePopout({
     .filter((choice) => choice.kind === "screen")
     .map((choice) => choice.id)
     .join(",");
+  // A pick made outside the popout's own switcher ("Assistir", coming back
+  // from the theater) reaches `target` one render later. Until it does, the
+  // focus effect below must not pull the sound back to the share being
+  // replaced: that tug of war between "the share I am told to show" and "the
+  // share I was showing" is exactly what looped forever when Bob was watched
+  // while Alice was on the popout (Electron test, 2026-11-23).
+  const pendingPick = useRef<string | null>(null);
+  const choose = useCallback((id: string) => {
+    pendingPick.current = id;
+    setPickedId(id);
+  }, []);
+
   useEffect(() => {
     const now = new Set(watchedKey ? watchedKey.split(",") : []);
     // With opt-in on (which is whenever the popout is), a share only becomes
@@ -178,10 +191,10 @@ export function SharePopout({
     watchedRef.current = now;
     const chosen = newly[newly.length - 1];
     if (chosen) {
-      setPickedId(chosen);
+      choose(chosen);
       dispatch({ type: "watch" });
     }
-  }, [watchedKey, dispatch]);
+  }, [watchedKey, dispatch, choose]);
 
   const placement = sharePopoutPlacement({
     mode,
@@ -189,40 +202,43 @@ export function SharePopout({
     hasTarget: target !== null,
   });
 
-  // The share on the popout is the one heard, while the popout is what is on
-  // screen. Not in the theater: the stage owns focus there (a tile put in
-  // fullscreen focuses its share), and pulling it back here would leave the
-  // person looking at one share and hearing another.
-  const focusSetHere = useRef<string | null>(null);
-  useEffect(() => {
-    if (
-      placement === "floating" &&
-      target?.kind === "screen" &&
-      voiceState.focusedScreenPeerId !== target.id
-    ) {
-      focusSetHere.current = target.id;
-      onFocusShare(target.id);
-    }
-  }, [
-    placement,
-    target?.kind,
-    target?.id,
-    voiceState.focusedScreenPeerId,
-    onFocusShare,
-  ]);
-
-  // A focus chosen anywhere else (a tile in the theater, "Assistir") is the
-  // person's pick too, so minimizing finds the share they were watching.
+  // Back from the theater, the popout shows the share the person was
+  // watching there (a tile put in fullscreen focuses its share). Only on that
+  // transition: while the popout floats, it alone decides the focus.
   const focused = voiceState.focusedScreenPeerId;
+  const placementBefore = useRef(placement);
   useEffect(() => {
-    if (focused === null || focused === focusSetHere.current) {
+    const was = placementBefore.current;
+    placementBefore.current = placement;
+    if (was !== "theater" || placement !== "floating" || focused === null) {
       return;
     }
     const watched = watchedKey ? watchedKey.split(",") : [];
     if (watched.includes(focused)) {
-      setPickedId(focused);
+      choose(focused);
     }
-  }, [focused, watchedKey]);
+  }, [placement, focused, watchedKey, choose]);
+
+  // The share on the popout is the one heard, while the popout is what is on
+  // screen. Not in the theater: the stage owns focus there, and pulling it
+  // back here would leave the person looking at one share and hearing another.
+  useEffect(() => {
+    const pending = pendingPick.current;
+    if (pending !== null) {
+      const watched = watchedKey ? watchedKey.split(",") : [];
+      if (target?.id !== pending && watched.includes(pending)) {
+        return;
+      }
+      pendingPick.current = null;
+    }
+    if (
+      placement === "floating" &&
+      target?.kind === "screen" &&
+      focused !== target.id
+    ) {
+      onFocusShare(target.id);
+    }
+  }, [placement, target?.kind, target?.id, focused, watchedKey, onFocusShare]);
 
   // The theater is the call stage, drawn by the shell; nothing floats over it.
   if (!inCall || placement !== "floating" || target === null) {
@@ -236,7 +252,7 @@ export function SharePopout({
       call={call}
       viewingCallChannel={viewingCallChannel}
       onGoToCall={onGoToCall}
-      onPick={(id) => setPickedId(id)}
+      onPick={choose}
       onMaximize={() => {
         dispatch({ type: "maximize" });
         // The theater fills the call's own conversation area, so from
@@ -256,7 +272,7 @@ export function SharePopout({
             (choice) => choice.kind === "screen" && choice.id !== target.id,
           );
           if (next) {
-            setPickedId(next.id);
+            choose(next.id);
             return;
           }
         }

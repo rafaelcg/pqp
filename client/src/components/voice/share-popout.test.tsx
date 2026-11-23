@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceState } from "@/hooks/use-voice";
@@ -245,5 +245,50 @@ describe("SharePopout", () => {
     });
     expect(popout()?.getAttribute("data-share-popout")).toBe("p2");
     expect(onFocusShare).not.toHaveBeenCalledWith("p3");
+  });
+
+  it("settles on the share just watched instead of looping between two", () => {
+    // Electron test, 2026-11-23: Alice on the popout, then "Watch" on Bob.
+    // The popout's focus and a focus set elsewhere chased each other and
+    // React stopped with "Maximum update depth exceeded". Here the voice
+    // state is real: focusing a share updates the focus, as `use-voice` does.
+    const focusCalls: string[] = [];
+    let setVoice: (next: VoiceState) => void = () => {};
+    function Harness({ initial }: { initial: VoiceState }) {
+      const [voiceState, set] = useState(initial);
+      setVoice = set;
+      return (
+        <SharePopout
+          voiceState={voiceState}
+          enabled
+          call={{ name: "stage", serverName: "QG" }}
+          viewingCallChannel
+          onGoToCall={() => {}}
+          onFocusShare={(id) => {
+            focusCalls.push(id);
+            set((current) => ({ ...current, focusedScreenPeerId: id }));
+          }}
+          onDismissShare={() => {}}
+        />
+      );
+    }
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    act(() =>
+      root.render(
+        <Harness
+          initial={state({ ...twoSharers, dismissedSharePeerIds: ["p3"], focusedScreenPeerId: "p2" })}
+        />,
+      ),
+    );
+    expect(popout()?.getAttribute("data-share-popout")).toBe("p2");
+    // "Watch" on p3: `use-voice` un-dismisses it and gives it the focus.
+    act(() =>
+      setVoice(state({ ...twoSharers, dismissedSharePeerIds: [], focusedScreenPeerId: "p3" })),
+    );
+    expect(popout()?.getAttribute("data-share-popout")).toBe("p3");
+    expect(focusCalls.filter((id) => id === "p2")).toEqual([]);
+    expect(focusCalls.length).toBeLessThan(3);
+    expect(errors.mock.calls.some((call) => String(call[0]).includes("Maximum update depth"))).toBe(false);
+    errors.mockRestore();
   });
 });
