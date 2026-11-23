@@ -1501,6 +1501,17 @@ export function createVoiceController(transport: RealtimeTransport) {
   let shareOptIn = false;
   /** Shares opt-in dismissed, as opposed to ones the person declined. */
   const optInDismissed = new Set<string>();
+  /**
+   * Whether this call has had a KNOWN answer for opt-in yet. The answer rides
+   * on a share config request that can land after the call's welcome; until
+   * it does the app says "off, not settled", and shares already up are let
+   * in. The first settled "on" then holds them, so a slow request never
+   * decides for the person. Later changes (the operator flipping the flag, a
+   * window narrowed and widened) never pull a share off the screen.
+   */
+  let optInSettled = false;
+  /** Shares this person pressed "Assistir" on (or watched again) this call. */
+  const watchedByChoice = new Set<string>();
   let manager: ReturnType<typeof createPeerConnectionManager> | null = null;
   let sfu: LiveKitSession | null = null;
   /**
@@ -4686,6 +4697,37 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  /**
+   * The call's first settled "on" (see `optInSettled`): every share up right
+   * now that this person did not choose goes back to waiting for "Assistir".
+   */
+  function holdUnchosenShares() {
+    let held = false;
+    for (const id of state.screenSharePeerIds) {
+      if (
+        id === state.peerId ||
+        watchedByChoice.has(id) ||
+        state.dismissedSharePeerIds.includes(id)
+      ) {
+        continue;
+      }
+      state.dismissedSharePeerIds = [...state.dismissedSharePeerIds, id];
+      optInDismissed.add(id);
+      held = true;
+    }
+    if (!held) {
+      return;
+    }
+    syncShareInvites();
+    state.audibleScreenPeerIds = audibleScreenPeerIds(
+      state.screenSharePeerIds.filter(
+        (id) => !state.dismissedSharePeerIds.includes(id),
+      ),
+      state.focusedScreenPeerId,
+    );
+    emit();
+  }
+
   /** Mirror `optInDismissed` into the state the UI reads, in roster order. */
   function syncShareInvites() {
     state.shareInvitePeerIds = state.screenSharePeerIds.filter((id) =>
@@ -5539,6 +5581,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     unregisterSoundboard?.();
     unregisterSoundboard = null;
     optInDismissed.clear();
+    watchedByChoice.clear();
+    optInSettled = false;
     state = {
       status: "idle",
       peerId: null,
@@ -6793,6 +6837,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       // newcomers. Empty previous is the locked "join into live shares" rule.
       state.screenSharePeerIds = [];
       optInDismissed.clear();
+      watchedByChoice.clear();
+      optInSettled = false;
       state.shareInvitePeerIds = [];
       state.liveStream = null;
       state.cameraPeerIds = [];
@@ -8040,12 +8086,22 @@ export function createVoiceController(transport: RealtimeTransport) {
      * wait for "Assistir"; the ones already on screen stay. Off gives back
      * every share opt-in held, and keeps the ones the person declined.
      */
-    setShareOptIn(on: boolean) {
-      if (shareOptIn === on) {
+    setShareOptIn(on: boolean, settled = true) {
+      const firstAnswer = settled && !optInSettled;
+      if (settled) {
+        optInSettled = true;
+      }
+      if (shareOptIn === on && !(on && firstAnswer)) {
         return;
       }
       shareOptIn = on;
-      if (on || optInDismissed.size === 0) {
+      if (on) {
+        if (firstAnswer) {
+          holdUnchosenShares();
+        }
+        return;
+      }
+      if (optInDismissed.size === 0) {
         return;
       }
       state.dismissedSharePeerIds = state.dismissedSharePeerIds.filter(
@@ -8071,6 +8127,7 @@ export function createVoiceController(transport: RealtimeTransport) {
      * would have no way to undo.
      */
     dismissShare(peerId: string) {
+      watchedByChoice.delete(peerId);
       if (shareOptIn && state.screenSharePeerIds.includes(peerId)) {
         optInDismissed.add(peerId);
       }
@@ -8116,6 +8173,7 @@ export function createVoiceController(transport: RealtimeTransport) {
      * three or more are watched: the person asked for this one.
      */
     watchShare(peerId: string) {
+      watchedByChoice.add(peerId);
       optInDismissed.delete(peerId);
       if (!state.dismissedSharePeerIds.includes(peerId)) {
         return;

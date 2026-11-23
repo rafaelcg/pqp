@@ -108,8 +108,30 @@ async function openViewer(browser: Browser, conversationId: string, suffix: stri
   return { context, page };
 }
 
+/** The stored global value before this spec touched it, to hand back after. */
+async function storedSharePopoutFlag(): Promise<boolean | null> {
+  const res = await fetch(`${API}/api/admin/flags`, {
+    headers: { Authorization: `Bearer ${E2E_ADMIN_TOKEN}` },
+  });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    flags: { key: string; stored: { enabled: boolean } | null }[];
+  };
+  return body.flags.find((flag) => flag.key === "share_popout")?.stored?.enabled ?? null;
+}
+
+let previousFlag: boolean | null | undefined;
+
+test.beforeAll(async () => {
+  previousFlag = await storedSharePopoutFlag();
+});
+
 test.afterAll(async () => {
-  await setSharePopoutFlag(null);
+  // Hand back exactly what was there, not "unset": another suite, or a
+  // person running against a shared database, may have set it on purpose.
+  if (previousFlag !== undefined) {
+    await setSharePopoutFlag(previousFlag);
+  }
 });
 
 test("a share waits for Assistir, plays in the popout, and follows the viewer", async ({
@@ -209,6 +231,45 @@ test("a share waits for Assistir, plays in the popout, and follows the viewer", 
     await viewer.page.keyboard.press("Escape");
     await expect(viewer.page.getByTestId("share-popout")).toBeVisible({ timeout: 20_000 });
     await expect(stageShare).toHaveCount(0);
+  } finally {
+    await viewer.context.close();
+  }
+});
+
+test("joining a call with a share already up still waits for Assistir", async ({
+  page,
+  browser,
+}) => {
+  // The share config that carries `share_popout` is asked for at join and can
+  // land after the call's welcome. Whatever the order, a share that was up
+  // before this person joined must not start playing on its own, even one
+  // they were watching before they left.
+  await setSharePopoutFlag(true);
+  await materialiseAccount("popout-late-a");
+  const viewerAccount = await materialiseAccount("popout-late-b");
+  const callDm = await openDm("popout-late-a", viewerAccount.id);
+
+  const viewer = await openViewer(browser, callDm, "popout-late-b");
+  try {
+    await openConversation(page, callDm, "popout-late-a");
+    await page.getByRole("button", { name: "Start voice call", exact: true }).click();
+    await viewer.page.getByRole("button", { name: "Accept" }).click({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Share your screen", exact: true }).click();
+    await expect(page.getByText("You are presenting")).toBeVisible({ timeout: 20_000 });
+
+    // Watch it, then leave the call.
+    await viewer.page.locator("[data-share-invite]").getByRole("button").click({ timeout: 30_000 });
+    await expect(viewer.page.getByTestId("share-popout")).toBeVisible({ timeout: 20_000 });
+    await viewer.page.getByRole("main").getByRole("button", { name: "Leave", exact: true }).click();
+    await expect(viewer.page.getByTestId("share-popout")).toHaveCount(0);
+
+    // Join again, into a call whose share is already up.
+    await viewer.page.getByRole("button", { name: "Join call", exact: true }).click({ timeout: 20_000 });
+    await expect(viewer.page.locator("[data-share-invite]")).toBeVisible({ timeout: 30_000 });
+    // Give a late answer time to land, then check nothing opened by itself.
+    await viewer.page.waitForTimeout(3_000);
+    await expect(viewer.page.getByTestId("share-popout")).toHaveCount(0);
+    await expect(viewer.page.locator("[data-share-invite]")).toBeVisible();
   } finally {
     await viewer.context.close();
   }

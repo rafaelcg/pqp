@@ -1479,13 +1479,42 @@ describe("screen share audio", () => {
       expect(state.audibleScreenPeerIds).toEqual(["p2"]);
     });
 
-    it("leaves a share already on screen alone when opt-in turns on", async () => {
+    it("leaves a share already on screen alone when opt-in turns on mid-call", async () => {
       const { voice } = await connectedMesh();
+      // The call's answer was a settled "off"; the operator flips it later.
+      voice.setShareOptIn(false, true);
       voice.handleSignaling(rosterWithShare(["p2"]));
       voice.setShareOptIn(true);
       voice.handleSignaling(rosterWithShare(["p2", "p3"]));
       expect(voice.getState().dismissedSharePeerIds).toEqual(["p3"]);
       expect(voice.getState().audibleScreenPeerIds).toEqual(["p2"]);
+    });
+
+    it("holds the shares already up when the answer lands after the welcome", async () => {
+      const { voice } = await connectedMesh();
+      // Not asked yet: the app says off, unsettled, and the roster lands.
+      voice.setShareOptIn(false, false);
+      voice.handleSignaling(rosterWithShare(["p2", "p3"]));
+      expect(voice.getState().dismissedSharePeerIds).toEqual([]);
+      // The person chose one before the answer arrived; that choice stands.
+      voice.watchShare("p2");
+      voice.setShareOptIn(true, true);
+      const state = voice.getState();
+      expect(state.dismissedSharePeerIds).toEqual(["p3"]);
+      expect(state.shareInvitePeerIds).toEqual(["p3"]);
+      expect(state.audibleScreenPeerIds).toEqual(["p2"]);
+    });
+
+    it("holds the shares already up on the first answer of each call", async () => {
+      const { voice } = await connectedMesh();
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.setShareOptIn(true, true);
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+      // A later answer is not a first answer: nothing is pulled again.
+      voice.watchShare("p2");
+      voice.setShareOptIn(false, true);
+      voice.setShareOptIn(true, true);
+      expect(voice.getState().dismissedSharePeerIds).toEqual([]);
     });
 
     it("does not hold a share again on the next roster once it is watched", async () => {

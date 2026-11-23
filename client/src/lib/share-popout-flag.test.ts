@@ -4,6 +4,7 @@ import {
   resetSharePopoutForTests,
   setSharePopout,
   sharePopoutActive,
+  sharePopoutKnown,
 } from "./share-popout-flag";
 
 const SERVER = "7a0b3f3e-2f55-4c1e-9f3a-8d2c1b0a9e11";
@@ -40,5 +41,14 @@ describe("share popout flag", () => {
     expect(sharePopoutActive(OTHER)).toBe(true);
     setSharePopout(null);
     expect(sharePopoutActive(OTHER)).toBe(false);
+  });
+
+  it("tells an answer of off apart from no answer yet", () => {
+    expect(sharePopoutKnown(SERVER)).toBe(false);
+    recordSharePopout(SERVER, false);
+    expect(sharePopoutKnown(SERVER)).toBe(true);
+    expect(sharePopoutActive(SERVER)).toBe(false);
+    setSharePopout(true);
+    expect(sharePopoutKnown(OTHER)).toBe(true);
   });
 });

@@ -64,6 +64,16 @@ export function sharePopoutActive(serverId: string | null | undefined): boolean 
   return answers.get(keyOf(serverId)) === true;
 }
 
+/**
+ * Whether there is an answer for this server yet. "Unknown is off" is right
+ * for drawing, but the call also needs to tell "off" from "not asked yet":
+ * an answer that lands after the call's welcome must still hold the shares
+ * that were already up (`setShareOptIn` in `use-voice.ts`).
+ */
+export function sharePopoutKnown(serverId: string | null | undefined): boolean {
+  return forced !== null || answers.has(keyOf(serverId));
+}
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
@@ -73,6 +83,11 @@ function subscribe(listener: () => void): () => void {
 
 export function useSharePopout(serverId: string | null | undefined): boolean {
   const read = useCallback(() => sharePopoutActive(serverId), [serverId]);
+  return useSyncExternalStore(subscribe, read, read);
+}
+
+export function useSharePopoutKnown(serverId: string | null | undefined): boolean {
+  const read = useCallback(() => sharePopoutKnown(serverId), [serverId]);
   return useSyncExternalStore(subscribe, read, read);
 }
 

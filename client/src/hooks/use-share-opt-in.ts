@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { isWatchPartyChannelType } from "@/lib/watch-party-channels";
 import { sharePopoutApplies } from "@/lib/share-view-mode";
-import { useSharePopout } from "@/lib/share-popout-flag";
+import { useSharePopout, useSharePopoutKnown } from "@/lib/share-popout-flag";
 
 /**
  * Turns opt-in watching on for the call when the share popout applies to it
@@ -18,7 +18,7 @@ import { useSharePopout } from "@/lib/share-popout-flag";
  * change type during a call.
  */
 export function useShareOptInSync(
-  voice: { setShareOptIn: (on: boolean) => void },
+  voice: { setShareOptIn: (on: boolean, settled?: boolean) => void },
   input: {
     callChannelId: string | null;
     /** The call's server, `null` for a DM call. */
@@ -52,8 +52,11 @@ export function useShareOptInSync(
   const applies =
     callChannelId !== null &&
     sharePopoutApplies({ flagOn, wide, isWatchPartyChannel: watchParty });
+  // Settled once the call's server has an answer: until then "off" only means
+  // "not asked yet", and the call must not take it as the person's answer.
+  const answered = useSharePopoutKnown(input.callServerId);
   useEffect(() => {
-    voice.setShareOptIn(applies);
-  }, [voice, applies]);
+    voice.setShareOptIn(applies, answered);
+  }, [voice, applies, answered]);
   return { applies, channelName: latched?.name ?? null };
 }

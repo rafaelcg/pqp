@@ -1,5 +1,6 @@
 import { ScreenShare } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Menu } from "@/components/ui/menu";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -25,12 +26,12 @@ export const SHARE_INVITE_CHIP_LIMIT = 2;
 export function shareInviteSlots<T>(
   invites: readonly T[],
   limit: number = SHARE_INVITE_CHIP_LIMIT,
-): { shown: T[]; overflow: number } {
+): { shown: T[]; rest: T[] } {
   // "+1" is never worth a name: with exactly one over the limit, show it.
   if (invites.length <= limit + 1) {
-    return { shown: [...invites], overflow: 0 };
+    return { shown: [...invites], rest: [] };
   }
-  return { shown: invites.slice(0, limit), overflow: invites.length - limit };
+  return { shown: invites.slice(0, limit), rest: invites.slice(limit) };
 }
 
 export function ShareInviteChips({
@@ -46,7 +47,7 @@ export function ShareInviteChips({
   if (invites.length === 0) {
     return null;
   }
-  const { shown, overflow } = shareInviteSlots(invites);
+  const { shown, rest } = shareInviteSlots(invites);
   return (
     <div
       data-testid="share-invite-chips"
@@ -79,10 +80,32 @@ export function ShareInviteChips({
           </Button>
         </span>
       ))}
-      {overflow > 0 && (
-        <span className="shrink-0 text-xs text-text-tertiary">
-          {t("voice.share.inviteMore", { count: overflow })}
-        </span>
+      {/* The rest are still one click away: a share nobody can reach is a
+          share the person cannot watch, since the popout's switcher only
+          lists shares already being watched. */}
+      {rest.length > 0 && (
+        <Menu
+          align="start"
+          side="top"
+          items={rest.map((invite) => ({
+            id: invite.peerId,
+            label: t("voice.share.inviteWatchLabel", {
+              name: invite.presenterName,
+            }),
+            icon: ScreenShare,
+            onSelect: () => onWatch(invite.peerId),
+          }))}
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-testid="share-invite-more"
+            className="h-6 shrink-0 rounded-full px-2 text-xs text-text-tertiary"
+          >
+            {t("voice.share.inviteMore", { count: rest.length })}
+          </Button>
+        </Menu>
       )}
     </div>
   );
