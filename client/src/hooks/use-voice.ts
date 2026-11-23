@@ -8024,8 +8024,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       state.focusedScreenPeerId = peerId;
+      // Only shares this person watches may be heard: focusing one must not
+      // make a declined share, or one opt-in is holding, audible again.
       state.audibleScreenPeerIds = audibleScreenPeerIds(
-        state.screenSharePeerIds,
+        state.screenSharePeerIds.filter(
+          (id) => !state.dismissedSharePeerIds.includes(id),
+        ),
         peerId,
       );
       emit();
@@ -8058,15 +8062,21 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
     },
 
-    /** Stop watching one share: no picture, no sound, tile kept as a way back. */
+    /**
+     * Stop watching one share: no picture, no sound, tile kept as a way back.
+     *
+     * With opt-in on (`share_popout`) the way back is the "Assistir" chip, not
+     * a tile, because the popout draws no stage. So the share goes back to
+     * waiting for "Assistir" rather than to declined, which the popout's UI
+     * would have no way to undo.
+     */
     dismissShare(peerId: string) {
+      if (shareOptIn && state.screenSharePeerIds.includes(peerId)) {
+        optInDismissed.add(peerId);
+      }
       if (state.dismissedSharePeerIds.includes(peerId)) {
-        // Declining a share opt-in was holding: it stays dismissed, now as the
-        // person's own choice, so turning opt-in off leaves it declined.
-        if (optInDismissed.delete(peerId)) {
-          syncShareInvites();
-          emit();
-        }
+        syncShareInvites();
+        emit();
         return;
       }
       state.dismissedSharePeerIds = [...state.dismissedSharePeerIds, peerId];

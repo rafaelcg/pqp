@@ -1499,16 +1499,29 @@ describe("screen share audio", () => {
 
     it("turning opt-in off gives back what it held and keeps what was declined", async () => {
       const { voice } = await connectedMesh();
+      // Declined before opt-in existed: the person's own choice.
+      voice.handleSignaling(rosterWithShare(["p3"]));
+      voice.dismissShare("p3");
       voice.setShareOptIn(true);
       voice.handleSignaling(rosterWithShare(["p2", "p3"]));
-      // Declining a held share makes it the person's own choice.
-      voice.dismissShare("p3");
       expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
       voice.setShareOptIn(false);
       const state = voice.getState();
       expect(state.dismissedSharePeerIds).toEqual(["p3"]);
       expect(state.shareInvitePeerIds).toEqual([]);
       expect(state.audibleScreenPeerIds).toEqual(["p2"]);
+    });
+
+    it("stopping a watched share under opt-in sends it back to Assistir", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.watchShare("p2");
+      voice.dismissShare("p2");
+      const state = voice.getState();
+      expect(state.dismissedSharePeerIds).toEqual(["p2"]);
+      expect(state.shareInvitePeerIds).toEqual(["p2"]);
+      expect(state.audibleScreenPeerIds).toEqual([]);
     });
 
     it("forgets a held share when it stops, so the next one asks again", async () => {
@@ -1519,6 +1532,15 @@ describe("screen share audio", () => {
       expect(voice.getState().shareInvitePeerIds).toEqual([]);
       voice.handleSignaling(rosterWithShare(["p2"]));
       expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+    });
+
+    it("focusing a share never makes a held one audible", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2", "p3"]));
+      voice.watchShare("p2");
+      voice.focusScreenShare("p2");
+      expect(voice.getState().audibleScreenPeerIds).toEqual(["p2"]);
     });
 
     it("changes nothing with opt-in off", async () => {

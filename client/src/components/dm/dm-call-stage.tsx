@@ -42,6 +42,9 @@ export function DmCallStage({
   onSetScreenVolume,
   composerHidden,
   stageHidden,
+  picturesInPopout = false,
+  onDismissShare,
+  onWatchShare,
   onStopScreenShare,
   onFocusScreenShare,
   onToggleRaisedHand,
@@ -80,6 +83,11 @@ export function DmCallStage({
   composerHidden?: boolean;
   /** The video pane is put away; the controls stay in the composer. */
   stageHidden?: boolean;
+  /** See `CallStage.picturesInPopout`. */
+  picturesInPopout?: boolean;
+  /** Stop watching one share, or press "Assistir" on it. */
+  onDismissShare?: (peerId: string) => void;
+  onWatchShare?: (peerId: string) => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   /**
@@ -165,6 +173,9 @@ export function DmCallStage({
       onSetScreenVolume={onSetScreenVolume}
       composerHidden={composerHidden}
       stageHidden={stageHidden}
+      picturesInPopout={picturesInPopout}
+      onDismissShare={onDismissShare}
+      onWatchShare={onWatchShare}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
       onToggleRaisedHand={onToggleRaisedHand}

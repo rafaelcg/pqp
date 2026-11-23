@@ -9,6 +9,9 @@ import { useSharePopout } from "@/lib/share-popout-flag";
  * (issue #1736): the `share_popout` answer for the call's server, a window at
  * least `lg` wide, and a room that is not a watch party.
  *
+ * Also returns the call's channel name, latched the same way, for the popout's
+ * badge.
+ *
  * The call's channel type comes from `channels`, which only holds the SELECTED
  * server's channels, so walking off to another server would lose it. The last
  * type seen for the call's channel is kept instead, because a channel does not
@@ -20,10 +23,14 @@ export function useShareOptInSync(
     callChannelId: string | null;
     /** The call's server, `null` for a DM call. */
     callServerId: string | null;
-    channels: readonly { id: string; type: string }[];
+    channels: readonly { id: string; type: string; name?: string }[];
   },
-): boolean {
-  const known = useRef<{ channelId: string; watchParty: boolean } | null>(null);
+): { applies: boolean; channelName: string | null } {
+  const known = useRef<{
+    channelId: string;
+    watchParty: boolean;
+    name: string | null;
+  } | null>(null);
   const { callChannelId, channels } = input;
   const listed = callChannelId
     ? channels.find((channel) => channel.id === callChannelId)
@@ -32,12 +39,14 @@ export function useShareOptInSync(
     known.current = {
       channelId: callChannelId,
       watchParty: isWatchPartyChannelType(listed.type),
+      name: listed.name ?? null,
     };
   }
-  const watchParty =
+  const latched =
     known.current !== null && known.current.channelId === callChannelId
-      ? known.current.watchParty
-      : false;
+      ? known.current
+      : null;
+  const watchParty = latched?.watchParty ?? false;
   const flagOn = useSharePopout(input.callServerId);
   const wide = useLgUp();
   const applies =
@@ -46,5 +55,5 @@ export function useShareOptInSync(
   useEffect(() => {
     voice.setShareOptIn(applies);
   }, [voice, applies]);
-  return applies;
+  return { applies, channelName: latched?.name ?? null };
 }

@@ -296,6 +296,7 @@ import {
 } from "@/lib/apps/app-sessions-store";
 import { CallDockOutlet, CallDockProvider } from "@/components/voice/call-dock";
 import { useShareOptInSync } from "@/hooks/use-share-opt-in";
+import { SharePopout } from "@/components/voice/share-popout";
 import {
   canOfferWatchPartyCreate,
   isWatchPartyChannelType,
@@ -3357,11 +3358,23 @@ function MainAppContent({
   // share config the effect above prefetches; until it answers, it is off.
   // The ref is read during render on purpose: every voice event re-renders
   // this component, and the ref is set before the join that starts the call.
-  useShareOptInSync(voice, {
+  const sharePopoutCall = useShareOptInSync(voice, {
     callChannelId: voiceSeatChannelId,
     callServerId: voiceServerIdRef.current,
     channels,
   });
+  const focusShareFromPopout = useCallback(
+    (peerId: string) => voice.focusScreenShare(peerId),
+    [voice],
+  );
+  const dismissShareFromPopout = useCallback(
+    (peerId: string) => voice.dismissShare(peerId),
+    [voice],
+  );
+  const watchShareFromStage = useCallback(
+    (peerId: string) => voice.watchShare(peerId),
+    [voice],
+  );
   /**
    * A conversation whose call was started "with video": the camera should come
    * on as soon as that join is connected. A ref plus an effect rather than an
@@ -13163,6 +13176,7 @@ function MainAppContent({
         user && (
           <VoiceChannelStage
             fill={splitState.active}
+            picturesInPopout={sharePopoutCall.applies}
             onShapeChange={handleStageShape}
             // Section 10 of docs/plans/WATCH_PARTY_SETUP_UX.md: in a channel
             // with a party on it, the party bar is the only bar. Mute, the
@@ -13276,8 +13290,15 @@ function MainAppContent({
       {activeConversation && user && (
         <DmCallStage
           fill={splitState.active}
+          picturesInPopout={sharePopoutCall.applies}
           onShapeChange={handleStageShape}
           conversation={activeConversation}
+          // Only with the popout: a DM call's tiles never had a dismiss
+          // control, and the flag off must leave them exactly as they were.
+          onDismissShare={
+            sharePopoutCall.applies ? dismissShareFromPopout : undefined
+          }
+          onWatchShare={sharePopoutCall.applies ? watchShareFromStage : undefined}
           currentUser={{
             id: user.id,
             displayName: user.displayName,
@@ -15479,6 +15500,36 @@ function MainAppContent({
         onFailed={() => setAppError(t("listingNudge.failed"))}
       />
 
+      {/* THE SHARE POPOUT (issue #1736): one picture from the call, over the
+          conversation area, in every channel. Mounted here, once, so walking
+          to another channel never unbinds its video. */}
+      {user && (
+        <SharePopout
+          voiceState={voiceState}
+          enabled={sharePopoutCall.applies}
+          call={
+            voiceState.voiceChannelId
+              ? {
+                  name:
+                    voiceChannel?.name ??
+                    sharePopoutCall.channelName ??
+                    (voiceConversation
+                      ? conversationTitle(voiceConversation.participants)
+                      : t("voice.channelFallback")),
+                  serverName: voiceConversation
+                    ? null
+                    : (servers.find(
+                        (one) => one.id === voiceServerIdRef.current,
+                      )?.name ?? null),
+                }
+              : null
+          }
+          viewingCallChannel={viewingThisCall}
+          onGoToCall={() => void openVoiceChannel()}
+          onFocusShare={focusShareFromPopout}
+          onDismissShare={dismissShareFromPopout}
+        />
+      )}
       {/* The dock the watch surface falls back to whenever no channel pane is
           holding it. An empty anchor: the surface's own box is `fixed`, so
           this contributes nothing to the layout. */}

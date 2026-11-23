@@ -815,6 +815,12 @@ export interface CallStageProps {
   composerHidden?: boolean;
   /** The video pane is put away: the controls stay in the composer. */
   stageHidden?: boolean;
+  /**
+   * The share popout owns the call's pictures (`share_popout`, issue #1736):
+   * the stage behaves as if nobody published, stays folded into the
+   * composer's dock, and the chat keeps the whole pane.
+   */
+  picturesInPopout?: boolean;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -941,6 +947,7 @@ export function CallStage({
   roomListOnScreen = false,
   composerHidden = false,
   stageHidden = false,
+  picturesInPopout = false,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -976,7 +983,7 @@ export function CallStage({
     voiceState.peerId,
     voiceState.localScreenStream !== null,
   );
-  const hasVideo = hasWatchableVideo({
+  const hasVideo = !picturesInPopout && hasWatchableVideo({
     localCameraOn:
       voiceState.isCameraOn || voiceState.localCameraStream !== null,
     remoteHasCamera: voiceState.remotePeers.some(
