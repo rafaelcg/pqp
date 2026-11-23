@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -9,6 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
+  Expand,
   Maximize2,
   PictureInPicture2,
   ScreenShare,
@@ -37,13 +37,8 @@ import {
   setSharePopoutPref,
   useSharePopoutPref,
 } from "@/lib/share-popout-pref";
-import {
-  INITIAL_SHARE_VIEW_MODE,
-  nextShareViewMode,
-  sharePopoutPlacement,
-  type ShareViewEvent,
-  type ShareViewMode,
-} from "@/lib/share-view-mode";
+import { sharePopoutPlacement } from "@/lib/share-view-mode";
+import { dispatchShareView, useShareViewMode } from "@/lib/share-view-store";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -107,19 +102,18 @@ export function SharePopout({
     voiceState.status !== "idle" &&
     voiceState.voiceChannelId !== null;
 
-  // The mode is this call's: a new call starts as a popout again.
-  const [mode, setMode] = useState<ShareViewMode>(INITIAL_SHARE_VIEW_MODE);
+  // The mode is this call's: a new call starts as a popout again. Shared with
+  // the app shell, which draws the theater (`lib/share-view-store.ts`).
+  const mode = useShareViewMode();
   const [pickedId, setPickedId] = useState<string | null>(null);
   const currentRef = useRef<string | null>(null);
   const callId = voiceState.voiceChannelId;
   useEffect(() => {
-    setMode((previous) => nextShareViewMode(previous, { type: "call-changed" }));
+    dispatchShareView({ type: "call-changed" });
     setPickedId(null);
     currentRef.current = null;
   }, [callId]);
-  const dispatch = useCallback((event: ShareViewEvent) => {
-    setMode((previous) => nextShareViewMode(previous, event));
-  }, []);
+  const dispatch = dispatchShareView;
 
   const peers = voiceState.remotePeers;
   const screens = useMemo(
@@ -205,7 +199,8 @@ export function SharePopout({
     hasTarget: target !== null,
   });
 
-  if (!inCall || placement === "none" || target === null) {
+  // The theater is the call stage, drawn by the shell; nothing floats over it.
+  if (!inCall || placement !== "floating" || target === null) {
     return null;
   }
   return (
@@ -217,6 +212,14 @@ export function SharePopout({
       viewingCallChannel={viewingCallChannel}
       onGoToCall={onGoToCall}
       onPick={(id) => setPickedId(id)}
+      onMaximize={() => {
+        dispatch({ type: "maximize" });
+        // The theater fills the call's own conversation area, so from
+        // anywhere else maximizing is also going back to the call.
+        if (!viewingCallChannel) {
+          onGoToCall();
+        }
+      }}
       onClose={() => {
         if (target.kind === "screen") {
           onDismissShare(target.id);
@@ -324,6 +327,7 @@ function FloatingPopout({
   viewingCallChannel,
   onGoToCall,
   onPick,
+  onMaximize,
   onClose,
   t,
 }: {
@@ -334,6 +338,7 @@ function FloatingPopout({
   viewingCallChannel: boolean;
   onGoToCall: () => void;
   onPick: (id: string) => void;
+  onMaximize: () => void;
   onClose: () => void;
   t: T;
 }) {
@@ -505,6 +510,7 @@ function FloatingPopout({
         playsInline
         muted
         aria-label={label}
+        onDoubleClick={onMaximize}
         className="h-full w-full object-contain"
       />
       <div
@@ -570,6 +576,18 @@ function FloatingPopout({
             <PictureInPicture2 aria-hidden="true" className="h-4 w-4" />
           </Button>
         )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          data-testid="share-popout-maximize"
+          className="h-7 w-7 text-on-media hover:bg-white/10 hover:text-on-media"
+          aria-label={t("voice.popout.maximize")}
+          title={t("voice.popout.maximize")}
+          onClick={onMaximize}
+        >
+          <Expand aria-hidden="true" className="h-4 w-4" />
+        </Button>
         <Button
           type="button"
           variant="ghost"

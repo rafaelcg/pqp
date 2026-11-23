@@ -2047,6 +2047,8 @@
   "voice.popout.choiceCamera": "Cámara de {name}",
   "voice.popout.pip": "Imagen en imagen",
   "voice.popout.close": "Cerrar",
+  "voice.popout.maximize": "Maximizar",
+  "voice.popout.minimize": "Minimizar",
   "voice.share.noAudioShort": "sin sonido",
   "voice.share.noAudioTooltip": "Depende de la computadora de quien comparte, no es un error de tu lado.",
   "voice.share.tickAudio": "Elige una pestaña de Chrome y marca “Compartir también el audio de la pestaña” para mandar el sonido.",

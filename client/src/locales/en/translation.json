@@ -2035,6 +2035,8 @@
   "voice.popout.choiceCamera": "{name}'s camera",
   "voice.popout.pip": "Picture-in-picture",
   "voice.popout.close": "Close",
+  "voice.popout.maximize": "Maximize",
+  "voice.popout.minimize": "Minimize",
   "voice.share.noAudioShort": "no sound",
   "voice.share.noAudioTooltip": "That's up to the sharer's computer, not a bug on your end.",
   "voice.share.tickAudio": "Pick a Chrome tab and tick “Also share tab audio” to send the sound too.",

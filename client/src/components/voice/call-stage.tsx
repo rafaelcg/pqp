@@ -821,6 +821,12 @@ export interface CallStageProps {
    * composer's dock, and the chat keeps the whole pane.
    */
   picturesInPopout?: boolean;
+  /**
+   * The theater (`share_popout`, issue #1736): the stage was maximized from
+   * the popout. It is drawn expanded whatever this channel's own collapse
+   * says, and collapsing it goes back to the popout instead.
+   */
+  onMinimizeToPopout?: () => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -948,6 +954,7 @@ export function CallStage({
   composerHidden = false,
   stageHidden = false,
   picturesInPopout = false,
+  onMinimizeToPopout,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -1039,11 +1046,20 @@ export function CallStage({
       declinedNames={declinedNames}
       playOutgoingRingtone={playOutgoingRingtone}
       hasVideo={hasVideo}
-      userCollapsed={userCollapsed}
+      userCollapsed={onMinimizeToPopout ? false : userCollapsed}
       onSetCollapsed={(next) => {
+        if (onMinimizeToPopout) {
+          // Collapsing the theater is minimizing it: back to the popout, and
+          // this channel's own remembered collapse is left as it was.
+          if (next) {
+            onMinimizeToPopout();
+          }
+          return;
+        }
         setUserCollapsed(next);
         rememberStageCollapsed(channelId, next);
       }}
+      onMinimizeToPopout={onMinimizeToPopout}
       onLeave={onLeave}
       onToggleMute={onToggleMute}
       onDismissMicFallbackNotice={onDismissMicFallbackNotice}
@@ -1103,6 +1119,7 @@ function ActiveCall({
   hasVideo,
   userCollapsed,
   onSetCollapsed,
+  onMinimizeToPopout,
   onLeave,
   onToggleMute,
   onDismissMicFallbackNotice,
@@ -1157,6 +1174,7 @@ function ActiveCall({
   hasVideo: boolean;
   userCollapsed: boolean;
   onSetCollapsed: (collapsed: boolean) => void;
+  onMinimizeToPopout?: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
   onDismissMicFallbackNotice: () => void;
@@ -3295,6 +3313,19 @@ function ActiveCall({
               startedAt={startedAt}
               className="rounded bg-black/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
             />
+          )}
+          {/* The theater's way back to the popout (`share_popout`). */}
+          {onMinimizeToPopout && (
+            <button
+              type="button"
+              data-testid="stage-minimize-to-popout"
+              aria-label={t("voice.popout.minimize")}
+              title={t("voice.popout.minimize")}
+              className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-paper-muted hover:bg-black/80 hover:text-paper"
+              onClick={onMinimizeToPopout}
+            >
+              <Minimize2 aria-hidden="true" className="h-4 w-4" />
+            </button>
           )}
           {/* The way back from the landscape takeover, and the way into it
               again. Only on a phone held sideways with a share on. */}

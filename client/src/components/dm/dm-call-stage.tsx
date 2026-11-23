@@ -43,6 +43,7 @@ export function DmCallStage({
   composerHidden,
   stageHidden,
   picturesInPopout = false,
+  onMinimizeToPopout,
   onDismissShare,
   onWatchShare,
   onStopScreenShare,
@@ -85,6 +86,8 @@ export function DmCallStage({
   stageHidden?: boolean;
   /** See `CallStage.picturesInPopout`. */
   picturesInPopout?: boolean;
+  /** See `CallStage.onMinimizeToPopout`. */
+  onMinimizeToPopout?: () => void;
   /** Stop watching one share, or press "Assistir" on it. */
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
@@ -174,6 +177,7 @@ export function DmCallStage({
       composerHidden={composerHidden}
       stageHidden={stageHidden}
       picturesInPopout={picturesInPopout}
+      onMinimizeToPopout={onMinimizeToPopout}
       onDismissShare={onDismissShare}
       onWatchShare={onWatchShare}
       onStopScreenShare={onStopScreenShare}

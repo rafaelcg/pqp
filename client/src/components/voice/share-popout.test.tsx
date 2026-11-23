@@ -13,6 +13,9 @@ vi.mock("@/lib/remote-video-binding", () => ({
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { SharePopout } = await import("./share-popout");
+const { dispatchShareView, resetShareViewForTests, shareViewMode } = await import(
+  "@/lib/share-view-store"
+);
 
 const fakeStream = () =>
   ({
@@ -117,6 +120,7 @@ describe("SharePopout", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    resetShareViewForTests();
   });
 
   const twoSharers = state({
@@ -193,5 +197,24 @@ describe("SharePopout", () => {
     const props = render(twoSharers);
     act(() => container.querySelector<HTMLButtonElement>("[data-testid='share-popout-call']")!.click());
     expect(props.onGoToCall).toHaveBeenCalled();
+  });
+
+  it("maximizes from another channel by going back to the call", () => {
+    const props = render(twoSharers);
+    act(() => container.querySelector<HTMLButtonElement>("[data-testid='share-popout-maximize']")!.click());
+    expect(shareViewMode()).toBe("theater");
+    expect(props.onGoToCall).toHaveBeenCalled();
+    // Still elsewhere: the picture keeps floating until the call is on screen.
+    expect(popout()).not.toBeNull();
+  });
+
+  it("gives the call's own channel to the theater and floats nothing over it", () => {
+    render(twoSharers, { viewingCallChannel: true });
+    act(() => dispatchShareView({ type: "maximize" }));
+    render(twoSharers, { viewingCallChannel: true });
+    expect(popout()).toBeNull();
+    act(() => dispatchShareView({ type: "minimize" }));
+    render(twoSharers, { viewingCallChannel: true });
+    expect(popout()).not.toBeNull();
   });
 });

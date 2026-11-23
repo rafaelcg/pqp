@@ -36,6 +36,7 @@ export function VoiceChannelStage({
   composerHidden,
   stageHidden,
   picturesInPopout = false,
+  onMinimizeToPopout,
   roomListOnScreen,
   onStopScreenShare,
   onFocusScreenShare,
@@ -95,6 +96,8 @@ export function VoiceChannelStage({
   stageHidden?: boolean;
   /** See `CallStage.picturesInPopout`. */
   picturesInPopout?: boolean;
+  /** See `CallStage.onMinimizeToPopout`. */
+  onMinimizeToPopout?: () => void;
   /** See `CallStage`'s prop of the same name. */
   roomListOnScreen?: boolean;
   onStopScreenShare?: () => void;
@@ -160,6 +163,7 @@ export function VoiceChannelStage({
       composerHidden={composerHidden}
       stageHidden={stageHidden}
       picturesInPopout={picturesInPopout}
+      onMinimizeToPopout={onMinimizeToPopout}
       roomListOnScreen={roomListOnScreen}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}

@@ -12,7 +12,10 @@ import { E2E_ADMIN_TOKEN } from "../playwright.config";
  *    frames, while the chat keeps the pane (the stage stays folded);
  *  - the popout stays on screen, same <video>, when the viewer walks to
  *    another conversation;
- *  - closing it sends the share back to "Assistir".
+ *  - closing it sends the share back to "Assistir";
+ *  - maximizing from another conversation goes back to the call's and opens
+ *    the theater (the stage, with nothing floating over it); Escape returns
+ *    to the popout.
  *
  * The flag is turned on the way the operator does it and handed back after.
  */
@@ -182,6 +185,30 @@ test("a share waits for Assistir, plays in the popout, and follows the viewer", 
       window.dispatchEvent(new PopStateEvent("popstate"));
     }, callDm);
     await expect(viewer.page.locator("[data-share-invite]")).toBeVisible({ timeout: 20_000 });
+
+    // THE THEATER. Watch again, walk away, and maximize from there: back in
+    // the call's DM, the stage takes the conversation area with the share on
+    // it, and nothing floats over it.
+    await viewer.page.locator("[data-share-invite]").getByRole("button").click();
+    await expect(viewer.page.getByTestId("share-popout")).toBeVisible({ timeout: 20_000 });
+    await viewer.page.evaluate((id) => {
+      window.history.pushState({}, "", `/app/dm/${id}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    }, otherDm);
+    await expect(viewer.page.getByTestId("share-popout-call")).toBeEnabled({ timeout: 20_000 });
+    await viewer.page.getByTestId("share-popout").hover();
+    await viewer.page.getByTestId("share-popout-maximize").click();
+    await expect(viewer.page).toHaveURL(new RegExp(`/app/dm/${callDm}`), { timeout: 20_000 });
+    const stageShare = viewer.page.locator('[data-testid="call-stage"] video.object-contain');
+    await expect(stageShare).toBeVisible({ timeout: 20_000 });
+    await expect(viewer.page.getByTestId("share-popout")).toHaveCount(0);
+    await expect(viewer.page.getByTestId("stage-minimize-to-popout")).toBeVisible();
+
+    // Escape goes back to the popout.
+    await viewer.page.locator("body").click({ position: { x: 5, y: 5 } });
+    await viewer.page.keyboard.press("Escape");
+    await expect(viewer.page.getByTestId("share-popout")).toBeVisible({ timeout: 20_000 });
+    await expect(stageShare).toHaveCount(0);
   } finally {
     await viewer.context.close();
   }
