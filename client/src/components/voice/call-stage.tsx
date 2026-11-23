@@ -4609,6 +4609,22 @@ function cameraLabel(
  * the alternative is a grid where seven faces are cropped and one is not. The
  * two kinds keep separate answers; see `lib/video-fit.ts` for why.
  */
+/**
+ * Where a tile's control row (name, volume, menu) sits from the tile's bottom.
+ *
+ * Two things can be under the picture's bottom edge: the black band of a
+ * letterboxed picture (`insetBottom`, from `useVideoInsets`) and the floating
+ * control bar (`--tile-row-lift`, its height from the stage's bottom). The
+ * row has to clear whichever reaches higher, so it is their MAXIMUM, not
+ * their sum. The sum put the row in the middle of a share whenever both were
+ * there: a tall stage, a 16:9 picture centred with bands, and the bar
+ * floating over the bottom band (the share popout's theater made it obvious).
+ * Never above the tile's top edge, as before.
+ */
+export function tileRowBottom(insetBottom: number): string {
+  return `min(calc(max(${insetBottom}px, var(--tile-row-lift, 0px)) + 8px), calc(100% - 2.25rem))`;
+}
+
 function TileOverlay({
   isFullscreen = false,
   onToggleFullscreen,
@@ -4701,7 +4717,7 @@ function TileOverlay({
         // Lifted over a floating bar, but never past the picture's own top:
         // with pictures stacked on a sideways phone the lift is taller than
         // the top picture, and its row went up under the page header.
-        bottom: `min(calc(${(insets?.bottom ?? 0) + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem))`,
+        bottom: tileRowBottom(insets?.bottom ?? 0),
       }}
     >
       <div className="flex min-w-0 items-center gap-1.5">
@@ -5985,7 +6001,7 @@ export function ScreenTileFrame({
           style={{
             left: insets.left + 8,
             right: insets.right + 8,
-            bottom: `min(calc(${insets.bottom + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem))`,
+            bottom: tileRowBottom(insets.bottom),
           }}
         >
           <div className="flex min-w-0 items-center gap-1.5">
