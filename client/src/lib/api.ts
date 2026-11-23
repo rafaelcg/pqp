@@ -1132,6 +1132,12 @@ export interface ShareConfig {
    * (`lib/share-fast-start.ts`). Absent on an older API: off.
    */
   shareFastStartQuality?: boolean;
+  /**
+   * A call's picture is a popout inside the app window instead of a stage
+   * that splits the pane with the chat (`lib/share-popout-flag.ts`). Absent on
+   * an older API: off.
+   */
+  sharePopout?: boolean;
 }
 
 /**

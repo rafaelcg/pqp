@@ -1,5 +1,6 @@
 import { fetchShareConfig } from "./api";
 import { recordShareFastStartQuality } from "./share-fast-start";
+import { recordSharePopout } from "./share-popout-flag";
 
 /**
  * `share_high_motion_guard` as the client learns it: one boolean on
@@ -20,6 +21,9 @@ import { recordShareFastStartQuality } from "./share-fast-start";
  * viewer needs as well as the presenter: every answer is handed to
  * `share-fast-start.ts` as it arrives, and the call reads it from there.
  * Unanswered is off, like the rest.
+ *
+ * And so does `share_popout` (`sharePopout`), handed to `share-popout-flag.ts`
+ * the same way: it decides where the call's picture is drawn.
  */
 
 const TTL_MS = 10 * 60_000;
@@ -52,6 +56,7 @@ function ask(serverId: string | null): Promise<ShareFlags | null> {
         };
         cache.set(serverId ?? "", { at: Date.now(), value });
         recordShareFastStartQuality(serverId, config.shareFastStartQuality === true);
+        recordSharePopout(serverId, config.sharePopout === true);
         resolve(value);
       })
       .catch(() => {

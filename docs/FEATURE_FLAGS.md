@@ -457,6 +457,20 @@ late only means that one join starts the old way. Turn it on for one server
 from controles → interruptores (the server's override); the next join and the
 next share pick it up.
 
+Born as a flag (no old reader): `SHARE_POPOUT` (`share_popout`, default off,
+**per server**), served to the client by `GET /api/share/config?serverId=` as
+`sharePopout`, a DM call reading the global answer. A call's picture becomes a
+popout inside the app window instead of a stage that splits the pane with the
+chat: the chat keeps the whole pane, one share floats in a corner of the
+conversation area and follows the person across channels, it fills that area
+only when they maximize it (a grid of several shares at once), and a new share
+arrives as "Assistir" with no video received until the click. Web and desktop
+only; iOS and Android are a TODO. The client holds the answer in a store React
+subscribes to (`client/src/lib/share-popout-flag.ts`), fed by the share config
+the call already asks for, so it makes no request of its own. Unknown is off.
+It lands in steps, flag first; until the rest ships, turning it on changes
+nothing. Plan and progress: github.com/rafaelcg/pqp/issues/1736.
+
 Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`
 (`linux_desktop_system_audio`, default off, **global only**), the computer's
 sound on a screen share from the Linux desktop app, served to the client by
