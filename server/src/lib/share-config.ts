@@ -44,6 +44,15 @@ import { isEnabled } from "./flags.js";
  * Off, the client behaves exactly as before. Measured with
  * `client/e2e/share-fast-start/`.
  *
+ * `sharePopout`: a viewer's call picture becomes a popout inside the app
+ * window (`client/src/lib/share-popout-flag.ts`): the chat keeps the whole
+ * pane, one share floats in a corner and follows the person across channels,
+ * and it fills the conversation area only when they maximize it. A new share
+ * arrives as "Assistir" and no video is received until the click. Web and
+ * desktop only. Runtime flag `share_popout`, default off, `SHARE_POPOUT` as its
+ * environment default, per-server override. Off, the client behaves exactly
+ * as before. github.com/rafaelcg/pqp/issues/1736.
+ *
  * `linuxDesktopSystemAudio`: the Linux desktop app may carry the computer's
  * sound (minus the call) on a share. The shell builds the audio bus
  * (`electron/lib/linux-share-audio.js`) and this is the switch that lets the
@@ -74,6 +83,7 @@ export interface ShareConfig {
   shareHighMotionGuard: boolean;
   shareGameCaptureHint: boolean;
   shareFastStartQuality: boolean;
+  sharePopout: boolean;
   linuxDesktopSystemAudio: boolean;
   macDesktopSystemAudio: boolean;
 }
@@ -88,6 +98,7 @@ export function shareConfigForServer(rawServerId: string | null): ShareConfig {
     shareHighMotionGuard: isEnabled("share_high_motion_guard", { serverId }),
     shareGameCaptureHint: isEnabled("share_game_capture_hint", { serverId }),
     shareFastStartQuality: isEnabled("share_fast_start_quality", { serverId }),
+    sharePopout: isEnabled("share_popout", { serverId }),
     linuxDesktopSystemAudio: isEnabled("linux_desktop_system_audio"),
     macDesktopSystemAudio: isEnabled("mac_desktop_system_audio"),
   };

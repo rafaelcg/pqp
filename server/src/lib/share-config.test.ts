@@ -8,6 +8,7 @@ describe("shareConfigForServer", () => {
     delete process.env.SHARE_HIGH_MOTION_GUARD;
     delete process.env.SHARE_GAME_CAPTURE_HINT;
     delete process.env.SHARE_FAST_START_QUALITY;
+    delete process.env.SHARE_POPOUT;
     delete process.env.LINUX_DESKTOP_SYSTEM_AUDIO;
     delete process.env.MAC_DESKTOP_SYSTEM_AUDIO;
     resetFeatureFlagsForTests();
@@ -19,6 +20,7 @@ describe("shareConfigForServer", () => {
       shareHighMotionGuard: false,
       shareGameCaptureHint: false,
       shareFastStartQuality: false,
+      sharePopout: false,
       linuxDesktopSystemAudio: false,
       macDesktopSystemAudio: true,
     });
@@ -33,6 +35,18 @@ describe("shareConfigForServer", () => {
     for (const word of ["TRUE", "1", "on", ""]) {
       process.env.SHARE_FAST_START_QUALITY = word;
       expect(shareConfigForServer(null).shareFastStartQuality).toBe(false);
+    }
+  });
+
+  it("reads the share popout from its own variable, exact word only", () => {
+    process.env.SHARE_POPOUT = "true";
+    expect(shareConfigForServer(null).sharePopout).toBe(true);
+    // Independent of the other share switches.
+    expect(shareConfigForServer(null).shareFastStartQuality).toBe(false);
+    expect(shareConfigForServer(null).shareHighMotionGuard).toBe(false);
+    for (const word of ["TRUE", "1", "on", ""]) {
+      process.env.SHARE_POPOUT = word;
+      expect(shareConfigForServer(null).sharePopout).toBe(false);
     }
   });
 
