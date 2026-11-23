@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { isWatchPartyChannelType } from "@/lib/watch-party-channels";
 import { sharePopoutApplies } from "@/lib/share-view-mode";
@@ -26,7 +26,7 @@ export function useShareOptInSync(
     channels: readonly { id: string; type: string; name?: string }[];
   },
 ): { applies: boolean; channelName: string | null } {
-  const known = useRef<{
+  const [known, setKnown] = useState<{
     channelId: string;
     watchParty: boolean;
     name: string | null;
@@ -35,17 +35,27 @@ export function useShareOptInSync(
   const listed = callChannelId
     ? channels.find((channel) => channel.id === callChannelId)
     : undefined;
-  if (listed && callChannelId) {
-    known.current = {
-      channelId: callChannelId,
-      watchParty: isWatchPartyChannelType(listed.type),
-      name: listed.name ?? null,
-    };
-  }
-  const latched =
-    known.current !== null && known.current.channelId === callChannelId
-      ? known.current
+  const seen =
+    listed && callChannelId
+      ? {
+          channelId: callChannelId,
+          watchParty: isWatchPartyChannelType(listed.type),
+          name: listed.name ?? null,
+        }
       : null;
+  // Latched in state, adjusted during render (React's "storing information
+  // from previous renders"), not in a ref written while rendering.
+  if (
+    seen &&
+    (known?.channelId !== seen.channelId ||
+      known.watchParty !== seen.watchParty ||
+      known.name !== seen.name)
+  ) {
+    setKnown(seen);
+  }
+  const current = seen ?? known;
+  const latched =
+    current !== null && current.channelId === callChannelId ? current : null;
   const watchParty = latched?.watchParty ?? false;
   const flagOn = useSharePopout(input.callServerId);
   const wide = useLgUp();

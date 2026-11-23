@@ -183,21 +183,46 @@ export function SharePopout({
     }
   }, [watchedKey, dispatch]);
 
-  // The share on the popout is the one heard.
-  useEffect(() => {
-    if (
-      target?.kind === "screen" &&
-      voiceState.focusedScreenPeerId !== target.id
-    ) {
-      onFocusShare(target.id);
-    }
-  }, [target?.kind, target?.id, voiceState.focusedScreenPeerId, onFocusShare]);
-
   const placement = sharePopoutPlacement({
     mode,
     viewingCallChannel,
     hasTarget: target !== null,
   });
+
+  // The share on the popout is the one heard, while the popout is what is on
+  // screen. Not in the theater: the stage owns focus there (a tile put in
+  // fullscreen focuses its share), and pulling it back here would leave the
+  // person looking at one share and hearing another.
+  const focusSetHere = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      placement === "floating" &&
+      target?.kind === "screen" &&
+      voiceState.focusedScreenPeerId !== target.id
+    ) {
+      focusSetHere.current = target.id;
+      onFocusShare(target.id);
+    }
+  }, [
+    placement,
+    target?.kind,
+    target?.id,
+    voiceState.focusedScreenPeerId,
+    onFocusShare,
+  ]);
+
+  // A focus chosen anywhere else (a tile in the theater, "Assistir") is the
+  // person's pick too, so minimizing finds the share they were watching.
+  const focused = voiceState.focusedScreenPeerId;
+  useEffect(() => {
+    if (focused === null || focused === focusSetHere.current) {
+      return;
+    }
+    const watched = watchedKey ? watchedKey.split(",") : [];
+    if (watched.includes(focused)) {
+      setPickedId(focused);
+    }
+  }, [focused, watchedKey]);
 
   // The theater is the call stage, drawn by the shell; nothing floats over it.
   if (!inCall || placement !== "floating" || target === null) {
@@ -221,10 +246,20 @@ export function SharePopout({
         }
       }}
       onClose={() => {
+        setPickedId(null);
         if (target.kind === "screen") {
           onDismissShare(target.id);
+          // Another share still being watched takes its place. Hiding the
+          // popout here would leave that one playing its sound with nothing
+          // on screen and no switcher to reach it.
+          const next = choices.find(
+            (choice) => choice.kind === "screen" && choice.id !== target.id,
+          );
+          if (next) {
+            setPickedId(next.id);
+            return;
+          }
         }
-        setPickedId(null);
         dispatch({ type: "close" });
       }}
       t={t}
@@ -446,8 +481,10 @@ function FloatingPopout({
     }
   };
 
+  // The value, not the property: a policy that disables picture-in-picture
+  // leaves `pictureInPictureEnabled` defined and false.
   const pipSupported =
-    typeof document !== "undefined" && "pictureInPictureEnabled" in document;
+    typeof document !== "undefined" && document.pictureInPictureEnabled === true;
   const togglePip = () => {
     const video = videoRef.current;
     if (!video) {

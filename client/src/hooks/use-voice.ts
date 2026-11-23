@@ -1502,6 +1502,13 @@ export function createVoiceController(transport: RealtimeTransport) {
   /** Shares opt-in dismissed, as opposed to ones the person declined. */
   const optInDismissed = new Set<string>();
   /**
+   * Shares the person stopped watching while opt-in was on. Shown as
+   * "Assistir" like the held ones, because the popout draws no stage tile to
+   * undo a decline from, but they are the person's own choice: turning opt-in
+   * off leaves them declined instead of giving them back.
+   */
+  const closedUnderOptIn = new Set<string>();
+  /**
    * Whether this call has had a KNOWN answer for opt-in yet. The answer rides
    * on a share config request that can land after the call's welcome; until
    * it does the app says "off, not settled", and shares already up are let
@@ -4728,11 +4735,16 @@ export function createVoiceController(transport: RealtimeTransport) {
     emit();
   }
 
-  /** Mirror `optInDismissed` into the state the UI reads, in roster order. */
+  /**
+   * Mirror the shares waiting for "Assistir" (held by opt-in, or closed by
+   * the person while it was on) into the state the UI reads, in roster order.
+   */
   function syncShareInvites() {
-    state.shareInvitePeerIds = state.screenSharePeerIds.filter((id) =>
-      optInDismissed.has(id),
-    );
+    state.shareInvitePeerIds = shareOptIn
+      ? state.screenSharePeerIds.filter(
+          (id) => optInDismissed.has(id) || closedUnderOptIn.has(id),
+        )
+      : state.screenSharePeerIds.filter((id) => optInDismissed.has(id));
   }
 
   /**
@@ -4758,9 +4770,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.dismissedSharePeerIds = state.dismissedSharePeerIds.filter((id) =>
       nextIds.includes(id),
     );
-    for (const id of [...optInDismissed]) {
-      if (!nextIds.includes(id)) {
-        optInDismissed.delete(id);
+    for (const set of [optInDismissed, closedUnderOptIn]) {
+      for (const id of [...set]) {
+        if (!nextIds.includes(id)) {
+          set.delete(id);
+        }
       }
     }
     // Opt-in watching (`share_popout`): a share arrives as "Assistir", with no
@@ -5581,6 +5595,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     unregisterSoundboard?.();
     unregisterSoundboard = null;
     optInDismissed.clear();
+    closedUnderOptIn.clear();
     watchedByChoice.clear();
     optInSettled = false;
     state = {
@@ -6837,6 +6852,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // newcomers. Empty previous is the locked "join into live shares" rule.
       state.screenSharePeerIds = [];
       optInDismissed.clear();
+      closedUnderOptIn.clear();
       watchedByChoice.clear();
       optInSettled = false;
       state.shareInvitePeerIds = [];
@@ -8101,7 +8117,14 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         return;
       }
+      // What the person closed stays declined; only what opt-in held returns.
+      const hadClosed = closedUnderOptIn.size > 0;
+      closedUnderOptIn.clear();
       if (optInDismissed.size === 0) {
+        if (hadClosed) {
+          syncShareInvites();
+          emit();
+        }
         return;
       }
       state.dismissedSharePeerIds = state.dismissedSharePeerIds.filter(
@@ -8122,14 +8145,16 @@ export function createVoiceController(transport: RealtimeTransport) {
      * Stop watching one share: no picture, no sound, tile kept as a way back.
      *
      * With opt-in on (`share_popout`) the way back is the "Assistir" chip, not
-     * a tile, because the popout draws no stage. So the share goes back to
-     * waiting for "Assistir" rather than to declined, which the popout's UI
-     * would have no way to undo.
+     * a tile, because the popout draws no stage: the share shows as waiting
+     * for "Assistir" (`closedUnderOptIn`). It is still the person's decline,
+     * so turning opt-in off leaves it declined rather than playing again.
      */
     dismissShare(peerId: string) {
       watchedByChoice.delete(peerId);
       if (shareOptIn && state.screenSharePeerIds.includes(peerId)) {
-        optInDismissed.add(peerId);
+        // Declining a share opt-in was holding makes it the person's choice.
+        optInDismissed.delete(peerId);
+        closedUnderOptIn.add(peerId);
       }
       if (state.dismissedSharePeerIds.includes(peerId)) {
         syncShareInvites();
@@ -8175,6 +8200,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     watchShare(peerId: string) {
       watchedByChoice.add(peerId);
       optInDismissed.delete(peerId);
+      closedUnderOptIn.delete(peerId);
       if (!state.dismissedSharePeerIds.includes(peerId)) {
         return;
       }

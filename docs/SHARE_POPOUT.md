@@ -11,7 +11,7 @@ With the flag on for the call's server (a DM call reads the global answer), a wi
 - **The popout.** "Assistir" puts that share in a popout over the conversation area, above the composer. It shows one picture, and that share is the one you hear. Drag it and it snaps to the nearest corner; resize it from its inner corner; move it between corners with the arrow keys. Corner and size are kept per device. With more than one picture, a switcher in its header picks which.
 - **It follows you.** Walk to another channel, server or DM and the popout stays, same video, still playing. Its header names the call and takes you back to it.
 - **The theater.** Maximize (the button, or a double click on the picture) and the call's stage takes the conversation area, with the chat put away. Every share you watch and every camera are in its grid, which is where several shares are watched at once; shares still waiting show there with their own "Assistir". From another channel, maximize takes you back to the call first. "Show the chat" brings the chat back beside the picture for this theater only. Minimize, collapsing the stage, or Escape returns to the popout.
-- **Close** stops watching that share and sends it back to "Assistir".
+- **Close** stops watching that share and sends it back to "Assistir". If another share is still being watched it takes the popout; the popout hides only when none is left. A share closed this way stays declined if the popout stops applying (the flag goes off or the window narrows): it does not come back playing.
 
 With the flag off, or a narrow window, or a watch party, nothing here applies and the call behaves exactly as before.
 
@@ -44,7 +44,8 @@ Your own share and camera are never candidates (`OwnShareStrip` says you are sha
 Two rules the code depends on:
 
 - **The popout never moves in the tree.** `lib/remote-video-delivery.ts` pauses an SFU publication when the last `<video>` bound to it goes away. Mounted once at the app root, the popout's video survives every navigation.
-- **Opt-in remembers what it held.** Shares opt-in held are tracked apart from shares the person declined before opt-in applied. Turning opt-in off (flag off, window narrowed) gives back only what it held.
+- **Opt-in remembers what it held.** Shares opt-in held are tracked apart from shares the person declined, whether before opt-in applied or by closing them while it did. Turning opt-in off (flag off, window narrowed) gives back only what it held.
+- **Focus belongs to what is on screen.** While the popout floats, its share is the one heard. In the theater the stage owns focus (a tile put in fullscreen focuses its share) and the popout leaves it alone; a focus chosen there becomes the popout's pick, so minimizing shows that share.
 
 ## Bandwidth
 

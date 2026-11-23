@@ -6,7 +6,7 @@ import { useCallback, useSyncExternalStore } from "react";
  * off, served by `GET /api/share/config?serverId=` as `sharePopout`.
  * github.com/rafaelcg/pqp/issues/1736.
  *
- * What it will change, once the rest of the feature lands behind it: the chat
+ * What it changes: the chat
  * keeps the whole pane, one share floats in a corner of the conversation area
  * and follows the person across channels, it fills that area only when they
  * maximize it, and a new share arrives as "Assistir" with no video received

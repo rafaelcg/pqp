@@ -1553,6 +1553,33 @@ describe("screen share audio", () => {
       expect(state.audibleScreenPeerIds).toEqual([]);
     });
 
+    it("keeps a share closed under opt-in declined when opt-in turns off", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2", "p3"]));
+      voice.watchShare("p2");
+      voice.watchShare("p3");
+      // Closed in the popout: back to Assistir while opt-in is on...
+      voice.dismissShare("p2");
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+      // ...and still declined, not playing, once the window narrows.
+      voice.setShareOptIn(false);
+      const state = voice.getState();
+      expect(state.dismissedSharePeerIds).toEqual(["p2"]);
+      expect(state.shareInvitePeerIds).toEqual([]);
+      expect(state.audibleScreenPeerIds).toEqual(["p3"]);
+    });
+
+    it("keeps a held share declined once the person closes it", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.dismissShare("p2");
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+      voice.setShareOptIn(false);
+      expect(voice.getState().dismissedSharePeerIds).toEqual(["p2"]);
+    });
+
     it("forgets a held share when it stops, so the next one asks again", async () => {
       const { voice } = await connectedMesh();
       voice.setShareOptIn(true);

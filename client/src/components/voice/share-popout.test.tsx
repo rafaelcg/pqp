@@ -175,14 +175,21 @@ describe("SharePopout", () => {
     expect(props.onFocusShare).toHaveBeenCalledWith("p2");
   });
 
-  it("close stops watching that share and stays closed", () => {
+  it("close moves to the other share still watched instead of hiding", () => {
     const props = render(twoSharers);
     act(() => container.querySelector<HTMLButtonElement>("[data-testid='share-popout-close']")!.click());
     expect(props.onDismissShare).toHaveBeenCalledWith("p3");
-    expect(popout()).toBeNull();
-    // The share the person closed is now dismissed; the other one does not
-    // bring the popout back by itself.
+    // The voice state now has p3 dismissed: p2 takes the popout.
     render(state({ ...twoSharers, dismissedSharePeerIds: ["p3"] }));
+    expect(popout()?.getAttribute("data-share-popout")).toBe("p2");
+  });
+
+  it("close on the last watched share hides the popout and it stays closed", () => {
+    const one = state({ ...twoSharers, dismissedSharePeerIds: ["p2"] });
+    const props = render(one);
+    act(() => container.querySelector<HTMLButtonElement>("[data-testid='share-popout-close']")!.click());
+    expect(props.onDismissShare).toHaveBeenCalledWith("p3");
+    render(state({ ...twoSharers, dismissedSharePeerIds: ["p2", "p3"] }));
     expect(popout()).toBeNull();
   });
 
@@ -216,5 +223,27 @@ describe("SharePopout", () => {
     act(() => dispatchShareView({ type: "minimize" }));
     render(twoSharers, { viewingCallChannel: true });
     expect(popout()).not.toBeNull();
+  });
+
+  it("leaves the audio alone in the theater and follows the share chosen there", () => {
+    const onFocusShare = vi.fn();
+    render(twoSharers, { viewingCallChannel: true, onFocusShare });
+    expect(popout()?.getAttribute("data-share-popout")).toBe("p3");
+    act(() => dispatchShareView({ type: "maximize" }));
+    onFocusShare.mockClear();
+    // A tile put in fullscreen in the theater focuses p2.
+    render(state({ ...twoSharers, focusedScreenPeerId: "p2" }), {
+      viewingCallChannel: true,
+      onFocusShare,
+    });
+    expect(onFocusShare).not.toHaveBeenCalled();
+    // Minimized, the popout shows the share they were watching.
+    act(() => dispatchShareView({ type: "minimize" }));
+    render(state({ ...twoSharers, focusedScreenPeerId: "p2" }), {
+      viewingCallChannel: true,
+      onFocusShare,
+    });
+    expect(popout()?.getAttribute("data-share-popout")).toBe("p2");
+    expect(onFocusShare).not.toHaveBeenCalledWith("p3");
   });
 });
