@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 /**
  * "{name} tá compartilhando a tela · Assistir", for shares that opt-in
  * watching held back (`VoiceState.shareInvitePeerIds`, `share_popout`, issue
- * #1736).
+ * 1736).
  *
  * Lives in the call's bar, beside the faces, because that bar is what is on
  * screen in every channel while the chat keeps the pane: the stage, where a

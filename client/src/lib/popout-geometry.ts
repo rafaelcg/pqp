@@ -1,5 +1,5 @@
 /**
- * Where the share popout sits and how big it is (issue #1736).
+ * Where the share popout sits and how big it is (issue 1736).
  *
  * The popout lives inside the CONVERSATION AREA, never over the channel list
  * and never over the composer: the area handed in here is already that box,

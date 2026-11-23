@@ -468,8 +468,11 @@ arrives as "Assistir" with no video received until the click. Web and desktop
 only; iOS and Android are a TODO. The client holds the answer in a store React
 subscribes to (`client/src/lib/share-popout-flag.ts`), fed by the share config
 the call already asks for, so it makes no request of its own. Unknown is off.
-It lands in steps, flag first; until the rest ships, turning it on changes
-nothing. Plan and progress: github.com/rafaelcg/pqp/issues/1736.
+Behaviour, rollout and what it deliberately does not do:
+`docs/SHARE_POPOUT.md`. Turn it on for one server from controles →
+interruptores; a call picks it up when its share config arrives (at join),
+and turning it off mid-call gives back every share it held. Issue:
+github.com/rafaelcg/pqp/issues/1736.
 
 Born as a flag (no old reader): `LINUX_DESKTOP_SYSTEM_AUDIO`
 (`linux_desktop_system_audio`, default off, **global only**), the computer's

@@ -816,13 +816,13 @@ export interface CallStageProps {
   /** The video pane is put away: the controls stay in the composer. */
   stageHidden?: boolean;
   /**
-   * The share popout owns the call's pictures (`share_popout`, issue #1736):
+   * The share popout owns the call's pictures (`share_popout`, issue 1736):
    * the stage behaves as if nobody published, stays folded into the
    * composer's dock, and the chat keeps the whole pane.
    */
   picturesInPopout?: boolean;
   /**
-   * The theater (`share_popout`, issue #1736): the stage was maximized from
+   * The theater (`share_popout`, issue 1736): the stage was maximized from
    * the popout. It is drawn expanded whatever this channel's own collapse
    * says, and collapsing it goes back to the popout instead.
    */

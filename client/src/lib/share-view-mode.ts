@@ -1,5 +1,5 @@
 /**
- * Where a call's picture is drawn when `share_popout` is on (issue #1736).
+ * Where a call's picture is drawn when `share_popout` is on (issue 1736).
  *
  * Three states, and the person moves between them:
  *

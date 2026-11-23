@@ -43,7 +43,7 @@ import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
- * THE SHARE POPOUT (issue #1736): one picture from the call, floating over the
+ * THE SHARE POPOUT (issue 1736): one picture from the call, floating over the
  * conversation area, in every channel.
  *
  * Mounted ONCE at the root of the app, never inside `CallStage`. The stage only

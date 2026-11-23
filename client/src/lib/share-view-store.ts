@@ -8,7 +8,7 @@ import {
 
 /**
  * The share popout's mode, shared by the two places that act on it (issue
- * #1736): the popout itself (mounted at the app root) and the app shell, which
+ * 1736): the popout itself (mounted at the app root) and the app shell, which
  * expands the call stage and puts the chat away while the mode is `theater`.
  *
  * One store rather than state in either component because both must agree on

@@ -723,7 +723,7 @@ export interface VoiceState {
   dismissedSharePeerIds: string[];
   /**
    * Shares waiting for "Assistir": a subset of `dismissedSharePeerIds` that
-   * opt-in watching held back (`share_popout`, issue #1736), as opposed to
+   * opt-in watching held back (`share_popout`, issue 1736), as opposed to
    * shares this person declined. Same peer ids, in roster order. Empty with
    * opt-in off. The UI asks "{name} está transmitindo · Assistir" of these and
    * "Tu parou de assistir" of the rest.
@@ -1493,7 +1493,7 @@ const SCREEN_PUBLISH_MISS_CONFIRM = 2;
 
 export function createVoiceController(transport: RealtimeTransport) {
   /**
-   * Opt-in watching for `share_popout` (issue #1736): set by the app from the
+   * Opt-in watching for `share_popout` (issue 1736): set by the app from the
    * call's flag and the window width (`sharePopoutApplies`). On, a share
    * arrives dismissed and waits for "Assistir". Off is the old behaviour,
    * every share watched on arrival.

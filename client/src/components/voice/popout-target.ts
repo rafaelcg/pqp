@@ -1,7 +1,7 @@
 import { cameraSoloId } from "@/components/dm/call-stage-state";
 
 /**
- * Which ONE picture the share popout shows (issue #1736).
+ * Which ONE picture the share popout shows (issue 1736).
  *
  * The popout holds a single picture on purpose: several floating windows over
  * a chat is clutter, and the theater (maximize) is where several shares are

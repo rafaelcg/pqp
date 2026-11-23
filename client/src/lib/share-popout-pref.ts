@@ -7,7 +7,7 @@ import {
 } from "./popout-geometry";
 
 /**
- * Where the person left the share popout, and how big (issue #1736).
+ * Where the person left the share popout, and how big (issue 1736).
  *
  * Device-local, like the call split: it describes this screen, not the person,
  * and a laptop and a big monitor want different answers. Stored as a corner

@@ -6,7 +6,7 @@ import { useSharePopout } from "@/lib/share-popout-flag";
 
 /**
  * Turns opt-in watching on for the call when the share popout applies to it
- * (issue #1736): the `share_popout` answer for the call's server, a window at
+ * (issue 1736): the `share_popout` answer for the call's server, a window at
  * least `lg` wide, and a room that is not a watch party.
  *
  * Also returns the call's channel name, latched the same way, for the popout's

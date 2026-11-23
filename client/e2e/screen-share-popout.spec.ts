@@ -2,7 +2,7 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
 import { E2E_ADMIN_TOKEN } from "../playwright.config";
 
 /**
- * THE SHARE POPOUT (issue #1736), with two real clients in a DM call.
+ * THE SHARE POPOUT (issue 1736), with two real clients in a DM call.
  *
  * With `share_popout` on (the global answer, which is what a DM call reads):
  *

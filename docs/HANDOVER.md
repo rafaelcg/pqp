@@ -64,6 +64,7 @@ Waiting on Rafael: promote Android 0.4.24; close reports #36, #37, #38 (notes: #
 - **Public page:** banner/icon fallback images and `/@handle` avatars are still GET-only redirects (HEAD answers 401); neither phone app ships Spanish for Compartilhar; the chat card has no share button.
 - **Phones:** no unread on the server list, no live server-order follow, collapsed category shows only a white dot for a mention, Android Conversas pin/mute/swipe, "Mandar um oi" after accepting a friend request.
 - **Forum minors:** tag filter "+7", closed-post strip clipping, embed-only card snippet.
+- **Share popout (`share_popout`, off, issue 1736):** web and desktop only. TODO: iOS (`ios/pqp/Sources/Voice/CallStageView.swift`) and Android (`RemoteVideoView.kt`) still draw every share on the stage and receive it on arrival. While the popout owns the pictures, your own camera is not shown anywhere until you maximize. See `docs/SHARE_POPOUT.md`.
 - **Grafana:** when its Prometheus datasource is unreachable the rules (`execErrState: Alerting`) email FIRING then RESOLVED. 2026-10-14 20:13 to 20:36 UTC was exactly that; prod was healthy. Proposed fix: set those rules to keep last state and add one "Grafana cannot query" rule. Not done.
 
 ## How we work (lessons from this push)

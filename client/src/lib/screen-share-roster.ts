@@ -198,7 +198,7 @@ export function videoLimitOf(
 
 /**
  * The shares that arrive unwatched when `share_popout` asks for opt-in
- * watching (issue #1736): every id in `nextIds` that was not in `previousIds`,
+ * watching (issue 1736): every id in `nextIds` that was not in `previousIds`,
  * except our own.
  *
  * Same diff `nextScreenShareFocus` uses, and for the same reason: the wire has
