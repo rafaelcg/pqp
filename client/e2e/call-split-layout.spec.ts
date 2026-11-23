@@ -384,6 +384,77 @@ test("a stored split is what the next call opens with", async ({ page }) => {
   await leaveVoiceIfConnected(page);
 });
 
+/**
+ * Issues 1589 and 1590: "Esconder o vídeo" is stored, so one click in an old
+ * call used to hide every share after it, a friend's and our own preview
+ * alike, with nothing on screen saying the stage was put away. A share that
+ * starts brings the stage back; hiding it during a share holds for that share.
+ */
+test("a share that starts brings a stored hidden stage back", async ({
+  page,
+  browser,
+}) => {
+  await ensureVoiceChannel();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openApp(page);
+  await page.evaluate(() =>
+    localStorage.setItem(
+      "pqp:call-split",
+      JSON.stringify({ orientation: "stacked", side: 0.62, collapsed: "stage" }),
+    ),
+  );
+  await page.reload();
+  await page.getByRole("button", { name: /lobby/ }).first().dblclick();
+  await waitUntilVoiceConnected(page);
+
+  const context = await browser.newContext({
+    permissions: ["microphone", "camera"],
+    viewport: { width: 1280, height: 800 },
+  });
+  const presenter = await context.newPage();
+  try {
+    await presenter.goto("/app");
+    await presenter.getByRole("button", { name: /lobby/ }).first().dblclick();
+    await waitUntilVoiceConnected(presenter);
+    await presenter.getByRole("button", { name: "Share your screen" }).click();
+
+    // A friend's share: the stage the last call hid is back, and so is the
+    // stored answer, so the next call does not open hidden either.
+    await expect(page.getByText(/is presenting/)).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId("call-stage")).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect
+      .poll(async () => (await storedSplit(page))?.collapsed)
+      .toBe("none");
+
+    // Hidden again during that share, it stays hidden: a choice about it.
+    const divider = page.getByTestId("call-split-divider");
+    const grip = (await divider.boundingBox())!;
+    await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await page.getByTestId("call-split-collapse-stage").click();
+    await expect(page.getByTestId("call-stage")).toBeHidden();
+    await page.waitForTimeout(1_500);
+    await expect(page.getByTestId("call-stage")).toBeHidden();
+
+    // Our own share is a new one: the preview of what is going out shows.
+    await page
+      .getByRole("main")
+      .getByRole("button", { name: "Share your screen" })
+      .click();
+    await expect(page.getByTestId("call-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    expect((await storedSplit(page))!.collapsed).toBe("none");
+  } finally {
+    await leaveVoiceIfConnected(presenter).catch(() => {});
+    await context.close();
+  }
+  await leaveVoiceIfConnected(page);
+});
+
 test("side by side puts the chat beside the call without remounting it", async ({
   page,
 }) => {

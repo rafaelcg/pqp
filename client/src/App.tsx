@@ -356,6 +356,7 @@ import {
   loadCallSplit,
   saveCallSplit,
   effectiveOrientation,
+  shareStartedUnderHiddenStage,
   strongestStageShape,
   type CallSplitKind,
   type CallSplitPreference,
@@ -2692,6 +2693,38 @@ function MainAppContent({
     // Only the rising edge matters; the split is read at that instant.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presentingAParty]);
+  // A stored "Esconder o vídeo" gives way to a share that just started, ours
+  // included (issues 1589, 1590; the rule is `shareStartedUnderHiddenStage`).
+  // Our own id is added from `isSharingScreen` because the roster that would
+  // echo it back can land after the preview is already up.
+  const callShareIds = useMemo(() => {
+    const ids = [...voiceState.screenSharePeerIds];
+    if (
+      voiceState.isSharingScreen &&
+      voiceState.peerId &&
+      !ids.includes(voiceState.peerId)
+    ) {
+      ids.push(voiceState.peerId);
+    }
+    return ids;
+  }, [voiceState.screenSharePeerIds, voiceState.isSharingScreen, voiceState.peerId]);
+  const previousCallShareIds = useRef<string[]>([]);
+  useEffect(() => {
+    const previous = previousCallShareIds.current;
+    previousCallShareIds.current = callShareIds;
+    if (
+      shareStartedUnderHiddenStage({
+        collapsed: callSplit.collapsed,
+        previousShareIds: previous,
+        nextShareIds: callShareIds,
+      })
+    ) {
+      handleCallSplitChange({ ...callSplit, collapsed: "none" }, true);
+    }
+    // Only a change in who is sharing matters; the split is read at that
+    // instant, like the presenter's rule above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callShareIds]);
   /**
    * "ATIVAR O MIC?" ONCE, AT GO-LIVE. The host always joins muted (see
    * `handleWatchPartyGoLive`), which used to leave a permanent red strip
