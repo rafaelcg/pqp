@@ -11,18 +11,18 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@livekit/rtc-ffi-bindings": "0.13.2",
-    "@livekit/rtc-node": "1.2.2",
+    "@livekit/rtc-ffi-bindings": "0.15.0",
+    "@livekit/rtc-node": "1.2.3",
     "pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "undici": "^8.12.4",
+    "undici": "^8.13.0",
     "ws": "^8.23.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
     "@types/pg": "^8.23.1",
     "@types/ws": "^8.18.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   }
 }
