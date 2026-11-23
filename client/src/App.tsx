@@ -2701,8 +2701,9 @@ function MainAppContent({
   // by a resume, a transport change or a rejoin is not a new share. Our own
   // id is added from `isSharingScreen` because the roster that would echo it
   // back can land after the preview is already up. A share this person has
-  // not chosen to watch (`dismissedSharePeerIds`) does not count until they do.
-  const callSharerKeys = useMemo(() => {
+  // not chosen to watch (`dismissedSharePeerIds`) never counts as started, but
+  // it is still part of who is sharing, so a re-mint does not make it new.
+  const [callSharerKeys, callWatchedKeys] = useMemo(() => {
     const ids = [...voiceState.screenSharePeerIds];
     if (
       voiceState.isSharingScreen &&
@@ -2716,10 +2717,12 @@ function MainAppContent({
         ? (voiceState.self?.userId ?? peerId)
         : (voiceState.remotePeers.find((peer) => peer.peerId === peerId)
             ?.userId ?? peerId);
-    const keys = ids
-      .filter((id) => !voiceState.dismissedSharePeerIds.includes(id))
-      .map(keyOf);
-    return [...new Set(keys)].sort().join("\n");
+    const keysOf = (list: string[]) =>
+      [...new Set(list.map(keyOf))].sort().join("\n");
+    return [
+      keysOf(ids),
+      keysOf(ids.filter((id) => !voiceState.dismissedSharePeerIds.includes(id))),
+    ];
   }, [
     voiceState.screenSharePeerIds,
     voiceState.isSharingScreen,
@@ -2744,6 +2747,7 @@ function MainAppContent({
       channelId: voiceState.voiceChannelId,
       connected: callConnected,
       keys: callSharerKeys ? callSharerKeys.split("\n") : [],
+      watched: callWatchedKeys ? callWatchedKeys.split("\n") : [],
     });
     callSharers.current = next;
     if (!started) {
@@ -2759,7 +2763,7 @@ function MainAppContent({
       saveCallSplit(restored);
       return restored;
     });
-  }, [callSharerKeys, callConnected, voiceState.voiceChannelId]);
+  }, [callSharerKeys, callWatchedKeys, callConnected, voiceState.voiceChannelId]);
   /**
    * "ATIVAR O MIC?" ONCE, AT GO-LIVE. The host always joins muted (see
    * `handleWatchPartyGoLive`), which used to leave a permanent red strip

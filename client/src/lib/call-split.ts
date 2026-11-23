@@ -464,15 +464,27 @@ export function resolveCollapsed(
 export interface CallSharers {
   /** The call these sharers belong to; `null` outside a call. */
   channelId: string | null;
-  /** Who is sharing, by person key. */
+  /** Everybody sharing, watched or not, by person key. */
   keys: readonly string[];
 }
 
 export const NO_CALL_SHARERS: CallSharers = { channelId: null, keys: [] };
 
+/**
+ * `keys` is everybody sharing and `watched` the ones this person has not
+ * dismissed (or left waiting for "Assistir"). Only a watched share can count
+ * as started, but the baseline is everybody: a share that was up while
+ * dismissed is already known, so neither a re-minted peer id nor watching it
+ * later makes it new.
+ */
 export function trackCallSharers(
   previous: CallSharers,
-  current: { channelId: string | null; connected: boolean; keys: readonly string[] },
+  current: {
+    channelId: string | null;
+    connected: boolean;
+    keys: readonly string[];
+    watched: readonly string[];
+  },
 ): { next: CallSharers; started: boolean } {
   const baseline =
     current.channelId === previous.channelId ? previous.keys : [];
@@ -485,7 +497,7 @@ export function trackCallSharers(
   const seen = new Set(baseline);
   return {
     next: { channelId: current.channelId, keys: current.keys },
-    started: current.keys.some((key) => !seen.has(key)),
+    started: current.watched.some((key) => !seen.has(key)),
   };
 }
 

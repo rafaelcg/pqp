@@ -624,10 +624,11 @@ describe("fitToPictureDelta", () => {
 });
 
 describe("trackCallSharers", () => {
-  const live = (keys: string[], channelId = "lobby") => ({
+  const live = (keys: string[], channelId = "lobby", watched = keys) => ({
     channelId,
     connected: true,
     keys,
+    watched,
   });
   const step = (previous: CallSharers, current: Parameters<typeof trackCallSharers>[1]) =>
     trackCallSharers(previous, current);
@@ -665,7 +666,7 @@ describe("trackCallSharers", () => {
     // join() clears the share ids before the welcome; the status is not
     // connected in between, so the empty list is never taken as an answer.
     const before = step(NO_CALL_SHARERS, live(["bia"])).next;
-    const rejoining = step(before, { channelId: "lobby", connected: false, keys: [] });
+    const rejoining = step(before, { channelId: "lobby", connected: false, keys: [], watched: [] });
     expect(rejoining.started).toBe(false);
     expect(step(rejoining.next, live(["bia"])).started).toBe(false);
   });
@@ -673,8 +674,24 @@ describe("trackCallSharers", () => {
   it("starts from nobody in a different call", () => {
     const before = step(NO_CALL_SHARERS, live(["bia"], "lobby")).next;
     expect(step(before, live(["bia"], "games")).started).toBe(true);
-    const left = step(before, { channelId: null, connected: false, keys: [] }).next;
+    const left = step(before, { channelId: null, connected: false, keys: [], watched: [] }).next;
     expect(step(left, live(["bia"], "lobby")).started).toBe(true);
+  });
+
+  it("does not count a dismissed share whose peer id is re-minted", () => {
+    // Dismissal is by peer id, so a resume or a transport change drops it and
+    // the same share comes back watched. It was already up: not a start.
+    const before = step(NO_CALL_SHARERS, live(["ana", "bia"], "lobby", ["ana"])).next;
+    expect(step(before, live(["ana", "bia"])).started).toBe(false);
+  });
+
+  it("does not count a share that arrives dismissed, nor watching it later", () => {
+    // A share waiting for "Assistir" is not shown, so it must not reopen the
+    // stage; pressing "Assistir" is watching a share that was already up.
+    const before = step(NO_CALL_SHARERS, live(["ana"])).next;
+    const waiting = step(before, live(["ana", "bia"], "lobby", ["ana"]));
+    expect(waiting.started).toBe(false);
+    expect(step(waiting.next, live(["ana", "bia"])).started).toBe(false);
   });
 
   it("is quiet when seeded with the sharers already up (a remount mid-call)", () => {
