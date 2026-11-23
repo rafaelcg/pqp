@@ -74,6 +74,45 @@ async function ensureVoiceChannel(): Promise<void> {
   }
 }
 
+/**
+ * Put a second dev account (`pqp:dev-user-suffix`) in the first server, past
+ * the age gate and onboarding the way `audience-mode.spec.ts` does.
+ */
+async function joinServerAs(suffix: string): Promise<void> {
+  const guest = { ...headers, Authorization: `Bearer ${DEV_TOKEN}:${suffix}` };
+  const me = await fetch(`${API}/api/me`, { headers: guest });
+  const { ageGate } = (await me.json()) as { ageGate?: string };
+  if (ageGate && ageGate !== "passed") {
+    await fetch(`${API}/api/me/age-check`, {
+      method: "POST",
+      headers: guest,
+      body: JSON.stringify({ dateOfBirth: "1990-01-01" }),
+    });
+  }
+  await fetch(`${API}/api/me/preferences`, {
+    method: "PATCH",
+    headers: guest,
+    body: JSON.stringify({ onboardedAt: new Date().toISOString() }),
+  });
+  const res = await fetch(`${API}/api/servers`, { headers });
+  const { servers } = (await res.json()) as { servers: { id: string }[] };
+  const invite = await fetch(`${API}/api/servers/${servers[0]!.id}/invites`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({}),
+  });
+  const { invite: created } = (await invite.json()) as {
+    invite: { code: string };
+  };
+  const joined = await fetch(`${API}/api/invites/${created.code}/join`, {
+    method: "POST",
+    headers: guest,
+  });
+  if (!joined.ok && joined.status !== 409) {
+    throw new Error(`${suffix} could not join: ${joined.status}`);
+  }
+}
+
 async function joinLobbyWithCamera(page: Page): Promise<void> {
   await page.getByRole("button", { name: /lobby/ }).first().dblclick();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
@@ -411,6 +450,12 @@ test("a share that starts brings a stored hidden stage back", async ({
     permissions: ["microphone", "camera"],
     viewport: { width: 1280, height: 800 },
   });
+  // A real second person: sharers are told apart by account, so a friend who
+  // is the same Dev User as this window would not be a friend at all.
+  await joinServerAs("bob");
+  await context.addInitScript(() =>
+    localStorage.setItem("pqp:dev-user-suffix", "bob"),
+  );
   const presenter = await context.newPage();
   try {
     await presenter.goto("/app");
