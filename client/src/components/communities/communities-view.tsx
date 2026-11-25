@@ -474,6 +474,10 @@ function JamDoor({
     return null;
   }
   const songId = top.status === "ready" ? top.songId : null;
+  // Only an answer of "no song" is an empty catalogue. A failed lookup says
+  // nothing about it: the generic line stays, and the site link is the way to
+  // look for songs without it.
+  const emptyCatalogue = top.status === "ready" && songId === null;
   return (
     <section
       aria-labelledby="communities-jam-door"
@@ -489,7 +493,7 @@ function JamDoor({
           {t("communities.jam.title")}
         </p>
         <p className="mt-1 text-sm text-paper-muted">
-          {songId ? t("communities.jam.body") : t("communities.jam.bodyEmpty")}
+          {emptyCatalogue ? t("communities.jam.bodyEmpty") : t("communities.jam.body")}
         </p>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 self-start sm:self-auto">
@@ -505,7 +509,7 @@ function JamDoor({
         <Button variant={songId ? "ghost" : "secondary"} data-jam-door-start="" onClick={onStart}>
           {t("communities.jam.start")}
         </Button>
-        {songId && (
+        {!emptyCatalogue && (
           <a
             href={jamSiteHomeUrl()}
             target="_blank"
