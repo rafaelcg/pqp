@@ -88,7 +88,12 @@ the generic `noindex` card.
   that takes a part (`joinMode` not `closed`, below): first original that takes
   one, else first original, else first that takes one, else the first song. A
   closed original still beats an open cover (the cover is the rights risk), and
-  its page says plainly that it takes no part. **The strip**
+  its page says plainly that it takes no part. When the hero IS closed and other
+  songs take a part, up to three of them (those asking for an instrument first,
+  `pickWantingParts`) sit under it as "Essas tão pedindo gente" (`wants.*`), with
+  "Ver todas" opening Falta alguém, so a visitor always has something to record
+  on; nothing extra when the hero takes a part or none does. The hero reads the
+  top twelve (`FEATURED_WINDOW`) so a closed hero still finds some. **The strip**
   (`how-it-works.tsx`, `intro.*` in the catalogues) says "Ouve. Não precisa de
   conta." / "Grava a parte que falta, de fone, em cima da banda." / "Quem começou
   escolhe o que entra na mistura." with the site's own icons on instrument-hue
