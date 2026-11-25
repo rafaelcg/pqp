@@ -38,6 +38,11 @@ enum DeepLinkTarget: Equatable, Sendable {
     /// the jump link a forwarded message's card opens (`forwardMessagePath` in
     /// `packages/shared/src/forward.ts`). The channel opens on the message.
     case message(serverId: String, channelId: String, messageId: String)
+    /// A jam song, `/app/server/<sid>/channel/<jamChannelId>/song/<songId>`:
+    /// what "Copiar link" on a song hands out on every client (`jamSongRoutePath`
+    /// in `client/src/lib/app-route.ts`, `DeepLinkTarget.JamSong` on Android).
+    /// The jam channel's wall opens with the song on top of it.
+    case jamSong(serverId: String, channelId: String, songId: String)
 }
 
 /// Turns links and notification paths into `DeepLinkTarget`s, and nothing else.
@@ -115,6 +120,13 @@ enum DeepLink {
             let messageId = segments[5]
             guard !serverId.isEmpty, !channelId.isEmpty, !messageId.isEmpty else { return nil }
             return .message(serverId: serverId, channelId: channelId, messageId: messageId)
+
+        case 6 where segments[0] == "server" && segments[2] == "channel" && segments[4] == "song":
+            let serverId = segments[1]
+            let channelId = segments[3]
+            let songId = segments[5]
+            guard !serverId.isEmpty, !channelId.isEmpty, !songId.isEmpty else { return nil }
+            return .jamSong(serverId: serverId, channelId: channelId, songId: songId)
 
         case 4 where segments[0] == "server" && segments[2] == "channel":
             let serverId = segments[1]

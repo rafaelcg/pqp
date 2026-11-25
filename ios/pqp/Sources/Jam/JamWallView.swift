@@ -35,8 +35,17 @@ struct JamWallView: View {
     private static let gap: CGFloat = 10
     private static let cellAspect: CGFloat = 0.92
 
-    init(channel: Channel, server: Server) {
+    /// A song link's song: opened on top of the wall once it has loaded.
+    private let initialSongId: String?
+    private let onInitialSongHandled: () -> Void
+
+    init(
+        channel: Channel, server: Server,
+        initialSongId: String? = nil, onInitialSongHandled: @escaping () -> Void = {}
+    ) {
         _model = State(initialValue: JamWallModel(channel: channel, server: server))
+        self.initialSongId = initialSongId
+        self.onInitialSongHandled = onInitialSongHandled
     }
 
     private var columns: Int { sizeClass == .regular ? 4 : 2 }
@@ -81,6 +90,28 @@ struct JamWallView: View {
             }
         }
         .task { await model.start(session: session) }
+        // A song link. Its own task so the wall's load is never held up by it,
+        // and so a slow song read cannot leave the wall blank.
+        .task(id: initialSongId) { await openInitialSong() }
+    }
+
+    /// Opens the song a link named. The wall is already under it, so every way
+    /// this can fail leaves a screen with the songs on it, and says why:
+    /// a song that is gone, or one that lives in another jam (a link edited by
+    /// hand), is "not available"; a failed read is "try again".
+    private func openInitialSong() async {
+        guard let id = initialSongId else { return }
+        onInitialSongHandled()
+        do {
+            let detail = try await session.api.jamSong(id: id)
+            guard JamSongLinkRules.belongs(detail.song, toChannel: model.channel.id) else {
+                session.linkError = JamSongLinkMessage.unavailable
+                return
+            }
+            openedSong = JamSongRoute(song: detail.song)
+        } catch {
+            session.linkError = JamSongLinkMessage.forFailure(error)
+        }
     }
 
     @ViewBuilder

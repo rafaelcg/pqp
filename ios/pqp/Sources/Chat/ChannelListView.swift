@@ -28,6 +28,9 @@ struct ChannelListView: View {
     /// Set when a forwarded message's card brought us here: `initialChannel`
     /// opens scrolled to this message, once.
     let initialMessageId: String?
+    /// Set when a jam song's link brought us here: `initialChannel` is the jam
+    /// channel and its wall opens this song, once.
+    let initialJamSongId: String?
 
     init(
         server: Server,
@@ -35,7 +38,8 @@ struct ChannelListView: View {
         opensBau: Bool = false,
         initialBau: BauFocus? = nil,
         initialForum: ForumFocus? = nil,
-        initialMessageId: String? = nil
+        initialMessageId: String? = nil,
+        initialJamSongId: String? = nil
     ) {
         self.server = server
         self.initialChannel = initialChannel
@@ -43,7 +47,9 @@ struct ChannelListView: View {
         self.initialBau = initialBau
         self.initialForum = initialForum
         self.initialMessageId = initialMessageId
+        self.initialJamSongId = initialJamSongId
         _jumpMessageId = State(initialValue: initialMessageId)
+        _jamSongId = State(initialValue: initialJamSongId)
         _current = State(initialValue: server)
         _collapsed = State(initialValue: CollapsedSections().load(serverId: server.id))
         _layoutConfig = State(initialValue: ChannelLayoutMemory().load(serverId: server.id))
@@ -192,6 +198,9 @@ struct ChannelListView: View {
     /// The message a link asked for, until the chat it opened has scrolled to
     /// it (so coming back to the channel later does not jump again).
     @State private var jumpMessageId: String?
+    /// The song a link asked for, until the wall has opened it (so coming
+    /// back to the jam later does not open it again).
+    @State private var jamSongId: String?
 
     /**
      A WATCH PARTY IS NOT A VOICE ROW, AND THIS IS WHERE THAT IS ENFORCED.
@@ -1027,7 +1036,11 @@ struct ChannelListView: View {
         if channel.isForum {
             ForumHomeView(forum: channel, server: current)
         } else if channel.isJam {
-            JamWallView(channel: channel, server: current)
+            JamWallView(
+                channel: channel, server: current,
+                initialSongId: channel.id == initialChannel?.id ? jamSongId : nil,
+                onInitialSongHandled: { jamSongId = nil }
+            )
         } else {
             chat(for: channel)
         }

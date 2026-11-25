@@ -107,7 +107,7 @@ struct JamStageView: View {
             }
             HStack(spacing: -8) {
                 ForEach(model.active.prefix(5)) { track in
-                    Avatar(name: track.displayName, seed: track.authorId, size: 28, url: track.authorAvatarUrl)
+                    Avatar(name: track.avatarName, seed: track.authorId, size: 28, url: track.authorAvatarUrl)
                         .overlay(Circle().strokeBorder(artTint, lineWidth: 2))
                 }
             }
@@ -311,7 +311,7 @@ struct JamTrackRow: View {
             }
         } label: {
             HStack(spacing: 8) {
-                Avatar(name: track.displayName, seed: track.authorId, size: 30, url: track.authorAvatarUrl)
+                Avatar(name: track.avatarName, seed: track.authorId, size: 30, url: track.authorAvatarUrl)
                     .overlay(Circle().strokeBorder(track.instrument.color, lineWidth: 2))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: track.instrument.title)
@@ -538,7 +538,7 @@ struct JamOtherTakesView: View {
     private func row(_ track: JamTrack) -> some View {
         let hearing = model.isAuditioned(track)
         return HStack(spacing: 10) {
-            Avatar(name: track.displayName, seed: track.authorId, size: 30, url: track.authorAvatarUrl)
+            Avatar(name: track.avatarName, seed: track.authorId, size: 30, url: track.authorAvatarUrl)
                 .overlay(Circle().strokeBorder(track.instrument.color, lineWidth: 2))
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: track.instrument.title)

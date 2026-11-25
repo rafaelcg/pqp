@@ -898,6 +898,16 @@
         }
       }
     },
+    "Could not open that song. Try again in a moment." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra abrir essa música. Tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
     "Could not start the audio. Try again." : {
       "localizations" : {
         "pt-BR" : {
@@ -3164,6 +3174,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Essa música foi apagada."
+          }
+        }
+      }
+    },
+    "This song is not available. It may have been deleted, or it is in a server you are not in." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa música não está disponível. Pode ter sido apagada, ou está num servidor em que tu não estás."
           }
         }
       }

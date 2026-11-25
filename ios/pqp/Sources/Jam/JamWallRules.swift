@@ -412,3 +412,48 @@ extension JamTrack {
         return min(1, max(0, peaks[index]))
     }
 }
+
+
+// MARK: - Song links
+
+/// What a jam song link does when it cannot open the song, as sentences.
+/// Android lets the song screen say "gone"; here the wall is already open
+/// under the link, so the sentence goes in the usual "Can't open that link"
+/// alert (`SessionStore.linkError`) and the person is left on the wall or on
+/// the server, never on a blank screen.
+enum JamSongLinkMessage {
+    /// Gone, hidden from this account, or in a server it is not in. The server
+    /// answers all of these alike (404 or 403), so the app does not pretend to
+    /// tell them apart.
+    static var unavailable: String {
+        String(localized: "This song is not available. It may have been deleted, or it is in a server you are not in.")
+    }
+
+    /// The read itself failed: offline, or the server had a bad moment.
+    static var failed: String {
+        String(localized: "Could not open that song. Try again in a moment.")
+    }
+
+    /// A refusal that means "not for you or not there" (404, or 403 on a
+    /// server this account is not in) against everything else.
+    static func isUnavailable(_ error: Error) -> Bool {
+        switch error as? APIError {
+        case .notFound: true
+        case .server(let status, _): status == 403
+        default: false
+        }
+    }
+
+    static func forFailure(_ error: Error) -> String {
+        isUnavailable(error) ? unavailable : failed
+    }
+}
+
+enum JamSongLinkRules {
+    /// A song link names the jam channel as well as the song, and the two must
+    /// agree: the id alone would open a song of any jam this account can read
+    /// under the wrong channel's title.
+    static func belongs(_ song: JamSongSummary, toChannel channelId: String) -> Bool {
+        song.channelId == channelId
+    }
+}

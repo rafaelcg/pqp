@@ -43,6 +43,9 @@ enum PushPresentation {
             return postId != visibleChannelId
         case .message(_, let channelId, _):
             return channelId != visibleChannelId
+        case .jamSong:
+            // A jam wall is not a chat a banner could sit over.
+            return true
         case .invite, .server, .bau, .bauPost, .none:
             return true
         }

@@ -126,4 +126,51 @@ final class JamBidiTests: XCTestCase {
         )
         XCTAssertEqual(JamWho.line(song: song, contributors: nil), "+3")
     }
+
+    // MARK: The avatar's initial
+
+    func testAnAvatarNameThatStartsWithAnOverrideStillHasAnInitial() {
+        // Before: the first character of "\u{202E}Bia" is the override, which draws as nothing.
+        XCTAssertEqual(Avatar.initials(of: "\(rlo)Bia"), "\(rlo)")
+        let t = track(label: nil, person: "\(rlo)Bia Souza")
+        XCTAssertEqual(t.avatarName, "Bia Souza")
+        XCTAssertEqual(Avatar.initials(of: t.avatarName), "BS")
+    }
+
+    func testEveryControlIsDroppedFromTheAvatarName() {
+        let t = track(label: nil, person: "\u{202A}\u{2067}Leo\u{202C}\u{2069} Lima")
+        XCTAssertEqual(t.avatarName, "Leo Lima")
+        XCTAssertEqual(Avatar.initials(of: t.avatarName), "LL")
+    }
+
+    func testAnAvatarNameOfOnlyControlsFallsBackToTheQuestionMark() {
+        let t = track(label: nil, person: "\(rlo)\u{2066}")
+        XCTAssertEqual(t.avatarName, "")
+        XCTAssertEqual(Avatar.initials(of: t.avatarName), "?")
+        // An account that is gone has no name at all.
+        XCTAssertEqual(track(label: nil, person: nil).avatarName, "?")
+    }
+
+    func testAnOrdinaryNameIsUntouchedByTheAvatarClean() {
+        XCTAssertEqual(track(label: nil, person: "Gabi").avatarName, "Gabi")
+        XCTAssertEqual(track(label: nil, person: "\u{0645}\u{0631}\u{062D}\u{0628}\u{0627}").avatarName, "\u{0645}\u{0631}\u{062D}\u{0628}\u{0627}")
+    }
+
+    // MARK: A song link that cannot open
+
+    func testASongOfAnotherJamDoesNotOpenUnderThisOne() {
+        let song = JamSongSummary(id: "s", channelId: "jam-1", serverId: "x", title: "In Bloom", trackCount: 1, contributorCount: 1)
+        XCTAssertTrue(JamSongLinkRules.belongs(song, toChannel: "jam-1"))
+        XCTAssertFalse(JamSongLinkRules.belongs(song, toChannel: "jam-2"))
+    }
+
+    func testGoneAndHiddenAreUnavailableAndEverythingElseIsTryAgain() {
+        XCTAssertTrue(JamSongLinkMessage.isUnavailable(APIError.notFound("Song not found")))
+        XCTAssertTrue(JamSongLinkMessage.isUnavailable(APIError.server(status: 403, message: "no")))
+        XCTAssertFalse(JamSongLinkMessage.isUnavailable(APIError.server(status: 500, message: "boom")))
+        XCTAssertFalse(JamSongLinkMessage.isUnavailable(APIError.transport("offline")))
+        XCTAssertFalse(JamSongLinkMessage.isUnavailable(URLError(.notConnectedToInternet)))
+        XCTAssertEqual(JamSongLinkMessage.forFailure(APIError.notFound("x")), JamSongLinkMessage.unavailable)
+        XCTAssertEqual(JamSongLinkMessage.forFailure(APIError.transport("x")), JamSongLinkMessage.failed)
+    }
 }

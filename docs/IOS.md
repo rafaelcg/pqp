@@ -1409,10 +1409,29 @@ wired headphones before and after "Calibrar" and check the take against the
 band on the web; repeat with the speaker and with AirPods (expect the warning
 and a take that needs a nudge); take a call mid-take; pull the headphones mid-take.
 
+**A song link opens in the app.** `JamLinks.song` builds the web's own route,
+`/app/server/<server>/channel/<jam channel>/song/<song>` (shaped like the forum's
+`/post/` link), and `DeepLink` parses the same string into
+`DeepLinkTarget.jamSong`, from a `pqp://server/<s>/channel/<c>/song/<id>` URL, a
+universal link, a push `path` and a tap on a same-instance link in a message
+(`BauShare.inAppTarget`). The shell lands on the server's channel list, the jam's
+wall on top of it and the song on top of that: `HomeView.openJamSong` finds the
+jam in the server's channels, and `JamWallView` reads the song once the wall is
+up (`initialSongId`) and opens it only when it belongs to that jam
+(`JamSongLinkRules.belongs`). Android does the same (`DeepLinkTarget.JamSong`).
+A song that cannot open never leaves a blank screen: a server this account is not
+in, a jam it cannot see, a song that was deleted or that lives in another jam all
+end in the "Can't open that link" alert with a sentence
+(`JamSongLinkMessage.unavailable`), on the wall or on the server; a failed read
+says to try again. **The gap:** the apple-app-site-association file
+(`client/public/.well-known/`) still claims `/app/invite/*` alone, so a song link
+tapped in Safari, Messages or another app opens the web, not the app. Only
+`pqp://`, a push and a tap inside the app reach this path until that file claims
+`/app/server/*/channel/*/song/*` (a web deploy, and Apple's CDN caches it for about
+a day).
+
 **Not here.** Recording a camera, replacing the viewer's old take in the mix,
-trimming, comments, a song deep link (`JamLinks.song` is shaped like the forum's `/post/` link and is only as
-the web's own route, `/app/server/<server>/channel/<jam channel>/song/<song>`), Spanish (the app ships en and pt-BR
-only).
+trimming, comments, Spanish (the app ships en and pt-BR only).
 
 ## Activities (apps in a channel)
 
