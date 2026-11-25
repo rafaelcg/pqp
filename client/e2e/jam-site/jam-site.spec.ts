@@ -607,6 +607,128 @@ test.describe("what needs an account", () => {
   });
 });
 
+test.describe("how it works and the featured slot", () => {
+  const ORIGINAL = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Cantiga nossa", [["vocals", "Lia"]], []);
+  const COVER = song("2e3d4c5b-6a7f-4e8d-9c0b-1b2c3d4e5f60", "Um hit", [["guitar", "Duda"]], ["bass"], { artist: "Banda Famosa", likes: 900 });
+
+  test("the strip is under the hero, in three steps, and costs no media request", async ({ page }) => {
+    await mockApi(page);
+    const media: string[] = [];
+    page.on("request", (request) => {
+      if (/\.(wav|webm|mp4|flac|mp3|ogg)(\?|$)/.test(request.url()) || request.resourceType() === "media") media.push(request.url());
+    });
+    await page.goto("/jam");
+    const how = page.locator("[data-jam-how]");
+    await expect(how).toBeVisible();
+    await expect(how.locator("[data-jam-how-step]")).toHaveCount(3);
+    await expect(how).toContainText("Como funciona");
+    await expect(how).toContainText("Ouve. Não precisa de conta.");
+    await expect(how).toContainText("Grava a parte que falta, de fone, em cima da banda.");
+    await expect(how).toContainText("Quem começou escolhe o que entra na mistura.");
+    // under the hero, above the tabs
+    const [hero, strip, tabs] = await Promise.all(
+      ["[data-jam-hero]", "[data-jam-how]", '[data-jam-tab="top"]'].map(async (selector) => (await page.locator(selector).boundingBox())!.y),
+    );
+    expect(hero).toBeLessThan(strip!);
+    expect(strip).toBeLessThan(tabs!);
+    await shot(page, "02-home-how-it-works");
+    await page.waitForTimeout(400);
+    expect(media).toEqual([]);
+  });
+
+  test("the strip is on the empty home too, and fits a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await mockApi(page, { songs: [] });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-empty]")).toBeVisible();
+    await expect(page.locator("[data-jam-how-step]")).toHaveCount(3);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    await shot(page, "03-home-empty-320");
+  });
+
+  test("the featured slot is the first original, not a more liked cover", async ({ page }) => {
+    await mockApi(page, { songs: [COVER, ORIGINAL, A] });
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${ORIGINAL.id}"]`)).toBeVisible();
+    // the cover is still on the page, as a card
+    await expect(page.locator(`[data-jam-card="${COVER.id}"]`)).toHaveCount(1);
+    await expect(page.locator(`[data-jam-card="${ORIGINAL.id}"]`)).toHaveCount(0);
+  });
+
+  test("with only covers the featured slot is the first song", async ({ page }) => {
+    await mockApi(page, { songs: [COVER, { ...ORIGINAL, artist: "Outra Banda" }] });
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${COVER.id}"]`)).toBeVisible();
+  });
+});
+
+test.describe("shared links carry ref=share", () => {
+  /** A share sheet that records what it was handed, or none at all (the copy path). */
+  async function withShare(page: Page, mode: "sheet" | "copy") {
+    await page.addInitScript((m) => {
+      const w = window as unknown as { __shared: unknown[]; __copied: string[] };
+      w.__shared = [];
+      w.__copied = [];
+      Object.defineProperty(navigator, "share", {
+        configurable: true,
+        value: m === "sheet" ? async (data: unknown) => void w.__shared.push(data) : undefined,
+      });
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (text: string) => void w.__copied.push(text) },
+      });
+    }, mode);
+  }
+  const read = <T,>(page: Page, key: "__shared" | "__copied") => page.evaluate((k) => (window as never as Record<string, T[]>)[k]!, key);
+
+  test("the share sheet is handed the address with ref=share", async ({ page }) => {
+    await mockApi(page);
+    await withShare(page, "sheet");
+    await page.goto(`/jam/m/${SONG_A}`);
+    await page.locator("[data-jam-share]").click();
+    await expect.poll(async () => (await read<{ url: string }>(page, "__shared")).length).toBe(1);
+    const [data] = await read<{ url: string }>(page, "__shared");
+    const url = new URL(data!.url);
+    expect(url.pathname).toBe(`/jam/m/${SONG_A}`);
+    expect(url.searchParams.get("ref")).toBe("share");
+  });
+
+  test("the copied link has ref=share and the toast says it was copied", async ({ page }) => {
+    await mockApi(page);
+    await withShare(page, "copy");
+    await page.goto(`/jam/m/${SONG_A}`);
+    await page.locator("[data-jam-share]").click();
+    await expect(page.getByText("Link copiado").first()).toBeVisible();
+    const [copied] = await read<string>(page, "__copied");
+    expect(new URL(copied!).searchParams.get("ref")).toBe("share");
+    await shot(page, "04-song-share-copied");
+  });
+
+  test("a page opened with a ref keeps it on the link it shares", async ({ page }) => {
+    await mockApi(page);
+    await withShare(page, "copy");
+    await page.goto(`/jam/m/${SONG_A}?ref=clip-ana`);
+    await page.locator("[data-jam-share]").click();
+    await expect.poll(async () => (await read<string>(page, "__copied")).length).toBe(1);
+    const [copied] = await read<string>(page, "__copied");
+    expect(new URL(copied!).searchParams.get("ref")).toBe("clip-ana");
+  });
+
+  test("arriving on a shared link and pressing Gravar hands ref=share to the app", async ({ page }) => {
+    await mockApi(page);
+    await page.route("**/app?*", (route) => route.fulfill({ body: "<html><body>app</body></html>", contentType: "text/html" }));
+    await page.goto(`/jam/m/${SONG_A}?ref=share`);
+    await page.locator("[data-jam-record]").click();
+    await page.locator("[data-jam-ask-go]").click();
+    await page.waitForURL(/\/app\?/);
+    const url = new URL(page.url());
+    expect(url.searchParams.get("jam")).toBe(SONG_A);
+    expect(url.searchParams.get("record")).toBe("1");
+    expect(url.searchParams.get("ref")).toBe("share");
+  });
+});
+
 test.describe("when the flag is off", () => {
   test("is a small page that asks nothing but the config, and is kept out of search", async ({ page }) => {
     const calls = await mockApi(page, { enabled: false });

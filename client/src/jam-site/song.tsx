@@ -5,7 +5,8 @@ import { jt } from "@/lib/i18n/jam-site";
 import { detectLocale } from "@/lib/locale";
 import type { JamInstrumentName } from "@/lib/jam-intent";
 import { noteJamPlay } from "./api";
-import { mainHref } from "./attribution";
+import { jamAttribution, mainHref } from "./attribution";
+import { jamShareHref } from "./share-url";
 import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
 import { SongCover } from "./art";
@@ -155,7 +156,8 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
   );
 
   const share = async () => {
-    const url = `${window.location.origin}${jamPath(mount, { kind: "song", songId: song.id })}`;
+    // ref=share unless the page was opened with a ref already (`share-url.ts`).
+    const url = jamShareHref(jamPath(mount, { kind: "song", songId: song.id }), window.location.origin, jamAttribution());
     const who = song.startedBy.handle ? `@${song.startedBy.handle}` : personLabel(song.startedBy);
     try {
       if (typeof navigator.share === "function") {

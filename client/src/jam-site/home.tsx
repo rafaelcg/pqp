@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { jt } from "@/lib/i18n/jam-site";
 import { detectLocale } from "@/lib/locale";
 import { SongArt, SongCover } from "./art";
+import { pickFeatured } from "./featured";
+import { HowItWorks } from "./how-it-works";
 import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
 import { INSTRUMENT_LOOK, INSTRUMENTS, asInstrument, inkMix, type Instrument } from "./instruments";
@@ -13,7 +15,7 @@ import { jamPath } from "./route";
 import { CONTAINER, FromAppNotice } from "./shell";
 import { Badge } from "./tiles";
 import { button, focusRing, Skeleton } from "./ui";
-import { pickFeatured, useFeatured, useJamList, type JamTab } from "./use-jam-data";
+import { FEATURED_WINDOW, useFeatured, useJamList, type JamTab } from "./use-jam-data";
 import { cn, compactCount, instrumentName, listOf, personLabel } from "./util";
 
 const TABS: readonly JamTab[] = ["top", "needs", "new", "done"];
@@ -339,7 +341,7 @@ export function HomePage() {
   // Waiting for the hero instead would hold usable cards behind a second request;
   // leaving nothing out would draw the hero's song as a card and pull it out a
   // moment later, shifting every card after it.
-  const heroId = tab !== "top" ? null : featured.status === "loading" ? (pickFeatured(list.songs)?.id ?? null) : (featured.song?.id ?? null);
+  const heroId = tab !== "top" ? null : featured.status === "loading" ? (pickFeatured(list.songs.slice(0, FEATURED_WINDOW))?.id ?? null) : (featured.song?.id ?? null);
   const shown = useMemo(() => (heroId ? list.songs.filter((song) => song.id !== heroId) : list.songs), [heroId, list.songs]);
   const cards = useMemo(() => shown.map((song, index) => <Card key={song.id} song={song} skippable={index >= SKIPPED_AFTER} />), [shown]);
 
@@ -350,6 +352,7 @@ export function HomePage() {
       </h1>
       {fromApp && <FromAppNotice body={jt("fromApp.start")} />}
       <Hero song={featured.song} status={featured.status} />
+      <HowItWorks />
       <div className="mt-10 sm:mt-14">
         <Tabs tab={tab} onTab={setTab} need={need} onNeed={setNeed} />
       </div>

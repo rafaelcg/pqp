@@ -80,7 +80,15 @@ the generic `noindex` card.
 
 ## What the pages draw
 
-- **Home (Palco).** A featured song, tabs, cards. The server sorts (`top`,
+- **Home (Palco).** A featured song, a three-step "Como funciona" strip, tabs,
+  cards. **The featured slot prefers an original**: of the first six of Em alta,
+  the first song with a part to show whose `artist` is null, else the first with
+  a part (`pickFeatured`, `src/jam-site/featured.ts`), so the showcase is never
+  somebody else's hit when an original is on the page. **The strip**
+  (`how-it-works.tsx`, `intro.*` in the catalogues) says "Ouve. Não precisa de
+  conta." / "Grava a parte que falta, de fone, em cima da banda." / "Quem começou
+  escolhe o que entra na mistura." with the site's own icons on instrument-hue
+  chips; static, no request, and it is also on the empty home. The server sorts (`top`,
   `new`); `needs=` filters an instrument. **Em alta** is `top`, **Novas** is
   `new`, **Falta alguém** is `new` with the songs that ask for nobody dropped
   (and a row of instrument chips that become `needs=`), **Prontas** is `new`
@@ -208,6 +216,18 @@ account is where the question can be answered, so the link carries the answer:
   retention by channel in the same service (`retentionBySource`). The landing
   recorded is `/app`, because that is the page the account first loaded; the
   `ref` is the signal.
+
+**Shared links carry `ref=share`.** The song page's Compartilhar (Web Share API,
+else a copied link) hands out `<origin>/<path>?ref=share` (`jamShareHref`,
+`src/jam-site/share-url.ts`), so the people who come in through a shared link
+show up as their own row in the acquisition report. When the page was opened
+with a `ref` already (a clip, a post, an earlier share) that one is kept: it is
+who brought them. The arrival's `utm_*` are not copied onto the link. A visitor
+who arrives on `/m/<id>?ref=share` and presses Gravar goes to
+`/app?jam=<id>&record=1&instrument=...&ref=share` (the arrival's `ref` is
+remembered first-touch like any other), which `lib/acquisition.ts` stores as
+`users.acquisition_ref`. Tested in `share-url.test.ts` and
+`e2e/jam-site/jam-site.spec.ts`.
 
 Zone analytics says how many people looked, the acquisition report says how many
 of them signed up. Put a `?ref=` on every link you hand out for the site (a clip's

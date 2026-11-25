@@ -1,6 +1,7 @@
 import type { PublicJamSong, PublicJamSongDetail } from "@pqp/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchJam, fetchJamConfig, fetchJamList, JamApiError } from "./api";
+import { pickFeatured } from "./featured";
 import type { Instrument } from "./instruments";
 
 /**
@@ -143,18 +144,16 @@ export function useJamList(tab: JamTab, need: Instrument | null): ListState {
   return { songs, status, more, loadingMore, loadMore, retry: () => setAttempt((n) => n + 1) };
 }
 
-/** The hero's rule over a page in Em alta order: the first song with a part to show. */
-export function pickFeatured<T extends Pick<PublicJamSong, "parts">>(songs: readonly T[]): T | null {
-  return songs.find((candidate) => candidate.parts.length > 0) ?? null;
-}
+/** How many of Em alta the hero reads, and so how many the grid reads when it guesses the hero (`pickFeatured`). */
+export const FEATURED_WINDOW = 6;
 
-/** The featured song: the most liked one that has a part to show. */
+/** The featured song: the first original of the top few that has a part to show, else the first with a part. */
 export function useFeatured(): { song: PublicJamSong | null; status: "loading" | "ready" | "error" } {
   const [song, setSong] = useState<PublicJamSong | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   useEffect(() => {
     const controller = new AbortController();
-    fetchJamList({ sort: "top", limit: 6 }, controller.signal).then(
+    fetchJamList({ sort: "top", limit: FEATURED_WINDOW }, controller.signal).then(
       (result) => {
         setSong(pickFeatured(result.songs));
         setStatus("ready");
