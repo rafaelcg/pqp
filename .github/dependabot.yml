@@ -44,6 +44,12 @@ updates:
       # `npm view @livekit/rtc-node@<version> dependencies`), move both
       # versions in tools/watch-party-load/package.json together.
       - dependency-name: "@livekit/rtc-ffi-bindings"
+      # The other half of that pair. rtc-node 1.2.3 pins rtc-ffi-bindings 0.15.0
+      # exactly, so taking it from here while the ignore above holds the
+      # bindings at 0.13.2 is the split described above (#1745). Taken by hand,
+      # both versions in one PR. Only 1.2.3 and later are skipped.
+      - dependency-name: "@livekit/rtc-node"
+        versions: [">=1.2.3"]
       # 1.65.x fails two e2e lanes on Chrome 158: the sandboxed Locadora frame
       # logs "Permissions policy violation: focus-without-user-activation",
       # which apps/locadora/e2e/locadora.spec.mts asserts never happens, and the
@@ -91,6 +97,18 @@ updates:
     ignore:
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # Dependabot reads the whole pnpm workspace from this entry too, so it
+      # proposes the packages' dependencies from here as well (#1741 moved
+      # Playwright to 1.65.1 and the load harness's rtc-node and bindings),
+      # and the ignores of the workspace entry above do not apply to it. The
+      # same pins, with the reasons given there.
+      - dependency-name: "@livekit/rtc-ffi-bindings"
+      - dependency-name: "@livekit/rtc-node"
+        versions: [">=1.2.3"]
+      - dependency-name: "@playwright/test"
+        versions: ["1.65.x"]
+      - dependency-name: "@types/node"
+        versions: [">=25.0.0"]
     groups:
       npm-minor-patch:
         update-types:
@@ -168,6 +186,14 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 3
+    ignore:
+      # Compose BOM 2026.11.01 (Compose UI 1.13.0) requires compiling against
+      # Android 37.1 and the app is on compileSdk 37, so :app:checkDebugAarMetadata
+      # fails (#1740). Moving compileSdk is a by-hand change, together with the
+      # platform install in android.yml and android-release.yml. Remove this
+      # once that has landed.
+      - dependency-name: "androidx.compose:compose-bom"
+        versions: [">=2026.11"]
     groups:
       android:
         patterns:
