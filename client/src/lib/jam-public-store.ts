@@ -281,12 +281,23 @@ export async function fetchTopPublicJamId(): Promise<string | null> {
  * failed lookup says nothing about the catalogue, and starting is always
  * available).
  */
+let doorRun = 0;
+
 export async function openPublicJamsDoor(): Promise<void> {
+  // The lookup takes a network round trip. A person who pressed the door twice, or
+  // went somewhere else meanwhile, must not be pulled into Jam when it lands.
+  doorRun += 1;
+  const mine = doorRun;
+  const startedAt = typeof window === "undefined" ? "" : window.location.pathname;
   let songId: string | null = null;
   try {
     songId = await fetchTopPublicJamId();
   } catch {
     // Not an answer: fall through to starting one.
+  }
+  const moved = typeof window !== "undefined" && window.location.pathname !== startedAt;
+  if (mine !== doorRun || moved) {
+    return;
   }
   if (songId) {
     openPublicJamById(songId, { play: true });
