@@ -6654,6 +6654,7 @@
   "jamAnnouncement.dismiss": "Fechar aviso da Jam",
   "communities.jam.title": "Jam",
   "communities.jam.body": "Cada um grava a sua parte e a música toca como uma banda. Ouve uma ou começa a tua.",
+  "communities.jam.bodyEmpty": "Cada um grava a sua parte e a música toca como uma banda. Começa a primeira.",
   "communities.jam.listen": "Ouvir uma jam",
   "communities.jam.start": "Começar uma jam",
   "communities.jam.all": "Ver todas no site",

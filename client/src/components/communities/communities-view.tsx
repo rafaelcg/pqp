@@ -488,7 +488,9 @@ function JamDoor({
           <Music2 aria-hidden="true" className="h-4 w-4 text-signal" />
           {t("communities.jam.title")}
         </p>
-        <p className="mt-1 text-sm text-paper-muted">{t("communities.jam.body")}</p>
+        <p className="mt-1 text-sm text-paper-muted">
+          {songId ? t("communities.jam.body") : t("communities.jam.bodyEmpty")}
+        </p>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 self-start sm:self-auto">
         {songId && onListen && (

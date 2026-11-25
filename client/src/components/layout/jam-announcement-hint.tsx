@@ -86,7 +86,7 @@ export function JamAnnouncementHint({
         label={t("jamAnnouncement.title")}
         dismissLabel={t("jamAnnouncement.dismiss")}
         dataAttribute="jam-announcement"
-        hero={<JamHowToHero className="h-28" />}
+        hero={<JamHowToHero />}
         title={t("jamAnnouncement.title")}
         body={t("jamAnnouncement.body")}
         footer={
