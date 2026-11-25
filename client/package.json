@@ -64,7 +64,7 @@
     "@emulatorjs/core-mgba": "4.2.3",
     "@emulatorjs/emulatorjs": "4.2.3",
     "@grafana/faro-rollup-plugin": "0.13.2",
-    "@playwright/test": "^1.65.1",
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/vite": "^4.3.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
