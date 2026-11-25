@@ -10,7 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { searchServerMessages } from "@/lib/api";
 import { messageLinkState, messageRoutePath } from "@/lib/app-route";
+import { JamGlyph } from "@/components/jam/jam-art";
 import { useTranslation } from "@/lib/i18n";
+import { openPublicJamsDoor, useJamPublicMe } from "@/lib/jam-public-store";
+import { looksLikeJamQuery } from "@/lib/quick-switcher";
 import { cn, formatDayLabel, formatFullTimestamp } from "@/lib/utils";
 import { appendUniqueResults, clampSelection } from "./search-results";
 
@@ -55,6 +58,10 @@ export function SearchDialog({
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
 
   const trimmed = query.trim();
+  // Somebody who types "jam" here is looking for the feature, not a message: offer
+  // the public jams, for every member, with or without a Jam channel in this server.
+  const jamPublic = useJamPublicMe(open);
+  const offerJam = jamPublic.enabled && looksLikeJamQuery(query);
   const searchable = trimmed.length >= SEARCH_QUERY_MIN_LENGTH;
 
   // Reopening starts a new search rather than resurrecting the last one: the
@@ -204,6 +211,26 @@ export function SearchDialog({
             />
           )}
         </div>
+
+        {offerJam && (
+          <button
+            type="button"
+            data-search-jam=""
+            onClick={() => {
+              onClose();
+              void openPublicJamsDoor();
+            }}
+            className="flex min-h-11 items-center gap-3 border-b border-border px-5 py-2 text-left hover:bg-surface-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center text-accent">
+              <JamGlyph className="h-5 w-5" />
+            </span>
+            <span className="flex min-w-0 flex-1 items-baseline gap-2">
+              <span className="truncate text-sm font-medium text-text">{t("switcher.jam.open")}</span>
+              <span className="truncate text-xs text-text-muted">{t("switcher.jam.hint")}</span>
+            </span>
+          </button>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {status === "error" ? (

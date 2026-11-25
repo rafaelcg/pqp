@@ -74,6 +74,12 @@ export interface SwitcherSources {
   jamDoor?: boolean;
 }
 
+/** Whether what was typed is somebody looking for Jam (the switcher and the message search both offer the door). */
+export function looksLikeJamQuery(query: string): boolean {
+  const needle = foldForSearch(query);
+  return needle.length > 0 && JAM_DOOR_WORDS.some((word) => word.startsWith(needle));
+}
+
 /** What somebody types looking for it. Folded like everything else, so "música" and "musica" are one. */
 const JAM_DOOR_WORDS = ["jam", "musica", "music", "cancion", "song", "banda", "band"] as const;
 
@@ -243,7 +249,7 @@ export function quickSwitcherItems(query: string, sources: SwitcherSources): Swi
 
   // Typed, never in the empty list. Before everything else: it is where the person said they wanted to go.
   const jamDoorItems: SwitcherItem[] =
-    sources.jamDoor && JAM_DOOR_WORDS.some((word) => word.startsWith(needle))
+    sources.jamDoor && looksLikeJamQuery(query)
       ? [{ kind: "jam", id: "jam:door" }]
       : [];
 
