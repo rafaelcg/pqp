@@ -485,6 +485,11 @@ import {
   jamIntentFromSearch,
   takeJamIntent,
 } from "@/lib/jam-intent";
+import {
+  dismissJamHandover,
+  noteJamHandover,
+  useJamArrival,
+} from "@/lib/jam-handover";
 import { parsePublicJamPath } from "@/lib/jam-public-links";
 import { openPublicJam, openPublicJamById } from "@/lib/jam-public-nav";
 import { JamAnnouncementHint } from "@/components/layout/jam-announcement-hint";
@@ -493,6 +498,8 @@ import {
   jamAnnouncementWanted,
   rememberJamAnnouncement,
 } from "@/lib/jam-announcement";
+import { JamArrivalCard } from "@/components/onboarding/jam-arrival-card";
+import { JamHandoverStrip } from "@/components/onboarding/jam-handover-strip";
 import { JamPublicHost } from "@/components/jam/jam-public-host";
 import {
   addIntentFromSearch,
@@ -543,7 +550,11 @@ import {
   type WatchPartyApprovedCard,
 } from "@/components/watch-party/waitlist/watch-party-approved-toasts";
 import { sendFriendRequest } from "@/components/friends/friends-api";
-import { onboardingPath, shouldRunOnboarding } from "@/lib/onboarding";
+import {
+  onboardingPath,
+  screensFor,
+  shouldRunOnboarding,
+} from "@/lib/onboarding";
 import {
   copyInvitePaste,
   inviteCodeFor,
@@ -1729,6 +1740,9 @@ function MainAppContent({
    * pathname there answered "no" every time and the dead step showed anyway.
    */
   const [arrivedOnInviteLink, setArrivedOnInviteLink] = useState(false);
+  // Somebody who came from the public jam site (`lib/jam-handover.ts`): the
+  // first run counts its own screens, and the shell keeps a way back.
+  const jamArrival = useJamArrival();
   /**
    * The server this session just walked into from an invite link, if the banner
    * for it has not been shown on this device before.
@@ -10073,6 +10087,7 @@ function MainAppContent({
     const jamIntent = jamIntentFromSearch(location.search) ?? takeJamIntent(storage);
     takeJamIntent(storage);
     if (jamIntent) {
+      noteJamHandover(jamIntent);
       openPublicJam(jamIntent);
     }
     // Both stashes are consumed unconditionally, even when the URL also carries
@@ -11083,6 +11098,9 @@ function MainAppContent({
       pendingCreate?.mode === "import" ||
       createIntentFromSearch(location.search)?.mode === "import" ||
       peekCreateIntent(browserStorage())?.mode === "import",
+    // The jam site's hand-over: the address, the boot-time stash, or the
+    // session record the arrival effect writes once it has spent both.
+    jam: jamArrival !== null,
   });
 
   // The gate, and then the gate again in its saving state while the app loads
@@ -11092,8 +11110,13 @@ function MainAppContent({
     return (
       <AgeGateDialog
         status={ageGate ?? "pending"}
-        stepsTotal={firstRunPath === "cold" ? 4 : 2}
+        stepsTotal={screensFor(firstRunPath).length}
         path={firstRunPath}
+        context={
+          firstRunPath === "jam" && jamArrival ? (
+            <JamArrivalCard handover={jamArrival} />
+          ) : undefined
+        }
         handingOff={gateHandoff}
         readback={ageGateReadback}
         // Passing re-runs the whole bootstrap from the top, which is exactly
@@ -11135,6 +11158,7 @@ function MainAppContent({
       <OnboardingFlow
         user={user}
         path={firstRunPath}
+        jam={jamArrival}
         entrance={!gateHandoff}
         arrival={
           firstRunPath !== "invite"
@@ -14343,6 +14367,25 @@ function MainAppContent({
           <div className="border-b border-warning/30 bg-warning/10 px-3 py-1 text-center text-xs text-warning">
             {t("chrome.devBypass")}
           </div>
+        )}
+
+        {jamArrival && !parsePublicJamPath(location.pathname) && (
+          <JamHandoverStrip
+            handover={jamArrival}
+            onReturn={() =>
+              openPublicJam(
+                jamArrival.target === "new"
+                  ? { kind: "new" }
+                  : {
+                      kind: "song",
+                      songId: jamArrival.target,
+                      record: false,
+                      instrument: null,
+                    },
+              )
+            }
+            onDismiss={dismissJamHandover}
+          />
         )}
 
         <ConnectionBanner

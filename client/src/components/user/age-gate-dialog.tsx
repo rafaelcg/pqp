@@ -1,5 +1,5 @@
 import { MINIMUM_AGE_YEARS, type AgeGateStatus } from "@pqp/shared";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
@@ -80,7 +80,14 @@ interface AgeGateDialogProps {
    */
   handingOff?: boolean;
   /** For the funnel's `onboarding_start`: which path this run is on. */
-  path?: "cold" | "invite" | "import";
+  path?: "cold" | "invite" | "import" | "jam";
+  /**
+   * A line of context drawn above the date fields and nothing else: today the
+   * jam path's "tua jam tá esperando" (`JamArrivalCard`). It is not part of the
+   * gate's wording, asks for nothing, and never shows on the read-back or the
+   * block, so the declaration itself reads exactly as it does for everybody.
+   */
+  context?: ReactNode;
   /**
    * Say the date back in words before sending it (`ageGateReadback` on
    * `GET /api/me`, the `age_gate_readback` flag). Off or absent: Continue
@@ -98,6 +105,7 @@ export function AgeGateDialog({
   stepsTotal,
   handingOff = false,
   path,
+  context,
   readback = false,
 }: AgeGateDialogProps) {
   const { t, locale } = useTranslation();
@@ -347,6 +355,7 @@ export function AgeGateDialog({
               onContinue();
             }}
           >
+            {context}
             <BirthDateFields
               parts={parts}
               onChange={setParts}

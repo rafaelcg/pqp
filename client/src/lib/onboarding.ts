@@ -36,28 +36,60 @@ export type FirstRunScreen = "age" | OnboardingStep;
  *   out. Age, then you, then the room.
  * - `import`: arrived on `?import=discord`. The create dialog opens on the
  *   paste the moment the wizard closes, and it has its own done screen.
- * - `cold`: neither. Age, you, room, and the invite for the room they made.
+ * - `jam`: arrived from the public jam site (`lib/jam-intent.ts`) to record on
+ *   a song, start one, like or report. The person came for one song, so the
+ *   room step is skipped like the invite path's, and the wizard itself is shown
+ *   only to an account with no usable name (`hasUsableName`). The age gate is
+ *   the one screen every account sees, so the path counts one screen and the
+ *   rare name step draws no dots: a counter that promises a second screen the
+ *   person usually never gets is worse than none.
+ * - `cold`: none of those. Age, you, room, and the invite for the room they made.
  */
-export type OnboardingPath = "cold" | "invite" | "import";
+export type OnboardingPath = "cold" | "invite" | "import" | "jam";
 
 export function onboardingPath({
   invite,
   importing,
+  jam = false,
 }: {
   invite: boolean;
   importing: boolean;
+  /** A jam intent from the public jam site is waiting or was just acted on. */
+  jam?: boolean;
 }): OnboardingPath {
   // An invite wins: the person clicked into a room, and the import can still
   // be reached from the + in the rail once they are in it.
   if (invite) {
     return "invite";
   }
-  return importing ? "import" : "cold";
+  // Then the import, which the person asked for by name. A jam intent behind
+  // it still opens the song once the wizard is out of the way.
+  if (importing) {
+    return "import";
+  }
+  return jam ? "jam" : "cold";
 }
 
 /** The screens a path shows, in order, gate first. */
 export function screensFor(path: OnboardingPath): readonly FirstRunScreen[] {
-  return path === "cold" ? ["age", "you", "room", "ready"] : ["age", "you"];
+  if (path === "cold") {
+    return ["age", "you", "room", "ready"];
+  }
+  return path === "jam" ? ["age"] : ["age", "you"];
+}
+
+/**
+ * Has this account a name somebody would recognise as theirs?
+ *
+ * The server never publishes an email address as a name; an account whose
+ * provider gave it no name gets `placeholderDisplayName`, `User` plus four hex
+ * digits. That is the only name the wizard's "who are you" step exists to
+ * replace, so it is the only thing the jam path asks about. Anything else
+ * (a Google name, a username, even the dev bypass's "Dev User") is a name.
+ */
+export function hasUsableName(user: Pick<User, "displayName">): boolean {
+  const name = user.displayName.trim();
+  return name !== "" && !/^User [0-9a-f]{4}$/i.test(name);
 }
 
 /**
