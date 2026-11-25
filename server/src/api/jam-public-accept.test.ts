@@ -242,12 +242,14 @@ describeDb("a starter's accept on a public standalone song", () => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
       void handleApi(req, res, pathname);
     });
-    await new Promise<void>((done) => http.listen(0, done));
+    await new Promise<void>((done) => http.listen(0, "127.0.0.1", done));
     baseUrl = `http://127.0.0.1:${(http.address() as AddressInfo).port}`;
   });
 
   afterAll(async () => {
-    await new Promise<void>((done) => http.close(() => done()));
+    if (http?.listening) {
+      await new Promise<void>((done) => http.close(() => done()));
+    }
     await new Promise<void>((done) => s3.close(() => done()));
     for (const name of [
       "S3_ENDPOINT",
