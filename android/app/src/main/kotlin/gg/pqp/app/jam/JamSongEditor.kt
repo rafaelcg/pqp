@@ -116,20 +116,29 @@ class JamSongEditor(
                 val uploadId = backend.uploadCover(songId, jpeg) { fraction ->
                     _ui.update { now -> if (now.pending === picture) now.copy(upload = CoverUpload.Uploading(fraction)) else now }
                 }
+                // Only this photo's own answer may touch the state: a newer pick owns it by now.
                 _ui.update {
-                    it.copy(
-                        cover = CoverChoice.New(uploadId),
-                        preview = picture,
-                        pending = null,
-                        upload = CoverUpload.Idle,
-                        note = EditNote.Ready,
-                    )
+                    if (it.pending !== picture) {
+                        it
+                    } else {
+                        it.copy(
+                            cover = CoverChoice.New(uploadId),
+                            preview = picture,
+                            pending = null,
+                            upload = CoverUpload.Idle,
+                            note = EditNote.Ready,
+                        )
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // A failed replacement leaves the photo that was already chosen where it was.
-                _ui.update { it.copy(pending = null, upload = CoverUpload.Failed(PhotoProblem.Write(jamWriteFailureOf(e)))) }
+                // A cancelled request can surface as an IOException and not as a cancellation, and a failed replacement
+                // leaves the photo already chosen where it was: so the failure of a photo that is no longer the
+                // current one says nothing.
+                _ui.update {
+                    if (it.pending !== picture) it else it.copy(pending = null, upload = CoverUpload.Failed(PhotoProblem.Write(jamWriteFailureOf(e))))
+                }
             }
         }
     }

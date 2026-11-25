@@ -639,7 +639,9 @@ class JamSongViewModel(
                 throw e
             } catch (e: Exception) {
                 val failure = jamWriteFailureOf(e)
-                _ui.update { ui -> ui.copy(adjust = ui.adjust?.let { JamAdjusting.failed(it, failure) }) }
+                // Frames that came while the save was out were not applied to the editor: it is reconciled now, so the
+                // next try cannot send an old edit over a newer stored value.
+                _ui.update { ui -> ui.copy(adjust = ui.adjust?.let { JamAdjusting.failed(it, failure) }).reconciled() }
                 if (failure == JamWriteFailure.Denied) refreshPermissions()
             }
         }

@@ -35,6 +35,9 @@ class JamSongEditorTest {
         var failUpload: Throwable? = null
         var uploadGate: CompletableDeferred<Unit>? = null
 
+        /** Uploads of these sizes fail with an IOException after the gate, even when their job was cancelled meanwhile (an OkHttp call that is cancelled throws one). */
+        var ioFailureSizes: Set<Int> = emptySet()
+
         override suspend fun config(serverId: String) = JamConfig(enabled = true, uploads = true)
         override suspend fun songs(channelId: String, cursor: String?, limit: Int) = JamSongListResponse()
         override suspend fun song(songId: String) = error("not used")
@@ -53,7 +56,8 @@ class JamSongEditorTest {
         override suspend fun uploadCover(songId: String, jpeg: ByteArray, onProgress: (Float) -> Unit): String {
             calls += "upload ${jpeg.size}"
             onProgress(0.5f)
-            uploadGate?.await()
+            uploadGate?.let { gate -> kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { gate.await() } }
+            if (jpeg.size in ioFailureSizes) throw java.io.IOException("Canceled")
             failUpload?.let { throw it }
             return "up-${jpeg.size}"
         }
@@ -196,6 +200,24 @@ class JamSongEditorTest {
         h.editor.photoReady(jpeg(9))
         advanceUntilIdle()
         assertEquals(CoverChoice.New("up-9"), h.editor.ui.value.cover)
+    }
+
+    @Test
+    fun `the failure of a photo that was replaced says nothing about the one that replaced it`() = runTest {
+        val h = harness()
+        h.backend.uploadGate = CompletableDeferred()
+        h.backend.ioFailureSizes = setOf(7)
+        h.editor.open()
+        h.editor.photoReady(jpeg(7))
+        advanceUntilIdle()
+        h.editor.photoReady(jpeg(9))
+        advanceUntilIdle()
+        h.backend.uploadGate!!.complete(Unit)
+        advanceUntilIdle()
+        // The first upload died with an IOException (its call was cancelled); the second landed and is the choice.
+        assertEquals(CoverChoice.New("up-9"), h.editor.ui.value.cover)
+        assertEquals(CoverUpload.Idle, h.editor.ui.value.upload)
+        assertNull(h.editor.ui.value.pending)
     }
 
     @Test

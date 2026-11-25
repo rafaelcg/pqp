@@ -96,6 +96,7 @@ import gg.pqp.app.onboarding.ui.rememberReduceMotion
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -145,9 +146,13 @@ fun JamEditSheet(song: JamSongSummary, editor: JamSongEditor, onDismiss: () -> U
     }
     LaunchedEffect(ui.done) { if (ui.done) onDismiss() }
 
+    // The photo being made into a cover: a newer pick cancels it, so a slow decode of an earlier photo can never
+    // replace the later choice.
+    var preparing by remember { mutableStateOf<Job?>(null) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
+        preparing?.cancel()
+        preparing = scope.launch {
             when (val result = withContext(Dispatchers.Default) { JamCoverPhoto.prepare(context.contentResolver, uri) }) {
                 is JamCoverPhoto.Prepared.Ready -> editor.photoReady(result.jpeg)
                 is JamCoverPhoto.Prepared.Rejected -> editor.photoRejected(result.problem)
