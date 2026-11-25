@@ -1241,6 +1241,17 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/public/jams/config (enabled), GET /api/jam-public/config (enabled)",
   },
+  jam_public_new_account_review: {
+    description:
+      "Segura a primeira música pública e as partes de uma conta nova pra revisão do operador (por padrão, conta com menos de 72 horas). Ligado é o comportamento de sempre. Desligado, nenhuma conta conta como nova pra isso: música e parte saem direto e a config diz \"open\". Denúncias, scanner de capa e vídeo, bloqueios, bans e limites não mudam. O que já está esperando revisão continua esperando.",
+    env: "JAM_PUBLIC_NEW_ACCOUNT_REVIEW",
+    parseEnv: onUnlessOff,
+    // On: today's behaviour, so a self-host and production change nothing
+    // until a row says otherwise. Only `false` / `0` / `off` turns it off.
+    codeDefault: true,
+    // GLOBAL, like `jam_public`: a standalone public jam has no server.
+    perServer: false,
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

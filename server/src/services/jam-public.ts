@@ -39,7 +39,7 @@ import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
 import { sharedRateLimit } from "../lib/cluster-rate-limit.js";
 import { HttpError } from "../lib/http.js";
-import { jamPublicEnabled, jamPublicLimits } from "../lib/jam-public-config.js";
+import { jamPublicEnabled, jamPublicLimits, jamPublicNewAccountReviewOn } from "../lib/jam-public-config.js";
 import { isStorageConfigured } from "../lib/s3.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { isContentScanConfigured } from "./content-scan.js";
@@ -147,7 +147,10 @@ export function requireJamPublicOn(): void {
 interface Standing {
   /** Blocked by an operator, account being deleted, or banned from the origin server. */
   blocked: boolean;
-  /** Younger than `JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS`. */
+  /**
+   * Younger than `JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS` while the runtime flag
+   * `jam_public_new_account_review` is on. Flag off: never young.
+   */
   young: boolean;
   /** Has had a public jam approved by an operator. */
   approved: boolean;
@@ -165,7 +168,7 @@ async function standingOf(
     banned: boolean;
     approved: boolean;
   }>(
-    `SELECT u.created_at > NOW() - make_interval(hours => $3) AS young,
+    `SELECT ($4::boolean AND u.created_at > NOW() - make_interval(hours => $3)) AS young,
             u.deletion_started_at IS NOT NULL AS deleting,
             EXISTS (SELECT 1 FROM jam_public_blocks b WHERE b.user_id = u.id) AS blocked,
             ($2::uuid IS NOT NULL AND EXISTS (
@@ -173,7 +176,7 @@ async function standingOf(
             EXISTS (SELECT 1 FROM jam_public_songs p
                      WHERE p.published_by = u.id AND p.review_state = 'approved') AS approved
        FROM users u WHERE u.id = $1`,
-    [userId, originServerId, jamPublicLimits.minAccountAgeHours()],
+    [userId, originServerId, jamPublicLimits.minAccountAgeHours(), jamPublicNewAccountReviewOn()],
   );
   const row = result.rows[0];
   if (!row) {

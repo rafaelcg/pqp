@@ -926,6 +926,98 @@ describeDb("public jams", () => {
       const published = jamPublicationResponseSchema.parse((await publish(alice, song)).body);
       expect(published.publication!.status).toBe("live");
     });
+
+    describe("the runtime flag jam_public_new_account_review", () => {
+      const reviewFlag = (on: boolean | null) =>
+        setGlobalFlag("jam_public_new_account_review", on, { kind: "dashboard" });
+
+      beforeEach(async () => {
+        // One hour old: well inside the 72 hour hold.
+        await getPool().query(`UPDATE users SET created_at = NOW() - INTERVAL '1 hour' WHERE id = $1`, [eve.id]);
+      });
+
+      it("on, by row and with no row at all: a 1 hour old account's first jam and its take wait", async () => {
+        for (const row of [true, null]) {
+          await reviewFlag(row);
+          expect(
+            jamPublicMeConfigSchema.parse((await call(eve, "GET", "/api/jam-public/config")).body).publishing,
+          ).toBe("review");
+        }
+        await reviewFlag(true);
+        const created = jamPublicSongCreatedSchema.parse(
+          (await call(eve, "POST", "/api/jam-public/songs", { title: "Primeira" })).body,
+        );
+        expect(created.publication.status).toBe("review");
+        await trackId(eve, created.song.id, "guitar", { publicConsent: "yes" });
+        expect(await publicSong(created.song.id)).toBeNull();
+
+        const other = await channelSong(alice, "Outra");
+        expect((await publish(alice, other)).status).toBe(200);
+        const take = await addTrack(eve, other, "bass", { publicConsent: "yes" });
+        expect(take.status).toBe(201);
+        const row = await getPool().query(`SELECT review_state FROM jam_public_tracks WHERE track_id = $1`, [
+          take.body.track.id,
+        ]);
+        expect(row.rows[0].review_state).toBe("pending");
+      });
+
+      it("off: the config says open and the first jam and its take go straight out", async () => {
+        await reviewFlag(false);
+        expect(
+          jamPublicMeConfigSchema.parse((await call(eve, "GET", "/api/jam-public/config")).body).publishing,
+        ).toBe("open");
+        const created = jamPublicSongCreatedSchema.parse(
+          (await call(eve, "POST", "/api/jam-public/songs", { title: "Primeira" })).body,
+        );
+        expect(created.publication.status).toBe("live");
+        await trackId(eve, created.song.id, "guitar", { publicConsent: "yes" });
+        expect((await publicSong(created.song.id))!.tracks).toHaveLength(1);
+        const queue = adminJamPublicQueueSchema.parse((await operator("GET", "/api/admin/jam-public/queue")).body);
+        expect(queue.songs).toEqual([]);
+
+        const other = await channelSong(alice, "Outra");
+        expect((await publish(alice, other)).status).toBe(200);
+        const take = await addTrack(eve, other, "bass", { publicConsent: "yes" });
+        expect(take.status).toBe(201);
+        const row = await getPool().query(`SELECT review_state FROM jam_public_tracks WHERE track_id = $1`, [
+          take.body.track.id,
+        ]);
+        expect(row.rows[0].review_state).not.toBe("pending");
+      });
+
+      it("off: what already waits keeps waiting, and flipping back on holds the next one again", async () => {
+        const held = jamPublicSongCreatedSchema.parse(
+          (await call(eve, "POST", "/api/jam-public/songs", { title: "Esperando" })).body,
+        );
+        expect(held.publication.status).toBe("review");
+        await reviewFlag(false);
+        const queue = adminJamPublicQueueSchema.parse((await operator("GET", "/api/admin/jam-public/queue")).body);
+        expect(queue.songs.map((one) => one.songId)).toEqual([held.song.id]);
+        await reviewFlag(true);
+        const next = jamPublicSongCreatedSchema.parse(
+          (await call(eve, "POST", "/api/jam-public/songs", { title: "Segunda" })).body,
+        );
+        expect(next.publication.status).toBe("review");
+      });
+
+      it("off: three distinct reports still hide the song", async () => {
+        await reviewFlag(false);
+        const created = jamPublicSongCreatedSchema.parse(
+          (await call(eve, "POST", "/api/jam-public/songs", { title: "Denunciada" })).body,
+        );
+        const song = created.song.id;
+        await trackId(eve, song, "guitar", { publicConsent: "yes" });
+        expect(await publicSong(song)).not.toBeNull();
+        for (const reporter of [alice, bob, carol]) {
+          expect(
+            (await call(reporter, "POST", "/api/jam-public/reports", { songId: song, reason: "spam" })).status,
+          ).toBe(201);
+        }
+        expect(await publicSong(song)).toBeNull();
+        const queue = adminJamPublicQueueSchema.parse((await operator("GET", "/api/admin/jam-public/queue")).body);
+        expect(queue.songs[0]).toMatchObject({ songId: song, status: "hidden", reports: 3 });
+      });
+    });
   });
 
   // ----------------------------------------------------------------- limits

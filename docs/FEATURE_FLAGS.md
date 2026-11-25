@@ -1036,6 +1036,39 @@ Turn it on from controles → interruptores, or `PUT /api/admin/flags
 Pinned by `server/src/api/jam-public.test.ts` (with the flag as a row, the way
 production sets it) and `server/src/lib/flag-client-contract.test.ts`.
 
+## `jam_public_new_account_review` (global, default ON, a kill switch)
+
+The hold on new accounts in public jams (`docs/JAM_PUBLIC.md` §"New accounts").
+Today an account younger than `JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS` (default 72)
+has its first public song held for an operator, its takes on public songs held
+too, and `GET /api/jam-public/config` says `publishing: "review"`. All of that is
+one computation, `standingOf()` in `server/src/services/jam-public.ts`; this
+flag is the only thing that decides whether it may answer "young".
+
+- **Default ON, today's behaviour byte for byte.** The environment default
+  `JAM_PUBLIC_NEW_ACCOUNT_REVIEW` is on unless it says `false`, `0` or `off`, so
+  production and every self-host change nothing until a row says otherwise.
+  `JAM_PUBLIC_MIN_ACCOUNT_AGE_HOURS` still sets the hours while it is on.
+- **Off:** no account is young for public jams. A first public song and a take go
+  straight out (subject to everything else below), and the config answers
+  `open`.
+- **What it does not touch, off or on:** the report auto-hide
+  (`JAM_PUBLIC_REPORTS_TO_HIDE`), the cover and video scans, operator blocks,
+  deleted accounts, server bans, the per-day rate limits, and auto-accept's other
+  gates. Songs and takes already pending when it goes off stay pending: an
+  operator still approves them from the queue. Flipping it back on holds the next
+  first publish and the next take again; nothing already out is pulled back.
+- **Global, read per request**, nothing cached per process, so a flip is in the
+  next answer on both API containers. It does not replace `jam_public`: with
+  `jam_public` off nothing publishes at all, whatever this one says.
+
+Flip it from controles → interruptores, or `PUT /api/admin/flags
+{ key: "jam_public_new_account_review", enabled: false }`. Rollback is the same
+with `true`, or deleting the row to follow the variable again. Pinned by
+`server/src/api/jam-public.test.ts` (the flag as a row, the way production sets
+it: on, off, pending items surviving a flip, and three reports still hiding a
+song with it off) and the old-reader table in `server/src/lib/flags.test.ts`.
+
 ## `apps` (per server)
 
 The apps platform: small interactive things (Locadora, a game room) that a person
