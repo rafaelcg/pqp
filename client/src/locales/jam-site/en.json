@@ -92,6 +92,8 @@
   "song.startedBy": "Started by {who}",
   "song.error": "Could not load this jam.",
   "song.audioError": "A track did not load. Press play to try again.",
+  "song.closed.line": "This song is complete.",
+  "song.closed.cta": "Start yours",
   "song.notFound.title": "This jam does not exist",
   "song.notFound.body": "It may have been taken down, or the link is wrong.",
   "song.notFound.cta": "See the jams",

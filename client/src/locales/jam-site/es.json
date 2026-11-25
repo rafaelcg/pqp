@@ -92,6 +92,8 @@
   "song.startedBy": "Empezada por {who}",
   "song.error": "No se pudo cargar esta jam.",
   "song.audioError": "Una pista no cargó. Toca reproducir para intentar de nuevo.",
+  "song.closed.line": "Esta canción está completa.",
+  "song.closed.cta": "Empezar la tuya",
   "song.notFound.title": "Esta jam no existe",
   "song.notFound.body": "Puede que la hayan quitado, o el enlace está mal.",
   "song.notFound.cta": "Ver las jams",

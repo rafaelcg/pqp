@@ -22,6 +22,7 @@ async function shot(page: Page, name: string): Promise<void> {
 const SONG_A = "0b8f2c1e-4d5a-4e6f-8a7b-1c2d3e4f5a6b";
 const SONG_B = "7a1d3b2c-9e8f-4a5b-8c6d-0e1f2a3b4c5d";
 const SONG_C = "5c4b3a29-1807-4f6e-9d5c-3b2a19087f6e";
+const SONG_D = "3d4c5b6a-7e8f-4a9b-8c0d-2e3f4a5b6c7d";
 
 const person = (name: string, handle: string | null = null) => ({ name, handle, avatarUrl: null });
 
@@ -49,6 +50,8 @@ function song(id: string, title: string, parts: Array<[string, string]>, needs: 
 const A = song(SONG_A, "Minuano", [["drums", "Leco"], ["guitar", "Tchelo"]], ["bass"], { likes: 48 });
 const B = song(SONG_B, "Riff solto", [["guitar", "Duda"]], ["vocals"]);
 const C = song(SONG_C, "Duo pronto", [["keys", "Gui"], ["bass", "Nanda"]], []);
+/** A song that takes no part from a visitor: only its starter adds. */
+const D = song(SONG_D, "Gravada e fechada", [["drums", "Leco"], ["guitar", "Tchelo"]], [], { joinMode: "closed" });
 
 function track(id: string, instrument: string, name: string, offsetMs = 0) {
   return {
@@ -135,7 +138,7 @@ async function mockApi(
   await page.route(/\/api\/public\/jams\/[0-9a-f-]{36}$/, async (route: Route) => {
     const id = route.request().url().split("/").pop()!;
     calls.detail.push(id);
-    const found = [A, B, C].find((candidate) => candidate.id === id);
+    const found = [A, B, C, D].find((candidate) => candidate.id === id);
     if (!found) return route.fulfill({ status: 404, json: { error: "not found" } });
     const tracks = found.parts.map((part, index) => track(`${id.slice(0, 8)}-t${index}`, part.instrument, part.person.name, index * 500));
     return route.fulfill({
@@ -674,6 +677,45 @@ test.describe("how it works and the featured slot", () => {
     await mockApi(page, { songs: [COVER, { ...ORIGINAL, artist: "Outra Banda" }] });
     await page.goto("/jam");
     await expect(page.locator(`[data-jam-hero="${COVER.id}"]`)).toBeVisible();
+  });
+});
+
+test.describe("a song that takes no part", () => {
+  test("a closed song offers no record button and no dashed tile, only to start your own", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_D}`);
+    await expect(page.locator("[data-jam-toggle]")).toBeVisible();
+    await expect(page.locator("[data-jam-record]")).toHaveCount(0);
+    await expect(page.locator("[data-jam-need-tile]")).toHaveCount(0);
+    await expect(page.locator("[data-jam-closed]")).toContainText("Essa música tá completa.");
+    await shot(page, "06-song-closed");
+    await page.locator("[data-jam-closed-start]").click();
+    await expect(page.locator("dialog[open]")).toContainText("Pra começar uma jam tu precisa de uma conta");
+  });
+
+  test("an open song keeps its record button and dashed tile, and no closed note", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    await expect(page.locator("[data-jam-record]")).toBeVisible();
+    await expect(page.locator("[data-jam-need-tile]")).toBeVisible();
+    await expect(page.locator("[data-jam-closed]")).toHaveCount(0);
+  });
+
+  test("a closed song on a phone: the note is in the page, nothing scrolls sideways", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_D}`);
+    await expect(page.locator("[data-jam-closed]")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    await shot(page, "07-song-closed-320");
+  });
+
+  test("the featured slot passes over a closed original for one that takes a part", async ({ page }) => {
+    const open = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Cantiga aberta", [["vocals", "Lia"]], []);
+    await mockApi(page, { songs: [D, open] });
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${open.id}"]`)).toBeVisible();
+    await expect(page.locator(`[data-jam-card="${SONG_D}"]`)).toHaveCount(1);
   });
 });
 

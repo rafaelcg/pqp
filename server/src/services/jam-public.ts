@@ -1089,6 +1089,7 @@ function mapPublicSong(row: PublicSongRow, nowMs: number): PublicJamSong {
       row.join_mode === "wanted"
         ? sortedInstruments(row.wanted_instruments.filter((one) => !present.has(one)))
         : [],
+    joinMode: row.join_mode === "closed" || row.join_mode === "wanted" ? row.join_mode : "open",
     plays: Number(row.plays_count),
     autoAcceptOutside: row.auto_accept_outside === true,
     likes: row.likes_count,

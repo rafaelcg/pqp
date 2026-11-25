@@ -106,7 +106,8 @@ export function SongTransport({
   need: Instrument | null;
   onLike: () => void;
   onShare: () => void;
-  onRecord: () => void;
+  /** Null on a song that takes no part (closed): there is no record button then. */
+  onRecord: (() => void) | null;
   /** "Link copiado": shown briefly after a copy. */
   shared: string | null;
 }) {
@@ -174,15 +175,17 @@ export function SongTransport({
           <span className="max-sm:sr-only">{jt("share.label")}</span>
         </button>
       </div>
-      <button
-        type="button"
-        onClick={onRecord}
-        data-jam-record=""
-        className={cn(button("primary"), "order-6 w-full basis-full md:order-none md:w-auto md:basis-auto")}
-      >
-        <Mic className="h-[18px] w-[18px]" aria-hidden />
-        {need ? jt(`record.${need}` as Parameters<typeof jt>[0]) : jt("record.any")}
-      </button>
+      {onRecord && (
+        <button
+          type="button"
+          onClick={onRecord}
+          data-jam-record=""
+          className={cn(button("primary"), "order-6 w-full basis-full md:order-none md:w-auto md:basis-auto")}
+        >
+          <Mic className="h-[18px] w-[18px]" aria-hidden />
+          {need ? jt(`record.${need}` as Parameters<typeof jt>[0]) : jt("record.any")}
+        </button>
+      )}
       <p className="sr-only" role="status" aria-live="polite">
         {shared ?? ""}
       </p>
