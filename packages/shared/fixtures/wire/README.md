@@ -3,7 +3,8 @@
 Generated from the shipped zod schemas in `packages/shared/src/signaling.ts` (and
 the files it imports). The schemas are the only source of truth; clients are
 meant to replay these files to prove they read a frame the way the server does
-(only the vitest suite does today, see the end). Plan:
+(the vitest suite and the desktop prototype's `wire_fixtures.rs` do today, see the
+end). Plan:
 `docs/plans/RUST.md`, phase A. Do not edit the JSON by hand.
 
 | File | Holds | Generator |
@@ -43,6 +44,8 @@ differs from a fresh regeneration. A new frame arm with no example in
 
 ## Reading the fixtures from a client
 
-`Android` and `iOS` replays are steps A2 and A3 of the plan. Until then the only
-reader is the vitest file above. A client should decode every `input`, compare
+`Android` and `iOS` replays are steps A2 and A3 of the plan. Until then the readers
+are the vitest file above and `rust/apps/desktop-proto/tests/wire_fixtures.rs`, which
+replays both files against the desktop prototype's frame types (`rust.yml` runs it on
+Linux). A client should decode every `input`, compare
 with `canonical`, and refuse every `violations[].frame`.

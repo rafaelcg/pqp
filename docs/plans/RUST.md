@@ -203,7 +203,7 @@ above zero on the dashboard, every budget in section 3 met.
   audio level. **Can start now on a branch** with the spike's own socket code;
   it lands on `main` with D1.
 
-  **Status (2026-11-21): prototype built and measured, on a branch.**
+  **Status (2026-11-21): prototype built and measured, merged as #1714.**
   `rust/apps/desktop-proto` (a Cargo workspace at `rust/`, outside pnpm) signs in
   with the local dev bypass, reads the Sandbox hall over HTTP, holds `/ws`
   (auth, rosters, join, leave, mute, deafen), and joins the SFU room on LiveKit
@@ -218,7 +218,9 @@ above zero on the dashboard, every budget in section 3 met.
   prototype, which declares only `livekit`. Two corrections to the text above:
   speaking state does not come from `/ws` (the socket deliberately carries no
   `speaking`, `signaling.ts`), it comes from LiveKit's active speakers; and per
-  this plan the branch should not merge before D1 and C1 exist.
+  this plan the branch should not merge before D1 and C1 exist. It merged
+  anyway, as #1714 on 2026-11-21, before either; `rust/` holds only
+  `apps/desktop-proto` today, so D1 and C1 are still to do.
 
   Measured with B1's harness, same machine, same scenes, same sampler
   (`tools/desktop-bench/results/2026-11-21-darwin-arm64-1e0a316af-native.json`,

@@ -428,16 +428,20 @@ nothing is published. The first check after the flag goes on is
 
 ### Still gating the flag
 
-Code fixes from the 2026-11-20 persona QA:
+Code fixes from the 2026-11-20 persona QA, all merged:
 
 - The sign-up sheet that stayed dead after Escape on the public site, and the
   site's other QA findings (#1708).
 - The link preview: a jam card for songs with no cover, and a stable cover
   address instead of a signed URL in `og:image` (#1707, `restarts-api`).
-- Bidirectional and invisible text in titles and labels.
-- Studio messages that were not true.
+- Bidirectional and invisible text in titles, artists and labels, and studio
+  messages that were not true (#1710, `restarts-api`). Its site follow-up, the
+  legacy bidi controls in the page head and invisible-only titles, is #1717. The
+  native isolation in the iOS and Android jam screens is #1716.
 
-The last two had no open PR when this was written, so none is linked.
+No code fix from that QA is known to be open. What is left is the owner's go
+(the runbook below) and the first scanner check after the flag goes on. `jam_public`
+is off, and turning it on is the owner's decision.
 
 ## Runbook
 
