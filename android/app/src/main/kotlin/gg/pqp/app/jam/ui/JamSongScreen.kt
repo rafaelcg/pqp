@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
@@ -67,6 +69,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +82,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -105,6 +110,9 @@ import gg.pqp.app.R
 import gg.pqp.app.core.Backend
 import gg.pqp.app.jam.JamBidi
 import gg.pqp.app.jam.JamConfig
+import gg.pqp.app.jam.JamEditPermissions
+import gg.pqp.app.jam.JamMixRules
+import gg.pqp.app.jam.JamTrackEdit
 import gg.pqp.app.jam.JamNaming
 import gg.pqp.app.jam.JamNeed
 import gg.pqp.app.jam.JamNotice
@@ -175,6 +183,14 @@ fun JamSongScreen(
     var confirmSong by remember { mutableStateOf(false) }
     var confirmTrack by remember { mutableStateOf<JamTrack?>(null) }
     var menu by remember { mutableStateOf(false) }
+    // The edit sheet's own state lives in the view model (a rotation keeps what was typed and the photo that went up).
+    var editing by rememberSaveable { mutableStateOf(false) }
+    val canEditSong = ui.state?.let { JamEditPermissions.canEditSong(it.viewer, config.enabled) } == true
+    fun openEditor() {
+        menu = false
+        model.editor.open()
+        editing = true
+    }
 
     // The app left the screen: pause, so a song is never left playing to nobody.
     LifecycleStartEffect(songId) {
@@ -223,6 +239,11 @@ fun JamSongScreen(
                         }
                     },
                     actions = {
+                        if (canEditSong) {
+                            IconButton(onClick = ::openEditor, modifier = Modifier.testTag("jam.song.edit")) {
+                                Icon(PqpIcons.Edit, contentDescription = stringResource(R.string.jam_edit_open))
+                            }
+                        }
                         Box {
                             IconButton(onClick = { menu = true }, modifier = Modifier.testTag("jam.song.more")) {
                                 Icon(PqpIcons.More, contentDescription = stringResource(R.string.jam_more))
@@ -245,6 +266,14 @@ fun JamSongScreen(
                                         shareLink(context, link)
                                     },
                                 )
+                                if (canEditSong) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.jam_edit_open)) },
+                                        leadingIcon = { Icon(PqpIcons.Edit, contentDescription = null) },
+                                        onClick = ::openEditor,
+                                        modifier = Modifier.testTag("jam.song.editItem"),
+                                    )
+                                }
                                 if (ui.state?.let { JamPermissions.canDeleteSong(it.viewer) } == true) {
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.jam_delete_song), color = MaterialTheme.colorScheme.error) },
@@ -302,9 +331,21 @@ fun JamSongScreen(
                 }
                 JamSongUi.Phase.Failed -> Message(stringResource(R.string.jam_song_failed), stringResource(R.string.jam_retry), model::load)
                 JamSongUi.Phase.Gone -> Message(stringResource(R.string.jam_song_gone), null, {})
-                JamSongUi.Phase.Ready -> SongBody(model, ui, shared, viewerId, onDeleteTrack = { confirmTrack = it })
+                JamSongUi.Phase.Ready -> SongBody(model, ui, shared, viewerId, flagOn = config.enabled, onDeleteTrack = { confirmTrack = it })
             }
         }
+    }
+
+    val sheetSong = ui.state?.song
+    if (editing && sheetSong != null && canEditSong) {
+        JamEditSheet(
+            song = sheetSong,
+            editor = model.editor,
+            onDismiss = {
+                editing = false
+                model.editor.close()
+            },
+        )
     }
 
     if (confirmSong) {
@@ -391,6 +432,7 @@ private fun SongBody(
     ui: JamSongUi,
     shared: JamSharedScope?,
     viewerId: String?,
+    flagOn: Boolean,
     onDeleteTrack: (JamTrack) -> Unit,
 ) {
     val state = ui.state ?: return
@@ -398,6 +440,11 @@ private fun SongBody(
     val stack = ui.stack
     val others = ui.otherTakes
     val reduce = rememberReduceMotion()
+    // The one playhead is drawn across the lanes and NOT across an open adjust editor, which has a playhead of its own on a
+    // different scale: where the editor sits is measured against the block, and the line skips it.
+    var stackCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var editorRange by remember { mutableStateOf<ClosedFloatingPointRange<Float>?>(null) }
+    LaunchedEffect(ui.adjust == null) { if (ui.adjust == null) editorRange = null }
 
     LazyColumn(
         contentPadding = PaddingValues(start = Spacing.gutter, end = Spacing.gutter, top = Spacing.sm, bottom = Spacing.xl),
@@ -414,18 +461,41 @@ private fun SongBody(
             val playheadColor = MaterialTheme.colorScheme.primary
             Column(
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
-                modifier = Modifier.drawWithContent {
-                    drawContent()
-                    val duration = ui.durationMs
-                    if (duration > 0 && stack.isNotEmpty()) {
-                        val x = JamPlayhead.x(model.positionMs, size.width, duration)
-                        drawLine(playheadColor.copy(alpha = 0.9f), Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
-                    }
-                },
+                modifier = Modifier
+                    .onGloballyPositioned { stackCoordinates = it }
+                    .drawWithContent {
+                        drawContent()
+                        val duration = ui.durationMs
+                        if (duration > 0 && stack.isNotEmpty()) {
+                            val x = JamPlayhead.x(model.positionMs, size.width, duration)
+                            val color = playheadColor.copy(alpha = 0.9f)
+                            val gap = editorRange
+                            if (gap == null) {
+                                drawLine(color, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+                            } else {
+                                if (gap.start > 0f) drawLine(color, Offset(x, 0f), Offset(x, gap.start), strokeWidth = 2.dp.toPx())
+                                if (gap.endInclusive < size.height) drawLine(color, Offset(x, gap.endInclusive), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+                            }
+                        }
+                    },
             ) {
                 stack.forEach { track ->
                     androidx.compose.runtime.key(track.id) {
-                        TrackRow(model, ui, track, viewerId, fresh = track.id in state.fresh, reduce = reduce, onDelete = { onDeleteTrack(track) })
+                        TrackRow(
+                            model, ui, track, viewerId,
+                            fresh = track.id in state.fresh,
+                            reduce = reduce,
+                            flagOn = flagOn,
+                            onDelete = { onDeleteTrack(track) },
+                            onEditorBounds = { coordinates ->
+                                val block = stackCoordinates
+                                if (block != null && block.isAttached && coordinates.isAttached) {
+                                    val top = block.localPositionOf(coordinates, Offset.Zero).y
+                                    val range = top..(top + coordinates.size.height)
+                                    if (range != editorRange) editorRange = range
+                                }
+                            },
+                        )
                     }
                 }
             }
@@ -442,7 +512,7 @@ private fun SongBody(
                 }
             }
             items(others, key = { "take-${it.id}" }) { track ->
-                OtherTakeRow(model, ui, track, viewerId, onDelete = { onDeleteTrack(track) }, modifier = Modifier.animateItem())
+                OtherTakeRow(model, ui, track, viewerId, flagOn = flagOn, onDelete = { onDeleteTrack(track) }, modifier = Modifier.animateItem())
             }
         }
     }
@@ -606,7 +676,9 @@ private fun TrackRow(
     viewerId: String?,
     fresh: Boolean,
     reduce: Boolean,
+    flagOn: Boolean,
     onDelete: () -> Unit,
+    onEditorBounds: (LayoutCoordinates) -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     val state = ui.state ?: return
@@ -620,6 +692,11 @@ private fun TrackRow(
     val auditioned = ui.auditioning[track.instrument] == track.id && !track.inMix
     var expanded by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
+    // The author's own take, with the flag on, is the only one that can be adjusted; the editor opens under its lane.
+    val stored = state.tracks.firstOrNull { it.id == track.id } ?: track
+    val canAdjust = JamEditPermissions.canAdjustTrack(stored, viewerId, flagOn)
+    val adjusting = ui.adjust?.trackId == track.id
+    val savedVolume = JamTrackEdit.volumeDelta(stored.gain)
 
     // Entrance: a row that arrives live slides up and fades in; at rest, nothing.
     val enter = remember { Animatable(if (reduce || !fresh) 1f else 0f) }
@@ -656,7 +733,8 @@ private fun TrackRow(
                     color = if (audible) colors.onSurface else colors.onSurfaceVariant,
                 )
                 Text(
-                    text = name,
+                    // The author's saved volume, said on its own lane when it is not the recorded level (the web does too).
+                    text = if (savedVolume != null) name + JamNaming.SEPARATOR + stringResource(R.string.jam_clip_saved_volume, savedVolume) else name,
                     style = MaterialTheme.typography.labelMedium,
                     color = colors.onSurfaceVariant,
                     maxLines = 1,
@@ -688,10 +766,45 @@ private fun TrackRow(
             ) {
                 Text(stringResource(R.string.jam_solo_short), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
             }
+            if (canAdjust) {
+                SmallToggle(
+                    active = adjusting,
+                    onClick = { if (adjusting) model.adjustClose() else model.startAdjust(stored) },
+                    description = stringResource(R.string.jam_adjust_open),
+                    testTag = "jam.adjustOpen.${track.id}",
+                ) {
+                    Icon(PqpIcons.Adjust, contentDescription = null, modifier = Modifier.size(18.dp))
+                }
+            }
             VotePill(model, ui, track, haptics)
         }
 
         Lane(model, ui, track, status, label)
+
+        AnimatedVisibility(
+            visible = adjusting,
+            enter = if (reduce) EnterTransition.None else expandVertically(spring(stiffness = 500f)) + fadeIn(),
+            exit = if (reduce) ExitTransition.None else shrinkVertically(spring(stiffness = 500f)) + fadeOut(),
+        ) {
+            val adjust = ui.adjust
+            if (adjust != null && adjust.trackId == track.id) {
+                JamAdjustPanel(
+                    track = stored,
+                    adjust = adjust,
+                    band = JamMixRules.activeTracks(ui.liveTracks, ui.auditioning).filter { it.id != track.id },
+                    originMs = ui.originMs,
+                    position = { model.positionMs },
+                    onTrimStart = model::adjustTrimStart,
+                    onTrimEnd = model::adjustTrimEnd,
+                    onNudge = model::adjustNudge,
+                    onGainPercent = model::adjustGainPercent,
+                    onReset = model::adjustReset,
+                    onSave = model::adjustSave,
+                    onClose = model::adjustClose,
+                    modifier = Modifier.onGloballyPositioned(onEditorBounds),
+                )
+            }
+        }
 
         AnimatedVisibility(
             visible = expanded,
@@ -938,6 +1051,7 @@ private fun OtherTakeRow(
     ui: JamSongUi,
     track: JamTrack,
     viewerId: String?,
+    flagOn: Boolean,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -980,6 +1094,14 @@ private fun OtherTakeRow(
                 TextButton(onClick = { model.setInMix(track, true) }, enabled = track.id !in ui.busy) {
                     Text(stringResource(R.string.jam_put_in_mix))
                 }
+            }
+            if (JamEditPermissions.canAdjustTrack(track, viewerId, flagOn)) {
+                // Adjusting a take that is not in the mix means hearing it: it is listened to, and its lane opens in the stack.
+                val adjustLabel = stringResource(R.string.jam_adjust_open)
+                IconButton(
+                    onClick = { model.startAdjust(track) },
+                    modifier = Modifier.semantics { contentDescription = adjustLabel }.testTag("jam.adjustOpen.${track.id}"),
+                ) { Icon(PqpIcons.Adjust, contentDescription = null, modifier = Modifier.size(20.dp)) }
             }
             if (JamPermissions.canDeleteTrack(track, viewer, viewerId)) {
                 TextButton(onClick = onDelete) { Text(stringResource(R.string.jam_delete_track), color = colors.error) }

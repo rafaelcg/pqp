@@ -27,6 +27,20 @@ interface JamBackend {
     suspend fun deleteTrack(trackId: String)
     suspend fun deleteSong(songId: String)
 
+    /** The track's author's edit of its volume, place in time and trims. */
+    suspend fun updateTrack(trackId: String, request: UpdateJamTrackRequest): JamTrackWithSong
+
+    /** The song's title and artist: its author or a moderator. */
+    suspend fun updateSong(songId: String, patch: SongPatch): JamSongSummary
+
+    /**
+     * A cover's first two steps: a ticket for exactly these bytes and the PUT to the bucket, with [onProgress] as the
+     * fraction sent. Returns the upload id, which [setCover] claims.
+     */
+    suspend fun uploadCover(songId: String, jpeg: ByteArray, onProgress: (Float) -> Unit): String
+    suspend fun setCover(songId: String, uploadId: String): JamSongSummary
+    suspend fun removeCover(songId: String): JamSongSummary
+
     /** The jam channel takes the socket's primary slot: its frames are fanned out to its viewers. */
     fun join(channelId: String)
 
@@ -57,6 +71,20 @@ class SessionJamBackend(private val session: SessionStore) : JamBackend {
     override suspend fun setInMix(trackId: String, inMix: Boolean) = session.api.setJamTrackInMix(trackId, inMix)
     override suspend fun deleteTrack(trackId: String) = session.api.deleteJamTrack(trackId)
     override suspend fun deleteSong(songId: String) = session.api.deleteJamSong(songId)
+
+    override suspend fun updateTrack(trackId: String, request: UpdateJamTrackRequest) =
+        session.api.updateJamTrack(trackId, request)
+
+    override suspend fun updateSong(songId: String, patch: SongPatch) = session.api.updateJamSong(songId, patch)
+
+    override suspend fun uploadCover(songId: String, jpeg: ByteArray, onProgress: (Float) -> Unit): String {
+        val ticket = session.api.jamCoverTicket(songId, JamCover.SEND_TYPE, jpeg.size.toLong())
+        putJamCover(session.http, ticket.uploadUrl, jpeg, onProgress)
+        return ticket.uploadId
+    }
+
+    override suspend fun setCover(songId: String, uploadId: String) = session.api.setJamCover(songId, uploadId)
+    override suspend fun removeCover(songId: String) = session.api.removeJamCover(songId)
 
     override fun join(channelId: String) {
         session.realtime.joinChannel(channelId)

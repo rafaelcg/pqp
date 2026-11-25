@@ -90,6 +90,11 @@ class JamWallViewModelTest {
         override suspend fun setInMix(trackId: String, inMix: Boolean) = error("not used")
         override suspend fun deleteTrack(trackId: String) = Unit
         override suspend fun deleteSong(songId: String) = Unit
+        override suspend fun updateTrack(trackId: String, request: UpdateJamTrackRequest) = error("not used")
+        override suspend fun updateSong(songId: String, patch: SongPatch) = error("not used")
+        override suspend fun uploadCover(songId: String, jpeg: ByteArray, onProgress: (Float) -> Unit) = error("not used")
+        override suspend fun setCover(songId: String, uploadId: String) = error("not used")
+        override suspend fun removeCover(songId: String) = error("not used")
         override fun join(channelId: String) { joins += channelId }
         override fun leave(channelId: String) { leaves += channelId }
     }

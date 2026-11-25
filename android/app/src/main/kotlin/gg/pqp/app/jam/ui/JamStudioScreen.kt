@@ -22,10 +22,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.ui.semantics.onClick
-import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -118,7 +114,6 @@ import gg.pqp.app.jam.JamPeaks
 import gg.pqp.app.jam.record.CutReason
 import gg.pqp.app.jam.record.JamStudioUi
 import gg.pqp.app.jam.record.JamStudioViewModel
-import gg.pqp.app.jam.record.JamTakeEdit
 import gg.pqp.app.jam.record.MeasureMethod
 import gg.pqp.app.jam.record.PostFailure
 import gg.pqp.app.jam.record.PostStage
@@ -823,10 +818,6 @@ private fun rememberFrameTick(active: Boolean): FrameTick {
     return tick
 }
 
-/** A hold waits this long before it repeats, so a tap stays one step, and then repeats this often. */
-private const val HOLD_DELAY_NS = 400_000_000L
-private const val REPEAT_NS = 90_000_000L
-
 @Composable
 private fun BlockCard(block: StudioBlock, askMic: (String) -> Unit, onRetry: () -> Unit) {
     val colors = MaterialTheme.colorScheme
@@ -1299,7 +1290,7 @@ private fun NudgeCard(model: JamStudioViewModel, ui: JamStudioUi) {
     }
 }
 
-/** A press steps once; holding it repeats and speeds up (10, 50, then 100 ms a step), because nobody taps thirty times. */
+/** A press steps once; holding it repeats and speeds up (10, 50, then 100 ms a step): the same button the adjust editor has. */
 @Composable
 private fun NudgeButton(
     label: String,
@@ -1308,52 +1299,15 @@ private fun NudgeButton(
     model: JamStudioViewModel,
     modifier: Modifier,
 ) {
-    val colors = MaterialTheme.colorScheme
-    val haptics = LocalHapticFeedback.current
     val current by rememberUpdatedState(model)
-    Box(
-        modifier
-            .heightIn(min = 48.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(colors.surfaceContainerHigh)
-            .semantics(mergeDescendants = true) {
-                contentDescription = label
-                role = Role.Button
-                // TalkBack and a keyboard step once; the hold-to-repeat is for a finger.
-                onClick(label) {
-                    current.nudge(sign * JamTakeEdit.stepFor(0))
-                    true
-                }
-            }
-            .pointerInput(sign) {
-                awaitEachGesture {
-                    awaitFirstDown()
-                    current.nudge(sign * JamTakeEdit.stepFor(0))
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    val started = System.nanoTime()
-                    var next = started + HOLD_DELAY_NS
-                    while (true) {
-                        val wait = max(1L, (next - System.nanoTime()) / 1_000_000L)
-                        // Nothing arrives while the finger is still: the wait ends by itself and the step repeats.
-                        val event = withTimeoutOrNull(wait) { awaitPointerEvent() }
-                        if (event != null && event.changes.none { it.pressed }) break
-                        val now = System.nanoTime()
-                        if (now >= next) {
-                            current.nudge(sign * JamTakeEdit.stepFor((now - started) / 1_000_000L))
-                            next = now + REPEAT_NS
-                        }
-                    }
-                }
-            }
-            .padding(horizontal = Spacing.sm),
-        contentAlignment = Alignment.Center,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (sign < 0) Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, maxLines = 1)
-            if (sign > 0) Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-        }
-    }
+    HoldNudgeButton(
+        label = label,
+        icon = icon,
+        sign = sign,
+        onStep = { current.nudge(it) },
+        modifier = modifier,
+        container = MaterialTheme.colorScheme.surfaceContainerHigh,
+    )
 }
 
 // ------------------------------------------------------------------ posting, done, leaving

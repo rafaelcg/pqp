@@ -14,6 +14,7 @@ import gg.pqp.app.jam.JamSongViewer
 import gg.pqp.app.jam.JamTrack
 import gg.pqp.app.jam.JamTrackWithSong
 import gg.pqp.app.jam.JamVoteResponse
+import gg.pqp.app.jam.UpdateJamTrackRequest
 import gg.pqp.app.jam.jamSongLink
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.elementNames
@@ -59,6 +60,16 @@ class JamContractTest {
         assertSubset(JamSongDetailResponse.serializer(), "jamSongDetailResponseSchema")
         assertSubset(JamVoteResponse.serializer(), "jamVoteResponseSchema")
         assertSubset(JamTrackWithSong.serializer(), "jamTrackWithSongSchema")
+    }
+
+    /** What the phone WRITES: every field of an edit is a field the server's edit schema has. */
+    @Test
+    fun `the edit requests name only fields the shared schemas have`() {
+        assertSubset(UpdateJamTrackRequest.serializer(), "updateJamTrackSchema")
+        val songKeys = RepoSources.objectKeys(jam, "updateJamSongSchema").toSet()
+        assertTrue(songKeys.containsAll(setOf("title", "artist")))
+        assertEquals(setOf("kind", "contentType", "byteSize"), RepoSources.objectKeys(jam, "createJamUploadSchema").toSet())
+        assertEquals(setOf("uploadId"), RepoSources.objectKeys(jam, "setJamCoverSchema").toSet())
     }
 
     /** The two models a tile and a track row draw from: every field the server sends is read. */
