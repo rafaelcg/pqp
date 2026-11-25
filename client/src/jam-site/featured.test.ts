@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pickFeatured, takesParts } from "./featured";
+import { pickFeatured, pickWantingParts, takesParts } from "./featured";
 
 type Mode = "open" | "wanted" | "closed";
 const s = (id: string, artist: string | null, parts = 1, joinMode: Mode = "open") => ({
@@ -47,5 +47,29 @@ describe("pickFeatured", () => {
   });
   it("is the first song when everything is closed", () => {
     expect(pickFeatured([s("a", "A", 1, "closed"), s("b", "B", 1, "closed")])?.id).toBe("a");
+  });
+});
+
+describe("pickWantingParts", () => {
+  const w = (id: string, joinMode: Mode, needs: string[] = [], parts = 1) => ({
+    id,
+    joinMode,
+    needs: needs as never[],
+    parts: Array.from({ length: parts }, () => ({})) as never[],
+  });
+
+  it("is empty when the hero takes a part, or there is no hero", () => {
+    expect(pickWantingParts([w("a", "wanted", ["bass"])], { id: "h", joinMode: "open" })).toEqual([]);
+    expect(pickWantingParts([w("a", "wanted", ["bass"])], { id: "h", joinMode: "wanted" })).toEqual([]);
+    expect(pickWantingParts([w("a", "wanted", ["bass"])], null)).toEqual([]);
+  });
+  it("is empty when no other song takes a part", () => {
+    expect(pickWantingParts([w("h", "closed"), w("c", "closed"), w("e", "open", [], 0)], { id: "h", joinMode: "closed" })).toEqual([]);
+  });
+  it("lists songs that ask for an instrument first, then open ones, never the hero or a closed one, at most three", () => {
+    const hero = w("h", "closed");
+    const list = [hero, w("open1", "open"), w("c", "closed"), w("ask1", "wanted", ["bass"]), w("ask2", "wanted", ["keys"]), w("ask3", "wanted", ["drums"]), w("open2", "open")];
+    expect(pickWantingParts(list, hero).map((song) => song.id)).toEqual(["ask1", "ask2", "ask3"]);
+    expect(pickWantingParts(list, hero, 5).map((song) => song.id)).toEqual(["ask1", "ask2", "ask3", "open1", "open2"]);
   });
 });

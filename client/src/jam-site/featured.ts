@@ -31,3 +31,23 @@ export function pickFeatured<T extends Pick<PublicJamSong, "parts" | "artist" | 
     null
   );
 }
+
+/** How many songs the "these want a part" entry shows. */
+export const WANTING_MAX = 3;
+
+/**
+ * What the home points at when its hero takes no part (a closed song): up to
+ * three other songs with a part to show that take one, the ones that ASK for an
+ * instrument first, in the order they came. Empty when the hero takes a part
+ * itself (the entry is for a visitor who would otherwise have nothing to record
+ * on) or when no song in the page does.
+ */
+export function pickWantingParts<T extends Pick<PublicJamSong, "id" | "parts" | "needs" | "joinMode">>(
+  songs: readonly T[],
+  hero: Pick<PublicJamSong, "id" | "joinMode"> | null,
+  max: number = WANTING_MAX,
+): T[] {
+  if (!hero || takesParts(hero)) return [];
+  const candidates = songs.filter((song) => song.id !== hero.id && song.parts.length > 0 && takesParts(song));
+  return [...candidates.filter((song) => song.needs.length > 0), ...candidates.filter((song) => song.needs.length === 0)].slice(0, max);
+}

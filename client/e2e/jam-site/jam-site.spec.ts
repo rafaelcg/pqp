@@ -127,7 +127,7 @@ async function mockApi(
     calls.list.push(url);
     // The hero's read (`useFeatured`, six of Em alta) can be held back, so the grid's
     // own first page lands before it, which is the order a slow network can pick.
-    if (options.featuredDelayMs && url.searchParams.get("limit") === "6") {
+    if (options.featuredDelayMs && url.searchParams.get("limit") === "12") {
       await new Promise((resolve) => setTimeout(resolve, options.featuredDelayMs));
     }
     if (url.searchParams.get("cursor") === "c2") {
@@ -708,6 +708,61 @@ test.describe("a song that takes no part", () => {
     await expect(page.locator("[data-jam-closed]")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
     await shot(page, "07-song-closed-320");
+  });
+
+  // A closed original is the hero (it beats an open cover), so the home points at what still takes a part.
+  const COVER_ASKS = song("2e3d4c5b-6a7f-4e8d-9c0b-1b2c3d4e5f60", "Um hit pedindo baixo", [["guitar", "Duda"]], ["bass"], {
+    artist: "Banda Famosa",
+    joinMode: "wanted",
+  });
+
+  test("a closed hero gets a 'these want a part' entry right under it, and its songs open", async ({ page }) => {
+    await mockApi(page, { songs: [D, COVER_ASKS] });
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${SONG_D}"]`)).toBeVisible();
+    const wants = page.locator("[data-jam-wants]");
+    await expect(wants).toContainText("Essas tão pedindo gente");
+    await expect(wants.locator("[data-jam-wants-song]")).toHaveCount(1);
+    await expect(wants).toContainText("Um hit pedindo baixo");
+    await expect(wants).toContainText("Falta um baixo.");
+    const hero = (await page.locator("[data-jam-hero]").boundingBox())!;
+    const box = (await wants.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(hero.y + hero.height - 1);
+    await shot(page, "08-home-closed-hero-wants");
+    await wants.locator("[data-jam-wants-song]").click();
+    await expect(page).toHaveURL(new RegExp(`/jam/m/${COVER_ASKS.id}$`));
+  });
+
+  test("'Ver todas' opens the Falta alguém tab", async ({ page }) => {
+    await mockApi(page, { songs: [D, COVER_ASKS] });
+    await page.goto("/jam");
+    await page.locator("[data-jam-wants-all]").click();
+    await expect(page.locator('[data-jam-tab="needs"]')).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("no entry when the hero takes a part, and none when no song does", async ({ page }) => {
+    await mockApi(page, { songs: [A, B, C] });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-hero]")).toBeVisible();
+    await expect(page.locator("[data-jam-wants]")).toHaveCount(0);
+    const closedToo = song("4a5b6c7d-8e9f-4a0b-8c1d-3e4f5a6b7c8d", "Outra fechada", [["keys", "Gui"]], [], { joinMode: "closed" });
+    await page.unroute("**/api/public/jams?**");
+    await page.route("**/api/public/jams?**", (route) => route.fulfill({ json: { songs: [D, closedToo], nextCursor: null } }));
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${SONG_D}"]`)).toBeVisible();
+    await expect(page.locator("[data-jam-wants]")).toHaveCount(0);
+  });
+
+  test("on a 360 px phone the entry fits and sits under the hero", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 740 });
+    await mockApi(page, { songs: [D, COVER_ASKS] });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-wants]")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    const link = (await page.locator("[data-jam-wants-song]").boundingBox())!;
+    expect(link.height).toBeGreaterThanOrEqual(44);
+    await page.locator("[data-jam-wants]").scrollIntoViewIfNeeded();
+    await shot(page, "09-home-closed-hero-wants-360");
   });
 
   test("the featured slot passes over a closed original for one that takes a part", async ({ page }) => {
