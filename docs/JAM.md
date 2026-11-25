@@ -391,25 +391,37 @@ control characters refused, and:
 
 Rows written before this may still hold the controls, so every screen also
 isolates what it puts inside its own sentences (`client/src/lib/bidi.ts`,
-`<UserText>`). The phones do not yet: new rows are clean for them through the
-server, isolating old rows (and display names) in the iOS and Android views is a
-follow-up.
+`<UserText>`). The phones do the same since #1716: `JamBidi` on iOS and Android
+isolates what the jam screens draw inside the app's own sentences (and cleans what
+a screen reader speaks), so old rows and display names cannot reorder them.
 
 ## Phones and older clients
 
-Both native clients leave a channel type they do not know out of the list (iOS
-`Channel.isListed`, Android `drawable`), so a jam channel is invisible there, not
-a dead row, and the jam frames are dropped as unknown. An older **web** tab has
-no such rule: it would draw the channel as text. Turn the flag on for one server
-first.
+A phone build from before the jam screens (before #1572 and #1578) leaves a
+channel type it does not know out of the list (iOS `Channel.isListed`, Android
+`drawable`), so a jam channel is invisible there, not a dead row, and the jam
+frames are dropped as unknown. Current builds draw a jam row only where
+`GET /api/jam/config?serverId=` says `enabled`. An older **web** tab has no such
+rule: it would draw the channel as text. Turn the flag on for one server first.
 
 ## Not in this PR
 
-Comments on songs, publishing a song publicly, server-side mixdown, a native
-client UI (the web one is `docs/JAM_WEB.md`), audit-log actions for moderator deletes (the audit action list is typed on the
+Comments on songs, publishing a song publicly, server-side mixdown, audit-log actions for moderator deletes (the audit action list is typed on the
 client, so adding `jam.*` is a client change too), hiding a blocked author's
 tracks from the person who blocked them, a server-side signal for a new song in a jam nobody has open (the web client polls, `docs/JAM_WEB.md`), and
 a place for a person's tracks in the account data export.
+
+The web client is `docs/JAM_WEB.md`. Both phones now have a native client for the
+private jam (iOS #1572, #1594, #1604; Android #1578, #1605; the code is
+`ios/pqp/Sources/Jam/` and `android/.../jam/`, and `docs/IOS.md` and
+`docs/ANDROID.md` describe them): the wall, the song view, recording an audio
+part, voting, and putting a take in or out of the mix. What the phones still lack,
+as the code has it: editing a song's title, artist or cover; adjusting a take's
+gain, offset or trim; recording with the camera (the studio is audio only);
+sharing a song to chat (Android can send its link through the system share sheet);
+song search; reporting a part; and anything public (publishing, consent, the
+public site). Android opens a jam song's link (`/app/server/.../song/...`); iOS
+does not yet, and a change adding that is in progress.
 The two-API proof of the frames is `server/src/api/jam-two-process.test.ts`; the
 rest of the behaviour is `server/src/api/jam.test.ts`, run against a fake object
 store the real `lib/s3.ts` signs for.
