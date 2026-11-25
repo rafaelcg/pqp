@@ -39,7 +39,12 @@ import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
 import { sharedRateLimit } from "../lib/cluster-rate-limit.js";
 import { HttpError } from "../lib/http.js";
-import { jamPublicEnabled, jamPublicLimits, jamPublicNewAccountReviewOn } from "../lib/jam-public-config.js";
+import {
+  jamAnnouncementEnabled,
+  jamPublicEnabled,
+  jamPublicLimits,
+  jamPublicNewAccountReviewOn,
+} from "../lib/jam-public-config.js";
 import { isStorageConfigured } from "../lib/s3.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { isContentScanConfigured } from "./content-scan.js";
@@ -197,6 +202,7 @@ export async function jamPublicConfigFor(userId: string): Promise<JamPublicMeCon
     enabled,
     publishing: standing.blocked ? "blocked" : standing.young ? "review" : "open",
     uploads: isStorageConfigured(),
+    announce: jamAnnouncementEnabled(),
   };
 }
 

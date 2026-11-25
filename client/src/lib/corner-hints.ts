@@ -26,6 +26,10 @@ import { hintDietHides } from "./hint-diet";
  *     server where `forum_announcement` is on (`lib/forum-announcement.ts`).
  *     News about the server on screen, so it beats the year-round campaigns;
  *     it never wants the corner in a call, so it never meets voiceClean
+ *  4d. jamNews: "A Jam abriu", once per browser, to anybody signed in while
+ *     `jam_announcement` is on beside `jam_public` (`lib/jam-announcement.ts`).
+ *     Right after the forum card: both are launch news, and the forum's is
+ *     about the server on screen so it goes first
  *  5. voiceClean — the one-time Voz limpa nudge, above the user bar; after
  *     the first-run cards, before the app-invite campaigns (`lib/voice-clean.ts`)
  *  6. seasonalLook: "the Halloween look is here", once per season; a short
@@ -44,6 +48,7 @@ export const CORNER_HINT_ORDER = [
   "qg",
   "listingNudge",
   "forumNews",
+  "jamNews",
   "voiceClean",
   "seasonalLook",
   "mobileBeta",

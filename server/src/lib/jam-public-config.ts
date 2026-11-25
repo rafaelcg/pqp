@@ -24,6 +24,17 @@ export function jamPublicNewAccountReviewOn(): boolean {
   return isEnabled("jam_public_new_account_review");
 }
 
+/**
+ * `announce` on `GET /api/jam-public/config`: the "A Jam abriu" corner card may
+ * be offered (runtime flag `jam_announcement`, global, default off,
+ * `JAM_ANNOUNCEMENT` as its environment default). Only ever true while
+ * `jam_public` is on too: telling people a jam exists where nobody may open one
+ * would send them to a door that is shut.
+ */
+export function jamAnnouncementEnabled(): boolean {
+  return jamPublicEnabled() && isEnabled("jam_announcement");
+}
+
 /** The `error` token of a write refused while the flag is off. */
 export const JAM_PUBLIC_OFF = JAM_PUBLIC_ERRORS.off;
 

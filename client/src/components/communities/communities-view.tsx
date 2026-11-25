@@ -2,11 +2,13 @@ import {
   COMMUNITY_PAGE_SIZE,
   type CommunitySummary,
 } from "@pqp/shared";
-import { Compass, Plus, Search, Sparkles, X } from "lucide-react";
+import { Compass, Music2, Plus, Search, Sparkles, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ApiError, fetchCommunities, joinCommunity } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import { jamSiteHomeUrl } from "@/lib/jam-public-links";
+import { useJamPublicMe, useJamPublicTop } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
 import { CommunityCard, CommunityCardSkeleton } from "./community-card";
 import {
@@ -38,6 +40,13 @@ interface CommunitiesViewProps {
   onCreateCommunity: () => void;
   /** Opens the shared report dialog with a `server` target. */
   onReport: (community: CommunitySummary) => void;
+  /**
+   * The quiet door to public jams below the create strip: play the top public
+   * song (the caller closes the directory first), and start a jam of one's own.
+   * Absent, no door. Drawn only while `jam_public` is on for the account.
+   */
+  onListenJam?: (songId: string) => void;
+  onStartJam?: () => void;
 }
 
 /**
@@ -73,6 +82,8 @@ export function CommunitiesView({
   onEnterCommunity,
   onCreateCommunity,
   onReport,
+  onListenJam,
+  onStartJam,
 }: CommunitiesViewProps) {
   const { t, locale } = useTranslation();
   const [category, setCategory] = useState<CategoryFilter>(null);
@@ -352,6 +363,10 @@ export function CommunitiesView({
             </Button>
           </div>
 
+          {onStartJam && (
+            <JamDoor onListen={onListenJam} onStart={onStartJam} />
+          )}
+
           {joinError && (
             <p role="alert" className="mt-6 text-sm text-danger">
               {joinError}
@@ -434,5 +449,72 @@ export function CommunitiesView({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * A quiet persistent way into public jams (`docs/ONBOARDING.md`, "Jam door").
+ * The directory is where the app lists things to explore, and a member of a
+ * server with no Jam channel has no other way in once the announcement card is
+ * gone. Gated on `jam_public` alone, never on the announcement. Nothing is
+ * drawn while the flag is off or the first answer is out, and the song lookup
+ * settles before the strip appears, so its buttons never swap under the cursor.
+ */
+function JamDoor({
+  onListen,
+  onStart,
+}: {
+  onListen?: (songId: string) => void;
+  onStart: () => void;
+}) {
+  const { t } = useTranslation();
+  const me = useJamPublicMe();
+  const top = useJamPublicTop(me.enabled);
+  if (!me.enabled || (top.status !== "ready" && top.status !== "error")) {
+    return null;
+  }
+  const songId = top.status === "ready" ? top.songId : null;
+  return (
+    <section
+      aria-labelledby="communities-jam-door"
+      data-jam-door=""
+      className="mt-3 flex flex-col gap-3 rounded-2xl border border-ink-4 bg-ink-2 p-4 sm:flex-row sm:items-center sm:justify-between"
+    >
+      <div className="min-w-0">
+        <p
+          id="communities-jam-door"
+          className="flex items-center gap-2 font-display text-base font-bold"
+        >
+          <Music2 aria-hidden="true" className="h-4 w-4 text-signal" />
+          {t("communities.jam.title")}
+        </p>
+        <p className="mt-1 text-sm text-paper-muted">{t("communities.jam.body")}</p>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 self-start sm:self-auto">
+        {songId && onListen && (
+          <Button
+            variant="secondary"
+            data-jam-door-listen=""
+            onClick={() => onListen(songId)}
+          >
+            {t("communities.jam.listen")}
+          </Button>
+        )}
+        <Button variant={songId ? "ghost" : "secondary"} data-jam-door-start="" onClick={onStart}>
+          {t("communities.jam.start")}
+        </Button>
+        {songId && (
+          <a
+            href={jamSiteHomeUrl()}
+            target="_blank"
+            rel="noreferrer"
+            data-jam-door-all=""
+            className="rounded-sm text-sm font-semibold text-signal underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          >
+            {t("communities.jam.all")}
+          </a>
+        )}
+      </div>
+    </section>
   );
 }

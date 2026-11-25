@@ -4,13 +4,14 @@ import type {
   JamPublicInboxItem,
   JamPublicNotice,
 } from "@pqp/shared";
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { onConfigRefresh } from "@/lib/config-refresh";
 import {
   answerJamConsent,
   fetchJamPublicConsents,
   fetchJamPublicInbox,
   fetchJamPublicMe,
+  fetchPublicJams,
 } from "@/lib/jam-public-api";
 
 /**
@@ -34,9 +35,21 @@ export interface JamPublicMeState {
   /** `open` publishes and records straight out; `review` waits for an operator; `blocked` may not publish. */
   publishing: "open" | "review" | "blocked";
   uploads: boolean;
+  /**
+   * `jam_announcement`: the "A Jam abriu" corner card may be offered
+   * (`lib/jam-announcement.ts`). The server only says yes beside `enabled`, and
+   * this keeps that promise on its own side too.
+   */
+  announce: boolean;
 }
 
-const UNKNOWN: JamPublicMeState = { loaded: false, enabled: false, publishing: "open", uploads: false };
+const UNKNOWN: JamPublicMeState = {
+  loaded: false,
+  enabled: false,
+  publishing: "open",
+  uploads: false,
+  announce: false,
+};
 
 export interface JamPublicWaiting {
   consents: readonly JamPublicConsentRequest[];
@@ -74,6 +87,11 @@ export function resetJamPublic(): void {
   emit();
 }
 
+/** Test seam: what the store holds right now. */
+export function readJamPublicMeForTests(): JamPublicMeState {
+  return me;
+}
+
 export function loadJamPublicMe(options: { force?: boolean } = {}): Promise<void> {
   if (me.loaded && !options.force) {
     return Promise.resolve();
@@ -90,12 +108,14 @@ export function loadJamPublicMe(options: { force?: boolean } = {}): Promise<void
         enabled: answer.enabled === true,
         publishing: answer.publishing,
         uploads: answer.uploads === true,
+        announce: answer.enabled === true && answer.announce === true,
       };
       const changed =
         !me.loaded ||
         me.enabled !== next.enabled ||
         me.publishing !== next.publishing ||
-        me.uploads !== next.uploads;
+        me.uploads !== next.uploads ||
+        me.announce !== next.announce;
       me = next;
       if (!next.enabled && waiting !== NOTHING) {
         waiting = NOTHING;
@@ -235,6 +255,60 @@ export function useJamPublicMe(active = true): JamPublicMeState {
     }
   }, [active]);
   return useSyncExternalStore(subscribe, () => me, () => UNKNOWN);
+}
+
+// ---- the song to open --------------------------------------------------------
+
+/** How many of the top songs are looked at to pick the one a door opens. */
+const TOP_LOOKUP = 10;
+
+/**
+ * The song a door into public jams opens: the first of the most heard that has
+ * no artist (an original, which is what the product wants to show), else the
+ * first of them. `null` when there is no public song at all.
+ */
+export async function fetchTopPublicJamId(): Promise<string | null> {
+  const page = await fetchPublicJams({ sort: "top", limit: TOP_LOOKUP });
+  const songs = page.songs;
+  return (songs.find((song) => !song.artist?.trim()) ?? songs[0])?.id ?? null;
+}
+
+export type JamPublicTop =
+  | { status: "idle" | "loading" | "error" }
+  | { status: "ready"; songId: string | null };
+
+/**
+ * The top public song, asked once while `active` (a card or a door that may
+ * draw). `ready` with a null id is an answer: there is nothing to listen to
+ * yet, and the surface offers starting one instead. `error` is not an answer,
+ * and a surface that says something about it waits for one.
+ */
+export function useJamPublicTop(active: boolean): JamPublicTop {
+  const [top, setTop] = useState<JamPublicTop>({ status: "idle" });
+  const started = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!active || started.current) {
+      return;
+    }
+    started.current = true;
+    setTop({ status: "loading" });
+    void fetchTopPublicJamId().then(
+      (songId) => {
+        if (alive.current) setTop({ status: "ready", songId });
+      },
+      () => {
+        if (alive.current) setTop({ status: "error" });
+      },
+    );
+  }, [active]);
+  return top;
 }
 
 /** Who is waiting for this account's answer, and the starter's inbox. Empty while the flag is off. */

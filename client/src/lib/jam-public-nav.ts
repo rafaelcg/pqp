@@ -17,6 +17,8 @@ export interface PublicJamRequest {
   /** `new` starts a standalone public jam. */
   target: string;
   intent: JamIntent | null;
+  /** Start playing once the song is open (a card that said "Ouvir"); a link or a shelf card waits. */
+  play: boolean;
   /** Moves on every request, so asking twice for the same song still opens it. */
   nonce: number;
 }
@@ -32,15 +34,20 @@ function emit(): void {
 }
 
 /** Open a public jam in the app. */
-export function openPublicJam(intent: JamIntent): void {
+export function openPublicJam(intent: JamIntent, options: { play?: boolean } = {}): void {
   nonce += 1;
-  current = { target: intent.kind === "new" ? "new" : intent.songId, intent, nonce };
+  current = {
+    target: intent.kind === "new" ? "new" : intent.songId,
+    intent,
+    play: options.play === true && intent.kind === "song",
+    nonce,
+  };
   emit();
 }
 
 /** Open a public jam from somewhere that has only its id. */
-export function openPublicJamById(songId: string): void {
-  openPublicJam({ kind: "song", songId, record: false, instrument: null });
+export function openPublicJamById(songId: string, options: { play?: boolean } = {}): void {
+  openPublicJam({ kind: "song", songId, record: false, instrument: null }, options);
 }
 
 /** The address a request opens. */
@@ -56,6 +63,15 @@ export function takePublicJamIntent(target: string): JamIntent | null {
   const { intent } = current;
   current = { ...current, intent: null };
   return intent;
+}
+
+/** Whether the request for `target` asked to start playing, once: the view that acts on it calls this. */
+export function takePublicJamPlay(target: string): boolean {
+  if (!current || current.target !== target || !current.play) {
+    return false;
+  }
+  current = { ...current, play: false };
+  return true;
 }
 
 export function peekPublicJamRequest(): PublicJamRequest | null {

@@ -1252,6 +1252,21 @@ export const FEATURE_FLAGS = {
     // GLOBAL, like `jam_public`: a standalone public jam has no server.
     perServer: false,
   },
+  jam_announcement: {
+    description:
+      "Aviso da Jam (só cliente): quem está logado vê uma vez um cartão no canto, \"A Jam abriu\", com Ouvir uma jam (abre e toca a jam mais ouvida dentro do app) e Agora não. Só aparece com o jam_public ligado; nunca numa call, compartilhando, numa watch party ou digitando. Liga uns dias depois do jam_public, quando a moderação já está calma.",
+    env: "JAM_ANNOUNCEMENT",
+    parseEnv: exactTrue,
+    // Off: the announcement is a second step. `jam_public` goes on first and is
+    // watched for a day or two; this one goes on when Rafael says so
+    // (docs/plans, the Jam launch plan, C3), and off again when it has done
+    // its job. Only `true`.
+    codeDefault: false,
+    // GLOBAL like `jam_public`, whose answer it rides on: a public jam has no
+    // server, so the card is not about the server on screen.
+    perServer: false,
+    clientVia: "GET /api/jam-public/config (announce)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;
