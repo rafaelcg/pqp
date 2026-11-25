@@ -13,6 +13,17 @@ export function jamPublicEnabled(): boolean {
   return isEnabled("jam_public");
 }
 
+/**
+ * Do a young account's first public jam and its takes wait for an operator?
+ * The runtime flag `jam_public_new_account_review` (global, default ON,
+ * `JAM_PUBLIC_NEW_ACCOUNT_REVIEW` as its environment default; only `false` /
+ * `0` / `off` turns it off). Off, no account is "young" for public jams. Read
+ * per request.
+ */
+export function jamPublicNewAccountReviewOn(): boolean {
+  return isEnabled("jam_public_new_account_review");
+}
+
 /** The `error` token of a write refused while the flag is off. */
 export const JAM_PUBLIC_OFF = JAM_PUBLIC_ERRORS.off;
 
