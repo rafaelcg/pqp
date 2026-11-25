@@ -311,7 +311,10 @@ struct HomeView: View {
             await openChannel(serverId: serverId, channelId: channelId, messageId: messageId)
 
         case .jamSong(let serverId, let channelId, let songId):
-            await openJamSong(serverId: serverId, channelId: channelId, songId: songId)
+            if await openJamSong(request, serverId: serverId, channelId: channelId, songId: songId) {
+                superseded = true
+                return
+            }
 
         case .forumPost(let serverId, let forumId, let postId):
             guard let server = await resolveServer(serverId) else { return }
@@ -381,28 +384,39 @@ struct HomeView: View {
     /// account is not in, a jam channel it cannot see or that is gone. A song
     /// that is gone inside a jam the person can see is the wall's to say, and
     /// the wall stays under it.
-    private func openJamSong(serverId: String, channelId: String, songId: String) async {
+    ///
+    /// Two awaits sit before anything is committed, so a newer request that
+    /// arrived meanwhile has its own `follow` running: this one stops without
+    /// touching the screen and answers true ("superseded"), so it does not
+    /// mark the newer request handled either.
+    private func openJamSong(
+        _ request: DeepLinkTarget, serverId: String, channelId: String, songId: String
+    ) async -> Bool {
         guard let server = await resolveServer(serverId) else {
+            guard session.navigationRequest == request else { return true }
             session.linkError = JamSongLinkMessage.unavailable
-            return
+            return false
         }
         let channels: [Channel]
         do {
             channels = try await session.api.channels(serverId: serverId)
         } catch {
+            guard session.navigationRequest == request else { return true }
             session.linkError = JamSongLinkMessage.forFailure(error)
-            return
+            return false
         }
+        guard session.navigationRequest == request else { return true }
         guard let jam = channels.first(where: { $0.id == channelId && $0.isJam }) else {
             // The channel is not there for this account: land on the server so
             // the tap still goes somewhere, and say why the song did not open.
             tab = .servidores
             restoredChannel = RestoredChannel(server: server, channel: nil)
             session.linkError = JamSongLinkMessage.unavailable
-            return
+            return false
         }
         tab = .servidores
         restoredChannel = RestoredChannel(server: server, channel: jam, jamSongId: songId)
+        return false
     }
 
     /// A post a push named, asked twice before giving up: a tap on a
