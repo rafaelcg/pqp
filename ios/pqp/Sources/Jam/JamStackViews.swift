@@ -283,7 +283,13 @@ struct JamTrackRow: View {
                 ) { Task { await model.vote(track) } }
                 .frame(width: JamStackView.trailing)
             }
-            if expanded { controls.transition(.opacity.combined(with: .move(edge: .top))) }
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    controls
+                    adjustButton
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .padding(.horizontal, Metrics.hPadding)
         .opacity(audible ? 1 : 0.45)
@@ -402,6 +408,30 @@ struct JamTrackRow: View {
         .padding(.leading, 4)
     }
 
+    /// "Adjust my recording": the take's own timing and volume, for its author.
+    @ViewBuilder
+    private var adjustButton: some View {
+        if model.canAdjust(track) {
+            Button {
+                Haptics.selection()
+                model.beginAdjust(track)
+            } label: {
+                Label("Adjust my recording", systemImage: "slider.horizontal.3")
+                    .font(JamFont.text(13, .semibold))
+                    .foregroundStyle(Palette.paper)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .background(Capsule().fill(Palette.surfaceRaised))
+                    .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 4)
+            .accessibilityIdentifier("jam.track.adjust")
+        }
+    }
+
     private func toggle(
         symbol: String, on: Bool, label: LocalizedStringKey, id: String, action: @escaping () -> Void
     ) -> some View {
@@ -423,6 +453,11 @@ struct JamTrackRow: View {
 
     @ViewBuilder
     private var menu: some View {
+        if model.canAdjust(track) {
+            Button { model.beginAdjust(track) } label: {
+                Label("Adjust my recording", systemImage: "slider.horizontal.3")
+            }
+        }
         if model.canSetMix {
             Button { Task { await model.setInMix(track, false) } } label: {
                 Label("Take out of the mix", systemImage: "minus.circle")
@@ -564,6 +599,21 @@ struct JamOtherTakesView: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("jam.take.listen")
+            if model.canAdjust(track) {
+                Button {
+                    Haptics.selection()
+                    model.beginAdjust(track)
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(JamFont.text(17))
+                        .foregroundStyle(Palette.paperSubtle)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Adjust my recording"))
+                .accessibilityIdentifier("jam.take.adjust")
+            }
             if model.canSetMix {
                 Button {
                     Haptics.selection()
@@ -587,6 +637,11 @@ struct JamOtherTakesView: View {
         .padding(.horizontal, Metrics.hPadding)
         .padding(.vertical, 2)
         .contextMenu {
+            if model.canAdjust(track) {
+                Button { model.beginAdjust(track) } label: {
+                    Label("Adjust my recording", systemImage: "slider.horizontal.3")
+                }
+            }
             if model.canDelete(track) {
                 Button(role: .destructive) { onDelete(track) } label: {
                     Label("Delete take", systemImage: "trash")

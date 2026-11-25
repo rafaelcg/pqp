@@ -1343,6 +1343,90 @@ web's `--color-inst-*` tokens converted to sRGB (guitar yellow, bass blue,
 drums orange, vocals pink, keys cyan, other lilac); `JamInstrumentColorTests`
 reads `client/src/index.css` and fails when they drift.
 
+### Editing a song and adjusting a take
+
+Slice 1 of phone parity with the web's edit sheet and clip editor. Both are
+client only: they use routes the server already has, with the web's rules.
+
+**Edit a song** (`JamEditSongSheet`, `JamEditSongModel`, rules in
+`JamEditRules.swift`). A pencil in the song's header and "Editar música" in its
+menu, drawn only when `JamPermissions.canEditSong` says the viewer is the song's
+author or a moderator AND `GET /api/jam/config` says the flag is on; the server
+decides again on every write. The sheet edits the name, the artist and the
+cover, under a live tile. Save sends only what changed, in the order
+`PATCH /api/jam-songs/:id` (`artist: null` is an original; a title put back to
+what it was is not a write), then the cover, and applies each answer to the song
+as `jam-song-updated` does. The text is checked with the server's own rule
+(`JamText`, the port of `jamTitleSchema` and `jamArtistSchema`: bidi controls
+stripped, whitespace collapsed, something visible to read, UTF-16 length), so
+Save is never offered for text the server refuses. The cover follows the web's
+flow: a `PhotosPicker` photo is checked BEFORE anything is encoded (unreadable,
+under 400 px a side), centre-cropped to a 1024 px square JPEG with ImageIO (a
+48 MP original is never held whole; HEIC and the rest become JPEG), a ticket is
+minted for exactly its byte count (`POST /api/jam-songs/:id/uploads`, kind
+`cover`, the 4 MiB ceiling checked here first), the bytes `PUT` straight to
+storage with a progress ring on the tile, and `PUT /api/jam-songs/:id/cover`
+claims it only when Save is pressed, so closing the sheet leaves the old cover
+and the server sweeps the unclaimed object. Removing a cover is a `DELETE`
+(not gated by the flag on the server). Refusals are said in the web's words:
+403 `jam_channels_off` ("Recording is paused on this server."), any other 403
+("You cannot edit this song", and the song's permissions are read again because
+they were wrong), 413, 503, 429, offline. Unlike the web there is no framing
+step (the iPhone's avatar does not have one either): the crop is the centre.
+
+**Adjust a take** (`JamAdjustSheet`, `JamClipEditorView`, `JamAdjustModel`, rules
+in `JamTakeEditRules.swift`). "Adjust my recording" in the expanded lane, its
+menu and an own take under "Other takes", for the take's AUTHOR alone (the
+song's author and moderators do not nudge somebody else's take) and only with
+the flag on. The take is a clip on the song's one timeline under the band's
+waveform: drag an end to cut (the cut parts stay visible, on the quiet surface),
+drag the middle to move it, "Move earlier" / "Move later" (a tap is 10 ms, a hold
+repeats after 400 ms every 90 ms and speeds up to 50 then 100 ms), one volume
+from 0 to 200 %, "Whole song" or "Just the start" zoom. Every number is the
+web's (`jam-take-edit.ts`, `jam-clip.ts`), pinned by `JamTakeEditTests` against
+values produced by running those two files: a cut keeps 500 ms audible, a nudge
+is +/- 500 ms in whole milliseconds, gain is 0 to 2, and rounding is JavaScript's
+`Math.round` (halves go up), so a take adjusted here and on the web asks the
+server for the same thing. The offset follows the one reading of `offsetMs`
+(PR #1595): the nudge changes `offsetMs`, the file's FIRST sample; a trim hides
+audio and never moves it. Save sends `PATCH /api/jam-tracks/:id` with only the
+fields that moved.
+
+Heard at once, saved on Save. Every change goes to `JamSongModel.preview`: the
+volume reaches the one-band EQ at once, the placement goes to `JamEngine.place`
+(numbers only, the file and the player stay) and the song restarts at the same
+moment of the SONG (the transport's zero is the earliest heard sample, which a
+move can change), at most every 60 ms with a trailing apply so the last position
+is always the one heard. A take that is out of the mix is put on for this phone
+(`audition`) while its sheet is open. `JamSongModel.effective` is the one view of
+a track the engine plays (stored, or previewed), so a reload during an
+adjustment does not undo what the person is hearing, and an echo of a change this
+phone already made does not restart the song (`JamEngine.holds`).
+
+Reconciling with live frames (`JamAdjustDraft`, same rule as the web's
+`TrackAdjust`): when the STORED numbers move (the same account changed the take on
+the web, or the answer to this very save) the edits start over from them, unless
+a save is out; a frame that moves nothing an edit can change (a vote, a label)
+leaves the edits alone; a save that fails leaves them for another try. A take
+deleted under the sheet leaves nothing to adjust. A swipe down cannot throw edits
+away: the button reads "Voltar ao salvo" and says so.
+
+**Design.** Opaque palette colours only (the band is thin muted bars, the heard
+stretch is the instrument's colour, a cut is the raised surface with border
+coloured bars, the song's start one lime line), the song screen's own cards,
+pills and spring (`Animation.jam`), a handle that widens under a finger and a
+cover that lands with a small pop, none of it under Reduce Motion. Every target
+is 44 pt, type scales with Dynamic Type (`JamFont`), the handles and the middle
+are adjustable elements for VoiceOver (swipe up or down; 50 ms for an end, 10 ms
+for the middle) and the people's text goes through `JamBidi`.
+
+**Not verified here:** a physical device (the simulator has no real latency and
+its mic is the Mac's, so the DRAG feel, haptics and the audible result on
+AirPods are for a phone), and Android, which has neither yet.
+
+The "Not here" list below still says "trimming": that is the studio's review,
+which only nudges; a POSTED take can be cut and re-volumed from this adjuster.
+
 ### Recording a part
 
 From a song, "Gravar minha parte"; from the wall, "Gravar uma música" (a name

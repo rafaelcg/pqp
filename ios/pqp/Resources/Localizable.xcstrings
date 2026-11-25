@@ -131,6 +131,16 @@
         }
       }
     },
+    "%@ s cut" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ s cortados"
+          }
+        }
+      }
+    },
     "%@ streaming" : {
       "localizations" : {
         "pt-BR" : {
@@ -201,12 +211,52 @@
         }
       }
     },
+    "%lld ms earlier" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ms mais cedo"
+          }
+        }
+      }
+    },
+    "%lld ms later" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ms mais tarde"
+          }
+        }
+      }
+    },
     "Add my part" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Gravar minha parte"
+          }
+        }
+      }
+    },
+    "Adjust" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustar"
+          }
+        }
+      }
+    },
+    "Adjust my recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustar minha gravação"
           }
         }
       }
@@ -221,12 +271,32 @@
         }
       }
     },
+    "Adjusting your %@ recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustando tua gravação de %@"
+          }
+        }
+      }
+    },
     "Anybody on the server records on top" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Qualquer pessoa do servidor grava por cima"
+          }
+        }
+      }
+    },
+    "Artist" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Artista"
           }
         }
       }
@@ -257,6 +327,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Voltar ao automático"
+          }
+        }
+      }
+    },
+    "Back to saved" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar ao salvo"
           }
         }
       }
@@ -301,6 +381,16 @@
         }
       }
     },
+    "Change photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trocar a foto"
+          }
+        }
+      }
+    },
     "Could not get your recording ready. Free some space on the phone and try again." : {
       "localizations" : {
         "pt-BR" : {
@@ -327,6 +417,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Contar antes de começar"
+          }
+        }
+      }
+    },
+    "Cut the end" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cortar o final"
+          }
+        }
+      }
+    },
+    "Cut the start" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cortar o começo"
           }
         }
       }
@@ -361,6 +471,26 @@
         }
       }
     },
+    "Discard your changes?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descartar as mudanças?"
+          }
+        }
+      }
+    },
+    "Drag the ends to trim. Drag the middle to move it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrasta as pontas pra cortar. Arrasta o meio pra mover."
+          }
+        }
+      }
+    },
     "Easy, that is a lot at once. Try again in a moment." : {
       "localizations" : {
         "pt-BR" : {
@@ -391,6 +521,16 @@
         }
       }
     },
+    "Edit song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar música"
+          }
+        }
+      }
+    },
     "Estimated delay %lld ms" : {
       "localizations" : {
         "pt-BR" : {
@@ -407,6 +547,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Atraso estimado em %lld ms. Se a tua parte ficar fora do tempo, calibra."
+          }
+        }
+      }
+    },
+    "Everybody hears it like this" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todo mundo ouve assim"
           }
         }
       }
@@ -501,6 +651,16 @@
         }
       }
     },
+    "Hold a button to go faster." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Segura o botão pra ir mais rápido."
+          }
+        }
+      }
+    },
     "Hold a headphone cup against the microphone, or measure on the speaker, so the microphone hears the clicks." : {
       "localizations" : {
         "pt-BR" : {
@@ -511,12 +671,62 @@
         }
       }
     },
+    "How it shows in the list" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como aparece na lista"
+          }
+        }
+      }
+    },
+    "How much to show" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quanto mostrar"
+          }
+        }
+      }
+    },
     "It has not been sent to the band yet." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ela ainda não foi mandada pra banda."
+          }
+        }
+      }
+    },
+    "It only counts once you save." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só vale depois de salvar."
+          }
+        }
+      }
+    },
+    "It only goes away once you save." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só sai depois de salvar."
+          }
+        }
+      }
+    },
+    "Just the start" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só o começo"
           }
         }
       }
@@ -541,12 +751,32 @@
         }
       }
     },
+    "Leave empty if it is yours" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vazio se a música é tua"
+          }
+        }
+      }
+    },
     "Leave the call to record" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sai da call pra gravar"
+          }
+        }
+      }
+    },
+    "Line it up" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alinhar"
           }
         }
       }
@@ -1138,6 +1368,16 @@
         }
       }
     },
+    "Move the recording in time" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover a gravação no tempo"
+          }
+        }
+      }
+    },
     "Mute, deafen and volume per person." : {
       "localizations" : {
         "pt-BR" : {
@@ -1248,6 +1488,26 @@
         }
       }
     },
+    "normal" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "normal"
+          }
+        }
+      }
+    },
+    "Nothing changes for everyone until you press Save." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só vale pra todo mundo depois de Salvar."
+          }
+        }
+      }
+    },
     "Nothing here" : {
       "localizations" : {
         "pt-BR" : {
@@ -1328,6 +1588,16 @@
         }
       }
     },
+    "Original" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original"
+          }
+        }
+      }
+    },
     "other" : {
       "localizations" : {
         "pt-BR" : {
@@ -1344,6 +1614,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Outros takes"
+          }
+        }
+      }
+    },
+    "Pick a JPG, PNG or WebP image." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escolhe uma imagem JPG, PNG ou WebP."
           }
         }
       }
@@ -1548,6 +1828,36 @@
         }
       }
     },
+    "Remove photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remover a foto"
+          }
+        }
+      }
+    },
+    "Reset" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desfazer"
+          }
+        }
+      }
+    },
+    "Right on time" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No tempo"
+          }
+        }
+      }
+    },
     "Send anyway" : {
       "localizations" : {
         "pt-BR" : {
@@ -1574,6 +1884,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mandar pra banda"
+          }
+        }
+      }
+    },
+    "Sending the photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviando a foto"
           }
         }
       }
@@ -1638,6 +1958,16 @@
         }
       }
     },
+    "Some of the text has nothing to read: the song's name or the artist. Go back and fix it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parte do texto não tem nada pra ler: o nome da música ou o artista. Volta e arruma."
+          }
+        }
+      }
+    },
     "Some tracks did not download. Tap to try again" : {
       "localizations" : {
         "pt-BR" : {
@@ -1664,6 +1994,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Alguém excluiu essa música. Tua gravação tá guardada: manda como música nova, ou descarta."
+          }
+        }
+      }
+    },
+    "Somebody took it down while you were adjusting it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alguém apagou ela enquanto tu ajustavas."
           }
         }
       }
@@ -1724,6 +2064,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ficou bom?"
+          }
+        }
+      }
+    },
+    "start" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "início"
           }
         }
       }
@@ -2638,6 +2988,26 @@
         }
       }
     },
+    "Swipe up to move it later, down to move it earlier." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desliza pra cima pra mover mais tarde, pra baixo pra mover mais cedo."
+          }
+        }
+      }
+    },
+    "Swipe up to move the handle right, down to move it left." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desliza pra cima pra mover a alça pra direita, pra baixo pra esquerda."
+          }
+        }
+      }
+    },
     "Thanks for answering honestly. The date of birth you gave is under %lld, so this account is closed. That is a rule about the service, not a judgement about you, pqp is built for adults and we are not able to make exceptions to it." : {
       "localizations" : {
         "pt-BR" : {
@@ -2688,6 +3058,16 @@
         }
       }
     },
+    "That artist has nothing to read. Use letters or numbers, or leave it empty." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse artista não tem nada pra ler. Usa letras ou números, ou deixa vazio."
+          }
+        }
+      }
+    },
     "That is not a date we can read. Check the day, month and year." : {
       "localizations" : {
         "pt-BR" : {
@@ -2708,6 +3088,46 @@
         }
       }
     },
+    "That name has nothing to read. Use letters or numbers." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse nome não tem nada pra ler. Usa letras ou números."
+          }
+        }
+      }
+    },
+    "That photo came out too large to send (the limit is 4 MB). Pick a smaller one." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa foto ficou grande demais pra enviar (o limite é 4 MB). Escolhe uma menor."
+          }
+        }
+      }
+    },
+    "That photo is too small (%lld x %lld). Pick one at least %lld px on each side." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa foto é pequena demais (%lld x %lld). Escolhe uma com pelo menos %lld px de lado."
+          }
+        }
+      }
+    },
+    "That song is gone." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa música sumiu."
+          }
+        }
+      }
+    },
     "That was too short. Keep playing a little longer." : {
       "localizations" : {
         "pt-BR" : {
@@ -2724,6 +3144,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "A banda"
+          }
+        }
+      }
+    },
+    "the band" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "a banda"
           }
         }
       }
@@ -2864,6 +3294,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "O celular ficou sem espaço e a gravação parou."
+          }
+        }
+      }
+    },
+    "The photo did not go up. Pick it again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A foto não subiu. Escolhe ela de novo."
           }
         }
       }
@@ -3088,12 +3528,32 @@
         }
       }
     },
+    "This phone cannot open that image. Try another one." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse celular não consegue abrir essa imagem. Tenta outra."
+          }
+        }
+      }
+    },
     "This recording has no sound" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Essa gravação está sem som"
+          }
+        }
+      }
+    },
+    "This recording is gone" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa gravação sumiu"
           }
         }
       }
@@ -3374,6 +3834,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quem pode entrar"
+          }
+        }
+      }
+    },
+    "Whole song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inteira"
           }
         }
       }
@@ -12534,6 +13004,26 @@
         }
       }
     },
+    "You cannot adjust this recording." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não pode ajustar essa gravação."
+          }
+        }
+      }
+    },
+    "You cannot edit this song." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não pode editar essa música."
+          }
+        }
+      }
+    },
     "You cannot record on this song right now." : {
       "localizations" : {
         "pt-BR" : {
@@ -12580,6 +13070,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tu não pode mandar mensagem aqui."
+          }
+        }
+      }
+    },
+    "You changed this song and have not saved." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu mexeu nessa música e não salvou."
           }
         }
       }
@@ -12720,6 +13220,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tu vai precisar de um novo convite para voltar."
+          }
+        }
+      }
+    },
+    "your recording" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "tua gravação"
           }
         }
       }

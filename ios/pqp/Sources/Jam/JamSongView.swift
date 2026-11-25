@@ -18,6 +18,7 @@ struct JamSongView: View {
     @State private var confirmingDeleteSong = false
     @State private var trackToDelete: JamTrack?
     @State private var scrubbing = false
+    @State private var editing = false
     let zoomSpace: Namespace.ID
     let wall: JamWallModel?
 
@@ -50,6 +51,17 @@ struct JamSongView: View {
                 studio = nil
                 Task { await model.resumeAfterRecording() }
             }
+        }
+        .sheet(isPresented: $editing) {
+            JamEditSongSheet(song: model)
+        }
+        .sheet(
+            item: Binding(
+                get: { model.adjustingTrack },
+                set: { if $0 == nil { model.endAdjust() } }
+            )
+        ) { track in
+            JamAdjustSheet(song: model, track: track)
         }
         .confirmationDialog("Delete this song?", isPresented: $confirmingDeleteSong, titleVisibility: .visible) {
             Button("Delete song", role: .destructive) {
@@ -134,7 +146,27 @@ struct JamSongView: View {
                     .accessibilityLabel(Text(verbatim: JamBidi.clean(headerLine)))
                 JamInstrumentChips(song: model.song, tracks: model.tracks)
             }
+            Spacer(minLength: 0)
+            if model.canEditSong {
+                Button {
+                    Haptics.selection()
+                    editing = true
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(JamFont.text(16, .semibold))
+                        .foregroundStyle(Palette.paper)
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(Palette.surfaceRaised))
+                        .overlay(Circle().strokeBorder(Palette.border, lineWidth: 1))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(JamTilePressStyle(reduceMotion: reduceMotion))
+                .accessibilityLabel(Text("Edit song"))
+                .accessibilityIdentifier("jam.song.edit")
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.8).combined(with: .opacity))
+            }
         }
+        .animation(.jam(reduceMotion: reduceMotion), value: model.canEditSong)
         .padding(.horizontal, Metrics.hPadding)
         .accessibilityElement(children: .contain)
     }
@@ -186,6 +218,12 @@ struct JamSongView: View {
                     }
                     ShareLink(item: songLink) {
                         Label("Share link", systemImage: "square.and.arrow.up")
+                    }
+                }
+                if model.canEditSong {
+                    Divider()
+                    Button { editing = true } label: {
+                        Label("Edit song", systemImage: "pencil")
                     }
                 }
                 if model.canDeleteSong {
