@@ -636,6 +636,20 @@ test.describe("how it works and the featured slot", () => {
     expect(media).toEqual([]);
   });
 
+  for (const [width, height] of [[360, 740], [320, 640]] as const) {
+    test(`on a ${width} px phone the strip comes before the hero, inside the first screen`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await mockApi(page);
+      await page.goto("/jam");
+      await expect(page.locator("[data-jam-hero]")).toBeVisible();
+      const strip = (await page.locator("[data-jam-how]").boundingBox())!;
+      const hero = (await page.locator("[data-jam-hero]").boundingBox())!;
+      expect(strip.y + strip.height).toBeLessThanOrEqual(hero.y);
+      expect(strip.y + strip.height).toBeLessThan(height);
+      await shot(page, `05-home-${width}`);
+    });
+  }
+
   test("the strip is on the empty home too, and fits a 320 px screen", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 700 });
     await mockApi(page, { songs: [] });

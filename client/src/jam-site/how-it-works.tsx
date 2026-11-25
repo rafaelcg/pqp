@@ -23,18 +23,18 @@ const STEPS: ReadonlyArray<{
 
 export function HowItWorks({ className }: { className?: string }) {
   return (
-    <section aria-labelledby="jam-how-title" data-jam-how="" className={cn("mt-8 sm:mt-10", className)}>
+    <section aria-labelledby="jam-how-title" data-jam-how="" className={className}>
       <h2 id="jam-how-title" className="text-sm font-semibold text-text-secondary">
         {jt("intro.title")}
       </h2>
-      <ol className="mt-3 grid gap-2 rounded-[var(--radius-panel)] border border-border bg-surface-1 p-3 sm:grid-cols-3 sm:gap-4 sm:p-4">
+      <ol className="mt-3 grid gap-1.5 rounded-[var(--radius-panel)] border border-border bg-surface-1 p-2.5 sm:grid-cols-3 sm:gap-4 sm:p-4">
         {STEPS.map((step, index) => {
           const Icon = step.icon;
           return (
             <li key={step.id} data-jam-how-step={step.id} className="flex min-w-0 items-center gap-3">
               <span
                 aria-hidden="true"
-                className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-full", INSTRUMENT_LOOK[step.hue].fill)}
+                className={cn("grid h-9 w-9 shrink-0 sm:h-10 sm:w-10 place-items-center rounded-full", INSTRUMENT_LOOK[step.hue].fill)}
               >
                 <Icon className="h-[18px] w-[18px]" fill={step.id === "listen" ? "currentColor" : "none"} />
               </span>

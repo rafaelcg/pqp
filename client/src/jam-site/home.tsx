@@ -351,8 +351,13 @@ export function HomePage() {
         {jt("home.tagline")}
       </h1>
       {fromApp && <FromAppNotice body={jt("fromApp.start")} />}
-      <Hero song={featured.song} status={featured.status} />
-      <HowItWorks />
+      {/* On a phone the strip comes first: the hero's play button is a screen down, and a cold visitor should know what a jam is before it. From lg the hero sits beside its art and the strip goes under it. */}
+      <div className="flex flex-col">
+        <div className="order-2 lg:order-1">
+          <Hero song={featured.song} status={featured.status} />
+        </div>
+        <HowItWorks className="order-1 mt-5 lg:order-2 lg:mt-10" />
+      </div>
       <div className="mt-10 sm:mt-14">
         <Tabs tab={tab} onTab={setTab} need={need} onNeed={setNeed} />
       </div>

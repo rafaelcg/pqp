@@ -88,7 +88,9 @@ the generic `noindex` card.
   (`how-it-works.tsx`, `intro.*` in the catalogues) says "Ouve. Não precisa de
   conta." / "Grava a parte que falta, de fone, em cima da banda." / "Quem começou
   escolhe o que entra na mistura." with the site's own icons on instrument-hue
-  chips; static, no request, and it is also on the empty home. The server sorts (`top`,
+  chips; static, no request, and it is also on the empty home. It sits under the
+  hero from `lg` up, and ABOVE it on a phone (the hero's play button is a screen
+  down there, and a cold visitor should know what a jam is before it). The server sorts (`top`,
   `new`); `needs=` filters an instrument. **Em alta** is `top`, **Novas** is
   `new`, **Falta alguém** is `new` with the songs that ask for nobody dropped
   (and a row of instrument chips that become `needs=`), **Prontas** is `new`
