@@ -13,6 +13,7 @@ import {
   fetchJamPublicMe,
   fetchPublicJams,
 } from "@/lib/jam-public-api";
+import { openPublicJam, openPublicJamById } from "@/lib/jam-public-nav";
 
 /**
  * What the signed-in account knows about public jams: the flag and what this
@@ -271,6 +272,27 @@ export async function fetchTopPublicJamId(): Promise<string | null> {
   const page = await fetchPublicJams({ sort: "top", limit: TOP_LOOKUP });
   const songs = page.songs;
   return (songs.find((song) => !song.artist?.trim()) ?? songs[0])?.id ?? null;
+}
+
+/**
+ * A door into public jams that has no song to show beside it (the quick
+ * switcher's "Abrir o Jam", the Novidades strip): the top public song, playing,
+ * or the sheet that starts one when there is none or the lookup failed (a
+ * failed lookup says nothing about the catalogue, and starting is always
+ * available).
+ */
+export async function openPublicJamsDoor(): Promise<void> {
+  let songId: string | null = null;
+  try {
+    songId = await fetchTopPublicJamId();
+  } catch {
+    // Not an answer: fall through to starting one.
+  }
+  if (songId) {
+    openPublicJamById(songId, { play: true });
+  } else {
+    openPublicJam({ kind: "new" });
+  }
 }
 
 export type JamPublicTop =

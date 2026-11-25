@@ -43,6 +43,8 @@ interface QuickSwitcherProps {
   onSelectChannel: (channelId: string) => void;
   /** Open a Jam song (its own address: the Jam with the song open). */
   onOpenJamSong?: (song: SwitcherSong) => void;
+  /** "Abrir o Jam": the public jams (offered only when `sources.jamDoor`). */
+  onOpenJams?: () => void;
   onSearchMessages: (query: string) => void;
 }
 
@@ -62,6 +64,7 @@ export function QuickSwitcher({
   onSelectServer,
   onSelectChannel,
   onOpenJamSong,
+  onOpenJams,
   onSearchMessages,
 }: QuickSwitcherProps) {
   const { t } = useTranslation();
@@ -166,6 +169,9 @@ export function QuickSwitcher({
       case "song":
         onOpenJamSong?.(item.song);
         return;
+      case "jam":
+        onOpenJams?.();
+        return;
     }
   }
 
@@ -177,6 +183,7 @@ export function QuickSwitcher({
     server: t("switcher.section.servers"),
     channel: t("switcher.section.channels"),
     song: t("switcher.section.songs"),
+    jam: t("switcher.section.jam"),
   };
 
   return (
@@ -396,6 +403,19 @@ function ItemBody({ item, active }: { item: SwitcherItem; active: boolean }) {
           </span>
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">{item.name}</span>
           <span className="shrink-0 truncate text-xs text-text-tertiary">{item.serverName}</span>
+        </>
+      );
+    case "jam":
+      return (
+        <>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center text-accent">
+            <JamGlyph className="h-5 w-5" />
+          </span>
+          <span className="flex min-w-0 flex-1 items-baseline gap-2">
+            <span className="truncate text-sm font-medium text-text">{t("switcher.jam.open")}</span>
+            <span className="truncate text-xs text-text-tertiary">{t("switcher.jam.hint")}</span>
+          </span>
+          <Trailing unread={0} active={active} label={t("switcher.open")} />
         </>
       );
     case "song":

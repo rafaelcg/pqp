@@ -107,3 +107,29 @@ describe("quickSwitcherItems", () => {
     expect(quickSwitcherItems("bloom", sources).some((item) => item.kind === "song")).toBe(false);
   });
 });
+
+describe("the Jam door", () => {
+  const withDoor: SwitcherSources = { ...sources, jamDoor: true };
+  const doors = (query: string, from: SwitcherSources) =>
+    quickSwitcherItems(query, from).filter((item) => item.kind === "jam");
+
+  it("typing jam offers the public jams, first, even in a server with no Jam channel", () => {
+    // `sources` has no jam channel: the production default.
+    expect(sources.channels.some((channel) => channel.type === "jam")).toBe(false);
+    const items = quickSwitcherItems("jam", withDoor);
+    expect(items[0]).toEqual({ kind: "jam", id: "jam:door" });
+  });
+
+  it("finds it by música, with or without the accent, and by a start of the word", () => {
+    for (const query of ["música", "musica", "ja", "Jam", "mus"]) {
+      expect(doors(query, withDoor), query).toHaveLength(1);
+    }
+  });
+
+  it("is not offered for other words, for an empty box, or while jam_public is off", () => {
+    expect(doors("caio", withDoor)).toHaveLength(0);
+    expect(doors("", withDoor)).toHaveLength(0);
+    expect(doors("jam", sources)).toHaveLength(0);
+    expect(doors("jam", { ...sources, jamDoor: false })).toHaveLength(0);
+  });
+});

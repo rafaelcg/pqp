@@ -136,6 +136,7 @@ import {
   dispatchJamPublicNotice,
   isJamPublicNotice,
   jamPublicReconnected,
+  openPublicJamsDoor,
   useJamPublicMe,
   useJamPublicTop,
 } from "@/lib/jam-public-store";
@@ -2114,6 +2115,8 @@ function MainAppContent({
     [],
   );
   const jamCreating = useRef(false);
+  // "Criar Jam" asks first: it adds a permanent channel to a shared server.
+  const [jamCreateAsk, setJamCreateAsk] = useState<{ parentId: string | null } | null>(null);
   const jamCreateUnsure = useRef<{ serverId: string; known: Set<string> } | null>(null);
   const refreshChannelListRef = useRef<
     (serverId: string, confirmingVanishedId?: string | null) => void
@@ -3572,9 +3575,10 @@ function MainAppContent({
   );
   const stableOnCreateChannel = useStableCallback(
     (type: ChannelType, isPrivate: boolean, parentId?: string | null) => {
-      // A Jam is an app you add, not a channel you name: one click, called "jam".
+      // A Jam is an app you add, not a channel you name: called "jam", after one
+      // question, because it lands in a server other people share.
       if (type === "jam") {
-        void handleCreateJam(parentId ?? null);
+        setJamCreateAsk({ parentId: parentId ?? null });
         return;
       }
       setChannelPrompt({ mode: "create", type, isPrivate, parentId: parentId ?? null });
@@ -15382,6 +15386,23 @@ function MainAppContent({
         onClose={() => setMicPromptPartyId(null)}
       />
       <ConfirmDialog
+        open={jamCreateAsk !== null}
+        title={t("jam.createConfirm.title")}
+        description={t("jam.createConfirm.body")}
+        confirmLabel={t("jam.createConfirm.confirm")}
+        cancelLabel={t("jam.createConfirm.cancel")}
+        destructive={false}
+        initialFocus="confirm"
+        onConfirm={() => {
+          const ask = jamCreateAsk;
+          setJamCreateAsk(null);
+          if (ask) {
+            void handleCreateJam(ask.parentId);
+          }
+        }}
+        onClose={() => setJamCreateAsk(null)}
+      />
+      <ConfirmDialog
         open={pendingDeleteChannelId !== null}
         title={t("chrome.deleteChannel")}
         description={t("chrome.deleteChannelConfirm")}
@@ -15673,6 +15694,9 @@ function MainAppContent({
             channels: selection.kind === "server" ? channels : [],
             openServerName:
               selection.kind === "server" ? (selectedServer?.name ?? null) : null,
+            // Typing "jam" offers the public jams whenever `jam_public` is on,
+            // for every member, with or without a Jam channel in the open server.
+            jamDoor: jamPublicMe.enabled,
           }}
           searchServerName={
             selection.kind === "server" ? (selectedServer?.name ?? null) : null
@@ -15694,6 +15718,10 @@ function MainAppContent({
             void loadChannels(serverId);
           }}
           onSelectChannel={stableOnSelectChannel}
+          onOpenJams={() => {
+            setWhatsNewOpen(false);
+            void openPublicJamsDoor();
+          }}
           onOpenJamSong={(song) => {
             setWhatsNewOpen(false);
             navigate(jamSongRoutePath(song.serverId, song.channelId, song.id), {
