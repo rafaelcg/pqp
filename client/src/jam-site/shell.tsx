@@ -1,8 +1,9 @@
 import { MoonIcon as Moon, SunIcon as Sun, XIcon } from "./icons";
 import { useEffect, useState, type ReactNode } from "react";
-import { jt } from "@/lib/i18n/jam-site";
+import { jamLanguage, jt } from "@/lib/i18n/jam-site";
 import { useAsk } from "./auth-sheet";
 import { mainHref } from "./attribution";
+import { chooseLanguage, JAM_LANGUAGES } from "./language";
 import { Link, mainOrigin, useJamRoute } from "./router";
 import { jamPath } from "./route";
 import { setBrightness, useBrightness } from "./theme";
@@ -81,6 +82,38 @@ export function Header() {
   );
 }
 
+/**
+ * The language choice: three plain buttons, each named in its own language (and
+ * marked with it, so a screen reader says "English" in English), the current one
+ * pressed. A button and not a link because it reloads into the choice
+ * (`language.ts`). No motion: a reload is its own transition.
+ */
+export function LanguageSwitch() {
+  const current = jamLanguage();
+  return (
+    <div role="group" aria-label={jt("footer.language")} data-jam-language="" className="flex flex-wrap items-center max-sm:-mx-2 sm:-mr-2">
+      {JAM_LANGUAGES.map(({ locale, label }) => (
+        <button
+          key={locale}
+          type="button"
+          lang={locale}
+          aria-pressed={locale === current}
+          data-jam-language-option={locale}
+          onClick={() => {
+            if (locale !== current) chooseLanguage(locale);
+          }}
+          className={cn(
+            "inline-flex min-h-11 min-w-11 items-center justify-center rounded-sm px-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+            locale === current ? "font-bold text-text" : "",
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Footer() {
   const origin = mainOrigin();
   // 44 px tall hit area, and the footer's padding gives back what the links take, so it looks as it did
@@ -102,6 +135,7 @@ export function Footer() {
             {jt("footer.privacy")}
           </a>
         </nav>
+        <LanguageSwitch />
       </div>
     </footer>
   );

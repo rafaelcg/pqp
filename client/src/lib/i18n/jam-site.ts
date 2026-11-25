@@ -62,6 +62,12 @@ export async function loadJamLocale(locale: Locale): Promise<void> {
   await instance.changeLanguage(locale);
 }
 
+/** The language the site is drawn in right now (the catalogue `jt` reads). */
+export function jamLanguage(): Locale {
+  const current = instance.language;
+  return current === "pt-BR" || current === "es" ? current : "en";
+}
+
 export function jt(key: JamKey, vars?: JamVars): string {
   const result = instance.t(String(key), vars ?? {});
   return typeof result === "string" ? result : String(result);

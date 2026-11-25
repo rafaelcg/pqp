@@ -37,6 +37,12 @@
  *    address, only as "there is a cover", and a test fails on any `X-Amz` or
  *    `sig=` in a head.
  *
+ *  - THE PAGE'S LANGUAGE AND THE CARD'S ARE TWO THINGS. `pqp:locale` and
+ *    `<html lang>` carry the negotiated language, Spanish included: the client
+ *    trusts `pqp:locale` before `navigator.languages` (`fromServedDocument`), so
+ *    writing `en` for a Mexican browser, as this once did, rendered the whole
+ *    site in English. The card (title, description, picture, `og:locale`) has
+ *    no Spanish catalogue and stays English for those readers (`cardLocaleOf`).
  *  - Text a person typed (title, artist, who played, who started it) is stripped of
  *    bidi override, embedding and isolate controls before it reaches a tag. The
  *    server strips them from new input (`cleanLine` in `@pqp/shared`), but a song
@@ -109,8 +115,21 @@ export interface JamSongMeta {
   startedBy: { name: string; handle: string | null };
 }
 
+/** The languages the site speaks. The card's words come in two of them (`cardLocaleOf`). */
+export type JamLocale = "pt-BR" | "en" | "es";
+
+/**
+ * The language of the card's words and picture. They exist in Portuguese and
+ * English only, so a Spanish reader's unfurl is the English card while the PAGE
+ * (`pqp:locale`, `<html lang>`) is Spanish.
+ */
+export function cardLocaleOf(locale: JamLocale): "pt-BR" | "en" {
+  return locale === "pt-BR" ? "pt-BR" : "en";
+}
+
 export interface JamMetaOptions {
-  locale: "pt-BR" | "en";
+  /** The page's language, which the client trusts over the browser's. The card's words follow `cardLocaleOf`. */
+  locale: JamLocale;
   /** The origin the page was served from, for the site's own card pictures (`/images/og-jam*.png`). */
   siteOrigin: string;
   /** The API's origin, for a song's cover address. Null: no cover is offered, the card is. */
@@ -215,9 +234,10 @@ interface CardImage {
 }
 
 function cardImage(options: JamMetaOptions): CardImage {
+  const card = cardLocaleOf(options.locale);
   return {
-    url: `${options.siteOrigin}${jamCardImagePath(options.locale)}`,
-    alt: CARD_ALT[options.locale],
+    url: `${options.siteOrigin}${jamCardImagePath(card)}`,
+    alt: CARD_ALT[card],
     card: true,
   };
 }
@@ -231,7 +251,7 @@ interface Card {
   jsonLd?: object;
 }
 
-function renderHead(card: Card, locale: "pt-BR" | "en"): string {
+function renderHead(card: Card, locale: JamLocale): string {
   // Last line of defence: whatever reaches a tag has no bidi control in it.
   const e = (value: string) => escapeHtml(bidiClean(value));
   const lines = [
@@ -247,7 +267,7 @@ function renderHead(card: Card, locale: "pt-BR" | "en"): string {
     ...(card.noindex ? [] : [`<meta property="og:url" content="${e(card.url)}" />`]),
     `<meta property="og:title" content="${e(card.title)}" />`,
     `<meta property="og:description" content="${e(card.description)}" />`,
-    `<meta property="og:locale" content="${locale === "pt-BR" ? "pt_BR" : "en_US"}" />`,
+    `<meta property="og:locale" content="${cardLocaleOf(locale) === "pt-BR" ? "pt_BR" : "en_US"}" />`,
     `<meta property="og:image" content="${e(card.image.url)}" />`,
     ...(card.image.card
       ? [
@@ -277,11 +297,12 @@ export function renderJamHead(
 ): { head: string; noindex: boolean } {
   const { target, enabled } = input;
   const song = input.song ? cleanJamSong(input.song) : null;
-  const generic = HOME_TEXT[options.locale];
+  const cardLocale = cardLocaleOf(options.locale);
+  const generic = HOME_TEXT[cardLocale];
   const canonical =
     target.kind === "song" ? `https://jam.pqp.gg/m/${target.songId}` : "https://jam.pqp.gg/";
   if (target.kind === "song" && song && enabled) {
-    const text = jamSongCardText(song, options.locale);
+    const text = jamSongCardText(song, cardLocale);
     // `coverUrl` says only THAT the song has a public cover. The address in the
     // tag is ours and stable; the signed URL in it never leaves this function.
     const cover = song.coverUrl ? jamCoverAddress(options.apiOrigin, target.songId) : null;
@@ -326,7 +347,8 @@ export function injectJamHead(
     return { html, noindex: false };
   }
   const { head, noindex } = renderJamHead(input, options);
-  const stripped = html.replace(MANAGED_TAGS, "");
+  // The shell ships `lang="en"`; the document says the language it is written in.
+  const stripped = html.replace(MANAGED_TAGS, "").replace('<html lang="en">', `<html lang="${options.locale}">`);
   const insertAt = stripped.indexOf("<head>") + "<head>".length;
   return {
     html: stripped.slice(0, insertAt) + "\n    " + head + stripped.slice(insertAt),

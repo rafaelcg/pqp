@@ -7,6 +7,7 @@ import {
   type JamIntent,
 } from "@/lib/jam-intent";
 import { jamAttribution } from "./attribution";
+import { withLanguage } from "./language";
 import { mainOrigin } from "./router";
 import { button, Sheet } from "./ui";
 
@@ -88,7 +89,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
     } catch {
       // The URL carries it anyway.
     }
-    window.location.assign(jamIntentHref(intent, mainOrigin(), jamAttribution()));
+    window.location.assign(withLanguage(jamIntentHref(intent, mainOrigin(), jamAttribution())));
   };
 
   return (
