@@ -17,5 +17,3 @@ Ninguém toca ao mesmo tempo, não é uma jam ao vivo. Cada parte é gravada dep
 ## Ainda não
 
 No celular (iPhone e Android) dá pra ver as músicas, ouvir, gravar uma parte de áudio, votar e botar na mistura ou tirar. Editar a música, ajustar uma gravação, gravar com a câmera, compartilhar, buscar e denunciar ainda só no navegador. E jam pública não abre no app ainda: o link abre no site.
-
-Conta nova, nos primeiros dias, tem a parte olhada pela equipe antes de aparecer numa jam pública.

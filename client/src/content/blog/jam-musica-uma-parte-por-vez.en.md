@@ -17,5 +17,3 @@ Nobody plays at the same time, so this is not a live jam. Each part is recorded 
 ## Not yet
 
 On phones (iPhone and Android) you can browse songs, listen, record an audio part, vote, and mix parts in or out. Editing a song, adjusting a take, recording with the camera, sharing, searching and reporting are still browser only. And public jams do not open in the app yet: the link opens the site.
-
-A new account has its first parts looked at by the team before they show up on a public jam.
