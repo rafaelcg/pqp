@@ -48,10 +48,12 @@ export interface JamMetrics {
   };
   /**
    * Accounts with a live take in the last 7 days and NO take of any kind
-   * before that window. Deleted takes count when deciding "first ever": a
-   * person who recorded and deleted a take 10 days ago has already tried it,
-   * so their next take is a return, not a first. Always at most
-   * `recorders.distinct7d`.
+   * before that window: their first take ever fell inside it. Deleted takes
+   * count when deciding "first ever": a person who recorded and deleted a take
+   * 10 days ago has already tried it, so their next take is a return, not a
+   * first. A deleted take INSIDE the window does not disqualify: their first
+   * ever is still in the last 7 days. Always at most `recorders.distinct7d`
+   * (same statement, same snapshot).
    */
   firstTakers7d: number;
   /**
@@ -103,7 +105,7 @@ export async function jamMetrics(): Promise<JamMetrics> {
   // One after another, not Promise.all: the payload is cached and these are
   // cold-path reads, so they take one pooled connection at a time rather than
   // eight at once next to the rest of the dashboard's queries.
-  const [channels, songs, takesLive, takesRecent, firstTakers, publicSongs, outside, votes] =
+  const [channels, songs, takesLive, takesRecent, publicSongs, outside, votes] =
     await inSequence([
       () => pool.query<{ channels: string; servers: string }>(
         `SELECT COUNT(*)::text AS channels, COUNT(DISTINCT server_id)::text AS servers
@@ -120,7 +122,13 @@ export async function jamMetrics(): Promise<JamMetrics> {
       () => pool.query<{ live: string }>(
         `SELECT COUNT(*)::text AS live FROM jam_tracks WHERE deleted_at IS NULL`,
       ),
-      // One pass over the last 30 days of live takes answers every window.
+      // ONE statement for everything about recorders, so the numbers are from
+      // one snapshot (`firstTakers7d <= distinct7d` cannot be broken by a take
+      // committing between two reads). It groups the last 30 days of live takes
+      // by author first, so what is held is one small row per person, not one
+      // per take. "No take before" is an index probe per author
+      // (`idx_jam_tracks_author`), only for people with a take this week, and
+      // deliberately does not filter `deleted_at`.
       () => pool.query<{
         posted24h: string;
         posted7d: string;
@@ -128,40 +136,32 @@ export async function jamMetrics(): Promise<JamMetrics> {
         distinct7d: string;
         distinct30d: string;
         returning7d: string;
+        first_takers7d: string;
       }>(
-        `WITH recent AS (
-           SELECT author_id, created_at, video_key
+        `WITH per_author AS (
+           SELECT author_id,
+                  COUNT(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS n24h,
+                  COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days') AS n7d,
+                  COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days'
+                                     AND video_key IS NOT NULL) AS video7d,
+                  COALESCE(BOOL_OR(created_at >= now() - interval '14 days'
+                                   AND created_at < now() - interval '7 days'), FALSE) AS prev_week
              FROM jam_tracks
             WHERE deleted_at IS NULL AND created_at >= now() - interval '30 days'
-         ), this_week AS (
-           SELECT DISTINCT author_id FROM recent WHERE created_at >= now() - interval '7 days'
-         ), last_week AS (
-           SELECT DISTINCT author_id FROM recent
-            WHERE created_at >= now() - interval '14 days' AND created_at < now() - interval '7 days'
+            GROUP BY author_id
          )
-         SELECT COUNT(*) FILTER (WHERE created_at >= now() - interval '24 hours')::text AS posted24h,
-                COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days')::text AS posted7d,
-                COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days'
-                                   AND video_key IS NOT NULL)::text AS with_video7d,
-                (SELECT COUNT(*) FROM this_week)::text AS distinct7d,
-                COUNT(DISTINCT author_id)::text AS distinct30d,
-                (SELECT COUNT(*) FROM this_week w WHERE EXISTS (
-                   SELECT 1 FROM last_week l WHERE l.author_id = w.author_id
-                 ))::text AS returning7d
-           FROM recent`,
-      ),
-      // Candidates are the authors with a live take this week; "no take before"
-      // is an index probe per author (`idx_jam_tracks_author`) and deliberately
-      // does not filter `deleted_at`.
-      () => pool.query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM (
-           SELECT DISTINCT author_id FROM jam_tracks
-            WHERE deleted_at IS NULL AND created_at >= now() - interval '7 days'
-         ) w
-          WHERE NOT EXISTS (
-            SELECT 1 FROM jam_tracks p
-             WHERE p.author_id = w.author_id AND p.created_at < now() - interval '7 days'
-          )`,
+         SELECT COALESCE(SUM(n24h), 0)::text AS posted24h,
+                COALESCE(SUM(n7d), 0)::text AS posted7d,
+                COALESCE(SUM(video7d), 0)::text AS with_video7d,
+                COUNT(*) FILTER (WHERE n7d > 0)::text AS distinct7d,
+                COUNT(*)::text AS distinct30d,
+                COUNT(*) FILTER (WHERE n7d > 0 AND prev_week)::text AS returning7d,
+                COUNT(*) FILTER (WHERE n7d > 0 AND NOT EXISTS (
+                  SELECT 1 FROM jam_tracks p
+                   WHERE p.author_id = per_author.author_id
+                     AND p.created_at < now() - interval '7 days'
+                ))::text AS first_takers7d
+           FROM per_author`,
       ),
       () => pool.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count
@@ -201,7 +201,7 @@ export async function jamMetrics(): Promise<JamMetrics> {
       withVideo7d: num(r?.with_video7d),
     },
     recorders: { distinct7d: num(r?.distinct7d), distinct30d: num(r?.distinct30d) },
-    firstTakers7d: num(firstTakers.rows[0]?.count),
+    firstTakers7d: num(r?.first_takers7d),
     returningRecorders7d: num(r?.returning7d),
     public: {
       firstPublished7d: num(publicSongs.rows[0]?.count),

@@ -20,7 +20,12 @@ import type { DbUser } from "../db.js";
  * not only computed.
  */
 
-const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+// A scratch database only: `beforeEach` truncates users, servers and channels.
+// Never a developer's DATABASE_URL; CI (a throwaway Postgres service) is the
+// one place DATABASE_URL is known to be disposable.
+const DATABASE_URL =
+  process.env.TEST_DATABASE_URL ??
+  (process.env.CI === "true" ? process.env.DATABASE_URL : undefined);
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
 if (DATABASE_URL) {
@@ -235,6 +240,15 @@ describeDb("jam metrics", () => {
     expect(m.recorders).toEqual({ distinct7d: 0, distinct30d: 0 });
     expect(m.firstTakers7d).toBe(0);
     expect(m.takes.live).toBe(0);
+  });
+
+  it("keeps a first-taker whose own deleted take is also inside the week", async () => {
+    const s = await song(jamA1, serverA, "4 days");
+    await take(s, carol, "4 days", { deleted: true });
+    await take(s, carol, "1 day");
+    const m = await jamMetrics();
+    expect(m.firstTakers7d).toBe(1);
+    expect(m.recorders.distinct7d).toBe(1);
   });
 
   it("is on the admin payload", async () => {
