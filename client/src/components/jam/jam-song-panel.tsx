@@ -1,5 +1,5 @@
 import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
-import { ArrowLeft, Camera, ChevronDown, Link2, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Send, Trash2, X } from "lucide-react";
+import { ArrowLeft, Camera, Check, ChevronDown, Link2, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Send, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -712,7 +712,17 @@ export function JamSongPanel({
 
       {/* the dock: the one thing to do */}
       <footer data-jam-dock="" hidden={adjustingId !== null} className="safe-pb flex flex-col gap-2 border-t border-border bg-surface-1 px-3 py-1.5 pointer-coarse:py-2 sm:px-5">
-        {reason === null && first ? (
+        {reason === null && first && outsideRecord && pub.viewerWaiting ? (
+          // Sent and waiting for the starter: a calm status, not a second green button that asks again.
+          <p
+            role="status"
+            data-jam-outside-waiting=""
+            className="mx-auto flex h-10 w-full items-center justify-center gap-2 rounded-full bg-surface-2 text-sm font-bold text-text-secondary ring-1 ring-inset ring-border sm:max-w-sm pointer-coarse:h-11"
+          >
+            <Check className="h-4 w-4 shrink-0" aria-hidden />
+            {t("jam.public.outside.sentStatus")}
+          </p>
+        ) : reason === null && first ? (
           <button
             type="button"
             data-jam-record-over=""
@@ -731,7 +741,7 @@ export function JamSongPanel({
             </p>
           )
         )}
-        {outsideRecord && reason === null && first && (
+        {outsideRecord && reason === null && first && !pub.viewerWaiting && (
           <p data-jam-outside-hint="" className="text-center text-[13px] leading-snug text-text-secondary [text-wrap:pretty]">
             {pub.autoAccept ? t("jam.public.outside.sendHintAuto") : t("jam.public.outside.sendHint")}
           </p>
