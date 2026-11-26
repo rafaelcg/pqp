@@ -247,6 +247,37 @@ reason). `GET /api/admin/metrics` carries a `jamPublic` block (published, in
 review, hidden by reports, removed, plays, likes, verdicts by status,
 quarantined objects, and per-process refusals by limit).
 
+### Jam numbers: does Jam work
+
+`GET /api/admin/metrics` also carries a `jam` block, shown in `/novo` under
+**pessoas e conteúdo**, in the detalhes row **Jam** (the classic page does not
+draw it). It is computed from the tables Jam already writes
+(`server/src/services/jam-metrics.ts`): no table of its own, no per-request
+counter, the same on every replica, null when its read failed (the row then
+says so instead of showing zeros). Private and public jams are counted
+together unless a field sits under `public`. Everything counts live rows: a
+deleted song or take is not in it, and deleting a song deletes its takes.
+
+| Field | What it counts |
+|---|---|
+| `jamChannels`, `serversWithJam` | channels of type `jam`; distinct servers holding one |
+| `songs.created24h` / `created7d` / `live` | live songs created in the window, and every live song (a standalone public jam counts) |
+| `takes.posted24h` / `posted7d` / `live` / `withVideo7d` | live takes (faixas) posted in the window, every live take, and the 7 day ones with a camera video |
+| `recorders.distinct7d` / `distinct30d` | distinct accounts with a live take in the window: activation |
+| `firstTakers7d` | accounts with a live take in the last 7 days and **no take of any kind before it**. A deleted older take counts as "has already tried it", so their next take is a return, not a first. Always at most `distinct7d`: the first-take number |
+| `returningRecorders7d` | accounts with a live take in the last 7 days **and** a live take in the 7 days before (days 8 to 14): the return number |
+| `public.firstPublished7d` | songs first published in the last 7 days and still public (not unpublished, removed or deleted). One waiting in review counts: a new account's first publish waits there |
+| `public.outsideTakes7d` | live takes from somebody other than the starter, received through public access in the last 7 days, minus the ones an operator removed |
+| `public.outsideTakesAdmitted7d` | of those, the ones in the mix now (the starter put them in, or auto-accept did). A starter who takes one back out lowers it; the schema keeps no separate "admitted" event |
+| `votes7d` | votes cast in the last 7 days on takes that still exist |
+
+There are **no targets yet**, on purpose: there is no baseline to set them
+against. Read the block for a week after the flip, then decide what "works"
+means and put the numbers here. Sign-ups from the site are in `GET
+/api/admin/acquisition` (`ref=jam`); the dashboard's Umami and Cloudflare
+numbers cover visits. The `jam` block starts after the take: it cannot see who
+opened `jam.pqp.gg` and never recorded.
+
 ### lista de espera: turning "somebody asked" into "somebody can now stream"
 
 First section in the pane, because opening **controles** during a launch is,

@@ -1006,6 +1006,13 @@
         return { id: "conversas", title: "Conversas", summary: fmt(cv.senders7d) + " de " + fmt(cv.activeSenders7d) + " pessoas que escreveram em 7 dias mandaram DM (" + M.fmtPct(share) + ")",
           body: [stats([["mandaram DM · 24 h", fmt(cv.senders1d), "direta ou em grupo"], ["mandaram DM · 7 dias", fmt(cv.senders7d), M.fmtPct(share) + " de quem escreveu"], ["conversas novas · 24 h", fmt((created.dm || 0) + (created.group || 0)), fmt(created.dm) + " diretas · " + fmt(created.group) + " em grupo"], ["novatos que mandaram DM", M.fmtPct(M.pct(nc.dmWithin7d, nc.eligible)), fmt(nc.dmWithin7d) + " de " + fmt(nc.eligible) + " contas de 8 a 14 dias, na 1ª semana"]])] };
       })(),
+      (function () {
+        // Jam: activation, first take, publish and return (README, "Jam numbers").
+        // Null means the read failed, not zero.
+        var jv = M.jamView(m.jam);
+        if (!jv) return { id: "jam", title: "Jam", summary: "não deu pra ler agora", body: [para("A leitura do Jam falhou nesta rodada; tenta de novo no próximo refresh.")] };
+        return { id: "jam", title: "Jam", summary: jv.summary, body: [stats(jv.made), stats(jv.judged)] };
+      })(),
       { id: "apps", title: "Apps e produto", summary: "amizades · anexos · convites · push",
         body: [stats([["amizades", fmt(p.friendships), fmt(p.pendingFriendRequests) + " pedidos em aberto"], ["anexos · 24 h", fmt((p.attachments || {}).last24h), fmt((p.attachments || {}).total) + " no total"], ["convites · 24 h", fmt((p.invites || {}).created24h), fmt((p.invites || {}).uses) + " usos no total"], ["push", fmt((p.push || {}).web), "web · " + fmt((p.push || {}).apns) + " iphone · " + fmt((p.push || {}).fcm) + " android"]])] },
       { id: "chamadas", title: "Chamadas e toques", summary: fmt(calls.joinConnected) + " de " + fmt(calls.joinAttempts) + " entradas conectaram · " + fmt(calls.ringsAnswered) + " de " + fmt(calls.rings) + " toques atendidos",

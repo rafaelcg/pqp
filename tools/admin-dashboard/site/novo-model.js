@@ -726,6 +726,34 @@
     }
   }
 
+  /**
+   * The Jam card: does Jam work. `jam` is the block of `GET /api/admin/metrics`
+   * (server/src/services/jam-metrics.ts, "Jam numbers" in the README); null is
+   * a failed read and gets no figures. Two rows: what was made, then the three
+   * things the launch is judged on (a first take, a return, a public jam).
+   * Counts only, no ratios and no targets: a week of baseline comes first.
+   */
+  function jamView(jam) {
+    if (!jam) return null;
+    var songs = jam.songs || {}, takes = jam.takes || {}, rec = jam.recorders || {}, pub = jam.public || {};
+    return {
+      summary: fmt(num(rec.distinct7d)) + (num(rec.distinct7d) === 1 ? " pessoa gravou" : " pessoas gravaram") + " em 7 dias · " +
+        fmt(num(jam.firstTakers7d)) + " na primeira vez · " + fmt(num(jam.returningRecorders7d)) + " voltaram",
+      made: [
+        ["canais jam", fmt(num(jam.jamChannels)), fmt(num(jam.serversWithJam)) + (num(jam.serversWithJam) === 1 ? " servidor" : " servidores")],
+        ["músicas · 7 dias", fmt(num(songs.created7d)), fmt(num(songs.created24h)) + " em 24 h · " + fmt(num(songs.live)) + " no total"],
+        ["faixas · 7 dias", fmt(num(takes.posted7d)), fmt(num(takes.posted24h)) + " em 24 h · " + fmt(num(takes.live)) + " no total · " + fmt(num(takes.withVideo7d)) + " com vídeo"],
+        ["gravaram · 7 dias", fmt(num(rec.distinct7d)), fmt(num(rec.distinct30d)) + " em 30 dias"]
+      ],
+      judged: [
+        ["primeira faixa · 7 dias", fmt(num(jam.firstTakers7d)), "contas que nunca tinham gravado"],
+        ["voltaram · 7 dias", fmt(num(jam.returningRecorders7d)), "gravaram nesta semana e na anterior"],
+        ["públicas novas · 7 dias", fmt(num(pub.firstPublished7d)), fmt(num(pub.outsideTakes7d)) + " faixas de fora · " + fmt(num(pub.outsideTakesAdmitted7d)) + " no mix agora"],
+        ["votos · 7 dias", fmt(num(jam.votes7d)), "em faixas que ainda existem"]
+      ]
+    };
+  }
+
   var api = {
     fmt: fmt, dec: dec, pct: pct, fmtPct: fmtPct, deltaLabel: deltaLabel, shortDay: shortDay,
     hojeKpis: hojeKpis, activityHeadline: activityHeadline, costPerActive: costPerActive,
@@ -734,7 +762,7 @@
     appStatus: appStatus, checklistItems: checklistItems, checklistComplete: checklistComplete, currentVersionOf: currentVersionOf, strandedVersion: strandedVersion,
     appSubtitle: appSubtitle, reviewSummary: reviewSummary, globalSwitch: globalSwitch, serversText: serversText, sessionsLine: sessionsLine,
     disableConfirm: disableConfirm, communityConfirm: communityConfirm, defaultConfirm: defaultConfirm, defaultNote: defaultNote, serverReleased: serverReleased, serverRow: serverRow, initials: initials, appsWriteError: appsWriteError,
-    disableFailure: disableFailure, auditText: auditText, appSummary: appSummary, LOCK_NOTE: LOCK_NOTE
+    jamView: jamView, disableFailure: disableFailure, auditText: auditText, appSummary: appSummary, LOCK_NOTE: LOCK_NOTE
   };
   root.PQPNovo = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

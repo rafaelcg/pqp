@@ -321,3 +321,31 @@ test("a room that loses its open time in a registry blip is not announced as new
   const room = (openedAt) => metrics({ voice: { rooms: [{ channelId: "c1", server: "Clube", channel: "voz", participants: 4, openedAt }] } });
   assert.deepEqual(M.feedDiff(room("2026-09-27T10:00:00Z"), room(null), "t"), []);
 });
+
+test("jamView: a failed read has no card, a quiet week reads as zeros", () => {
+  assert.equal(M.jamView(null), null);
+  const quiet = M.jamView({});
+  assert.equal(quiet.summary, "0 pessoas gravaram em 7 dias · 0 na primeira vez · 0 voltaram");
+  assert.equal(quiet.made.length, 4);
+  assert.equal(quiet.judged.length, 4);
+});
+
+test("jamView: puts each field under the label that says what it counts", () => {
+  const v = M.jamView({
+    jamChannels: 3, serversWithJam: 1,
+    songs: { created24h: 2, created7d: 5, live: 40 },
+    takes: { posted24h: 4, posted7d: 12, live: 300, withVideo7d: 3 },
+    recorders: { distinct7d: 1, distinct30d: 9 },
+    firstTakers7d: 1, returningRecorders7d: 6,
+    public: { firstPublished7d: 2, outsideTakes7d: 7, outsideTakesAdmitted7d: 4 },
+    votes7d: 11
+  });
+  assert.equal(v.summary, "1 pessoa gravou em 7 dias · 1 na primeira vez · 6 voltaram");
+  assert.deepEqual(v.made[0], ["canais jam", "3", "1 servidor"]);
+  assert.deepEqual(v.made[1], ["músicas · 7 dias", "5", "2 em 24 h · 40 no total"]);
+  assert.equal(v.made[2][2], "4 em 24 h · 300 no total · 3 com vídeo");
+  assert.equal(v.made[3][2], "9 em 30 dias");
+  assert.equal(v.judged[1][1], "6");
+  assert.deepEqual(v.judged[2], ["públicas novas · 7 dias", "2", "7 faixas de fora · 4 no mix agora"]);
+  assert.equal(v.judged[3][1], "11");
+});
