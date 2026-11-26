@@ -182,7 +182,11 @@ struct HomeView: View {
         .alert(
             "Can't open that link",
             isPresented: Binding(
-                get: { session.linkError != nil },
+                get: {
+                    LinkAlertRules.isPresented(
+                        linkError: session.linkError, firstRunIsUp: session.firstRun != nil
+                    )
+                },
                 set: { if !$0 { session.linkError = nil } }
             )
         ) {
@@ -355,14 +359,21 @@ struct HomeView: View {
         else { return }
         tab = .servidores
         if let channel = channels.first(where: { $0.id == channelId }) {
-            if channel.isText {
+            switch ChannelLinkLanding.landing(for: channel) {
+            case .chat:
                 restoredChannel = RestoredChannel(
                     server: server, channel: channel, jumpToMessageId: messageId
                 )
-            } else if channel.isForum {
+            case .forum:
                 restoredChannel = RestoredChannel(
                     server: server, channel: nil, forum: ForumFocus(forumId: channel.id)
                 )
+            case .jamWall:
+                // The wall itself, no song on top (the web opens the Jam the
+                // same way). `ChannelListView` pushes it.
+                restoredChannel = RestoredChannel(server: server, channel: channel)
+            case .serverOnly:
+                restoredChannel = RestoredChannel(server: server, channel: nil)
             }
             return
         }
@@ -393,17 +404,13 @@ struct HomeView: View {
         _ request: DeepLinkTarget, serverId: String, channelId: String, songId: String
     ) async -> Bool {
         guard let server = await resolveServer(serverId) else {
-            guard session.navigationRequest == request else { return true }
-            session.linkError = JamSongLinkMessage.unavailable
-            return false
+            return await reportLinkFailure(JamSongLinkMessage.unavailable, for: request)
         }
         let channels: [Channel]
         do {
             channels = try await session.api.channels(serverId: serverId)
         } catch {
-            guard session.navigationRequest == request else { return true }
-            session.linkError = JamSongLinkMessage.forFailure(error)
-            return false
+            return await reportLinkFailure(JamSongLinkMessage.forFailure(error), for: request)
         }
         guard session.navigationRequest == request else { return true }
         guard let jam = channels.first(where: { $0.id == channelId && $0.isJam }) else {
@@ -411,11 +418,21 @@ struct HomeView: View {
             // the tap still goes somewhere, and say why the song did not open.
             tab = .servidores
             restoredChannel = RestoredChannel(server: server, channel: nil)
-            session.linkError = JamSongLinkMessage.unavailable
-            return false
+            return await reportLinkFailure(JamSongLinkMessage.unavailable, for: request)
         }
         tab = .servidores
         restoredChannel = RestoredChannel(server: server, channel: jam, jamSongId: songId)
+        return false
+    }
+
+    /// Says why a link did not land, once the stack has stopped moving (see
+    /// `NavigationSettle`: an alert raised mid-push drops the push). Answers
+    /// "superseded" the same way `openJamSong` does, so a stale link neither
+    /// speaks over a newer one nor marks it handled.
+    private func reportLinkFailure(_ message: String, for request: DeepLinkTarget) async -> Bool {
+        await NavigationSettle.untilIdle()
+        guard !Task.isCancelled, session.navigationRequest == request else { return true }
+        session.linkError = message
         return false
     }
 

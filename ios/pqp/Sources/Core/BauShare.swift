@@ -150,10 +150,10 @@ enum BauShare {
     }
 
     /// Where a tap on a same-instance permalink URL goes, or nil for any other
-    /// link (which Safari keeps). Two kinds: a Baú post, and a jam song (the
-    /// phone's only way into a song link today, because the
-    /// apple-app-site-association file claims invites alone, so a song link
-    /// tapped anywhere outside this app opens the web).
+    /// link (which Safari keeps). Two kinds: a Baú post, and a jam song (a tap
+    /// inside the app; outside it the apple-app-site-association file claims
+    /// the song path, so a tap in Safari or Messages reaches the app only once
+    /// that file is live and cached by Apple's CDN).
     static func inAppTarget(for url: URL, currentOrigin: String? = currentWebOrigin) -> DeepLinkTarget? {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let origin = origin(of: components),

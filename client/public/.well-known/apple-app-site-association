@@ -6,7 +6,11 @@
         "components": [
           {
             "/": "/app/invite/*",
-            "comment": "Invite links, and only invite links: this is the one URL on pqp.gg where the native app is a better destination than the web app."
+            "comment": "Invite links: the one URL on pqp.gg where the native app is a better destination than the web app."
+          },
+          {
+            "/": "/app/server/*/channel/*/song/*",
+            "comment": "A jam song's own link (Copiar link). The app opens the jam wall with the song on top, or says why it cannot. Only the song path and not the plain /channel/<id> one: a channel can be a voice room or a watch party, which the app does not open from a link, and a claimed link the app then drops is worse than the web."
           }
         ]
       }
