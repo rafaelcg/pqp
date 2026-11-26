@@ -288,6 +288,19 @@ what it is asking in one heading ("O que tu vai tocar?", "Gravando voz", "Ficou
 bom? Manda pra banda."). Everything else on the screen (input, level, latency,
 count-in, camera, adjusting) is for when something is wrong.
 
+**The finished screen stays, and for a public song it helps bring people in.**
+"Música criada" and "Mandada" no longer move on by themselves (the 6.5 s timer
+took the share button away from whoever was about to press it); the person leaves
+with "Ver a música". For a song a stranger can open (a public jam, or a channel
+song its starter published and that is `live`; `jamShareOffered`) the screen carries
+`JamInviteCard` (`components/jam/jam-invite.tsx`): the song's picture and title, the
+message that will go out, one primary action and a quiet copy. On a phone the primary
+is the system share sheet; on a desktop it is "Copiar link" with WhatsApp, X and
+Telegram beside it. A private channel song gets none of this, as before. The same
+card opens from the song's own share button (`Compartilhar` in the header of a public
+view, an entry in the `...` menu of a live channel song). Every address it hands out
+comes from `jamPublicSongLink` (`ref=share`); see `docs/JAM_SITE.md`.
+
 **No tempo, no BPM.** The count-in is a switch, "Contar antes de começar" (four
 clicks at a fixed speed, then the band), on by default. Its speed was a BPM field
 with a tap button; it never changed the song or the placement of a take (the

@@ -10,7 +10,7 @@ import { useTranslation } from "@/lib/i18n";
 import { jamSiteHomeUrl } from "@/lib/jam-public-links";
 import { JamInboxDialog } from "@/components/jam/jam-public-waiting";
 import { openPublicJamById } from "@/lib/jam-public-nav";
-import { useJamPublicMe, useJamPublicTop, useJamPublicWaiting } from "@/lib/jam-public-store";
+import { canRecordOnFeatured, useJamPublicMe, useJamPublicTop, useJamPublicWaiting } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
 import { CommunityCard, CommunityCardSkeleton } from "./community-card";
 import {
@@ -43,11 +43,13 @@ interface CommunitiesViewProps {
   /** Opens the shared report dialog with a `server` target. */
   onReport: (community: CommunitySummary) => void;
   /**
-   * The quiet door to public jams below the create strip: play the top public
-   * song (the caller closes the directory first), and start a jam of one's own.
-   * Absent, no door. Drawn only while `jam_public` is on for the account.
+   * The quiet door to public jams below the create strip: hear the featured
+   * song, record a part on it when it takes one, and start a jam of one's own
+   * (the caller closes the directory first). Absent, no door. Drawn only while
+   * `jam_public` is on for the account.
    */
   onListenJam?: (songId: string) => void;
+  onRecordJam?: (songId: string) => void;
   onStartJam?: () => void;
 }
 
@@ -85,6 +87,7 @@ export function CommunitiesView({
   onCreateCommunity,
   onReport,
   onListenJam,
+  onRecordJam,
   onStartJam,
 }: CommunitiesViewProps) {
   const { t, locale } = useTranslation();
@@ -367,7 +370,7 @@ export function CommunitiesView({
 
           {onStartJam && <JamWaitingRow />}
           {onStartJam && (
-            <JamDoor onListen={onListenJam} onStart={onStartJam} />
+            <JamDoor onListen={onListenJam} onRecord={onRecordJam} onStart={onStartJam} />
           )}
 
           {joinError && (
@@ -503,9 +506,11 @@ function JamWaitingRow() {
 
 function JamDoor({
   onListen,
+  onRecord,
   onStart,
 }: {
   onListen?: (songId: string) => void;
+  onRecord?: (songId: string) => void;
   onStart: () => void;
 }) {
   const { t } = useTranslation();
@@ -514,7 +519,8 @@ function JamDoor({
   if (!me.enabled || (top.status !== "ready" && top.status !== "error")) {
     return null;
   }
-  const songId = top.status === "ready" ? top.songId : null;
+  const songId = top.status === "ready" ? (top.song?.id ?? null) : null;
+  const canRecord = top.status === "ready" && canRecordOnFeatured(top.song, me);
   // Only an answer of "no song" is an empty catalogue. A failed lookup says
   // nothing about it: the generic line stays, and the site link is the way to
   // look for songs without it.
@@ -545,6 +551,11 @@ function JamDoor({
             onClick={() => onListen(songId)}
           >
             {t("communities.jam.listen")}
+          </Button>
+        )}
+        {songId && canRecord && onRecord && (
+          <Button variant="secondary" data-jam-door-record="" onClick={() => onRecord(songId)}>
+            {t("communities.jam.record")}
           </Button>
         )}
         <Button variant={songId ? "ghost" : "secondary"} data-jam-door-start="" onClick={onStart}>

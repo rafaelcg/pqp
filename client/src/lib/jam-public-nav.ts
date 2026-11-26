@@ -17,8 +17,6 @@ export interface PublicJamRequest {
   /** `new` starts a standalone public jam. */
   target: string;
   intent: JamIntent | null;
-  /** Start playing once the song is open (a card that said "Ouvir"); a link or a shelf card waits. */
-  play: boolean;
   /** Moves on every request, so asking twice for the same song still opens it. */
   nonce: number;
 }
@@ -34,20 +32,42 @@ function emit(): void {
 }
 
 /** Open a public jam in the app. */
-export function openPublicJam(intent: JamIntent, options: { play?: boolean } = {}): void {
+export function openPublicJam(intent: JamIntent): void {
   nonce += 1;
   current = {
     target: intent.kind === "new" ? "new" : intent.songId,
     intent,
-    play: options.play === true && intent.kind === "song",
     nonce,
   };
   emit();
 }
 
-/** Open a public jam from somewhere that has only its id. */
-export function openPublicJamById(songId: string, options: { play?: boolean } = {}): void {
-  openPublicJam({ kind: "song", songId, record: false, instrument: null }, options);
+/**
+ * Open a public jam from somewhere that has only its id. NEVER starts the
+ * music: opening a song shows it ready, and sound begins on the person's own
+ * tap on play (user test round 2, m8: it started by itself, at volume, on a
+ * song the person had not chosen to hear).
+ */
+export function openPublicJamById(songId: string): void {
+  openPublicJam({ kind: "song", songId, record: false, instrument: null });
+}
+
+// The three things a door into public jams offers. Every door says them the same
+// way, so there is one place that does them.
+
+/** "Ouvir": the song, waiting for play. */
+export function listenToPublicJam(songId: string): void {
+  openPublicJamById(songId);
+}
+
+/** "Gravar minha parte": the song, with the studio opening on the instrument it asks for. */
+export function recordOnPublicJam(songId: string): void {
+  openPublicJam({ kind: "song", songId, record: true, instrument: null });
+}
+
+/** "Começar a minha": the sheet that starts a new public song. */
+export function startPublicJam(): void {
+  openPublicJam({ kind: "new" });
 }
 
 /** The address a request opens. */
@@ -63,15 +83,6 @@ export function takePublicJamIntent(target: string): JamIntent | null {
   const { intent } = current;
   current = { ...current, intent: null };
   return intent;
-}
-
-/** Whether the request for `target` asked to start playing, once: the view that acts on it calls this. */
-export function takePublicJamPlay(target: string): boolean {
-  if (!current || current.target !== target || !current.play) {
-    return false;
-  }
-  current = { ...current, play: false };
-  return true;
 }
 
 export function peekPublicJamRequest(): PublicJamRequest | null {

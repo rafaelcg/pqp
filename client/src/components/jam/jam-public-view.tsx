@@ -8,7 +8,7 @@ import { useTranslation } from "@/lib/i18n";
 import { fetchJamSong } from "@/lib/jam-api";
 import type { JamIntent } from "@/lib/jam-intent";
 import { likePublicJam } from "@/lib/jam-public-api";
-import { takePublicJamIntent, takePublicJamPlay } from "@/lib/jam-public-nav";
+import { startPublicJam, takePublicJamIntent } from "@/lib/jam-public-nav";
 import { useJamPublicMe } from "@/lib/jam-public-store";
 import { pickInstrument } from "@/lib/jam-record";
 import { releaseJamEngine } from "@/lib/jam-session";
@@ -90,7 +90,6 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
   // The starter's auto-accept switch, reported by the song panel (which already reads the song), for what the studio tells an outside take.
   const [autoAccept, setAutoAccept] = useState(false);
   const [tries, setTries] = useState(0);
-  const [autoplay, setAutoplay] = useState(false);
   const intentRef = useRef<JamIntent | null>(null);
   const handledIntent = useRef<string | null>(null);
 
@@ -109,8 +108,6 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
         putJamSongOnWall(key, answer.song, asked);
         const intent = takePublicJamIntent(songId);
         intentRef.current = intent;
-        // "Ouvir uma jam" on a card: the click that asked also starts the music.
-        setAutoplay(takePublicJamPlay(songId));
         if (intent && intent.kind === "song" && intent.act === "like") {
           // The heart somebody pressed before they had an account, once, now.
           for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -292,10 +289,11 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
           enabled={me.enabled}
           uploads={me.uploads}
           freshTrackId={freshTrackId}
-          autoplay={autoplay}
+          autoplay={false}
           publicView
           onAutoAcceptChange={setAutoAccept}
           onRecord={(instrument) => record(instrument)}
+          onStartOwn={startPublicJam}
           onClose={onClose}
         />
       </div>

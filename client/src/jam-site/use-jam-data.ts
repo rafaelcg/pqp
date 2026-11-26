@@ -1,7 +1,7 @@
 import type { PublicJamSong, PublicJamSongDetail } from "@pqp/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchJam, fetchJamConfig, fetchJamList, JamApiError } from "./api";
-import { pickFeatured } from "./featured";
+import { FEATURED_WINDOW, pickFeatured } from "./featured";
 import type { Instrument } from "./instruments";
 
 /**
@@ -144,12 +144,8 @@ export function useJamList(tab: JamTab, need: Instrument | null): ListState {
   return { songs, status, more, loadingMore, loadMore, retry: () => setAttempt((n) => n + 1) };
 }
 
-/**
- * How many of Em alta the hero reads, and so how many the grid reads when it
- * guesses the hero (`pickFeatured`). Wide enough that a closed hero still finds
- * songs that take a part to point at (`pickWantingParts`).
- */
-export const FEATURED_WINDOW = 12;
+// How many of Em alta the hero reads: the same number the app's doors read (`lib/jam-featured.ts`).
+export { FEATURED_WINDOW };
 
 /** The featured song: the first original of the top few that has a part to show, else the first with a part. */
 export function useFeatured(): {

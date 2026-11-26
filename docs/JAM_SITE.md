@@ -83,7 +83,7 @@ the generic `noindex` card.
 - **Home (Palco).** A featured song, a three-step "Como funciona" strip, tabs,
   cards. **The featured slot prefers an original**: of the first six of Em alta,
   the first song with a part to show whose `artist` is null, else the first with
-  a part (`pickFeatured`, `src/jam-site/featured.ts`), so the showcase is never
+  a part (`pickFeatured`, `lib/jam-featured.ts`, re-exported by `src/jam-site/featured.ts`; the app's own doors into public jams, the "A Jam abriu" card, Novidades, the directory strip, search and Cmd+K, pick their song with the same function), so the showcase is never
   somebody else's hit when an original is on the page. It also prefers a song
   that takes a part (`joinMode` not `closed`, below): first original that takes
   one, else first original, else first that takes one, else the first song. A
@@ -129,8 +129,9 @@ the generic `noindex` card.
   empty. Layouts for 1 to 9+ tiles, wide and upright (`src/jam-site/mosaic.ts`,
   pure and tested). Tap a tile to hear only that part, large, the band small
   beside it; Escape or the pill's x goes back. One play button, time, a seek
-  slider, like, share (Web Share API, else a copied link), the record button
-  named for the missing instrument, "Quem tocou o quê" lanes (a part's report is
+  slider, like, share (Web Share API, else a card with copy, WhatsApp, X and Telegram), the record button
+  named for the missing instrument (the bar sits above the mosaic, so play, share and record are all on
+  the first screen of a phone), "Quem tocou o quê" lanes (a part's report is
   in its lane's small "more" menu, reachable by keyboard: Enter or the down arrow
   opens it, Escape closes it and gives the focus back; no flag on every row),
   where it was born, report.
@@ -273,16 +274,32 @@ account is where the question can be answered, so the link carries the answer:
   recorded is `/app`, because that is the page the account first loaded; the
   `ref` is the signal.
 
-**Shared links carry `ref=share`.** The song page's Compartilhar (Web Share API,
-else a copied link) hands out `<origin>/<path>?ref=share` (`jamShareHref`,
-`src/jam-site/share-url.ts`), so the people who come in through a shared link
+**Shared links carry `ref=share`, and one builder makes every one of them.**
+`jamPublicSongLink` (`src/lib/jam-share-link.ts`) is the only place the address of
+a public song is built for a share or a copy: the app's "Chama a galera" moment
+after a song is created or a part is sent, the song panel's share button and
+menu entry, and the song page's Compartilhar on this site. It always answers the
+song's PUBLIC page (`jam.pqp.gg/m/<id>` hosted, `<origin>/jam/m/<id>` on a
+self-host or a preview), never an `/app/...` address a stranger cannot open, and
+only a song that is `live` is offered it (`jamShareOffered`; a private channel
+song is not). `jam-share-link.test.ts` reads the source tree and lists the few
+files allowed to spell a jam address by hand. Where the person's browser has the
+Web Share API (a phone) the share opens the system sheet with a prepared message
+(`lib/jam-share-text.ts`: "Falta baixo nessa. Grava a tua parte:" from the song's
+`needs`, an invitation to listen for a complete song, in pt-BR, English and
+Spanish); anywhere else it is a card with the message, the link, a copy button and
+WhatsApp, X and Telegram links. The app counts `jam_share_shown` and
+`jam_share_tap` (`target`: native, copy, whatsapp, x, telegram) through
+`lib/track.ts`, so they exist only on the hosted build; this site, which carries
+no tag (D7), counts nothing and relies on `ref=share`. The share puts the
+song's address on `<origin>/<path>?ref=share`, so the people who come in through a shared link
 show up as their own row in the acquisition report. When the page was opened
 with a `ref` already (a clip, a post, an earlier share) that one is kept: it is
 who brought them. The arrival's `utm_*` are not copied onto the link. A visitor
 who arrives on `/m/<id>?ref=share` and presses Gravar goes to
 `/app?jam=<id>&record=1&instrument=...&ref=share` (the arrival's `ref` is
 remembered first-touch like any other), which `lib/acquisition.ts` stores as
-`users.acquisition_ref`. Tested in `share-url.test.ts` and
+`users.acquisition_ref`. Tested in `jam-share-link.test.ts` and
 `e2e/jam-site/jam-site.spec.ts`.
 
 Zone analytics says how many people looked, the acquisition report says how many

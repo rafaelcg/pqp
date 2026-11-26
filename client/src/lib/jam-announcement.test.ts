@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { winningCornerHint } from "./corner-hints";
+import { cornerOrder, winningCornerHint } from "./corner-hints";
 import {
   isJamAnnouncementSeen,
   JAM_ANNOUNCEMENT_KEY,
@@ -118,10 +118,31 @@ describe("the store", () => {
 });
 
 describe("its place in the corner queue", () => {
-  it("a Baú post, the notify offer, the QG invite and the forum card go first", () => {
-    for (const first of ["communityHomePost", "notifyOffer", "qg", "forumNews"] as const) {
-      expect(winningCornerHint({ [first]: true, jamNews: true })).toBe(first);
+  it("a Baú post and the notify offer (moments, not campaigns) go first for everybody", () => {
+    for (const newcomer of [false, true]) {
+      for (const first of ["communityHomePost", "notifyOffer"] as const) {
+        expect(winningCornerHint({ [first]: true, jamNews: true }, { newcomer })).toBe(first);
+      }
     }
+  });
+
+  it("a member sees it before the QG invite and the forum card, without dismissing anything unrelated", () => {
+    for (const other of ["qg", "listingNudge", "forumNews"] as const) {
+      expect(winningCornerHint({ [other]: true, jamNews: true })).toBe("jamNews");
+      expect(winningCornerHint({ [other]: true, jamNews: true }, { newcomer: false })).toBe("jamNews");
+    }
+  });
+
+  it("a new account is invited to the QG first, then gets the Jam card the moment that is gone", () => {
+    expect(winningCornerHint({ qg: true, jamNews: true }, { newcomer: true })).toBe("qg");
+    expect(winningCornerHint({ qg: false, jamNews: true }, { newcomer: true })).toBe("jamNews");
+    // Still ahead of the cards after it, so it is not pushed behind the campaigns by the reorder.
+    expect(winningCornerHint({ jamNews: true, listingNudge: true, forumNews: true, cargos: true }, { newcomer: true })).toBe("jamNews");
+  });
+
+  it("the two orders hold the same cards, so one card at a time is unchanged", () => {
+    expect([...cornerOrder(true)].sort()).toEqual([...cornerOrder(false)].sort());
+    expect(cornerOrder(true).indexOf("jamNews")).toBe(cornerOrder(true).indexOf("qg") + 1);
   });
 
   it("it goes before Voz limpa and the year-round campaigns", () => {

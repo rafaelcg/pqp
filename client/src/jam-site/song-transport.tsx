@@ -119,7 +119,8 @@ export function SongTransport({
   onLike,
   onShare,
   onRecord,
-  shared,
+  shareSlot,
+  className,
 }: {
   player: PublicPlayer;
   likes: number;
@@ -129,8 +130,10 @@ export function SongTransport({
   onShare: () => void;
   /** Null on a song that takes no part (closed): there is no record button then. */
   onRecord: (() => void) | null;
-  /** "Link copiado": shown briefly after a copy. */
-  shared: string | null;
+  /** The share card, drawn under the bar when the share button opened it. */
+  shareSlot?: React.ReactNode;
+  /** Extra layout from the page (it moves the bar above the stage on a phone). */
+  className?: string;
 }) {
   const state = usePlayerState(player);
   const loading = state.phase === "loading";
@@ -154,7 +157,7 @@ export function SongTransport({
   }, [player]);
 
   return (
-    <div className="relative mt-4 flex flex-wrap items-center gap-x-3 gap-y-3 md:flex-nowrap md:gap-x-4" data-jam-transport="">
+    <div className={cn("relative flex flex-wrap items-center gap-x-3 gap-y-3 md:flex-nowrap md:gap-x-4", className)} data-jam-transport="">
       <button
         type="button"
         onClick={toggle}
@@ -199,7 +202,8 @@ export function SongTransport({
           type="button"
           onClick={onShare}
           data-jam-share=""
-          className={cn(buttonClass.base, "h-11 min-w-11 gap-2 px-3 text-sm text-text-secondary hover:bg-surface-2 hover:text-text")}
+          aria-label={jt("share.label")}
+          className={cn(buttonClass.base, "h-11 min-w-11 gap-2 bg-surface-2 px-3 text-sm text-text ring-1 ring-inset ring-border hover:bg-surface-3")}
         >
           <Share2 className="h-[18px] w-[18px]" aria-hidden />
           <span className="max-sm:sr-only">{jt("share.label")}</span>
@@ -216,17 +220,7 @@ export function SongTransport({
           {need ? jt(`record.${need}` as Parameters<typeof jt>[0]) : jt("record.any")}
         </button>
       )}
-      <p className="sr-only" role="status" aria-live="polite">
-        {shared ?? ""}
-      </p>
-      {shared && (
-        <p
-          className="absolute right-0 top-full z-10 mt-2 max-w-full select-text truncate rounded-full bg-surface-3 px-3 py-1.5 text-sm font-semibold text-text shadow-[var(--shadow-2)]"
-          aria-hidden="true"
-        >
-          {shared}
-        </p>
-      )}
+      {shareSlot}
       {state.phase === "error" && (
         <p className="order-8 basis-full text-sm font-semibold text-danger" role="alert" data-jam-audio-error="">
           {jt("song.audioError")}

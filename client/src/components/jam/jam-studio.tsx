@@ -18,6 +18,9 @@ import { latencyIsMeasured } from "@/lib/jam-latency-trust";
 import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
 import { liveTimelineEndMs } from "@/lib/jam-live";
 import { TAKE_STEM_ID } from "@/lib/jam-session";
+import { fetchPublicSongForViewer } from "@/lib/jam-public-api";
+import { jamShareOffered } from "@/lib/jam-share-link";
+import { readJamChannel, useJamStoreVersion } from "@/lib/jam-store";
 import { songNeed, songTimeline } from "@/lib/jam-wall";
 import { placed } from "@/lib/jam-take-edit";
 import { computePeaks } from "@/lib/jam";
@@ -27,6 +30,7 @@ import { newJamNonce } from "@/lib/jam-nonce";
 import { coverGradient } from "./jam-art";
 import { JamClipEditor } from "./jam-clip-editor";
 import { JamLaneWave } from "./jam-lane-wave";
+import { JamInviteCard, type JamInviteSubject } from "./jam-invite";
 import { formatList } from "./jam-need";
 import { JamLaneFrame, JamLaneIdentity, JAM_BAND_BOX } from "./jam-lane-frame";
 import { bandOf, Ruler } from "./jam-song-panel";
@@ -274,6 +278,64 @@ export function JamStudio({
   const doneTitle = t(done.titleKey as MessageKey);
   const doneBody = t(done.bodyKey as MessageKey);
 
+  // "Chama a galera" is only offered for a song a stranger can actually open: the public page of it.
+  //   - a jam started here (`publicAccess`, no song yet): only when the server says it is live (a new
+  //     account's first jam waits for review and its page does not open);
+  //   - the starter's own public jam: its publication says live;
+  //   - somebody else's public jam (an outside take): it was public to get here;
+  //   - a channel's song: only once its starter published it. A private song gets nothing, as before.
+  const starterRead = useJamPublication(
+    song?.id ?? "",
+    publicMe.enabled && publicAccess && song !== null && canSwitchMix,
+  );
+  // The take went into the song this studio was opened on (a song that vanished under a take is posted as a
+  // song of its own, which inherits nothing from the one that was deleted).
+  const intoThisSong = song !== null && studio.posted?.songId === song.id;
+  // Somebody else's public jam may have been hidden or unpublished while the take was recorded: ask the
+  // public read once the take is done, and offer nothing until it says yes.
+  const needsLiveCheck =
+    phase === "done" && publicMe.enabled && publicAccess && intoThisSong && !canSwitchMix;
+  const [outsideLive, setOutsideLive] = useState<boolean | null>(null);
+  const checkedSongId = needsLiveCheck ? song!.id : null;
+  useEffect(() => {
+    if (checkedSongId === null) {
+      return;
+    }
+    let cancelled = false;
+    void fetchPublicSongForViewer(checkedSongId).then(
+      () => !cancelled && setOutsideLive(true),
+      () => !cancelled && setOutsideLive(false),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [checkedSongId]);
+  const shareable = jamShareOffered({
+    publicEnabled: publicMe.enabled,
+    publicAccess,
+    existingSong: intoThisSong,
+    isStarter: canSwitchMix,
+    createdStatus: studio.createdStatus,
+    publicationStatus: publicAccess ? starterRead.publication?.status : publication.publication?.status,
+    outsideConfirmedLive: outsideLive === true,
+  });
+  useJamStoreVersion();
+  const postedSongId = studio.posted?.songId ?? null;
+  const storedSong = postedSongId ? (readJamChannel(channelId).songs.find((one) => one.id === postedSongId) ?? null) : null;
+  const inviteSong = storedSong ?? (intoThisSong ? song : null);
+  const inviteSubject: JamInviteSubject | null =
+    shareable && postedSongId
+      ? {
+          id: postedSongId,
+          title: inviteSong?.title ?? draft?.title ?? "",
+          coverUrl: inviteSong?.coverUrl ?? null,
+          artist: inviteSong ? inviteSong.artist : (draft?.artist ?? null),
+          joinMode: inviteSong?.joinMode ?? draft?.joinMode ?? "open",
+          wantedInstruments: inviteSong?.wantedInstruments ?? draft?.wantedInstruments ?? [],
+          instruments: inviteSong?.instruments ?? [],
+        }
+      : null;
+
   const stageVideo = useRef<HTMLVideoElement | null>(null);
   useEffect(() => {
     const element = stageVideo.current;
@@ -348,14 +410,8 @@ export function JamStudio({
     recordRef.current?.focus({ preventScroll: true });
   }, [phase, studio.mic, studio.needsCheck]);
 
-  useEffect(() => {
-    if (phase !== "done" || !studio.posted) {
-      return;
-    }
-    const posted = studio.posted;
-    const timer = window.setTimeout(() => onPosted(posted), 6500);
-    return () => window.clearTimeout(timer);
-  }, [phase, studio.posted, onPosted]);
+  // The "done" screen stays until the person leaves it (its button). It used to move on by itself after a few
+  // seconds, which took the share button away from somebody about to press it.
 
   const micProblem =
     studio.mic === "denied"
@@ -874,7 +930,15 @@ export function JamStudio({
             body={doneBody}
             action={t("jam.post.view")}
             onAction={() => onPosted(studio.posted!)}
-          />
+          >
+            {inviteSubject && (
+              <JamInviteCard
+                subject={inviteSubject}
+                justSent={studio.instrument}
+                surface={created ? "created" : "sent"}
+              />
+            )}
+          </DoneOverlay>
         )}
       </div>
 

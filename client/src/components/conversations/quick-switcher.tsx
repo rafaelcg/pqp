@@ -1,5 +1,5 @@
 import type { UserStatus } from "@pqp/shared";
-import { Hash, Search, Volume2 } from "lucide-react";
+import { Hash, Plus, Search, Volume2 } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatBadgeCount } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
@@ -45,6 +45,8 @@ interface QuickSwitcherProps {
   onOpenJamSong?: (song: SwitcherSong) => void;
   /** "Abrir o Jam": the public jams (offered only when `sources.jamDoor`). */
   onOpenJams?: () => void;
+  /** "Começar uma jam": the sheet that starts a public song, beside "Abrir o Jam". */
+  onStartJam?: () => void;
   onSearchMessages: (query: string) => void;
 }
 
@@ -65,6 +67,7 @@ export function QuickSwitcher({
   onSelectChannel,
   onOpenJamSong,
   onOpenJams,
+  onStartJam,
   onSearchMessages,
 }: QuickSwitcherProps) {
   const { t } = useTranslation();
@@ -172,11 +175,14 @@ export function QuickSwitcher({
       case "jam":
         onOpenJams?.();
         return;
+      case "jam-start":
+        onStartJam?.();
+        return;
     }
   }
 
   const sectionOf = (row: Row): string =>
-    row.type === "search" ? "search" : row.item.kind;
+    row.type === "search" ? "search" : row.item.kind === "jam-start" ? "jam" : row.item.kind;
   const sectionLabel: Record<string, string> = {
     person: t("switcher.section.people"),
     conversation: t("switcher.section.conversations"),
@@ -414,6 +420,19 @@ function ItemBody({ item, active }: { item: SwitcherItem; active: boolean }) {
           <span className="flex min-w-0 flex-1 items-baseline gap-2">
             <span className="truncate text-sm font-medium text-text">{t("switcher.jam.open")}</span>
             <span className="truncate text-xs text-text-tertiary">{t("switcher.jam.hint")}</span>
+          </span>
+          <Trailing unread={0} active={active} label={t("switcher.open")} />
+        </>
+      );
+    case "jam-start":
+      return (
+        <>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center text-accent">
+            <Plus className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <span className="flex min-w-0 flex-1 items-baseline gap-2">
+            <span className="truncate text-sm font-medium text-text">{t("switcher.jam.start")}</span>
+            <span className="truncate text-xs text-text-tertiary">{t("switcher.jam.startHint")}</span>
           </span>
           <Trailing unread={0} active={active} label={t("switcher.open")} />
         </>
