@@ -242,6 +242,36 @@ private func XCTAssertEqual(_ a: [Double], _ b: [Double], accuracy: Double, file
     for (x, y) in zip(a, b) { XCTAssertEqual(x, y, accuracy: accuracy, "\(a) vs \(b)", file: file, line: line) }
 }
 
+// MARK: - Press and hold
+
+@MainActor
+final class JamHoldRepeaterTests: XCTestCase {
+    func testATapIsExactlyOneStepEvenThoughReleasingCancelsTheDelay() async throws {
+        let repeater = JamHoldRepeater()
+        var steps: [Double] = []
+        repeater.begin(direction: 1, delayMs: 150, repeatMs: 30) { steps.append($0) }
+        XCTAssertEqual(steps, [10], "a press steps at once")
+        try await Task.sleep(for: .milliseconds(40))
+        repeater.end()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(steps, [10], "released during the delay: nothing more, however long it is left")
+        XCTAssertFalse(repeater.isHolding)
+    }
+
+    func testAHoldRepeatsAfterTheDelayAndStopsTheMomentItEnds() async throws {
+        let repeater = JamHoldRepeater()
+        var steps: [Double] = []
+        repeater.begin(direction: -1, delayMs: 60, repeatMs: 30) { steps.append($0) }
+        try await Task.sleep(for: .milliseconds(260))
+        repeater.end()
+        let atRelease = steps.count
+        XCTAssertGreaterThanOrEqual(atRelease, 4, "the first press and several repeats")
+        XCTAssertTrue(steps.allSatisfy { $0 < 0 }, "in the direction of the button")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(steps.count, atRelease, "nothing after the release")
+    }
+}
+
 // MARK: - The engine hears it
 
 /// `JamEngine.place` moves a stem without reopening its file. Rendered offline

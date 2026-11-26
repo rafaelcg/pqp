@@ -409,7 +409,7 @@ struct JamHoldStepButton: View {
     let id: String
     let step: (Double) -> Void
 
-    @State private var holding: Task<Void, Never>?
+    @State private var repeater = JamHoldRepeater()
     @State private var pressed = false
 
     var body: some View {
@@ -429,31 +429,57 @@ struct JamHoldStepButton: View {
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in
-                    guard holding == nil else { return }
+                    guard !repeater.isHolding else { return }
                     pressed = true
                     Haptics.selection()
-                    step(direction * JamClipEdits.nudgeStep(heldMs: 0))
-                    holding = Task {
-                        try? await Task.sleep(for: .milliseconds(Int(JamClipEdits.holdDelayMs)))
-                        var held = JamClipEdits.holdDelayMs
-                        while !Task.isCancelled {
-                            step(direction * JamClipEdits.nudgeStep(heldMs: held))
-                            held += JamClipEdits.repeatMs
-                            try? await Task.sleep(for: .milliseconds(Int(JamClipEdits.repeatMs)))
-                        }
-                    }
+                    repeater.begin(direction: direction, step: step)
                 }
                 .onEnded { _ in
-                    holding?.cancel()
-                    holding = nil
+                    repeater.end()
                     pressed = false
                 }
         )
-        .onDisappear { holding?.cancel(); holding = nil }
+        .onDisappear { repeater.end() }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(title))
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { step(direction * JamClipEdits.nudgeStep(heldMs: 0)) }
         .accessibilityIdentifier(id)
+    }
+}
+
+/// The press-and-hold behind "Move earlier" / "Move later": one step at once, and
+/// only if the finger is STILL down after the delay, a step every `repeatMs`,
+/// faster the longer it is held. A tap ends during the delay and must be exactly
+/// one step: the sleep's cancellation is not swallowed (it ends the task), and
+/// nothing steps after `end()`.
+@MainActor
+final class JamHoldRepeater {
+    private var task: Task<Void, Never>?
+
+    var isHolding: Bool { task != nil }
+
+    func begin(
+        direction: Double,
+        delayMs: Double = JamClipEdits.holdDelayMs,
+        repeatMs: Double = JamClipEdits.repeatMs,
+        step: @escaping (Double) -> Void
+    ) {
+        guard task == nil else { return }
+        step(direction * JamClipEdits.nudgeStep(heldMs: 0))
+        task = Task {
+            do { try await Task.sleep(for: .milliseconds(delayMs)) } catch { return }
+            var held = delayMs
+            while !Task.isCancelled {
+                step(direction * JamClipEdits.nudgeStep(heldMs: held))
+                held += repeatMs
+                do { try await Task.sleep(for: .milliseconds(repeatMs)) } catch { return }
+            }
+        }
+    }
+
+    func end() {
+        task?.cancel()
+        task = nil
     }
 }

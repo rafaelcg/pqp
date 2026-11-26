@@ -374,6 +374,27 @@ final class JamEditSongModelTests: XCTestCase {
         song.stop()
     }
 
+    func testOnATieOfTimestampsTheOrderIsTheOneThisPhoneSaw() async throws {
+        let log = LockedBox<[SentRequest]>([])
+        JamStubURLProtocol.handler = route(log: log) { _ in (200, "{}") }
+        let session = makeEditSession()
+        keep = session
+        let song = try await startedModel(session: session)
+        let sentBefore = song.songWriteRevision()
+        // Another moderator's change arrives while this phone's request is out, with the SAME timestamp.
+        let frame = "{\"type\":\"jam-song-updated\",\"channelId\":\"chan-1\",\"song\":\(songJSON(title: "Newer from a moderator"))}"
+        song.apply(.jam(try XCTUnwrap(JamFrame.parse(Data(frame.utf8)))))
+        XCTAssertEqual(song.song.title, "Newer from a moderator")
+        // The older answer (equal `updatedAt`) does not go over it.
+        song.applySongEdit(try Coding.decoder.decode(JamSongSummary.self, from: Data(songJSON(title: "Older answer").utf8)), sentAt: sentBefore)
+        XCTAssertEqual(song.song.title, "Newer from a moderator")
+        // A request sent AFTER that frame, answered with the same timestamp, is the newer one.
+        let sentAfter = song.songWriteRevision()
+        song.applySongEdit(try Coding.decoder.decode(JamSongSummary.self, from: Data(songJSON(title: "Mine, later").utf8)), sentAt: sentAfter)
+        XCTAssertEqual(song.song.title, "Mine, later")
+        song.stop()
+    }
+
     func testANothingToSaveSheetSendsNothing() async throws {
         let log = LockedBox<[SentRequest]>([])
         JamStubURLProtocol.handler = route(log: log) { _ in (200, "{}") }

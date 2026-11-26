@@ -370,13 +370,16 @@ final class JamEditSongModel {
         let plan = plan
         do {
             if let patch = plan.patch {
-                song.applySongEdit(try await api.updateJamSong(id: current.id, patch: patch))
+                let sent = song.songWriteRevision()
+                song.applySongEdit(try await api.updateJamSong(id: current.id, patch: patch), sentAt: sent)
             }
             switch plan.cover {
             case .set(let uploadId):
-                song.applySongEdit(try await api.setJamCover(songId: current.id, uploadId: uploadId))
+                let sent = song.songWriteRevision()
+                song.applySongEdit(try await api.setJamCover(songId: current.id, uploadId: uploadId), sentAt: sent)
             case .remove:
-                song.applySongEdit(try await api.removeJamCover(songId: current.id))
+                let sent = song.songWriteRevision()
+                song.applySongEdit(try await api.removeJamCover(songId: current.id), sentAt: sent)
             case nil:
                 break
             }

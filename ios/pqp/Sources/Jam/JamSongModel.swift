@@ -338,6 +338,8 @@ final class JamSongModel {
     /// heard (`audition`); closing takes it off again.
     @ObservationIgnored private var auditionedForAdjust: JamTrack?
     @ObservationIgnored private var previewTask: Task<Void, Never>?
+    /// How many `jam-song-updated` frames of this song have arrived (see `applySongEdit`).
+    @ObservationIgnored private var songFrameRevision = 0
     /// How many updates of each take have arrived as frames (see `saveAdjustment`).
     @ObservationIgnored private var trackRevisions: [String: Int] = [:]
     @ObservationIgnored private var lastPreviewApply = Date.distantPast
@@ -472,14 +474,21 @@ final class JamSongModel {
         await syncEngine()
     }
 
+    /// Read just before a song write is sent; hand it back to `applySongEdit`.
+    func songWriteRevision() -> Int { songFrameRevision }
+
     /// Show a song the server answered an edit with (the title, the artist or
     /// the cover): applied like `jam-song-updated`, which the writer's own
     /// socket gets too.
-    func applySongEdit(_ song: JamSongSummary) {
+    func applySongEdit(_ song: JamSongSummary, sentAt revision: Int? = nil) {
         // An answer that left the server before a newer change (another moderator,
         // whose frame already arrived) is older than what is on screen: it does not
-        // go over it. The bump is the song's `updatedAt`.
+        // go over it. The bump is the song's `updatedAt`, and two changes can share
+        // one (the clock has a resolution), so on a tie the order is the one this
+        // phone saw: an answer to a request sent BEFORE a song frame arrived
+        // (`sentAt` is `songWriteRevision()` when it was sent) is the older.
         guard song.updatedAt >= state.song.updatedAt else { return }
+        if song.updatedAt == state.song.updatedAt, let revision, revision != songFrameRevision { return }
         var next = state
         next.apply(.songUpdated(channelId: channel.id, song: song))
         state = next
@@ -724,6 +733,7 @@ final class JamSongModel {
         // Every update of a take that arrives is counted, so a request in flight can
         // tell "something changed it meanwhile" even when it changed back (A, B, A).
         if case .trackUpdated(_, _, let changed) = frame { trackRevisions[changed.id, default: 0] += 1 }
+        if case .songUpdated(_, let changed) = frame, changed.id == song.id { songFrameRevision += 1 }
         var next = state
         var effect = next.apply(frame, auditioned: Set(auditioning.values))
         guard next != state else { return }
