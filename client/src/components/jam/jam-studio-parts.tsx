@@ -344,7 +344,8 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
             <span role="alert">{studio.checkMethod === "tap-along" ? t("jam.latency.failed.tap") : t("jam.latency.failed")}</span>
           ) : (
             <>
-              <span className="font-semibold">{t("jam.latency.explain.title")}</span> <span className="[@media(max-height:32rem)]:hidden">{t("jam.latency.explain.short")}</span>
+              <span className="block font-semibold">{t("jam.latency.explain.title")}</span>
+              <span className="block text-text-secondary [@media(max-height:32rem)]:hidden">{t("jam.latency.explain.short")}</span>
             </>
           )}
         </p>
