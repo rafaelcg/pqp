@@ -34,6 +34,7 @@ class JamSongEditorTest {
         var failCover: Throwable? = null
         var failUpload: Throwable? = null
         var uploadGate: CompletableDeferred<Unit>? = null
+        var updateGate: CompletableDeferred<Unit>? = null
 
         /** Uploads of these sizes fail with an IOException after the gate, even when their job was cancelled meanwhile (an OkHttp call that is cancelled throws one). */
         var ioFailureSizes: Set<Int> = emptySet()
@@ -49,6 +50,7 @@ class JamSongEditorTest {
 
         override suspend fun updateSong(songId: String, patch: SongPatch): JamSongSummary {
             calls += "update ${patch.toJson()}"
+            updateGate?.await()
             failUpdate?.let { throw it }
             return songAnswer.copy(title = patch.title ?: songAnswer.title)
         }
@@ -218,6 +220,27 @@ class JamSongEditorTest {
         assertEquals(CoverChoice.New("up-9"), h.editor.ui.value.cover)
         assertEquals(CoverUpload.Idle, h.editor.ui.value.upload)
         assertNull(h.editor.ui.value.pending)
+    }
+
+    @Test
+    fun `a save that outlives its sheet applies its answer but never closes or fails the next sheet`() = runTest {
+        val h = harness()
+        h.backend.updateGate = CompletableDeferred()
+        h.editor.open()
+        h.editor.setTitle("Lithium")
+        h.editor.save(song)
+        advanceUntilIdle()
+        // The sheet is closed and opened again while the first save is still on the wire.
+        h.editor.close()
+        h.editor.open()
+        h.editor.setTitle("Something else")
+        h.backend.updateGate!!.complete(Unit)
+        advanceUntilIdle()
+        // The answer still reached the song (the write happened), and the new sheet is untouched.
+        assertEquals(listOf("Lithium"), h.answers.map { it.title })
+        assertFalse(h.editor.ui.value.done)
+        assertFalse(h.editor.ui.value.saving)
+        assertEquals("Something else", h.editor.ui.value.titleEdit)
     }
 
     @Test

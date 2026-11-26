@@ -644,7 +644,8 @@ class JamSongViewModel(
             try {
                 val answer = backend.updateTrack(adjust.trackId, UpdateJamTrackRequest.of(patch))
                 // The editor closes first: what the engine plays IS what is stored now, so closing restores nothing.
-                _ui.update { it.copy(adjust = null) }
+                // Only this track's own editor: another take's editor opened while this save was out is not this answer's to close.
+                _ui.update { if (it.adjust?.trackId == adjust.trackId) it.copy(adjust = null) else it }
                 val now = _ui.value.state
                 if (now == null || now.accepts(answer.song)) onFrame(JamFrame.TrackUpdated(channelId, answer.song, answer.track))
                 rebuild()
@@ -655,7 +656,9 @@ class JamSongViewModel(
                 val failure = jamWriteFailureOf(e)
                 // Frames that came while the save was out were not applied to the editor: it is reconciled now, so the
                 // next try cannot send an old edit over a newer stored value.
-                _ui.update { ui -> ui.copy(adjust = ui.adjust?.let { JamAdjusting.failed(it, failure) }).reconciled() }
+                _ui.update { ui ->
+                    if (ui.adjust?.trackId != adjust.trackId) ui else ui.copy(adjust = JamAdjusting.failed(ui.adjust, failure)).reconciled()
+                }
                 if (failure == JamWriteFailure.Denied) refreshPermissions()
             }
         }

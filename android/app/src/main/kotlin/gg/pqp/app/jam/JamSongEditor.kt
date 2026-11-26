@@ -83,14 +83,19 @@ class JamSongEditor(
 
     private var uploadJob: Job? = null
 
+    /** One per opening of the sheet: a save that outlives its sheet still applies its answers to the song, but never touches a newer sheet. */
+    private var session = 0
+
     /** Every time the sheet opens it starts from the song as it is now. */
     fun open() {
+        session += 1
         uploadJob?.cancel()
         _ui.value = JamEditUi()
     }
 
     /** Closing counts as a pick too: a late answer is ignored, and nothing keeps a picked picture alive. */
     fun close() {
+        session += 1
         uploadJob?.cancel()
         uploadJob = null
         _ui.value = JamEditUi()
@@ -172,6 +177,7 @@ class JamSongEditor(
         val plan = plan(song)
         if (ui.uploading || ui.saving || plan.empty) return
         _ui.update { it.copy(saving = true, failure = null) }
+        val mine = session
         scope.launch {
             try {
                 // The text first, then the picture; each answer is the song as it now is.
@@ -181,12 +187,12 @@ class JamSongEditor(
                     CoverOp.Remove -> onSong(backend.removeCover(song.id))
                     null -> Unit
                 }
-                _ui.update { it.copy(saving = false, done = true) }
+                if (session == mine) _ui.update { it.copy(saving = false, done = true) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 val failure = jamWriteFailureOf(e)
-                _ui.update { it.copy(saving = false, failure = failure) }
+                if (session == mine) _ui.update { it.copy(saving = false, failure = failure) }
                 if (failure == JamWriteFailure.Denied) onDenied()
             }
         }
