@@ -273,4 +273,45 @@ final class DeepLinkTests: XCTestCase {
             path: "/app/server/srv-1/channel/jam-1/song/song-1", visibleChannelId: "jam-1"
         ))
     }
+
+    // MARK: - Plain channel links and held links
+
+    private func channel(type: String) throws -> Channel {
+        let json = #"{"id":"c-1","serverId":"s-1","kind":"server","name":"x","type":"\#(type)","position":0,"isPrivate":false,"topic":null,"imageUrl":null,"parentId":null}"#
+        return try JSONDecoder().decode(Channel.self, from: Data(json.utf8))
+    }
+
+    func testAPlainChannelLinkParsesTheSameForEveryChannelType() throws {
+        // The route does not know what the channel is; the shell finds out.
+        XCTAssertEqual(
+            DeepLink.target(path: "/app/server/srv-1/channel/jam-1"),
+            .channel(serverId: "srv-1", channelId: "jam-1")
+        )
+        XCTAssertEqual(
+            DeepLink.target(url: try XCTUnwrap(URL(string: "pqp://server/srv-1/channel/jam-1"))),
+            .channel(serverId: "srv-1", channelId: "jam-1")
+        )
+    }
+
+    func testAPlainChannelLinkLandsOnWhatThePhoneCanDraw() throws {
+        XCTAssertEqual(ChannelLinkLanding.landing(for: try channel(type: "text")), .chat)
+        XCTAssertEqual(ChannelLinkLanding.landing(for: try channel(type: "forum")), .forum)
+        XCTAssertEqual(ChannelLinkLanding.landing(for: try channel(type: "jam")), .jamWall)
+        // A voice room and a watch party are not opened from a link: the
+        // server's list, never nowhere.
+        XCTAssertEqual(ChannelLinkLanding.landing(for: try channel(type: "voice")), .serverOnly)
+        XCTAssertEqual(ChannelLinkLanding.landing(for: try channel(type: "watch_party")), .serverOnly)
+        XCTAssertEqual(ChannelLinkLanding.landing(for: try channel(type: "something_new")), .serverOnly)
+    }
+
+    func testALinkAlertWaitsForTheFirstRunWizardAndIsThenSaid() {
+        // A link held through the age step and the wizard that cannot land
+        // (the usual case for a brand-new account) says so over the hub, not
+        // over "How should people see you?".
+        XCTAssertFalse(LinkAlertRules.isPresented(linkError: "x", firstRunIsUp: true))
+        XCTAssertTrue(LinkAlertRules.isPresented(linkError: "x", firstRunIsUp: false))
+        // Nothing to say, nothing shown, wizard or not.
+        XCTAssertFalse(LinkAlertRules.isPresented(linkError: nil, firstRunIsUp: false))
+        XCTAssertFalse(LinkAlertRules.isPresented(linkError: nil, firstRunIsUp: true))
+    }
 }

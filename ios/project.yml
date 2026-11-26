@@ -81,7 +81,7 @@ targets:
     # associated-domains — universal links. An invite link on pqp.gg opens this
     #   app instead of Safari. This says which domain to trust; the other half is
     #   client/public/.well-known/apple-app-site-association, which says which
-    #   paths on it belong to this app (only /app/invite/*). `applinks:` alone —
+    #   paths on it belong to this app (/app/invite/* and a jam song). `applinks:` alone —
     #   no `webcredentials:` (no passwords to share) and no
     #   `activitycontinuation:` (nothing to hand off).
     #
@@ -207,7 +207,7 @@ targets:
           - group.gg.pqp.app
         # Universal links: an invite link on pqp.gg opens this app instead of
         # Safari. The other half is client/public/.well-known/
-        # apple-app-site-association, which scopes it to /app/invite/*.
+        # apple-app-site-association, which scopes it to /app/invite/* and a jam song.
         com.apple.developer.associated-domains:
           - applinks:pqp.gg
         # Remote notifications. NOT the server's APNS_ENVIRONMENT: this one is

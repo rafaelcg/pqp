@@ -648,7 +648,7 @@ unregisters first, while the call can still authenticate, or a shared phone keep
 previous account's DMs.
 
 **Invite links** reuse the shape the web already copies (`/app/invite/<code>`) — universal links
-via `applinks:pqp.gg` and an AASA claiming *only* that path, plus `pqp://invite/<code>` for where
+via `applinks:pqp.gg` and an AASA claiming that path (and, since the song link, a jam song's own), plus `pqp://invite/<code>` for where
 universal links do not fire. A pending invite is stashed in `UserDefaults`, not a property:
 Clerk sign-in can hand off to a web flow and return through a relaunch, which is exactly the
 brand-new-user case the feature exists for. Notification taps and invite links share one parser

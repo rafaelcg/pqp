@@ -111,13 +111,23 @@ struct JamWallView: View {
         do {
             let detail = try await session.api.jamSong(id: id)
             guard JamSongLinkRules.belongs(detail.song, toChannel: model.channel.id) else {
-                session.linkError = JamSongLinkMessage.unavailable
+                await report(JamSongLinkMessage.unavailable)
                 return
             }
             openedSong = JamSongRoute(song: detail.song)
         } catch {
-            session.linkError = JamSongLinkMessage.forFailure(error)
+            await report(JamSongLinkMessage.forFailure(error))
         }
+    }
+
+    /// The wall is still being pushed when a fast refusal arrives, and an alert
+    /// raised mid-push drops the push (the person ended on the channel list,
+    /// without the wall). It speaks once the stack has stopped moving, so the
+    /// alert always lands over the wall.
+    private func report(_ message: String) async {
+        await NavigationSettle.untilIdle()
+        guard !Task.isCancelled else { return }
+        session.linkError = message
     }
 
     @ViewBuilder

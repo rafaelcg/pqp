@@ -1093,10 +1093,18 @@ Two ways it reaches the app:
 - **Universal links.** `applinks:pqp.gg` in the entitlements (generated from
   `ios/project.yml`), plus
   `client/public/.well-known/apple-app-site-association` served by Cloudflare
-  Pages, which claims **only** `/app/invite/*` — not `/*`, which would hijack
-  every link on the site. Apple's CDN fetches that file, so a universal link
-  cannot work until it is deployed, and can be cached stale for ~24h after a
-  change.
+  Pages (`_headers`: `application/json`, five minutes), which claims **two**
+  paths: `/app/invite/*` and a jam song's `/app/server/*/channel/*/song/*`. Not
+  `/*`, which would hijack every link on the site, and not the plain
+  `/app/server/*/channel/*`: a channel can be a voice room or a watch party,
+  which the app does not open from a link (`ChannelLinkLanding.serverOnly`), and
+  a claimed link the app then drops is worse than the web opening it. Add a path
+  to that file only when the app lands on it; `apple-app-site-association.test.ts`
+  in `client/src/lib/` pins the list. Apple's CDN fetches that file, so a
+  universal link cannot work until it is deployed, and a change is cached stale
+  for about a day (a device picks it up after Apple's CDN does, and a build
+  installed before then keeps the old list until it re-checks). It is a web
+  deploy: client only, no API restart.
 - **`pqp://invite/<code>`**, registered in `Info.plist`, for everywhere universal
   links do not fire. During development this is the only one that works:
   `xcrun simctl openurl booted "pqp://invite/ABC123"`.
@@ -1423,12 +1431,44 @@ A song that cannot open never leaves a blank screen: a server this account is no
 in, a jam it cannot see, a song that was deleted or that lives in another jam all
 end in the "Can't open that link" alert with a sentence
 (`JamSongLinkMessage.unavailable`), on the wall or on the server; a failed read
-says to try again. **The gap:** the apple-app-site-association file
-(`client/public/.well-known/`) still claims `/app/invite/*` alone, so a song link
-tapped in Safari, Messages or another app opens the web, not the app. Only
-`pqp://`, a push and a tap inside the app reach this path until that file claims
-`/app/server/*/channel/*/song/*` (a web deploy, and Apple's CDN caches it for about
-a day).
+says to try again.
+
+**The alert waits for the stack to stop moving.** The song read can fail faster
+than the push into the wall finishes, and an alert raised in that window is
+presented by the shell's root, which makes UIKit drop the push: the person ended
+on the channel list with the wall nowhere in the stack, or on the wall, depending
+on whether the read beat the animation. Every "could not land" sentence now goes
+through `NavigationSettle.untilIdle()` (it reads
+`UINavigationController.transitionCoordinator` twice, a beat apart, with a two
+second safety cap) before it sets `SessionStore.linkError`, so the person always
+ends on the screen the link got to, the wall, with the alert above it. A slow
+read needs no wait and behaves as it did.
+
+**A link before the person is in the app** (at the age question, or in the
+first-run wizard) is held the way an invite is, and every kind of link, the song
+among them, is replayed as soon as the shell exists: `SessionStore.requestNavigation`
+keeps the place in `navigationRequest`, and `HomeView` follows it behind the
+wizard, so one that lands is under it when it closes. Only an invite is stashed
+in `UserDefaults` (it has to survive a sign-in that leaves the app). What used
+to differ for the song was its failure: a brand-new account is in none of the
+servers a link points at, and the "not available" alert came up over "How should
+people see you?". `LinkAlertRules.isPresented` holds that alert until the wizard
+is closed and it is said over the hub; a server, channel or message link that
+cannot land is still silent, as it was.
+
+**A plain jam channel link** (`/app/server/<s>/channel/<jam>`) opens the jam's
+wall with no song on top, as the web does (`ChannelLinkLanding.jamWall`,
+`HomeView.openChannel`). A voice room or watch party link lands on the server's
+channel list instead of doing nothing; Android stops there for a jam too (its
+channel push opens text, forum and voice only), so the wall from a plain link is
+the web's and iOS's behaviour.
+
+**Universal links for songs.** The apple-app-site-association file now claims
+the song path (see "Invite links"). It cannot be proven on a simulator against a
+local host: iOS fetches the file through Apple's CDN for the real domain, so the
+check that remains is on a phone with the build installed, after the file is
+live and Apple has refreshed it: tap a song link in Messages or Notes and it
+should open the app, long-press shows "Open in pqp".
 
 **Not here.** Recording a camera, replacing the viewer's old take in the mix,
 trimming, comments, Spanish (the app ships en and pt-BR only).
