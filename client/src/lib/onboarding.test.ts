@@ -4,6 +4,7 @@ import { ApiError } from "@/lib/api";
 import { en } from "@/lib/i18n";
 import {
   handleErrorMessage,
+  hasUsableName,
   isValidUsername,
   joinFromRoomStep,
   normalizeInviteCode,
@@ -228,6 +229,55 @@ describe("first-run screens", () => {
 
   it("clamps a screen the path does not have to the last dot", () => {
     expect(screenPosition("invite", "ready")).toEqual({ index: 1, total: 2 });
+  });
+
+  // The jam site's hand-over. Every assertion above is the contract the other
+  // paths had before it existed, and they are unchanged.
+  it("a visitor from the jam site gets the gate and no room step", () => {
+    const path = onboardingPath({ invite: false, importing: false, jam: true });
+    expect(path).toBe("jam");
+    expect(screensFor(path)).toEqual(["age"]);
+    expect(screensFor(path)).not.toContain("room");
+    expect(screensFor(path)).not.toContain("ready");
+    // The rare name step draws no dots: the counter has one screen.
+    expect(screenPosition(path, "you")).toEqual({ index: 0, total: 1 });
+  });
+
+  it("an invite or an import still outranks a jam intent", () => {
+    expect(onboardingPath({ invite: true, importing: false, jam: true })).toBe("invite");
+    expect(onboardingPath({ invite: false, importing: true, jam: true })).toBe("import");
+    expect(onboardingPath({ invite: true, importing: true, jam: true })).toBe("invite");
+  });
+
+  it("leaves every other path exactly as it was when jam is absent or false", () => {
+    for (const [invite, importing, expected] of [
+      [false, false, "cold"],
+      [true, false, "invite"],
+      [false, true, "import"],
+      [true, true, "invite"],
+    ] as const) {
+      expect(onboardingPath({ invite, importing })).toBe(expected);
+      expect(onboardingPath({ invite, importing, jam: false })).toBe(expected);
+    }
+    expect(screensFor("cold")).toEqual(["age", "you", "room", "ready"]);
+    expect(screensFor("invite")).toEqual(["age", "you"]);
+    expect(screensFor("import")).toEqual(["age", "you"]);
+  });
+});
+
+describe("hasUsableName", () => {
+  it("is false for the placeholder the server gives an account with no name", () => {
+    expect(hasUsableName({ displayName: "User 1a2b" })).toBe(false);
+    expect(hasUsableName({ displayName: "  User 00FF " })).toBe(false);
+    expect(hasUsableName({ displayName: "" })).toBe(false);
+  });
+
+  it("is true for a name somebody has", () => {
+    expect(hasUsableName({ displayName: "Marina Souza" })).toBe(true);
+    expect(hasUsableName({ displayName: "Dev User bob" })).toBe(true);
+    // Only the exact placeholder shape: a real person called User is a name.
+    expect(hasUsableName({ displayName: "User" })).toBe(true);
+    expect(hasUsableName({ displayName: "User 12345" })).toBe(true);
   });
 });
 

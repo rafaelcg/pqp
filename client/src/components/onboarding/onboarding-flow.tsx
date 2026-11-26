@@ -26,6 +26,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { Confetti } from "@/components/onboarding/confetti";
 import { ServerReadyPanel } from "@/components/onboarding/server-ready-panel";
+import { JamArrivalCard } from "@/components/onboarding/jam-arrival-card";
 import { StepDots } from "@/components/onboarding/step-dots";
 import {
   createInvite,
@@ -42,8 +43,10 @@ import { uploadAvatar } from "@/lib/avatar-upload";
 import { IdempotencyAttempt } from "@/lib/idempotency";
 import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import type { JamHandover } from "@/lib/jam-handover";
 import {
   handleErrorMessage,
+  hasUsableName,
   isValidUsername,
   joinFromRoomStep,
   normalizeInviteCode,
@@ -115,6 +118,12 @@ interface OnboardingFlowProps {
    */
   arrival?: OnboardingArrival | "pending" | "failed" | null;
   /**
+   * Jam path only: the visit from the public jam site this run belongs to.
+   * Draws "tua jam tá esperando" on the name step, and an account that already
+   * has a usable name never sees the wizard at all (`hasUsableName`).
+   */
+  jam?: JamHandover | null;
+  /**
    * The age gate handed this panel over in the same spot. No second rise.
    */
   entrance?: boolean;
@@ -166,6 +175,7 @@ export function OnboardingFlow({
   user,
   path: pathProp,
   arrival = null,
+  jam = null,
   entrance = true,
   onImportDiscord,
   onUserUpdated,
@@ -184,6 +194,18 @@ export function OnboardingFlow({
   /** The room made on step 3 and its invite, for step 4. */
   const [created, setCreated] = useState<CreatedRoom | null>(null);
   const finished = useRef(false);
+  // A visitor from the jam site whose account already has a name has nothing
+  // to answer here (the room step is not on their path either): the first run
+  // is over the moment the age gate is. Frozen at mount like the path.
+  const [skipAll] = useState(() => path === "jam" && hasUsableName(user));
+
+  useEffect(() => {
+    if (skipAll) {
+      finish();
+    }
+    // Once, at mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     // The gate normally fired this; an account that arrives already past the
@@ -199,8 +221,10 @@ export function OnboardingFlow({
   }, []);
 
   useEffect(() => {
-    track("onboarding_step_view", { step });
-  }, [step]);
+    if (!skipAll) {
+      track("onboarding_step_view", { step });
+    }
+  }, [step, skipAll]);
 
   useEffect(
     () => () => {
@@ -265,6 +289,7 @@ export function OnboardingFlow({
     user,
     path,
     arrival,
+    jam,
     onUserUpdated,
     onNext: () => {
       if (path === "cold") {
@@ -321,6 +346,10 @@ export function OnboardingFlow({
   // The gate was screen one, so the wizard's first step is dot two.
   const position = screenPosition(path, step);
 
+  if (skipAll) {
+    return null;
+  }
+
   return (
     <Dialog
       open
@@ -375,6 +404,7 @@ function useYouStep({
   user,
   path,
   arrival,
+  jam,
   onUserUpdated,
   onNext,
   onSkip,
@@ -382,6 +412,7 @@ function useYouStep({
   user: User;
   path: OnboardingPath;
   arrival: OnboardingFlowProps["arrival"];
+  jam: JamHandover | null;
   onUserUpdated: (user: User) => void;
   onNext: () => void;
   onSkip: () => void;
@@ -541,7 +572,9 @@ function useYouStep({
         ? t("onboarding.you.import")
         : path === "invite" && joined
           ? t("onboarding.you.enter", { server: joined.name })
-          : t("onboarding.you.next");
+          : path === "jam"
+            ? t("onboarding.you.jam")
+            : t("onboarding.you.next");
 
   const nameHintVisible =
     !nameTouched && displayName === user.displayName && displayName !== "";
@@ -582,6 +615,7 @@ function useYouStep({
         {path === "invite" && !joinFailed && (
           <ArrivalCard arrival={joined} members={members} selfId={user.id} />
         )}
+        {path === "jam" && jam ? <JamArrivalCard handover={jam} /> : null}
 
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium text-text-secondary">

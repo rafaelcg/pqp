@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { parsePublicJamPath, publicJamAppPath } from "@/lib/jam-public-links";
+import { leavesToJamSite, peekJamHandover, rebindJamHandover } from "@/lib/jam-handover";
+import { jamSiteHomeUrl, parsePublicJamPath, publicJamAppPath } from "@/lib/jam-public-links";
 import {
   openPublicJamById,
   publicJamRequestPath,
@@ -64,7 +65,19 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
     navigate(publicJamRequestPath(request));
   }, [ready, request, navigate]);
 
+  const routeTarget = route ? (route.kind === "new" ? "new" : route.songId) : null;
   const close = useCallback(() => {
+    // Somebody who came from the Jam site for this song is not a member who
+    // wandered into a jam: the chat home behind it is empty and has no way back
+    // (finding M1 of the launch user test). Closing goes to the site's list of
+    // songs, which is what "Voltar pras músicas" says, and is where they came
+    // from. The browser's Back still returns to the app, and the app keeps its
+    // "Voltar pra jam" strip for that. A different jam opened from the wall of a
+    // member's own server closes the way it always did.
+    if (routeTarget && leavesToJamSite(peekJamHandover(), routeTarget)) {
+      window.location.assign(jamSiteHomeUrl());
+      return;
+    }
     // Opened by a click inside the app there is an entry to go back to; opened
     // by a link there is not, and the app's own address goes back instead.
     if (location.key !== "default") {
@@ -72,7 +85,7 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
     } else {
       onClosed();
     }
-  }, [location.key, navigate, onClosed]);
+  }, [location.key, navigate, onClosed, routeTarget]);
 
   // The account's own notices, as one toast.
   useEffect(() => {
@@ -114,7 +127,11 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
           target={route.kind === "new" ? "new" : route.songId}
           viewerId={viewerId}
           onClose={close}
-          onSongStarted={(songId) => navigate(publicJamAppPath(songId), { replace: true })}
+          onSongStarted={(songId) => {
+            // A jam started by a visitor is now the jam they came from.
+            rebindJamHandover(songId);
+            navigate(publicJamAppPath(songId), { replace: true });
+          }}
         />
       )}
       {toast && me.enabled && (
