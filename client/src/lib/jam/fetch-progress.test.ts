@@ -104,11 +104,12 @@ describe("readWithProgress ceiling", () => {
     }
   });
 
-  it("never allocates beyond the ceiling for a header at it", async () => {
+  it("does not size its buffer from the header, even one under the ceiling", async () => {
     const alloc = vi.spyOn(globalThis, "Uint8Array");
-    await readWithProgress(streamed([10], { "content-length": "100" }), () => undefined, 100);
+    const bytes = await readWithProgress(streamed([10], { "content-length": "30000000" }), () => undefined);
     const sizes = alloc.mock.calls.map((call) => (call as unknown[])[0]).filter((n): n is number => typeof n === "number");
-    expect(Math.max(0, ...sizes)).toBeLessThanOrEqual(100);
+    expect(Math.max(0, ...sizes)).toBeLessThanOrEqual(1_048_576);
+    expect(bytes.byteLength).toBe(10);
     alloc.mockRestore();
   });
 });
@@ -149,10 +150,10 @@ describe("songBytes", () => {
     expect(songFraction(bytes)).toBeNull();
   });
 
-  it("never lets the total sit under what has arrived, and the fraction stops at 1", () => {
+  it("never lets the total sit under what has arrived, and the fraction never reaches 1", () => {
     const bytes = songBytes([{ loaded: 12, total: 10 }], 1);
     expect(bytes!.total).toBeGreaterThanOrEqual(bytes!.loaded);
-    expect(songFraction(bytes)).toBe(1);
+    expect(songFraction(bytes)).toBe(0.99);
   });
 });
 

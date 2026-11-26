@@ -9,6 +9,9 @@
 
 import { JAM_AUDIO_MAX_BYTES } from "@pqp/shared";
 
+/** The first buffer of a streamed read, whatever the header says. */
+const START_BYTES = 1_048_576;
+
 /** Bytes received so far and the size the server announced, or null when it did not say. */
 export type FetchProgress = (loaded: number, total: number | null) => void;
 
@@ -58,10 +61,10 @@ export async function readWithProgress(
     onProgress(bytes.byteLength, total === null ? bytes.byteLength : total);
     return bytes;
   }
-  // One buffer, written as the chunks arrive: sized by the announced length (at most the ceiling) or 1 MiB when
-  // there is none, and doubled (never past the ceiling) if the body runs past it, so a finished stem is never
-  // held twice (chunks AND a flattened copy).
-  let buffer = new Uint8Array(Math.min(total ?? 1_048_576, maxBytes));
+  // One buffer, written as the chunks arrive: a small start (never sized from the header, which a server can
+  // inflate), doubled up to the ceiling as the body really grows, so a finished stem is never held twice (chunks
+  // AND a flattened copy) and a lying header costs nothing.
+  let buffer = new Uint8Array(Math.min(maxBytes, total === null ? START_BYTES : Math.min(total, START_BYTES)));
   let loaded = 0;
   onProgress(0, total);
   for (;;) {
@@ -131,12 +134,16 @@ export function songBytes(stems: readonly StemBytes[], count: number): SongBytes
   return { loaded, total: Math.max(total, loaded), exact: guessed === 0 };
 }
 
-/** 0 to 1, never 1 until the end is real; null when there is no total to measure against. */
+/**
+ * 0 to 0.99; null when there is no total to measure against. It never says 1:
+ * a total that is partly a guess can be overtaken by what has arrived, and the
+ * end is real only when the stems are installed (the ring is gone by then).
+ */
 export function songFraction(bytes: SongBytes | null): number | null {
   if (!bytes || bytes.total <= 0) {
     return null;
   }
-  return Math.min(1, bytes.loaded / bytes.total);
+  return Math.min(0.99, bytes.loaded / bytes.total);
 }
 
 /** Megabytes the way a person reads them: one decimal under 10, whole above, in the reader's own separator. */
