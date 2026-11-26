@@ -68,7 +68,8 @@ export function jamShareable(status: string | null | undefined): boolean {
  *   - a jam started in the app's public flow: only when the server said `live` (a new account's first jam
  *     waits for review and its page does not open yet);
  *   - the starter's own public jam: its publication says `live`;
- *   - somebody else's public jam (an outside take): it was public to get here;
+ *   - somebody else's public jam (an outside take): the public read of it still answers when the take is
+ *     done (the starter may have unpublished it meanwhile);
  *   - a channel's song: only once its starter published it and it is `live`. A private song gets nothing.
  */
 export function jamShareOffered(input: {
@@ -84,6 +85,11 @@ export function jamShareOffered(input: {
   createdStatus: string | null;
   /** The publication status of the existing song, read for its starter. */
   publicationStatus: string | null | undefined;
+  /**
+   * For somebody else's public jam: the public read of the song answered just now (it can be hidden or
+   * unpublished while a take is being recorded). Anything but a confirmed yes offers nothing.
+   */
+  outsideConfirmedLive: boolean;
 }): boolean {
   if (!input.publicEnabled) {
     return false;
@@ -92,7 +98,7 @@ export function jamShareOffered(input: {
     if (!input.existingSong) {
       return jamShareable(input.createdStatus);
     }
-    return input.isStarter ? jamShareable(input.publicationStatus) : true;
+    return input.isStarter ? jamShareable(input.publicationStatus) : input.outsideConfirmedLive;
   }
   return input.existingSong && jamShareable(input.publicationStatus);
 }

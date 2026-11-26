@@ -10,6 +10,7 @@ describe("jamShareOffered", () => {
     isStarter: false,
     createdStatus: null as string | null,
     publicationStatus: undefined as string | null | undefined,
+    outsideConfirmedLive: false,
   };
 
   it("never with jam_public off", () => {
@@ -37,8 +38,13 @@ describe("jamShareOffered", () => {
     expect(jamShareOffered({ ...created, createdStatus: null })).toBe(false);
   });
 
-  it("an outside take on somebody else's public jam, and the starter's own live one", () => {
-    expect(jamShareOffered({ ...base, publicAccess: true })).toBe(true);
+  it("an outside take on somebody else's public jam only once the public read confirms it is still live", () => {
+    // hidden or unpublished while the take was recorded, or not yet confirmed: nothing to share
+    expect(jamShareOffered({ ...base, publicAccess: true })).toBe(false);
+    expect(jamShareOffered({ ...base, publicAccess: true, outsideConfirmedLive: true })).toBe(true);
+  });
+
+  it("the starter's own live jam", () => {
     expect(jamShareOffered({ ...base, publicAccess: true, isStarter: true, publicationStatus: "live" })).toBe(true);
     expect(jamShareOffered({ ...base, publicAccess: true, isStarter: true, publicationStatus: "review" })).toBe(false);
   });

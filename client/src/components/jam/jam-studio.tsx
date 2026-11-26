@@ -18,6 +18,7 @@ import { latencyIsMeasured } from "@/lib/jam-latency-trust";
 import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
 import { liveTimelineEndMs } from "@/lib/jam-live";
 import { TAKE_STEM_ID } from "@/lib/jam-session";
+import { fetchPublicSongForViewer } from "@/lib/jam-public-api";
 import { jamShareOffered } from "@/lib/jam-share-link";
 import { readJamChannel, useJamStoreVersion } from "@/lib/jam-store";
 import { songNeed, songTimeline } from "@/lib/jam-wall";
@@ -287,18 +288,41 @@ export function JamStudio({
     song?.id ?? "",
     publicMe.enabled && publicAccess && song !== null && canSwitchMix,
   );
+  // The take went into the song this studio was opened on (a song that vanished under a take is posted as a
+  // song of its own, which inherits nothing from the one that was deleted).
+  const intoThisSong = song !== null && studio.posted?.songId === song.id;
+  // Somebody else's public jam may have been hidden or unpublished while the take was recorded: ask the
+  // public read once the take is done, and offer nothing until it says yes.
+  const needsLiveCheck =
+    phase === "done" && publicMe.enabled && publicAccess && intoThisSong && !canSwitchMix;
+  const [outsideLive, setOutsideLive] = useState<boolean | null>(null);
+  const checkedSongId = needsLiveCheck ? song!.id : null;
+  useEffect(() => {
+    if (checkedSongId === null) {
+      return;
+    }
+    let cancelled = false;
+    void fetchPublicSongForViewer(checkedSongId).then(
+      () => !cancelled && setOutsideLive(true),
+      () => !cancelled && setOutsideLive(false),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [checkedSongId]);
   const shareable = jamShareOffered({
     publicEnabled: publicMe.enabled,
     publicAccess,
-    existingSong: song !== null,
+    existingSong: intoThisSong,
     isStarter: canSwitchMix,
     createdStatus: studio.createdStatus,
     publicationStatus: publicAccess ? starterRead.publication?.status : publication.publication?.status,
+    outsideConfirmedLive: outsideLive === true,
   });
   useJamStoreVersion();
   const postedSongId = studio.posted?.songId ?? null;
   const storedSong = postedSongId ? (readJamChannel(channelId).songs.find((one) => one.id === postedSongId) ?? null) : null;
-  const inviteSong = storedSong ?? song;
+  const inviteSong = storedSong ?? (intoThisSong ? song : null);
   const inviteSubject: JamInviteSubject | null =
     shareable && postedSongId
       ? {
