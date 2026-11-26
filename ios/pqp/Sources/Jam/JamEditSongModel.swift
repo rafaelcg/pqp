@@ -27,7 +27,17 @@ enum JamCoverPrep {
     /// main actor: a phone photo is tens of megapixels, so it is scaled while
     /// it is read (ImageIO's thumbnailer) and never held whole.
     static func prepare(data: Data) -> Result<JamPreparedCover, JamCoverRules.Problem> {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+        prepare(source: CGImageSourceCreateWithData(data as CFData, nil))
+    }
+
+    /// The same, from a file the library handed over: the encoded original is
+    /// read by ImageIO as it needs it and never held whole in memory.
+    static func prepare(file: URL) -> Result<JamPreparedCover, JamCoverRules.Problem> {
+        prepare(source: CGImageSourceCreateWithURL(file as CFURL, nil))
+    }
+
+    private static func prepare(source: CGImageSource?) -> Result<JamPreparedCover, JamCoverRules.Problem> {
+        guard let source,
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int,
               let height = properties[kCGImagePropertyPixelHeight] as? Int
@@ -40,9 +50,12 @@ enum JamCoverPrep {
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: JamCoverRules.size * 2,
         ]
+        // A pick that was replaced or closed has nobody waiting for the decode.
+        if Task.isCancelled { return .failure(.failed) }
         guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             return .failure(.unreadable)
         }
+        if Task.isCancelled { return .failure(.failed) }
         guard let jpeg = squareJpeg(UIImage(cgImage: cg)), let preview = UIImage(data: jpeg) else {
             return .failure(.unreadable)
         }
@@ -73,11 +86,32 @@ enum JamCoverPrep {
     }
 }
 
+/// A photo as the library hands it over: a file, not bytes in memory. A ProRAW
+/// or a panorama can be hundreds of MiB, and ImageIO reads it from disk.
+struct JamPickedPhoto: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .image) { photo in
+            SentTransferredFile(photo.url)
+        } importing: { received in
+            let ext = received.file.pathExtension.isEmpty ? "img" : received.file.pathExtension
+            let copy = FileManager.default.temporaryDirectory.appendingPathComponent("jam-pick-\(UUID().uuidString).\(ext)")
+            try FileManager.default.copyItem(at: received.file, to: copy)
+            return JamPickedPhoto(url: copy)
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class JamEditSongModel {
     enum Upload: Equatable {
         case idle
+        /// A photo was picked and is being read and framed, before any byte is
+        /// sent. It counts as work in progress everywhere `uploading` does: Save
+        /// and a swipe-down wait for it, and Cancel asks first.
+        case preparing
         case uploading(Double)
         case failed(JamCoverRules.Problem)
     }
@@ -146,9 +180,12 @@ final class JamEditSongModel {
         artistProblem != nil && (touched || artist != JamBidi.clean(current.artist ?? ""))
     }
 
+    /// A photo is being prepared or sent: the sheet is not done yet.
     var isUploading: Bool {
-        if case .uploading = upload { return true }
-        return false
+        switch upload {
+        case .preparing, .uploading: true
+        case .idle, .failed: false
+        }
     }
 
     /// Something would be lost by closing: a change Save would send, or a photo going up.
@@ -175,17 +212,13 @@ final class JamEditSongModel {
     }
 
     /// The song's own cover is the picture, as opposed to the art a song has without one.
-    var showsCurrentCover: Bool { cover == .keep && current.cover != nil && !isUploading }
+    var showsCurrentCover: Bool { cover == .keep && current.cover != nil && shownLocal == nil }
 
     // MARK: Picking a photo
 
     /// Check, frame, send. Each step that fails says why in words.
     func pick(_ item: PhotosPickerItem, api: APIClient) {
-        pickToken += 1
-        let mine = pickToken
-        uploadTask?.cancel()
-        upload = .idle
-        note = nil
+        let mine = beginPick()
         uploadTask = Task { [weak self] in
             guard let self else { return }
             // The picker was asked for pictures; a type that is not one is the rare case.
@@ -193,11 +226,15 @@ final class JamEditSongModel {
                 self.finishFailed(.type, token: mine)
                 return
             }
-            guard let data = try? await item.loadTransferable(type: Data.self) else {
+            guard let picked = try? await item.loadTransferable(type: JamPickedPhoto.self) else {
                 self.finishFailed(.unreadable, token: mine)
                 return
             }
-            let prepared = await Task.detached(priority: .userInitiated) { JamCoverPrep.prepare(data: data) }.value
+            let file = picked.url
+            defer { try? FileManager.default.removeItem(at: file) }
+            // The decode is cancelled with the pick (a closed sheet), not left to finish for nobody.
+            let work = Task.detached(priority: .userInitiated) { JamCoverPrep.prepare(file: file) }
+            let prepared = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
             guard self.stillCurrent(mine) else { return }
             switch prepared {
             case .failure(let problem):
@@ -206,6 +243,17 @@ final class JamEditSongModel {
                 await self.send(cover, api: api, token: mine)
             }
         }
+    }
+
+    /// A photo was picked: busy from this moment, not from the first byte. A
+    /// Save pressed while the photo is still being read would otherwise go
+    /// through and close the sheet, which throws the pick away unsaid.
+    func beginPick() -> Int {
+        pickToken += 1
+        uploadTask?.cancel()
+        upload = .preparing
+        note = nil
+        return pickToken
     }
 
     private func stillCurrent(_ token: Int) -> Bool { token == pickToken && !closed && !Task.isCancelled }

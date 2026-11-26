@@ -96,6 +96,8 @@ struct JamAdjustSheet: View {
         }
         .scrollDisabled(grabbing)
         .safeAreaInset(edge: .bottom, spacing: 0) { transport }
+        // Nothing is edited while a save is out (the model refuses too).
+        .disabled(model.saving)
     }
 
     private func header(_ track: JamTrack) -> some View {

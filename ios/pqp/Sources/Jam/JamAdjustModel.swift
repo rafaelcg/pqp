@@ -52,7 +52,9 @@ final class JamAdjustModel {
     // MARK: - Hearing it
 
     func hear(_ next: JamClipEdits) {
-        guard let track else { return }
+        // While a save is out the draft is what it is sending: a later drag would
+        // be in the draft only, and the answer closes the sheet over it.
+        guard let track, !saving else { return }
         draft.set(next)
         failure = nil
         song.preview(track, edits: next)
@@ -74,7 +76,7 @@ final class JamAdjustModel {
 
     /// Everything back to what is stored.
     func reset() {
-        guard let track else { return }
+        guard let track, !saving else { return }
         draft.reset(to: track)
         failure = nil
         song.clearPreview(trackId: trackId)

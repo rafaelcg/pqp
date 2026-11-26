@@ -139,7 +139,7 @@ struct JamEditSongSheet: View {
                 .font(JamFont.text(12)).foregroundStyle(Palette.danger)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("jam.edit.photoError")
-        case .uploading:
+        case .preparing, .uploading:
             Text("Sending the photo")
                 .font(JamFont.text(12)).foregroundStyle(Palette.paperMuted)
         case .idle:

@@ -143,6 +143,27 @@ final class JamEditRulesTests: XCTestCase {
         XCTAssertEqual(prepared.preview.size.height * prepared.preview.scale, 1024, accuracy: 1)
     }
 
+    /// The library hands over a FILE, which ImageIO reads as it needs it.
+    func testAPhotoIsPreparedFromAFileWithoutReadingItWhole() throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 1200, height: 900), format: format).image { context in
+            UIColor.orange.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 1200, height: 900))
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("jam-test-\(UUID().uuidString).png")
+        try XCTUnwrap(image.pngData()).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let prepared = try JamCoverPrep.prepare(file: file).get()
+        XCTAssertEqual(Array(prepared.jpeg.prefix(2)), [0xFF, 0xD8])
+        XCTAssertEqual(prepared.preview.size.width * prepared.preview.scale, 1024, accuracy: 1)
+        if case .failure(let problem) = JamCoverPrep.prepare(file: file.appendingPathExtension("missing")) {
+            XCTAssertEqual(problem, .unreadable)
+        } else {
+            XCTFail("a file that is not there is unreadable")
+        }
+    }
+
     func testATooSmallPhotoAndANonImageAreRefusedBeforeAnythingIsEncoded() throws {
         // Scale 1: a point is a pixel, so this really is a 300 px side.
         let format = UIGraphicsImageRendererFormat()
@@ -245,6 +266,7 @@ private func makeEditSession() -> SessionStore {
 /// writes are the test's.
 private func route(
     log: LockedBox<[SentRequest]>,
+    writeDelay: TimeInterval = 0,
     writes: @escaping @Sendable (URLRequest) -> (Int, String)
 ) -> @Sendable (URLRequest) -> (TimeInterval, Int, Data) {
     { request in
@@ -260,7 +282,7 @@ private func route(
         }
         log.value.append(SentRequest(method: method, path: path, json: bodyOf(request)))
         let (status, body) = writes(request)
-        return (0, status, Data(body.utf8))
+        return (writeDelay, status, Data(body.utf8))
     }
 }
 
@@ -351,6 +373,35 @@ final class JamEditSongModelTests: XCTestCase {
         XCTAssertEqual(edit.titleProblem, .empty)
         XCTAssertTrue(edit.showsTitleProblem)
         XCTAssertFalse(edit.canSave)
+        song.stop()
+    }
+
+    func testASaveCannotRunWhileAPickedPhotoIsStillBeingPrepared() async throws {
+        let log = LockedBox<[SentRequest]>([])
+        JamStubURLProtocol.handler = route(log: log) { _ in (200, "{\"song\":\(songJSON(title: "Another name"))}") }
+        let session = makeEditSession()
+        keep = session
+        let song = try await startedModel(session: session)
+        let edit = JamEditSongModel(song: song)
+        edit.titleEdit = "Another name"
+        XCTAssertTrue(edit.canSave)
+        // The person picked a photo: it is read and framed before any byte is sent.
+        _ = edit.beginPick()
+        XCTAssertEqual(edit.upload, .preparing)
+        XCTAssertTrue(edit.isUploading)
+        XCTAssertTrue(edit.isDirty, "closing now would drop the pick, so it asks first")
+        XCTAssertFalse(edit.canSave, "Save waits for the photo, or the sheet would close over it")
+        let landed = await edit.save(api: session.api)
+        XCTAssertFalse(landed)
+        XCTAssertTrue(log.value.filter { $0.method != "GET" }.isEmpty, "nothing was sent")
+        // Even a sheet with no text change is not done while the photo is.
+        let bare = JamEditSongModel(song: song)
+        _ = bare.beginPick()
+        XCTAssertTrue(bare.isDirty)
+        // A later pick replaces the earlier one: the older worker's answer is stale.
+        let first = edit.beginPick()
+        let second = edit.beginPick()
+        XCTAssertGreaterThan(second, first)
         song.stop()
     }
 
@@ -451,6 +502,33 @@ final class JamAdjustModelTests: XCTestCase {
         XCTAssertEqual(song.tracks.first?.offsetMs, 10)
         XCTAssertEqual(song.tracks.first?.gain, 0.5)
         XCTAssertEqual(song.effective(try XCTUnwrap(song.tracks.first)).offsetMs, 10)
+        song.stop()
+    }
+
+    func testNothingIsEditedWhileASaveIsOut() async throws {
+        let log = LockedBox<[SentRequest]>([])
+        let answer = "{\"track\":\(trackJSON(offset: 10)),\"song\":\(songJSON())}"
+        JamStubURLProtocol.handler = route(log: log, writeDelay: 0.4) { _ in (200, answer) }
+        let session = makeEditSession()
+        keep = session
+        let song = try await startedModel(session: session)
+        let adjust = JamAdjustModel(song: song, track: try XCTUnwrap(song.tracks.first))
+        adjust.nudge(by: 10)
+        let saving = Task { await adjust.save() }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(adjust.saving)
+        // A drag after the request left would live in the draft only, and the answer closes the sheet over it.
+        adjust.nudge(by: 50)
+        adjust.gain(1.8)
+        adjust.reset()
+        XCTAssertEqual(adjust.edits.nudgeMs, 10)
+        XCTAssertEqual(adjust.edits.gain, 1)
+        let landed = await saving.value
+        XCTAssertTrue(landed)
+        XCTAssertEqual(song.tracks.first?.offsetMs, 10)
+        // Editable again once it has landed or failed.
+        adjust.nudge(by: 5)
+        XCTAssertEqual(adjust.edits.nudgeMs, 15)
         song.stop()
     }
 
