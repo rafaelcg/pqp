@@ -298,6 +298,23 @@ final class JamEnginePlaceTests: XCTestCase {
         XCTAssertFalse(engine.holds([base, later]))
     }
 
+    func testSeveralStemsArePlacedInOneCallAndTheMixIsRecomputedOnce() throws {
+        let a = try writeStem("a", length: 48_000, spikes: [(0, 0.9)])
+        let b = try writeStem("b", length: 48_000, spikes: [(0, 0.6)])
+        let engine = JamEngine()
+        let sa = JamEngine.Stem(id: "a", url: a, offsetMs: 0, trimStartMs: 0, trimEndMs: 0)
+        let sb = JamEngine.Stem(id: "b", url: b, offsetMs: 0, trimStartMs: 0, trimEndMs: 0)
+        engine.load([sa, sb])
+        let moved = [
+            JamEngine.Stem(id: "a", url: a, offsetMs: 50, trimStartMs: 0, trimEndMs: 0),
+            JamEngine.Stem(id: "b", url: b, offsetMs: 100, trimStartMs: 0, trimEndMs: 0),
+            JamEngine.Stem(id: "ghost", url: a, offsetMs: 5, trimStartMs: 0, trimEndMs: 0),
+        ]
+        XCTAssertEqual(engine.place(moved), 2, "the stem that is not loaded is not placed")
+        XCTAssertEqual(engine.originMs, 50)
+        XCTAssertEqual(spikes(try engine.renderOffline(fromPositionMs: 0, frameCount: 20_000)), [0, 2_400])
+    }
+
     func testAStemMovedEarlierThanTheBandMovesTheTransportsZeroToItsFirstHeardSample() throws {
         let band = try writeStem("band", length: 48_000, spikes: [(0, 0.9)])
         let take = try writeStem("take", length: 24_000, spikes: [(0, 0.5)])

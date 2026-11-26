@@ -33,7 +33,8 @@ struct JamEditSongSheet: View {
                 VStack(alignment: .leading, spacing: 20) {
                     preview
                     photoControls
-                    fields
+                    // What Save is sending is what the sheet closes over: nothing is typed meanwhile.
+                    fields.disabled(model.saving)
                     if let failure = model.failure { failureRow(failure) }
                 }
                 .padding(Metrics.hPadding)
@@ -175,7 +176,7 @@ struct JamEditSongSheet: View {
     private var fields: some View {
         VStack(alignment: .leading, spacing: 16) {
             field(
-                "Song name", text: Binding(get: { model.title }, set: { model.titleEdit = $0 }),
+                "Song name", text: Binding(get: { model.title }, set: { if !model.saving { model.titleEdit = $0 } }),
                 prompt: "e.g. In Bloom", id: "jam.edit.title", field: .title
             )
             if model.showsTitleProblem, let problem = model.titleProblem {
@@ -184,7 +185,7 @@ struct JamEditSongSheet: View {
                     .accessibilityIdentifier("jam.edit.titleError")
             }
             field(
-                "Artist", text: Binding(get: { model.artist }, set: { model.artistEdit = $0 }),
+                "Artist", text: Binding(get: { model.artist }, set: { if !model.saving { model.artistEdit = $0 } }),
                 prompt: "Leave empty if it is yours", id: "jam.edit.artist", field: .artist
             )
             if model.showsArtistProblem {

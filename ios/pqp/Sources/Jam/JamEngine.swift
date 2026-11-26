@@ -154,10 +154,21 @@ final class JamEngine {
     /// have moved). False when there is no such stem or its file is another.
     @discardableResult
     func place(_ stem: Stem) -> Bool {
-        guard voices[stem.id]?.stem.url == stem.url else { return false }
-        voices[stem.id]?.stem = stem
-        recompute()
-        return true
+        place([stem]) == 1
+    }
+
+    /// The same for several stems at once, recomputing the mix's origin and length
+    /// ONCE (a drag does this many times a second, with every stem of the song).
+    /// Answers how many were placed.
+    @discardableResult
+    func place(_ stems: [Stem]) -> Int {
+        var placed = 0
+        for stem in stems where voices[stem.id]?.stem.url == stem.url {
+            voices[stem.id]?.stem = stem
+            placed += 1
+        }
+        if placed > 0 { recompute() }
+        return placed
     }
 
     private func detach(_ id: String) {

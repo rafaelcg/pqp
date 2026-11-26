@@ -197,6 +197,10 @@ final class JamSongModel {
         previewTask = nil
         previews = [:]
         adjustingId = nil
+        // A take that was put on only to be adjusted does not stay on after the screen.
+        if let adjusted = auditionedForAdjust, auditioning[adjusted.instrument] == adjusted.id {
+            auditioning.removeValue(forKey: adjusted.instrument)
+        }
         auditionedForAdjust = nil
         pauseInternal(keepSession: false)
         ticker?.cancel()
@@ -287,7 +291,12 @@ final class JamSongModel {
         let wasPlaying = isPlaying
         let songTime = engine.originMs + engine.positionMs
         let hadStems = engine.durationMs > 0
-        let stems = JamMixRules.stems(wanted, files: files)
+        // Read again NOW: while the stems downloaded a person may have moved a
+        // take (a preview), or a frame may have changed the mix. The stems come
+        // from what plays at this moment, not from what played when the sync began.
+        let current = active.map(effective)
+        video.load(current)
+        let stems = JamMixRules.stems(current, files: files)
         if hadStems, !stems.isEmpty, missing.isEmpty, engine.holds(stems) {
             // Nothing the engine plays changed (the echo of a change this phone
             // made itself, a vote that moved a count): the song is not restarted.
@@ -422,7 +431,7 @@ final class JamSongModel {
         let wasPlaying = isPlaying
         let songTime = engine.originMs + engine.positionMs
         video.load(wanted)
-        for stem in stems { engine.place(stem) }
+        engine.place(stems)
         let target = max(0, min(engine.durationMs, songTime - engine.originMs))
         if wasPlaying {
             startPlayback(from: target)

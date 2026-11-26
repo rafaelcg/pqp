@@ -32,11 +32,36 @@ enum JamCoverPrep {
 
     /// The same, from a file the library handed over: the encoded original is
     /// read by ImageIO as it needs it and never held whole in memory.
-    static func prepare(file: URL) -> Result<JamPreparedCover, JamCoverRules.Problem> {
-        prepare(source: CGImageSourceCreateWithURL(file as CFURL, nil))
+    static func prepare(file: URL, cancelled: () -> Bool = { false }) -> Result<JamPreparedCover, JamCoverRules.Problem> {
+        prepare(source: CGImageSourceCreateWithURL(file as CFURL, nil), cancelled: cancelled)
     }
 
-    private static func prepare(source: CGImageSource?) -> Result<JamPreparedCover, JamCoverRules.Problem> {
+    /// One decode at a time, whatever the number of sheets that were opened and
+    /// closed: a synchronous ImageIO call cannot be interrupted, so a replacement
+    /// waits its turn instead of piling a second decode buffer on the first.
+    private static let queue = DispatchQueue(label: "gg.pqp.jam.cover-prep", qos: .userInitiated)
+
+    private final class CancelFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var set = false
+        var isSet: Bool { lock.lock(); defer { lock.unlock() }; return set }
+        func cancel() { lock.lock(); set = true; lock.unlock() }
+    }
+
+    /// `prepare(file:)` on the serial queue, cancelled with the caller: a pick that
+    /// was replaced or closed while it waited its turn never starts its decode.
+    static func prepareSerially(file: URL) async -> Result<JamPreparedCover, JamCoverRules.Problem> {
+        let flag = CancelFlag()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                queue.async {
+                    continuation.resume(returning: flag.isSet ? .failure(.failed) : prepare(file: file, cancelled: { flag.isSet }))
+                }
+            }
+        } onCancel: { flag.cancel() }
+    }
+
+    private static func prepare(source: CGImageSource?, cancelled: () -> Bool = { false }) -> Result<JamPreparedCover, JamCoverRules.Problem> {
         guard let source,
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int,
@@ -51,11 +76,11 @@ enum JamCoverPrep {
             kCGImageSourceThumbnailMaxPixelSize: JamCoverRules.size * 2,
         ]
         // A pick that was replaced or closed has nobody waiting for the decode.
-        if Task.isCancelled { return .failure(.failed) }
+        if cancelled() { return .failure(.failed) }
         guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
             return .failure(.unreadable)
         }
-        if Task.isCancelled { return .failure(.failed) }
+        if cancelled() { return .failure(.failed) }
         guard let jpeg = squareJpeg(UIImage(cgImage: cg)), let preview = UIImage(data: jpeg) else {
             return .failure(.unreadable)
         }
@@ -231,10 +256,11 @@ final class JamEditSongModel {
                 return
             }
             let file = picked.url
-            defer { try? FileManager.default.removeItem(at: file) }
-            // The decode is cancelled with the pick (a closed sheet), not left to finish for nobody.
-            let work = Task.detached(priority: .userInitiated) { JamCoverPrep.prepare(file: file) }
-            let prepared = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+            // Cancelled with the pick (a closed sheet) and one at a time.
+            let prepared = await JamCoverPrep.prepareSerially(file: file)
+            // The small JPEG is all that goes on from here: the original is let go now,
+            // not after the ticket and the upload.
+            try? FileManager.default.removeItem(at: file)
             guard self.stillCurrent(mine) else { return }
             switch prepared {
             case .failure(let problem):

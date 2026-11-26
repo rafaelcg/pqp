@@ -144,7 +144,7 @@ final class JamEditRulesTests: XCTestCase {
     }
 
     /// The library hands over a FILE, which ImageIO reads as it needs it.
-    func testAPhotoIsPreparedFromAFileWithoutReadingItWhole() throws {
+    func testAPhotoIsPreparedFromAFileWithoutReadingItWhole() async throws {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let image = UIGraphicsImageRenderer(size: CGSize(width: 1200, height: 900), format: format).image { context in
@@ -156,6 +156,9 @@ final class JamEditRulesTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: file) }
         let prepared = try JamCoverPrep.prepare(file: file).get()
         XCTAssertEqual(Array(prepared.jpeg.prefix(2)), [0xFF, 0xD8])
+        // The queue the app uses decodes one at a time and answers the same.
+        let serial = try await JamCoverPrep.prepareSerially(file: file).get()
+        XCTAssertEqual(serial.jpeg.count, prepared.jpeg.count)
         XCTAssertEqual(prepared.preview.size.width * prepared.preview.scale, 1024, accuracy: 1)
         if case .failure(let problem) = JamCoverPrep.prepare(file: file.appendingPathExtension("missing")) {
             XCTAssertEqual(problem, .unreadable)
