@@ -390,6 +390,26 @@ export function useJamPublicTop(active: boolean): JamPublicTop {
 }
 
 /** Who is waiting for this account's answer, and the starter's inbox. Empty while the flag is off. */
+/** Waiting inbox takes per song, computed once per inbox read and shared by every tile. */
+let countsFor: readonly JamPublicInboxItem[] | null = null;
+let countsBySong: ReadonlyMap<string, number> = new Map();
+function waitingCountOf(songId: string): number {
+  if (countsFor !== waiting.inbox) {
+    const counts = new Map<string, number>();
+    for (const item of waiting.inbox) {
+      counts.set(item.songId, (counts.get(item.songId) ?? 0) + 1);
+    }
+    countsBySong = counts;
+    countsFor = waiting.inbox;
+  }
+  return countsBySong.get(songId) ?? 0;
+}
+
+/** How many outside takes wait for this account's answer on one song. A tile re-renders only when ITS number moves. */
+export function useJamWaitingCount(songId: string): number {
+  return useSyncExternalStore(subscribe, () => waitingCountOf(songId), () => 0);
+}
+
 export function useJamPublicWaiting(): JamPublicWaiting {
   return useSyncExternalStore(subscribe, () => waiting, () => NOTHING);
 }

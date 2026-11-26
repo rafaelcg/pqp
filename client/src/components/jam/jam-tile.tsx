@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import type { JamDetail } from "@/lib/jam-state";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
-import { useJamPublicWaiting } from "@/lib/jam-public-store";
+import { useJamWaitingCount } from "@/lib/jam-public-store";
 import { useJamStoreEpoch } from "@/lib/jam-store";
 import { JAM_TILE_SPAN, songNeed, type JamNeed, type JamTileSize } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
@@ -70,7 +70,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
   const needLabel = useNeedLabel();
   const need = songNeed(song);
   // Parts from outside waiting for this account's answer on this song (the starter's inbox).
-  const waitingTakes = useJamPublicWaiting().inbox.filter((item) => item.songId === song.id).length;
+  const waitingTakes = useJamWaitingCount(song.id);
   const hero = size === "hero" && !compact;
   const cover = useJamCover(song.coverUrl);
   const covered = cover.src !== null && cover.status !== "failed";

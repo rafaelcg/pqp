@@ -69,6 +69,8 @@ const counters = {
   pushClaimed: 0,
   /** Of those, the ones that reached a device attempt (the rest hit DND, a mute, a live socket). */
   pushTried: 0,
+  /** Pushes that failed before reaching a device (their claim was handed back). */
+  pushFailed: 0,
   /** Folded takes that did not claim a push (one went out less than half an hour ago). */
   pushHeldBack: 0,
   /** Items the person tapped or dismissed. */
@@ -204,6 +206,14 @@ async function upsertNotice(input: NoticeInput): Promise<{ id: string; count: nu
           if (tried) {
             counters.pushTried += 1;
           }
+        },
+        () => {
+          // The attempt failed before it could reach a device: hand the claim back, so the
+          // next take on this item (or a retry) may push instead of waiting half an hour.
+          counters.pushFailed += 1;
+          void getPool()
+            .query(`UPDATE jam_take_notices SET pushed_at = NULL WHERE id = $1 AND acked_at IS NULL`, [row.id])
+            .catch(() => undefined);
         },
       );
     } else {
@@ -382,8 +392,18 @@ export async function listJamTakeNotices(userId: string): Promise<JamTakeNotices
   }
   if (settled.length > 0) {
     // Everything on the song was answered: the item has done its job.
+    // Re-checked inside the statement: a take that merged into the item since the read
+    // above is waiting again, and the item must stay open for it.
     await getPool()
-      .query(`UPDATE jam_take_notices SET acked_at = NOW() WHERE id = ANY($1::uuid[]) AND acked_at IS NULL`, [settled])
+      .query(
+        `UPDATE jam_take_notices n SET acked_at = NOW()
+          WHERE n.id = ANY($1::uuid[]) AND n.acked_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM jam_tracks t JOIN jam_public_tracks pt ON pt.track_id = t.id
+               WHERE t.song_id = n.song_id AND pt.outside AND NOT t.in_mix
+                 AND t.deleted_at IS NULL AND pt.removed_at IS NULL)`,
+        [settled],
+      )
       .catch(() => undefined);
   }
   return { notices };

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ApiError, fetchCommunities, joinCommunity } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { jamSiteHomeUrl } from "@/lib/jam-public-links";
+import { JamInboxDialog } from "@/components/jam/jam-public-waiting";
 import { openPublicJamById } from "@/lib/jam-public-nav";
 import { useJamPublicMe, useJamPublicTop, useJamPublicWaiting } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
@@ -472,6 +473,7 @@ function JamWaitingRow() {
   const { t } = useTranslation();
   const me = useJamPublicMe();
   const { inbox } = useJamPublicWaiting();
+  const [chooserOpen, setChooserOpen] = useState(false);
   if (!me.enabled || inbox.length === 0) {
     return null;
   }
@@ -489,10 +491,12 @@ function JamWaitingRow() {
       <Button
         className="shrink-0 self-start sm:self-auto"
         data-jam-door-waiting-open=""
-        onClick={() => openPublicJamById(songs[0]!)}
+        // One song: straight to it. Several: the list, one row each, as the Jam wall does.
+        onClick={() => (songs.length === 1 ? openPublicJamById(songs[0]!) : setChooserOpen(true))}
       >
         {t("jam.public.card.reply")}
       </Button>
+      <JamInboxDialog open={chooserOpen} onClose={() => setChooserOpen(false)} />
     </section>
   );
 }

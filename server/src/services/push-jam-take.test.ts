@@ -10,7 +10,21 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
  * the person's language and names the song, and a tap opens that song.
  */
 
-const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+// This suite TRUNCATEs: it runs only against a localhost database, so a staging or
+// production `DATABASE_URL` in the environment makes it skip instead of wiping users.
+function localTestDatabase(): string | undefined {
+  const url = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+  if (!url) {
+    return undefined;
+  }
+  try {
+    const host = new URL(url).hostname;
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(host) ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const DATABASE_URL = localTestDatabase();
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
 if (DATABASE_URL) {

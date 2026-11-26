@@ -1964,7 +1964,11 @@ export async function sendJamTakePush(event: JamTakePushEvent): Promise<boolean>
 }
 
 /** Fire-and-forget, the contract of every `push*` entry point. */
-export function pushJamTake(event: JamTakePushEvent, onDone?: (tried: boolean) => void): void {
+export function pushJamTake(
+  event: JamTakePushEvent,
+  onDone?: (tried: boolean) => void,
+  onFailed?: () => void,
+): void {
   if (!isAnyPushEnabled()) {
     return;
   }
@@ -1972,6 +1976,7 @@ export function pushJamTake(event: JamTakePushEvent, onDone?: (tried: boolean) =
     .then((tried) => onDone?.(tried))
     .catch((error: unknown) => {
       console.error(`[push] jam take fan-out failed for song ${event.songId}:`, error);
+      onFailed?.();
     });
 }
 

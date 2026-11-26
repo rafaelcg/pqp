@@ -68,6 +68,7 @@ import {
   recordTakeForStarter,
   resetJamTakeNoticeCountersForTests,
   sweepJamTakeNotices,
+  type TakeDecisionTarget,
 } from "./jam-take-notices.js";
 import {
   LISTED_SONG_SQL,
@@ -742,12 +743,35 @@ export async function noteJamTrackAdded(input: {
   }
 }
 
+/** Best-effort: a failed read says `other` and the notice still goes, without the instrument. */
 async function instrumentOfTrack(trackId: string): Promise<JamInstrument> {
-  const result = await getPool().query<{ instrument: string }>(
-    `SELECT instrument FROM jam_tracks WHERE id = $1`,
-    [trackId],
-  );
-  return instrumentOf(result.rows[0]?.instrument ?? "other");
+  try {
+    const result = await getPool().query<{ instrument: string }>(
+      `SELECT instrument FROM jam_tracks WHERE id = $1`,
+      [trackId],
+    );
+    return instrumentOf(result.rows[0]?.instrument ?? "other");
+  } catch {
+    return "other";
+  }
+}
+
+/** Decision notices in flight at once. */
+export const DECISION_NOTICE_CONCURRENCY = 4;
+
+/** Tell each late-admitted take's sender, a few at a time. Never throws. */
+export async function announceDecisionsInPool(
+  targets: readonly TakeDecisionTarget[],
+  concurrency: number = DECISION_NOTICE_CONCURRENCY,
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < targets.length) {
+      const target = targets[next++]!;
+      await recordTakeDecision(target, "accepted").catch(() => undefined);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, worker));
 }
 
 // ----------------------------------------------------------- auto-accept
@@ -880,6 +904,7 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
          JOIN jam_tracks mt ON mt.id = m.track_id`,
       [scope.songId ?? null],
     );
+    const late: TakeDecisionTarget[] = [];
     for (const row of result.rows) {
       counters.takesAutoAdmitted += 1;
       if (row.author_id) {
@@ -893,19 +918,21 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
       }
       if (row.late && row.author_id) {
         // Auto-accept is the starter's standing yes: the sender hears when it lands.
-        void recordTakeDecision(
-          {
-            senderId: row.sender_id,
-            starterId: row.author_id,
-            songId: row.song_id,
-            title: row.title,
-            instrument: instrumentOf(row.instrument),
-            serverId: row.server_id,
-            channelId: row.channel_id,
-          },
-          "accepted",
-        );
+        late.push({
+          senderId: row.sender_id,
+          starterId: row.author_id,
+          songId: row.song_id,
+          title: row.title,
+          instrument: instrumentOf(row.instrument),
+          serverId: row.server_id,
+          channelId: row.channel_id,
+        });
       }
+    }
+    if (late.length > 0) {
+      // A sweep can admit up to 200 takes and each notice is a block check and an upsert:
+      // a small pool, never all at once (and never awaited by the admission itself).
+      void announceDecisionsInPool(late);
     }
     const announce = admissionAnnouncer;
     if (announce) {

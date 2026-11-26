@@ -23,7 +23,21 @@ import type { DbUser } from "../db.js";
  * `nudge-cluster.test.ts`. Only the push vendor and the socket probe are stubbed.
  */
 
-const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+// This suite TRUNCATEs: it runs only against a localhost database, so a staging or
+// production `DATABASE_URL` in the environment makes it skip instead of wiping users.
+function localTestDatabase(): string | undefined {
+  const url = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+  if (!url) {
+    return undefined;
+  }
+  try {
+    const host = new URL(url).hostname;
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(host) ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const DATABASE_URL = localTestDatabase();
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
 if (DATABASE_URL) {
@@ -227,6 +241,36 @@ describeDb("take notices across two instances on the Postgres bus", () => {
     await vi.waitFor(() => expect(pushed).toHaveLength(1), { timeout: 5_000 });
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(pushed).toHaveLength(1);
+  }, 30_000);
+
+  it("a push that fails before reaching a device hands its claim back, so the next take may push", async () => {
+    const pool = a.db.getPool();
+    const real = pool.query.bind(pool);
+    let failuresLeft = 1;
+    const spy = vi.spyOn(pool, "query").mockImplementation(((text: unknown, ...rest: unknown[]) => {
+      if (failuresLeft > 0 && typeof text === "string" && text.includes("FROM user_preferences")) {
+        failuresLeft -= 1;
+        return Promise.reject(new Error("connection terminated"));
+      }
+      return (real as (...args: unknown[]) => unknown)(text, ...rest);
+    }) as never);
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await takeOn(a, "bass");
+      await vi.waitFor(() => expect(a.notices.jamTakeNoticeCounters().pushFailed).toBe(1), { timeout: 5_000 });
+      await vi.waitFor(async () => {
+        const row = await real(`SELECT pushed_at FROM jam_take_notices WHERE user_id = $1`, [starter.id]);
+        expect((row as { rows: Array<{ pushed_at: Date | null }> }).rows[0]!.pushed_at).toBeNull();
+      });
+      // The claim is free again: the next take on the item pushes (it would be held back for
+      // half an hour had the failed attempt kept it).
+      await takeOn(a, "drums");
+      await vi.waitFor(() => expect(pushed).toHaveLength(1), { timeout: 5_000 });
+      expect(a.notices.jamTakeNoticeCounters()).toMatchObject({ pushClaimed: 2, pushFailed: 1 });
+    } finally {
+      spy.mockRestore();
+      quiet.mockRestore();
+    }
   }, 30_000);
 
   it("flag off by a row on A: B stops writing too, and nothing is stored or pushed", async () => {
