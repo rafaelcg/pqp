@@ -10,7 +10,7 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { featureHintEligible, rememberFeatureHint } from "@/lib/feature-hints";
@@ -531,35 +531,51 @@ export function DoneOverlay({
   body,
   action,
   onAction,
+  children,
 }: {
   title: string;
   body: string;
   action: string;
   onAction: () => void;
+  /** The "chama a galera" card, when the song can be shared: it takes the focus and the action turns quiet. */
+  children?: ReactNode;
 }) {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const hasMore = Boolean(children);
   useEffect(() => {
-    buttonRef.current?.focus();
+    const primary = rootRef.current?.querySelector<HTMLElement>("[data-jam-invite-share], [data-jam-invite-copy]");
+    (primary ?? buttonRef.current)?.focus({ preventScroll: true });
   }, []);
   return (
     <div
+      ref={rootRef}
       role="status"
       data-jam-done=""
-      className="absolute inset-0 z-20 grid place-items-center bg-surface-0/90 p-6 backdrop-blur-sm"
+      className="absolute inset-0 z-20 overflow-y-auto bg-surface-0/90 backdrop-blur-sm"
     >
-      <div className="flex max-w-sm flex-col items-center gap-4 text-center">
-        <span className="relative grid h-24 w-24 place-items-center">
-          <span aria-hidden className="jam-confirm-ring absolute inset-0 rounded-full ring-4 ring-accent" />
-          <span className="jam-confirm-pop grid h-20 w-20 place-items-center rounded-full bg-accent text-on-accent">
-            <Check className="h-10 w-10" strokeWidth={3} aria-hidden />
+      <div className="grid min-h-full place-items-center p-6">
+        <div className="flex w-full max-w-sm flex-col items-center gap-4 text-center">
+          <span className={cn("relative grid place-items-center", hasMore ? "h-16 w-16" : "h-24 w-24")}>
+            <span aria-hidden className="jam-confirm-ring absolute inset-0 rounded-full ring-4 ring-accent" />
+            <span className={cn("jam-confirm-pop grid place-items-center rounded-full bg-accent text-on-accent", hasMore ? "h-14 w-14" : "h-20 w-20")}>
+              <Check className={hasMore ? "h-7 w-7" : "h-10 w-10"} strokeWidth={3} aria-hidden />
+            </span>
           </span>
-        </span>
-        <h2 className="font-display text-3xl font-extrabold text-text [text-wrap:balance]">{title}</h2>
-        <p className="text-sm leading-relaxed text-text-secondary [text-wrap:pretty]">{body}</p>
-        <Button ref={buttonRef} className="mt-1 h-12 gap-2 rounded-full px-6 text-base" onClick={onAction} data-jam-done-action="">
-          <Sparkles className="h-4 w-4" aria-hidden />
-          {action}
-        </Button>
+          <h2 className={cn("font-display font-extrabold text-text [text-wrap:balance]", hasMore ? "text-2xl" : "text-3xl")}>{title}</h2>
+          <p className="text-sm leading-relaxed text-text-secondary [text-wrap:pretty]">{body}</p>
+          {children}
+          <Button
+            ref={buttonRef}
+            variant={hasMore ? "ghost" : "default"}
+            className={cn("mt-1 gap-2 rounded-full px-6 text-base", hasMore ? "h-11" : "h-12")}
+            onClick={onAction}
+            data-jam-done-action=""
+          >
+            {!hasMore && <Sparkles className="h-4 w-4" aria-hidden />}
+            {action}
+          </Button>
+        </div>
       </div>
     </div>
   );

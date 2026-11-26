@@ -3,6 +3,8 @@
  * the open web (jam.pqp.gg, `docs/JAM_SITE.md`).
  */
 
+import { jamPublicSongLink } from "@/lib/jam-share-link";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type PublicJamRoute = { kind: "song"; songId: string } | { kind: "new" };
@@ -46,9 +48,11 @@ export function jamSiteHomeUrl(where: Where = window.location): string {
   return hostedOnPqp(where.hostname) ? "https://jam.pqp.gg/" : `${where.protocol}//${where.host}/jam`;
 }
 
-/** The address anybody can open a public jam at. */
-export function publicJamShareUrl(songId: string, where: Where = window.location): string {
-  return hostedOnPqp(where.hostname)
-    ? `https://jam.pqp.gg/m/${songId}`
-    : `${where.protocol}//${where.host}/jam/m/${songId}`;
+/**
+ * The address anybody can open a public jam at, for a link the person follows
+ * themselves ("see it live"). What is shared or copied is `jamPublicSongLink`
+ * (`lib/jam-share-link.ts`), the one builder, which tags it `ref=share`.
+ */
+export function publicJamViewUrl(songId: string, where: Where = window.location): string {
+  return jamPublicSongLink(songId, { where, tagged: false });
 }
