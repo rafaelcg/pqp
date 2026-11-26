@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { desktopSignedOutPath } from "@/lib/desktop-auth-flow";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation } from "@/lib/i18n";
+import { forgetSignedIn } from "@/lib/jam-signed-in";
 
 /**
  * Sign out, from inside the app.
@@ -52,6 +53,7 @@ function ClerkSignOut({ className }: { className?: string }) {
       // into Chrome. The signed-out prompt is the next screen there.
       onClick={() => {
         if (holdForDrafts()) return;
+        forgetSignedIn();
         void signOut({ redirectUrl: desktopSignedOutPath() });
       }}
     >

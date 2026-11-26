@@ -2,7 +2,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { StudioTip } from "./jam-studio-parts";
+import type { JamStudio } from "@/hooks/use-jam-studio";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { LatencyCheck, StudioTip } from "./jam-studio-parts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -35,6 +37,27 @@ describe("the studio's first-run tip", () => {
     const dismiss = host.querySelector<HTMLButtonElement>("[data-jam-studio-tip] button");
     expect(dismiss).not.toBeNull();
     act(() => dismiss!.click());
+    expect(host.querySelector("[data-jam-studio-tip]")).toBeNull();
+  });
+
+  it("does not come after the latency card was on screen (no second headphone card after Agora não)", () => {
+    const studio = {
+      check: "idle",
+      checkMethod: "loopback",
+      latency: null,
+      skipCheck: () => undefined,
+      measure: () => Promise.resolve(),
+    } as unknown as JamStudio;
+    act(() =>
+      root.render(
+        <TooltipProvider>
+          <LatencyCheck studio={studio} />
+        </TooltipProvider>,
+      ),
+    );
+    expect(host.querySelector("[data-jam-latency-check]")).not.toBeNull();
+    // the card goes away (skipped) and the studio mounts the tip in its place
+    act(() => root.render(<StudioTip />));
     expect(host.querySelector("[data-jam-studio-tip]")).toBeNull();
   });
 });

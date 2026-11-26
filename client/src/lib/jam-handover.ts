@@ -242,6 +242,34 @@ export function dismissJamHandover(): void {
   set(null);
 }
 
+/**
+ * The cover of the song, read from the same public answer as the title. In
+ * memory only: the address is a short-lived signed one (`PublicJamSong.coverUrl`),
+ * so it is not worth storing and is simply asked for again after a reload.
+ */
+const covers = new Map<string, string>();
+
+function setCover(target: string, cover: string): void {
+  if (covers.get(target) === cover) {
+    return;
+  }
+  covers.set(target, cover);
+  emit();
+}
+
+/** The song's cover, once the public route answered with one (null before, or when it has none). */
+export function jamHandoverCover(target: string): string | null {
+  return covers.get(target) ?? null;
+}
+
+export function useJamHandoverCover(target: string | null): string | null {
+  return useSyncExternalStore(
+    subscribeJamHandover,
+    () => (target ? jamHandoverCover(target) : null),
+    () => null,
+  );
+}
+
 function setTitle(target: string, title: string): void {
   const held = peekJamHandover();
   if (held && held.target === target && held.title !== title) {
@@ -261,6 +289,8 @@ export function subscribeJamHandover(listener: () => void): () => void {
 /** Test seam: forget the in-memory copy so the next read goes to storage again. */
 export function resetJamHandoverForTests(): void {
   snapshot = undefined;
+  covers.clear();
+  requested.clear();
   listeners.clear();
 }
 
@@ -273,13 +303,14 @@ export function useJamHandover(): JamHandover | null {
 const requested = new Set<string>();
 
 /**
- * Ask the public jam route for the song's title, once per song per page, and
- * write it onto the handover. Best effort and silent: a route that is off
+ * Ask the public jam route for the song's title and cover, once per song per
+ * page (also when the title is already known: a cover is never stored), and
+ * write them onto the handover. Best effort and silent: a route that is off
  * (`jam_public`), a network failure or a song that is gone leaves the screens
  * saying "tua jam tá esperando" without a name, which is still true.
  */
 export function resolveJamHandoverTitle(handover: JamHandover | null): void {
-  if (!handover || handover.target === "new" || handover.title !== null || requested.has(handover.target)) {
+  if (!handover || handover.target === "new" || requested.has(handover.target)) {
     return;
   }
   const target = handover.target;
@@ -297,6 +328,12 @@ export function resolveJamHandoverTitle(handover: JamHandover | null): void {
       const song = body && typeof body === "object" ? (body as { song?: unknown }).song : null;
       const title =
         song && typeof song === "object" ? (song as { title?: unknown }).title : null;
+      const cover =
+        song && typeof song === "object" ? (song as { coverUrl?: unknown }).coverUrl : null;
+      if (typeof cover === "string" && cover !== "") {
+        // Root-relative when the server does not know its own public origin.
+        setCover(target, cover.startsWith("/") ? `${getApiBaseUrl()}${cover}` : cover);
+      }
       if (typeof title === "string" && title.trim() !== "") {
         setTitle(target, bidiClean(title.trim()));
       }

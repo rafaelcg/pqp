@@ -3,6 +3,8 @@
  * the open web (jam.pqp.gg, `docs/JAM_SITE.md`).
  */
 
+import { withSignedParam } from "./jam-signed-in";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type PublicJamRoute = { kind: "song"; songId: string } | { kind: "new" };
@@ -42,8 +44,22 @@ function hostedOnPqp(hostname: string): boolean {
 }
 
 /** The public site's home: `https://jam.pqp.gg/` on the hosted instance, `/jam` anywhere else. */
-export function jamSiteHomeUrl(where: Where = window.location): string {
+function jamSiteBase(where: Where): string {
   return hostedOnPqp(where.hostname) ? "https://jam.pqp.gg/" : `${where.protocol}//${where.host}/jam`;
+}
+
+/**
+ * The public site's home, for a link or a redirect FROM the app. Everybody who
+ * is in the app is signed in, so the address says so (`signed=1`, a harmless
+ * hint: `lib/jam-signed-in.ts`) and the site does not ask them for an account
+ * again; and on the hosted instance, where the two origins share no storage, it
+ * carries the language the app is speaking (`lang`) so the site does not flip to
+ * the browser's. Same-origin mounts share the saved choice already.
+ */
+export function jamSiteHomeUrl(where: Where = window.location, lang: string | null = null): string {
+  const hosted = hostedOnPqp(where.hostname);
+  const href = withSignedParam(jamSiteBase(where));
+  return hosted && lang ? `${href}&lang=${encodeURIComponent(lang)}` : href;
 }
 
 /** The address anybody can open a public jam at. */

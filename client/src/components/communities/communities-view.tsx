@@ -467,7 +467,7 @@ function JamDoor({
   onListen?: (songId: string) => void;
   onStart: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const me = useJamPublicMe();
   const top = useJamPublicTop(me.enabled);
   if (!me.enabled || (top.status !== "ready" && top.status !== "error")) {
@@ -511,7 +511,7 @@ function JamDoor({
         </Button>
         {!emptyCatalogue && (
           <a
-            href={jamSiteHomeUrl()}
+            href={jamSiteHomeUrl(window.location, locale)}
             target="_blank"
             rel="noreferrer"
             data-jam-door-all=""

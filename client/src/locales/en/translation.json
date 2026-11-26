@@ -1343,6 +1343,8 @@
   "jam.handover.waiting": "Your jam is waiting",
   "jam.handover.back": "Back to the jam",
   "jam.handover.dismiss": "Not now",
+  "jam.handover.opening": "Opening the jam…",
+  "jam.handover.openingNew": "Getting the studio ready…",
   "onboarding.you.later": "I'll sort it later",
   "onboarding.room.eyebrow": "Your room",
   "onboarding.room.title": "Where does the crew hang out?",

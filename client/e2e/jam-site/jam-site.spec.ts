@@ -610,6 +610,116 @@ test.describe("what needs an account", () => {
   });
 });
 
+/**
+ * N4 of the launch user test, round 2: after signing up the public site still
+ * treated the person as signed out. The app leaves a hint (`lib/jam-signed-in.ts`)
+ * and the site reads it; these set it the three ways it can arrive.
+ */
+test.describe("a visitor the app says is signed in", () => {
+  const signedIn = (name: string | null) => ({
+    key: "pqp:jam-signed-in",
+    raw: JSON.stringify({ value: name ? `1.${encodeURIComponent(name)}` : "1", at: Date.now() }),
+  });
+
+  async function appRoute(page: Page) {
+    await page.route("**/app?*", (route) => route.fulfill({ body: "<html><body>app</body></html>", contentType: "text/html" }));
+    await page.route("**/app", (route) => route.fulfill({ body: "<html><body>app</body></html>", contentType: "text/html" }));
+  }
+
+  test("sees their name, not Entrar, and record goes straight to the app with no sheet", async ({ page }) => {
+    await mockApi(page);
+    await appRoute(page);
+    const hint = signedIn("Rafa");
+    await page.addInitScript(({ key, raw }) => localStorage.setItem(key, raw), hint);
+    await page.goto(`/jam/m/${SONG_A}`);
+    await expect(page.locator("[data-jam-account]")).toContainText("Rafa");
+    await expect(page.locator("[data-jam-signin]")).toHaveCount(0);
+    await page.locator("[data-jam-record]").click();
+    await page.waitForURL(/\/app\?/);
+    expect(await page.locator("dialog[open]").count()).toBe(0);
+    const url = new URL(page.url());
+    expect(url.searchParams.get("jam")).toBe(SONG_A);
+    expect(url.searchParams.get("record")).toBe("1");
+    expect(url.searchParams.get("instrument")).toBe("bass");
+  });
+
+  test("start, like and report go straight on as well", async ({ page }) => {
+    await mockApi(page);
+    await appRoute(page);
+    const hint = signedIn("Rafa");
+    await page.addInitScript(({ key, raw }) => localStorage.setItem(key, raw), hint);
+    await page.goto(`/jam/m/${SONG_A}`);
+    await page.locator("[data-jam-like]").click();
+    await page.waitForURL(/\/app\?/);
+    expect(new URL(page.url()).searchParams.get("act")).toBe("like");
+    await page.goBack();
+    await page.locator("[data-jam-start]").click();
+    await page.waitForURL(/\/app\?/);
+    expect(new URL(page.url()).searchParams.get("jam")).toBe("new");
+  });
+
+  test("the app's own link (?signed=1) is enough: remembered for the visit, off the address, no wall", async ({ page }) => {
+    await mockApi(page);
+    await appRoute(page);
+    await page.goto(`/jam?signed=1&ref=clip`);
+    await expect(page.locator("[data-jam-account]")).toBeVisible();
+    expect(new URL(page.url()).searchParams.has("signed")).toBe(false);
+    expect(new URL(page.url()).searchParams.get("ref")).toBe("clip");
+    // the visit, not the browser: nothing was written where the next tab would find it
+    expect(await page.evaluate(() => localStorage.getItem("pqp:jam-signed-in"))).toBeNull();
+    // moving about the site keeps it
+    await page.locator("[data-jam-card] a").first().click();
+    await expect(page.locator("[data-jam-account]")).toBeVisible();
+    await page.locator("[data-jam-record]").click();
+    await page.waitForURL(/\/app\?/);
+  });
+
+  test("a stranger with a junk hint is a stranger: Entrar and the sheet", async ({ page }) => {
+    await mockApi(page);
+    await page.addInitScript(() => {
+      localStorage.setItem("pqp:jam-signed-in", "not json");
+      document.cookie = "pqp_jam_in=yes; Path=/";
+    });
+    await page.goto(`/jam/m/${SONG_A}`);
+    await expect(page.locator("[data-jam-signin]")).toBeVisible();
+    await page.locator("[data-jam-record]").click();
+    await expect(page.locator("dialog[open]")).toContainText("Pra gravar tu precisa de uma conta");
+  });
+
+  test("a cookie from the app (the hosted way) is read too", async ({ page }) => {
+    await mockApi(page);
+    await page.addInitScript(() => {
+      document.cookie = "pqp_jam_in=1.Ana; Path=/";
+    });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-account]")).toContainText("Ana");
+  });
+
+  for (const width of [320, 390, 1280]) {
+    test(`at ${width} px a signed-out visitor sees Entrar and a signed-in one sees the account, both inside the screen`, async ({ page }) => {
+      await mockApi(page);
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/jam");
+      const entrar = page.locator("[data-jam-signin]");
+      await expect(entrar).toBeVisible();
+      const box = await entrar.boundingBox();
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+      await page.evaluate(() => {
+        document.cookie = "pqp_jam_in=1.Rafa; Path=/";
+        window.dispatchEvent(new Event("focus"));
+      });
+      const account = page.locator("[data-jam-account]");
+      await expect(account).toBeVisible();
+      await expect(page.locator("[data-jam-signin]")).toHaveCount(0);
+      const accountBox = await account.boundingBox();
+      expect(accountBox!.x + accountBox!.width).toBeLessThanOrEqual(width);
+      expect(accountBox!.height).toBeGreaterThanOrEqual(44);
+      const toggle = await page.locator("[data-jam-theme-toggle]").boundingBox();
+      expect(toggle!.x + toggle!.width).toBeLessThanOrEqual(width);
+    });
+  }
+});
+
 test.describe("how it works and the featured slot", () => {
   const ORIGINAL = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Cantiga nossa", [["vocals", "Lia"]], []);
   const COVER = song("2e3d4c5b-6a7f-4e8d-9c0b-1b2c3d4e5f60", "Um hit", [["guitar", "Duda"]], ["bass"], { artist: "Banda Famosa", likes: 900 });
@@ -688,6 +798,8 @@ test.describe("a song that takes no part", () => {
     await expect(page.locator("[data-jam-record]")).toHaveCount(0);
     await expect(page.locator("[data-jam-need-tile]")).toHaveCount(0);
     await expect(page.locator("[data-jam-closed]")).toContainText("Essa música tá completa.");
+    // "Cada pessoa grava a sua parte em cima das outras" over "tá completa" contradicted itself
+    await expect(page.locator("[data-jam-tagline]")).toHaveCount(0);
     await shot(page, "06-song-closed");
     await page.locator("[data-jam-closed-start]").click();
     await expect(page.locator("dialog[open]")).toContainText("Pra começar uma jam tu precisa de uma conta");
@@ -699,6 +811,7 @@ test.describe("a song that takes no part", () => {
     await expect(page.locator("[data-jam-record]")).toBeVisible();
     await expect(page.locator("[data-jam-need-tile]")).toBeVisible();
     await expect(page.locator("[data-jam-closed]")).toHaveCount(0);
+    await expect(page.locator("[data-jam-tagline]")).toContainText("Cada pessoa grava a sua parte");
   });
 
   test("a closed song on a phone: the note is in the page, nothing scrolls sideways", async ({ page }) => {
@@ -883,6 +996,28 @@ test.describe("on a phone", () => {
         expect(toggle!.x + toggle!.width, `${width} ${path}`).toBeLessThanOrEqual(width);
       }
     }
+  });
+
+  test("the home does not jump when the config answer lands late (the booting frame has the home's height)", async ({ page }) => {
+    await mockApi(page);
+    await page.route("**/api/public/jams/config", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await route.fulfill({ json: { enabled: true } });
+    });
+    await page.addInitScript(() => {
+      (window as unknown as { __cls: number }).__cls = 0;
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries() as unknown as Array<{ value: number; hadRecentInput: boolean }>) {
+          if (!entry.hadRecentInput) (window as unknown as { __cls: number }).__cls += entry.value;
+        }
+      }).observe({ type: "layout-shift", buffered: true });
+    });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-grid]")).toBeVisible();
+    await page.waitForTimeout(500);
+    const cls = await page.evaluate(() => (window as unknown as { __cls: number }).__cls);
+    // 0.195 with the old short placeholder (the footer moved a whole screen); well under the 0.1 "good" line now
+    expect(cls).toBeLessThan(0.05);
   });
 
   test("says what this is in the first screen, on the home and on a song", async ({ page }) => {

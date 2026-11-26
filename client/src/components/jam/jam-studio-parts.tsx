@@ -323,6 +323,13 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
   const current = Math.round(studio.latency?.current.roundTripMs ?? 0);
   const hasMeasure = studio.latency !== null && studio.latency.current.method !== "estimate";
   const failed = studio.check === "failed";
+  // This card is already the headphone advice ("acertar o tempo do fone", measure it
+  // or skip it). `StudioTip` ("Bota o fone") says the same thing and mounts the
+  // moment this one goes away, so after "Agora não" a second card slid in and moved
+  // the page (user test round 2, n7). Seeing this one is the tip's turn spent.
+  useEffect(() => {
+    spendStudioTip();
+  }, []);
   // One line in the dock, right above the button it is about. A suggestion, not a
   // gate: the red button records either way (with the browser's estimate).
   return (
@@ -392,6 +399,18 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
 /* ---------------------------------------------------------------------- tip */
 
 /**
+ * Spent for this page load as well as remembered: a host that does not persist
+ * hints (localhost, a preview) forgets the stored bit at once, and "this visit"
+ * is exactly what the latency card's "Agora não" has to hold for.
+ */
+let tipSpentThisVisit = false;
+
+function spendStudioTip(): void {
+  tipSpentThisVisit = true;
+  rememberFeatureHint("jamStudio");
+}
+
+/**
  * The studio's first-run guidance, drawn IN the studio rather than through the
  * corner queue. The queue gives its one slot to older standing cards first, and a
  * card that sits over the corner can cover "Mandar pra banda"; this one lives in
@@ -400,7 +419,7 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
  */
 export function StudioTip() {
   const { t } = useTranslation();
-  const [shown, setShown] = useState(() => featureHintEligible("jamStudio"));
+  const [shown, setShown] = useState(() => !tipSpentThisVisit && featureHintEligible("jamStudio"));
   useEffect(() => {
     if (shown) {
       // Seen is seen: showing it is the impression, as for every other hint.

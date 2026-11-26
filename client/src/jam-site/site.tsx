@@ -2,7 +2,7 @@ import { jt } from "@/lib/i18n/jam-site";
 import { mainHref } from "./attribution";
 import { AskProvider } from "./auth-sheet";
 import { useHead } from "./head";
-import { HomePage } from "./home";
+import { HomeBooting, HomePage } from "./home";
 import { Link, mainOrigin, useJamRoute } from "./router";
 import { jamPath } from "./route";
 import { Page, Wordmark, CONTAINER, ThemeToggle } from "./shell";
@@ -74,7 +74,7 @@ export function JamSite() {
     <AskProvider>
       <Page>
         {config.state === "loading" ? (
-          <Booting />
+          view.kind === "home" ? <HomeBooting /> : <Booting />
         ) : config.state === "error" ? (
           <div className={cn(CONTAINER, "py-24 text-center")} role="alert" data-jam-error="">
             <h1 className="text-2xl font-extrabold">{jt("list.error")}</h1>
