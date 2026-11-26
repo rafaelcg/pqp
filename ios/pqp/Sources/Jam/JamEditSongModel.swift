@@ -305,6 +305,10 @@ final class JamEditSongModel {
             try await JamStorageUpload.put(file: file, to: ticket.uploadUrl, contentType: "image/jpeg") { [weak self] fraction in
                 Task { @MainActor in
                     guard let self, self.stillCurrent(token) else { return }
+                    // Progress is queued onto the main actor, so a callback can run after the
+                    // PUT has finished and the state has moved on (idle with the cover ready,
+                    // or failed): it only moves a bar that is still being drawn.
+                    guard case .uploading = self.upload else { return }
                     self.upload = .uploading(fraction)
                 }
             }
