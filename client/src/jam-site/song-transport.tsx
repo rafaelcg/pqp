@@ -171,6 +171,7 @@ export function SongTransport({
         {fraction !== null && (
           // The download as a ring just outside the button: drawn from the state, never animated.
           <svg className="pointer-events-none absolute -inset-1.5 h-[68px] w-[68px] -rotate-90 text-accent" viewBox="0 0 68 68" aria-hidden="true" data-jam-ring="" data-fraction={fraction.toFixed(3)}>
+            <circle cx="34" cy="34" r="32" fill="none" stroke="currentColor" strokeWidth="3" opacity="0.2" />
             <circle cx="34" cy="34" r="32" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" pathLength={100} strokeDasharray={100} strokeDashoffset={100 - fraction * 100} />
           </svg>
         )}

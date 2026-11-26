@@ -62,7 +62,8 @@
           .jam-boot-head { height: 44px; width: min(28rem, 70%); }
           .jam-boot-cards { display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 32px; }
           @media (min-width: 768px) { .jam-boot-cards { grid-template-columns: repeat(3, 1fr); } }
-          .jam-boot-card { height: 224px; border-radius: 16px; background: var(--color-surface-1, #121920); }
+          .jam-boot-card { height: 160px; border-radius: 16px; background: var(--color-surface-1, #121920); }
+          @media (min-width: 768px) { .jam-boot-card { height: 224px; } }
           @media (prefers-reduced-motion: no-preference) {
             .jam-boot-block::after {
               content: ""; position: absolute; inset: 0;
