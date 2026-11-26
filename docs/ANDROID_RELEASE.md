@@ -647,6 +647,26 @@ of forcing the loudspeaker. The audio button in the call bar shows where the
 sound is really going.
 ```
 
+### 0.4.39 (`versionCode` 46)
+
+Since 0.4.38 (`versionCode` 45): in Jam you can edit a song's name, artist and
+cover, and adjust your own take (cut the ends, line it up in time, change its
+volume).
+
+**pt-BR**:
+
+```
+No Jam, agora dá pra editar o nome, o artista e a capa de uma música, e ajustar
+a sua gravação: cortar as pontas, alinhar no tempo e mudar o volume.
+```
+
+**en-US**:
+
+```
+In Jam you can now edit a song's name, artist and cover, and adjust your own
+take: cut the ends, line it up in time, and change its volume.
+```
+
 ### 0.4.38 (`versionCode` 45)
 
 Since 0.4.37 (`versionCode` 44): the Portuguese copy says "tu" everywhere (a
