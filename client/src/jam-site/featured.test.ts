@@ -66,6 +66,11 @@ describe("pickWantingParts", () => {
   it("is empty when no other song takes a part", () => {
     expect(pickWantingParts([w("h", "closed"), w("c", "closed"), w("e", "open", [], 0)], { id: "h", joinMode: "closed" })).toEqual([]);
   });
+  it("leaves out a wanted song with nothing missing: it takes only listed instruments the payload does not name", () => {
+    const hero = w("h", "closed");
+    expect(pickWantingParts([hero, w("filled", "wanted", [])], hero)).toEqual([]);
+    expect(pickWantingParts([hero, w("filled", "wanted", []), w("open", "open")], hero).map((song) => song.id)).toEqual(["open"]);
+  });
   it("lists songs that ask for an instrument first, then open ones, never the hero or a closed one, at most three", () => {
     const hero = w("h", "closed");
     const list = [hero, w("open1", "open"), w("c", "closed"), w("ask1", "wanted", ["bass"]), w("ask2", "wanted", ["keys"]), w("ask3", "wanted", ["drums"]), w("open2", "open")];

@@ -37,10 +37,13 @@ export const WANTING_MAX = 3;
 
 /**
  * What the home points at when its hero takes no part (a closed song): up to
- * three other songs with a part to show that take one, the ones that ASK for an
- * instrument first, in the order they came. Empty when the hero takes a part
- * itself (the entry is for a visitor who would otherwise have nothing to record
- * on) or when no song in the page does.
+ * three other songs with a part to show that still want one, the ones that ASK
+ * for an instrument first, then open songs (any part), in the order they came.
+ * A `wanted` song with nothing missing is left out: it takes only the
+ * instruments its starter listed, which the public payload does not carry, so
+ * the entry could not say honestly what to record. Empty when the hero takes a
+ * part itself (the entry is for a visitor who would otherwise have nothing to
+ * record on) or when no song in the page qualifies.
  */
 export function pickWantingParts<T extends Pick<PublicJamSong, "id" | "parts" | "needs" | "joinMode">>(
   songs: readonly T[],
@@ -49,5 +52,7 @@ export function pickWantingParts<T extends Pick<PublicJamSong, "id" | "parts" | 
 ): T[] {
   if (!hero || takesParts(hero)) return [];
   const candidates = songs.filter((song) => song.id !== hero.id && song.parts.length > 0 && takesParts(song));
-  return [...candidates.filter((song) => song.needs.length > 0), ...candidates.filter((song) => song.needs.length === 0)].slice(0, max);
+  const asking = candidates.filter((song) => song.needs.length > 0);
+  const open = candidates.filter((song) => song.needs.length === 0 && song.joinMode !== "wanted");
+  return [...asking, ...open].slice(0, max);
 }
