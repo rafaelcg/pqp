@@ -565,6 +565,20 @@ final class JamAdjustModelTests: XCTestCase {
         song.apply(.jam(try XCTUnwrap(JamFrame.parse(Data("{\"type\":\"jam-track-updated\",\"channelId\":\"chan-1\",\"song\":\(songJSON()),\"track\":\(trackJSON(offset: 99))}".utf8)))))
         _ = await saving.value
         XCTAssertEqual(song.tracks.first?.offsetMs, 99, "the older answer (offset 10) is not laid over it")
+
+        // And when the other session put it back to where it started (A, B, A) the value alone cannot say
+        // anything happened: the frames that arrived are counted.
+        let again = try await startedModel(session: session)
+        let second = JamAdjustModel(song: again, track: try XCTUnwrap(again.tracks.first))
+        second.nudge(by: 10)
+        let later = Task { await second.save() }
+        try await Task.sleep(for: .milliseconds(100))
+        for offset in [99, 0] {
+            again.apply(.jam(try XCTUnwrap(JamFrame.parse(Data("{\"type\":\"jam-track-updated\",\"channelId\":\"chan-1\",\"song\":\(songJSON()),\"track\":\(trackJSON(offset: Double(offset)))}".utf8)))))
+        }
+        _ = await later.value
+        XCTAssertEqual(again.tracks.first?.offsetMs, 0, "back where it started, and the older answer (offset 10) still does not win")
+        again.stop()
         song.stop()
     }
 

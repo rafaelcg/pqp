@@ -338,6 +338,8 @@ final class JamSongModel {
     /// heard (`audition`); closing takes it off again.
     @ObservationIgnored private var auditionedForAdjust: JamTrack?
     @ObservationIgnored private var previewTask: Task<Void, Never>?
+    /// How many updates of each take have arrived as frames (see `saveAdjustment`).
+    @ObservationIgnored private var trackRevisions: [String: Int] = [:]
     @ObservationIgnored private var lastPreviewApply = Date.distantPast
     /// A preview moved the song in time and has not been heard yet.
     @ObservationIgnored private var previewPlacementDirty = false
@@ -451,7 +453,7 @@ final class JamSongModel {
     /// nothing restarts. Throws what the server said.
     func saveAdjustment(_ track: JamTrack, patch: JamTrackPatchBody) async throws {
         guard let session else { throw APIError.transport("No session") }
-        let before = tracks.first { $0.id == track.id }.map(JamStoredTake.init)
+        let revision = trackRevisions[track.id, default: 0]
         let answer = try await session.api.updateJamTrack(id: track.id, patch: patch)
         // A track has no version number, so "is the answer older than the screen"
         // is read from the screen: if a frame moved this take WHILE the request was
@@ -460,7 +462,7 @@ final class JamSongModel {
         // over it (the frame is what the song holds); the preview is dropped and
         // the engine follows the stored take.
         let now = tracks.first { $0.id == track.id }.map(JamStoredTake.init)
-        let superseded = now != nil && now != before && now != JamStoredTake(answer.track)
+        let superseded = now != nil && trackRevisions[track.id, default: 0] != revision && now != JamStoredTake(answer.track)
         if !superseded {
             var next = state
             next.apply(.trackUpdated(channelId: channel.id, song: answer.song, track: answer.track), auditioned: Set(auditioning.values))
@@ -707,6 +709,9 @@ final class JamSongModel {
     func apply(_ event: RealtimeEvent) {
         guard case .jam(let frame) = event, frame.channelId == channel.id else { return }
         if isReading { bufferedFrames.append(frame) }
+        // Every update of a take that arrives is counted, so a request in flight can
+        // tell "something changed it meanwhile" even when it changed back (A, B, A).
+        if case .trackUpdated(_, _, let changed) = frame { trackRevisions[changed.id, default: 0] += 1 }
         var next = state
         var effect = next.apply(frame, auditioned: Set(auditioning.values))
         guard next != state else { return }
