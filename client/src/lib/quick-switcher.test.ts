@@ -118,6 +118,7 @@ describe("the Jam door", () => {
     expect(sources.channels.some((channel) => channel.type === "jam")).toBe(false);
     const items = quickSwitcherItems("jam", withDoor);
     expect(items[0]).toEqual({ kind: "jam", id: "jam:door" });
+    expect(items[1]).toEqual({ kind: "jam-start", id: "jam:start" });
   });
 
   it("finds it by música, with or without the accent, and by a start of the word", () => {

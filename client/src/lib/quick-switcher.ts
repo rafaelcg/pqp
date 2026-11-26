@@ -43,7 +43,9 @@ export type SwitcherItem =
     }
   | { kind: "song"; id: string; song: SwitcherSong }
   /** "Abrir o Jam": the public jams, for anybody, whether or not their server has a Jam channel. */
-  | { kind: "jam"; id: "jam:door" };
+  | { kind: "jam"; id: "jam:door" }
+  /** "Começar uma jam", right under it: the same door's second action (user test round 2, N2). */
+  | { kind: "jam-start"; id: "jam:start" };
 
 /** What a song row needs: a Jam song the server matched for this viewer. */
 export interface SwitcherSong {
@@ -250,7 +252,10 @@ export function quickSwitcherItems(query: string, sources: SwitcherSources): Swi
   // Typed, never in the empty list. Before everything else: it is where the person said they wanted to go.
   const jamDoorItems: SwitcherItem[] =
     sources.jamDoor && looksLikeJamQuery(query)
-      ? [{ kind: "jam", id: "jam:door" }]
+      ? [
+          { kind: "jam", id: "jam:door" },
+          { kind: "jam-start", id: "jam:start" },
+        ]
       : [];
 
   return [...jamDoorItems, ...personItems, ...groupItems, ...serverItems, ...channelItems, ...songItems];

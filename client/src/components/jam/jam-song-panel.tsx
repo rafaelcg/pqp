@@ -85,6 +85,11 @@ export interface JamSongPanelProps {
   publicView?: boolean;
   /** Told when the song's auto-accept switch is known or changes (a public view hands it to its studio). */
   onAutoAcceptChange?: (on: boolean) => void;
+  /**
+   * A closed public song takes no part from anybody but its starter: with this,
+   * the dock offers "Começar a minha" instead of a dead end (user test round 2, N2).
+   */
+  onStartOwn?: () => void;
   /** The server this song's channel belongs to, for the publish sheet. Null outside a channel. */
   originName?: string | null;
 }
@@ -104,6 +109,7 @@ export function JamSongPanel({
   playNonce = 0,
   publicView = false,
   onAutoAcceptChange,
+  onStartOwn,
   originName = null,
 }: JamSongPanelProps) {
   const { t } = useTranslation();
@@ -736,9 +742,22 @@ export function JamSongPanel({
         ) : (
           reason !== null &&
           detail && (
-            <p role="status" className="text-center text-sm leading-snug text-text-secondary [text-wrap:pretty]">
-              {t(`jam.song.cannot.${reason}` as MessageKey)}
-            </p>
+            <>
+              <p role="status" className="text-center text-sm leading-snug text-text-secondary [text-wrap:pretty]">
+                {t(`jam.song.cannot.${reason}` as MessageKey)}
+              </p>
+              {reason === "closed" && publicView && onStartOwn && (
+                <button
+                  type="button"
+                  data-jam-closed-start=""
+                  onClick={onStartOwn}
+                  className="group relative mx-auto flex h-10 w-full items-center justify-center gap-2 overflow-hidden rounded-full bg-accent text-sm font-extrabold text-on-accent outline-none transition-[transform,background-color] duration-[var(--duration-fast)] hover:bg-accent-hover focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 sm:max-w-sm pointer-coarse:h-11 motion-safe:active:scale-[0.99] motion-reduce:transition-none"
+                >
+                  <Mic className="h-4 w-4 shrink-0" aria-hidden />
+                  {t("jam.song.startOwn")}
+                </button>
+              )}
+            </>
           )
         )}
         {outsideRecord && reason === null && first && !pub.viewerWaiting && (
