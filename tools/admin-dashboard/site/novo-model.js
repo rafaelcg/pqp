@@ -748,7 +748,7 @@
       judged: [
         ["primeira faixa · 7 dias", fmt(num(jam.firstTakers7d)), "contas que nunca tinham gravado"],
         ["voltaram · 7 dias", fmt(num(jam.returningRecorders7d)), "gravaram nesta semana e na anterior"],
-        ["públicas novas · 7 dias", fmt(num(pub.firstPublished7d)), fmt(num(pub.outsideTakes7d)) + " faixas de fora · " + fmt(num(pub.outsideTakesAdmitted7d)) + " no mix agora"],
+        ["públicas novas · 7 dias", fmt(num(pub.firstPublished7d)), fmt(num(pub.outsideTakes7d)) + " faixas de fora · " + fmt(num(pub.outsideTakesAdmitted7d)) + " na mix agora"],
         ["votos · 7 dias", fmt(num(jam.votes7d)), "em faixas que ainda existem"]
       ]
     };

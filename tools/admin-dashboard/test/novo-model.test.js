@@ -346,6 +346,6 @@ test("jamView: puts each field under the label that says what it counts", () => 
   assert.equal(v.made[2][2], "4 em 24 h · 300 no total · 3 com vídeo");
   assert.equal(v.made[3][2], "9 em 30 dias");
   assert.equal(v.judged[1][1], "6");
-  assert.deepEqual(v.judged[2], ["públicas novas · 7 dias", "2", "7 faixas de fora · 4 no mix agora"]);
+  assert.deepEqual(v.judged[2], ["públicas novas · 7 dias", "2", "7 faixas de fora · 4 na mix agora"]);
   assert.equal(v.judged[3][1], "11");
 });
