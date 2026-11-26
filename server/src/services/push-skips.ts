@@ -20,7 +20,7 @@ import { logEvent } from "../lib/log.js";
  *
  * Cumulative, in-process, per instance, all keys pre-seeded to zero: the same
  * convention as `push-metrics.ts`, so the exporter sums it across replicas.
- * Bounded cardinality: 6 kinds x 8 reasons.
+ * Bounded cardinality: 7 kinds x 8 reasons.
  */
 
 export type PushSkipKind =
@@ -30,7 +30,9 @@ export type PushSkipKind =
   | "reminder"
   | "waitlist"
   /** A new Baú post (`bau_post_push`). */
-  | "bau";
+  | "bau"
+  /** A Jam take waiting for the starter, or the starter's answer (`jam_take_notices`). */
+  | "jam";
 
 export type PushSkipReason =
   /** A live socket anywhere in the cluster (the rule this module was built to expose). */
@@ -60,6 +62,7 @@ export const PUSH_SKIP_KINDS: readonly PushSkipKind[] = [
   "reminder",
   "waitlist",
   "bau",
+  "jam",
 ];
 
 export const PUSH_SKIP_REASONS: readonly PushSkipReason[] = [

@@ -745,8 +745,57 @@ export const jamPublicNoticeSchema = z.object({
   reason: z.string().nullable().default(null),
   /** `take` only: auto-accept put the take in the mix, nothing waits for the starter. */
   admitted: z.boolean().default(false),
+  /** `take` only: the instrument of the take that just arrived. Additive: null from a server that predates it. */
+  instrument: jamInstrumentSchema.catch("other").nullable().default(null),
 });
 export type JamPublicNotice = z.infer<typeof jamPublicNoticeSchema>;
+
+/**
+ * TAKE NOTICES (`jam_take_notices`). The durable half of "somebody sent a part"
+ * and "the starter answered", read by `GET /api/jam-public/notices` and
+ * spent by `POST /api/jam-public/notices/ack`.
+ *
+ *   take      (to the starter) one or more outside takes wait for an answer.
+ *             ONE open item per song: a second take raises `count` and adds
+ *             its instrument instead of making another item. `count` and
+ *             `instruments` are read live, from the takes still waiting, so an
+ *             item whose takes were all answered is gone.
+ *   accepted  (to the sender) the starter put the take in the mix, or
+ *             auto-accept did well after it was sent.
+ *   refused   (to the sender) the starter declined it.
+ *
+ * Live frame for the two sender kinds: `jam-take-decision`, a distinct frame
+ * type on purpose: `jam-public-notice` reads an unknown `kind` as `consent`
+ * (`.catch`), so a tab that had not reloaded would show the sender a consent
+ * question. The starter's live nudge is the existing `jam-public-notice` with
+ * `kind: "take"`.
+ */
+export const JAM_TAKE_NOTICE_KINDS = ["take", "accepted", "refused"] as const;
+export const jamTakeNoticeSchema = z.object({
+  id: uuid,
+  kind: z.enum(JAM_TAKE_NOTICE_KINDS).catch("take"),
+  songId: uuid,
+  title: z.string(),
+  instruments: z.array(jamInstrumentSchema.catch("other")),
+  count: z.number().int().positive(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type JamTakeNotice = z.infer<typeof jamTakeNoticeSchema>;
+
+export const jamTakeNoticesResponseSchema = z.object({ notices: z.array(jamTakeNoticeSchema) });
+export type JamTakeNoticesResponse = z.infer<typeof jamTakeNoticesResponseSchema>;
+
+export const ackJamTakeNoticeSchema = z.object({ id: uuid });
+
+export const jamTakeDecisionSchema = z.object({
+  type: z.literal("jam-take-decision"),
+  decision: z.enum(["accepted", "refused"]),
+  songId: uuid,
+  title: z.string(),
+  instrument: jamInstrumentSchema.catch("other"),
+});
+export type JamTakeDecision = z.infer<typeof jamTakeDecisionSchema>;
 
 // ------------------------------------------------------------- operator
 

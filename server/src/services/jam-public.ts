@@ -62,6 +62,15 @@ import {
 import { jamPublicMediaExpiresAt, jamPublicMediaUrl } from "./jam-public-media.js";
 import { notifyJamPublic } from "./jam-public-notify.js";
 import {
+  jamTakeNoticeCounters,
+  jamTakeNoticeTableMetrics,
+  recordTakeDecision,
+  recordTakeForStarter,
+  resetJamTakeNoticeCountersForTests,
+  sweepJamTakeNotices,
+  type TakeDecisionTarget,
+} from "./jam-take-notices.js";
+import {
   LISTED_SONG_SQL,
   PUBLIC_COVER_KEY_SQL,
   PUBLIC_SONG_SQL,
@@ -115,15 +124,19 @@ export function noteJamPublicAddressRefusal(kind: keyof typeof counters.addressR
   counters.addressRefused[kind] += 1;
 }
 
-export function jamPublicCounters(): typeof counters {
+export function jamPublicCounters(): typeof counters & { takeNotices: ReturnType<typeof jamTakeNoticeCounters> } {
   return {
     ...counters,
     rateLimited: { ...counters.rateLimited },
     addressRefused: { ...counters.addressRefused },
+    // The notices about takes (`jam-take-notices.ts`): items written, folded,
+    // pushed, answered. Per process like every counter here.
+    takeNotices: jamTakeNoticeCounters(),
   };
 }
 
 export function resetJamPublicCountersForTests(): void {
+  resetJamTakeNoticeCountersForTests();
   for (const key of Object.keys(counters) as Array<keyof typeof counters>) {
     if (key === "rateLimited") {
       counters.rateLimited = { songs: 0, takes: 0, likes: 0, reports: 0 };
@@ -701,11 +714,24 @@ export async function noteJamTrackAdded(input: {
         ? await admitAutoAcceptedTakes({ songId: song.id })
         : [];
       if (!admitted.includes(trackId)) {
+        const instrument = await instrumentOfTrack(trackId);
+        // The durable item first: the frame below makes the starter's app read
+        // it, so it has to be there when it asks.
+        await recordTakeForStarter({
+          starterId: song.author_id,
+          takerId: userId,
+          songId: song.id,
+          title: song.title,
+          instrument,
+          serverId: song.server_id,
+          channelId: song.channel_id,
+        });
         notifyJamPublic(song.author_id, {
           kind: "take",
           songId: song.id,
           title: song.title,
           trackId,
+          instrument,
         });
       }
     }
@@ -715,6 +741,37 @@ export async function noteJamTrackAdded(input: {
       error instanceof Error ? error.message : error,
     );
   }
+}
+
+/** Best-effort: a failed read says `other` and the notice still goes, without the instrument. */
+async function instrumentOfTrack(trackId: string): Promise<JamInstrument> {
+  try {
+    const result = await getPool().query<{ instrument: string }>(
+      `SELECT instrument FROM jam_tracks WHERE id = $1`,
+      [trackId],
+    );
+    return instrumentOf(result.rows[0]?.instrument ?? "other");
+  } catch {
+    return "other";
+  }
+}
+
+/** Decision notices in flight at once. */
+export const DECISION_NOTICE_CONCURRENCY = 4;
+
+/** Tell each late-admitted take's sender, a few at a time. Never throws. */
+export async function announceDecisionsInPool(
+  targets: readonly TakeDecisionTarget[],
+  concurrency: number = DECISION_NOTICE_CONCURRENCY,
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < targets.length) {
+      const target = targets[next++]!;
+      await recordTakeDecision(target, "accepted").catch(() => undefined);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, worker));
 }
 
 // ----------------------------------------------------------- auto-accept
@@ -781,8 +838,12 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
       track_id: string;
       song_id: string;
       channel_id: string | null;
+      server_id: string | null;
       author_id: string | null;
       title: string;
+      sender_id: string;
+      instrument: string;
+      late: boolean;
     }>(
       `WITH due AS (
          SELECT pt.track_id
@@ -833,10 +894,17 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
          SELECT 'auto-admit', m.song_id, m.track_id, 'system' FROM mixed m
          RETURNING id
        )
-       SELECT m.track_id, m.song_id, s.channel_id, s.author_id, s.title
-         FROM mixed m JOIN jam_songs s ON s.id = m.song_id`,
+       SELECT m.track_id, m.song_id, s.channel_id, s.server_id, s.author_id, s.title,
+              mt.author_id AS sender_id, mt.instrument,
+              -- Well after it was sent: the sender is told it went in. A take
+              -- admitted inside its own request needs no card (they are looking at it).
+              (mt.created_at < NOW() - INTERVAL '30 seconds') AS late
+         FROM mixed m
+         JOIN jam_songs s ON s.id = m.song_id
+         JOIN jam_tracks mt ON mt.id = m.track_id`,
       [scope.songId ?? null],
     );
+    const late: TakeDecisionTarget[] = [];
     for (const row of result.rows) {
       counters.takesAutoAdmitted += 1;
       if (row.author_id) {
@@ -848,6 +916,23 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
           admitted: true,
         });
       }
+      if (row.late && row.author_id) {
+        // Auto-accept is the starter's standing yes: the sender hears when it lands.
+        late.push({
+          senderId: row.sender_id,
+          starterId: row.author_id,
+          songId: row.song_id,
+          title: row.title,
+          instrument: instrumentOf(row.instrument),
+          serverId: row.server_id,
+          channelId: row.channel_id,
+        });
+      }
+    }
+    if (late.length > 0) {
+      // A sweep can admit up to 200 takes and each notice is a block check and an upsert:
+      // a small pool, never all at once (and never awaited by the admission itself).
+      void announceDecisionsInPool(late);
     }
     const announce = admissionAnnouncer;
     if (announce) {
@@ -1052,9 +1137,13 @@ const PUBLIC_SONG_SELECT = `
        LIMIT 1
     ) prev ON TRUE
     LEFT JOIN LATERAL (
+      -- A take still waiting for the starter is a request, not a part: it does
+      -- not fill what the song asks for (same rule as the summary in jam.ts).
       SELECT COALESCE(array_agg(DISTINCT t.instrument), '{}') AS instruments
         FROM jam_tracks t
+        LEFT JOIN jam_public_tracks wpt ON wpt.track_id = t.id
        WHERE t.song_id = s.id AND t.deleted_at IS NULL
+         AND NOT (COALESCE(wpt.outside, FALSE) AND NOT t.in_mix)
     ) live ON TRUE`;
 
 function instrumentOf(value: string): JamInstrument {
@@ -1142,7 +1231,9 @@ export async function listPublicJams(query: PublicJamListQuery): Promise<PublicJ
     where.push(
       `s.join_mode = 'wanted' AND $${params.length}::text = ANY(s.wanted_instruments)
        AND NOT EXISTS (SELECT 1 FROM jam_tracks nt
+                        LEFT JOIN jam_public_tracks nwpt ON nwpt.track_id = nt.id
                         WHERE nt.song_id = s.id AND nt.deleted_at IS NULL
+                          AND NOT (COALESCE(nwpt.outside, FALSE) AND NOT nt.in_mix)
                           AND nt.instrument = $${params.length}::text)`,
     );
   }
@@ -2221,6 +2312,7 @@ export async function sweepJamPublic(): Promise<{ orphans: number; playMarks: nu
   // a hook of its own (a block lifted, a scan that finished on another
   // process, a restart in the middle of an admission).
   const admitted = (await admitAutoAcceptedTakes()).length;
+  await sweepJamTakeNotices().catch(() => undefined);
   return { orphans: deleted, playMarks: marks.rowCount ?? 0, admitted };
 }
 
@@ -2235,6 +2327,8 @@ export interface JamPublicTableMetrics {
   removed: number;
   plays: number;
   likes: number;
+  /** Take notices nobody has answered yet (`jam_take_notices`), all three kinds. */
+  takeNoticesOpen: number;
   scans: {
     covers: Record<string, number>;
     videos: Record<string, number>;
@@ -2244,7 +2338,7 @@ export interface JamPublicTableMetrics {
 
 /** The table half of the dashboard's `jamPublic` block. A handful of COUNTs on small tables. */
 export async function jamPublicTableMetrics(): Promise<JamPublicTableMetrics> {
-  const [songs, tracks, covers, videos, quarantine] = await Promise.all([
+  const [songs, tracks, covers, videos, quarantine, noticeTable] = await Promise.all([
     getPool().query<{
       published: number;
       review: number;
@@ -2275,6 +2369,7 @@ export async function jamPublicTableMetrics(): Promise<JamPublicTableMetrics> {
         WHERE video_scan_status <> 'none' GROUP BY video_scan_status`,
     ),
     getPool().query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM jam_public_quarantine`),
+    jamTakeNoticeTableMetrics(),
   ]);
   const head = songs.rows[0];
   const byStatus = (rows: Array<{ status: string; count: number }>) =>
@@ -2287,6 +2382,7 @@ export async function jamPublicTableMetrics(): Promise<JamPublicTableMetrics> {
     removed: head?.removed ?? 0,
     plays: Number(head?.plays ?? 0),
     likes: Number(head?.likes ?? 0),
+    takeNoticesOpen: noticeTable.open,
     scans: {
       covers: byStatus(covers.rows),
       videos: byStatus(videos.rows),

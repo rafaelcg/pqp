@@ -99,15 +99,15 @@ export function JamPublicRequests({
     return null;
   }
   return (
-    <section aria-labelledby="jam-requests" data-jam-requests="" className="mt-3 flex flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-3">
-        <h3 id="jam-requests" className="font-display text-lg font-extrabold text-text">
-          {t("jam.public.requests.title")}
-        </h3>
-        <span className="text-[13px] font-semibold text-text-secondary">
-          {t("jam.public.requests.count", { count: takes.length, countLabel: takes.length })}
-        </span>
-      </div>
+    <section
+      aria-labelledby="jam-requests"
+      data-jam-requests=""
+      data-jam-requests-count={takes.length}
+      className="mt-3 flex flex-col gap-2 rounded-[var(--radius-panel)] border-2 border-accent bg-accent-soft/40 p-3"
+    >
+      <h3 id="jam-requests" className="font-display text-lg font-extrabold text-text">
+        {t("jam.public.requests.banner", { count: takes.length, countLabel: takes.length })}
+      </h3>
       <p className="text-[13px] leading-snug text-text-secondary" data-jam-requests-hint={autoAccept ? "auto" : "manual"}>
         {autoAccept ? t("jam.public.requests.hintAuto") : t("jam.public.requests.hint")}
       </p>

@@ -1267,6 +1267,19 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/jam-public/config (announce)",
   },
+  jam_take_notices: {
+    description:
+      "Avisos de partes na Jam pública: quem começou a música é avisado (cartão no app, ao vivo se estiver online, push se o celular estiver fechado) quando um visitante manda uma parte, e quem mandou é avisado quando a parte é aceita ou recusada. Várias partes na mesma música viram um aviso só, com a contagem. Respeita DND, silenciar e bloqueios. Desligado, nada disso é escrito nem enviado; a lista de pedidos na música e o marcador no app continuam, porque leem o estado e não o aviso.",
+    env: "JAM_TAKE_NOTICES",
+    parseEnv: onUnlessOff,
+    // On: strictly additive (a card, a frame the old clients ignore, one push
+    // per song per half hour), and it answers the launch test's N1, where a
+    // starter never learned a stranger had sent a part. Only `false` / `0` /
+    // `off` turns it off. docs/JAM_PUBLIC.md, "Telling the starter".
+    codeDefault: true,
+    // GLOBAL like `jam_public`: a standalone public jam has no server.
+    perServer: false,
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

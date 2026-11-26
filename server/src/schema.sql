@@ -8080,6 +8080,32 @@ CREATE TABLE IF NOT EXISTS jam_public_reports (
 CREATE INDEX IF NOT EXISTS idx_jam_public_reports_song ON jam_public_reports (song_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_jam_public_reports_reporter ON jam_public_reports (reporter_id, created_at);
 
+-- The durable half of the Jam take notices (`jam_take_notices` flag,
+-- docs/JAM_PUBLIC.md "Telling the starter"): "somebody sent a part" for the
+-- starter ('take') and "the starter answered" for the sender ('accepted',
+-- 'refused'). ONE open row per (person, song, kind): a second take on the song
+-- raises `count` and adds its instrument, so a burst is one item, and the row
+-- upsert is the claim that two API machines share (`pushed_at` decides who
+-- pushes). The 'take' row's count and instruments are read live from the takes
+-- still waiting; the stored ones are only what it said when it was last
+-- touched. `title` is a snapshot for the push copy.
+CREATE TABLE IF NOT EXISTS jam_take_notices (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CONSTRAINT jam_take_notices_kind_check CHECK (kind IN ('take', 'accepted', 'refused')),
+  song_id UUID NOT NULL REFERENCES jam_songs(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  instruments TEXT[] NOT NULL DEFAULT '{}',
+  count INTEGER NOT NULL DEFAULT 1 CHECK (count > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  pushed_at TIMESTAMPTZ,
+  acked_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jam_take_notices_open
+  ON jam_take_notices (user_id, song_id, kind) WHERE acked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_jam_take_notices_old ON jam_take_notices (updated_at);
+
 -- Accounts an operator blocked from publishing and recording publicly.
 CREATE TABLE IF NOT EXISTS jam_public_blocks (
   user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

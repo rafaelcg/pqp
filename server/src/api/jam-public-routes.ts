@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  ackJamTakeNoticeSchema,
   adminBlockJamPublisherSchema,
   adminListJamPublicQuerySchema,
   adminRemoveJamPartSchema,
@@ -60,6 +61,7 @@ import {
   type JamPublicActor,
 } from "../services/jam-public.js";
 import { jamPlays, jamPlayViewer } from "../services/jam-public-plays.js";
+import { ackJamTakeNotice, listJamTakeNotices } from "../services/jam-take-notices.js";
 import { computeMemberPermissions } from "../services/permissions.js";
 import { isInstanceModerator } from "../services/reports.js";
 import { canAccessChannel } from "../services/users.js";
@@ -401,6 +403,20 @@ export function registerJamPublicRoutes(router: Router): void {
   router.get("/api/jam-public/inbox", async ({ user }) => ({
     takes: await jamPublicInboxFor(user.id),
   }));
+
+  // The durable half of "somebody sent a part" / "the starter answered"
+  // (`jam_take_notices`): the open items, read at boot and after a live nudge.
+  // Empty while the notices or the feature are off.
+  router.get("/api/jam-public/notices", async ({ user }) =>
+    jamPublicEnabled() ? listJamTakeNotices(user.id) : { notices: [] },
+  );
+
+  // Tapped or dismissed. Allowed with the flag off: it is the person's own row.
+  router.post("/api/jam-public/notices/ack", async ({ req, user }) => {
+    const { id } = ackJamTakeNoticeSchema.parse(await readJsonBody(req));
+    await ackJamTakeNotice(user.id, id);
+    return { ok: true as const };
+  });
 
   router.get("/api/jam-public/mine", async ({ user }) => ({
     songs: await myPublicJams(user.id),
