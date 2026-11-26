@@ -19,6 +19,8 @@ import gg.pqp.app.jam.audio.JamVideoStage
 import gg.pqp.app.jam.record.BackingStem
 import gg.pqp.app.jam.record.JamStudioLaunch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,12 +55,42 @@ data class JamSongUi(
     val playing: Boolean = false,
     /** A call is live on this device: a song does not start under it. */
     val callLive: Boolean = false,
+    /** The take being adjusted, with the edits not yet saved. Heard at once, sent on "Salvar". */
+    val adjust: JamAdjust? = null,
 ) {
     enum class Phase { Loading, Ready, Failed, Gone }
 
-    private val tracks get() = state?.tracks.orEmpty()
-    val stack: List<JamTrack> get() = JamMixRules.stack(tracks, auditioning)
-    val otherTakes: List<JamTrack> get() = JamMixRules.otherTakes(tracks, auditioning)
+    /**
+     * The tracks as the engine plays them and the lanes draw them: what is stored, except that the take being adjusted
+     * has the person's unsaved edits laid on it. Everything that plays, levels or draws reads THIS, never `state.tracks`.
+     */
+    val liveTracks: List<JamTrack>
+        get() {
+            val stored = state?.tracks.orEmpty()
+            val editing = adjust ?: return stored
+            return stored.map { if (it.id == editing.trackId) JamTrackEdit.placed(it, editing.edits) else it }
+        }
+
+    /**
+     * The adjust editor against the tracks as they now are: its edits are kept while the stored numbers are the ones
+     * they were laid on, started again from the stored ones when those moved, and the editor closes with its track.
+     */
+    fun reconciled(): JamSongUi {
+        val editing = adjust ?: return this
+        val now = JamAdjusting.reconcile(editing, state?.tracks?.firstOrNull { it.id == editing.trackId })
+        return if (now == editing) this else copy(adjust = now)
+    }
+
+    /** Unsaved edits are open: leaving, or opening another take's editor, would throw them away and so asks first. */
+    val adjustDirty: Boolean
+        get() {
+            val editing = adjust ?: return false
+            val stored = state?.tracks?.firstOrNull { it.id == editing.trackId } ?: return false
+            return JamTrackEdit.isEdited(stored, editing.edits)
+        }
+
+    val stack: List<JamTrack> get() = JamMixRules.stack(liveTracks, auditioning)
+    val otherTakes: List<JamTrack> get() = JamMixRules.otherTakes(liveTracks, auditioning)
 
     /** Every stem that is wanted has an answer, and at least one can play. */
     val ready: Boolean
@@ -171,7 +203,7 @@ class JamSongViewModel(
                         phase = if (loaded.wasDeleted) JamSongUi.Phase.Gone else JamSongUi.Phase.Ready,
                         state = loaded,
                         stems = emptyMap(),
-                    )
+                    ).reconciled()
                 }
                 syncStems()
             } catch (e: CancellationException) {
@@ -200,7 +232,7 @@ class JamSongViewModel(
             it.copy(
                 state = applied.state,
                 phase = if (applied.state.wasDeleted) JamSongUi.Phase.Gone else it.phase,
-            )
+            ).reconciled()
         }
         if (applied.state.wasDeleted) {
             stopEverything()
@@ -255,16 +287,20 @@ class JamSongViewModel(
                 rebuild()
             }
         }
-        video.load(active.filter { it.hasVideo })
+        video.load(JamMixRules.activeTracks(ui.liveTracks, ui.auditioning).filter { it.hasVideo })
         _ui.update { it.copy(videoTracks = video.tracks) }
         rebuild()
     }
 
-    /** Hands the engine the stems that are ready, once none of the wanted ones is still on its way. */
+    /**
+     * Hands the engine the stems that are ready, once none of the wanted ones is still on its way. The tracks are the
+     * LIVE ones: the take being adjusted is placed with its unsaved edits, so a drag is heard, and the stored numbers
+     * come back the moment the editor closes without saving. The transport keeps its place in SONG time across a
+     * change of origin (a trimmed head or a nudged take moves where the transport's zero sits).
+     */
     private fun rebuild() {
         val ui = _ui.value
-        val state = ui.state ?: return
-        val active = JamMixRules.activeTracks(state.tracks, ui.auditioning)
+        val active = JamMixRules.activeTracks(ui.liveTracks, ui.auditioning)
         if (active.any { results[it.id] == null }) return
         val readyTracks = active.filter { results[it.id] is JamStemLoader.Result.Ready }
         val specs = readyTracks.map { JamStemSpec(it.id, it.offsetMs, it.trimStartMs, it.trimEndMs, it.gain.toFloat()) }
@@ -274,7 +310,14 @@ class JamSongViewModel(
             val spec = specs.first { it.id == track.id }
             JamAlignment.place(spec, result.frames, origin)?.let { it to result.pcm }
         }
+        val loadedBefore = ui.durationMs > 0
+        val songTimeMs = ui.originMs + player.positionMs()
         player.load(placed)
+        if (loadedBefore && origin != ui.originMs) {
+            val keep = (songTimeMs - origin).coerceAtLeast(0.0)
+            player.seekTo(keep)
+            positionMs = keep
+        }
         _ui.update { it.copy(originMs = origin, durationMs = player.durationMs.value) }
         applyLevels()
         video.park(origin + positionMs)
@@ -282,8 +325,7 @@ class JamSongViewModel(
 
     private fun applyLevels() {
         val ui = _ui.value
-        val state = ui.state ?: return
-        for (track in JamMixRules.activeTracks(state.tracks, ui.auditioning)) {
+        for (track in JamMixRules.activeTracks(ui.liveTracks, ui.auditioning)) {
             val level = if (ui.audible(track.id)) (track.gain * ui.volume(track.id)).toFloat() else 0f
             player.setLevel(track.id, level)
         }
@@ -500,6 +542,144 @@ class JamSongViewModel(
         }
     }
 
+    // --- editing the song ---
+
+    /** The answer to a write on the song is the song as it now is: applied like the frame the room is getting, unless something newer already landed. */
+    private fun applySongAnswer(song: JamSongSummary) {
+        val now = _ui.value.state ?: return
+        if (now.accepts(song)) onFrame(JamFrame.SongUpdated(channelId, song))
+    }
+
+    /** What this person may do, read again (a 403 says it changed): only the viewer part is taken, the engine is left alone. */
+    private fun refreshPermissions() {
+        viewModelScope.launch {
+            try {
+                val detail = backend.song(songId)
+                _ui.update { ui -> ui.copy(state = ui.state?.copy(viewer = detail.viewer)) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // The next read says the same thing.
+            }
+        }
+    }
+
+    /** The edit sheet's logic: title, artist and cover, with the state that survives a rotation. */
+    val editor = JamSongEditor(backend, viewModelScope, songId, ::applySongAnswer, ::refreshPermissions)
+
+    // --- adjusting a take ---
+
+    private var previewJob: Job? = null
+
+    private fun storedTrack(id: String): JamTrack? = _ui.value.state?.tracks?.firstOrNull { it.id == id }
+
+    /**
+     * Open the adjust editor on one of the viewer's own takes. A take that is not in the mix is heard by listening to it
+     * (the same local audition the row offers), so what is being adjusted can be heard.
+     */
+    fun startAdjust(track: JamTrack) {
+        val stored = storedTrack(track.id) ?: return
+        if (stored.authorId != backend.viewerId) return
+        _ui.update { it.copy(adjust = JamAdjusting.open(stored)) }
+        // A take that is not playing right now (out of the mix, or in it but replaced by a competing take that is being
+        // listened to) has no lane to open under, so it is brought on: the mix's own take by going back to the mix,
+        // a competing one by listening to it.
+        val playing = JamMixRules.activeTracks(_ui.value.state?.tracks.orEmpty(), _ui.value.auditioning).any { it.id == stored.id }
+        if (!playing) {
+            if (stored.inMix) stopAudition(stored.instrument) else audition(stored)
+        }
+    }
+
+    private fun edit(change: (JamTrack, TakeEdits) -> TakeEdits) {
+        val adjust = _ui.value.adjust ?: return
+        val stored = storedTrack(adjust.trackId) ?: return
+        if (adjust.saving) return
+        val edits = change(stored, adjust.edits)
+        if (edits == adjust.edits) return
+        _ui.update { it.copy(adjust = JamAdjusting.edit(adjust, edits)) }
+        // A gain is a level and is heard at once; a trim or a nudge moves a stem, which re-places the mix a moment later
+        // (a drag asks sixty times a second, and each re-placement restarts the buffer).
+        if (edits.gain != adjust.edits.gain) applyLevels()
+        if (edits.nudgeMs != adjust.edits.nudgeMs || edits.trimStartMs != adjust.edits.trimStartMs || edits.trimEndMs != adjust.edits.trimEndMs) {
+            schedulePreview()
+        }
+    }
+
+    fun adjustTrimStart(ms: Double) = edit { track, edits -> JamTrackEdit.withTrimStart(track, edits, ms) }
+    fun adjustTrimEnd(ms: Double) = edit { track, edits -> JamTrackEdit.withTrimEnd(track, edits, ms) }
+    fun adjustNudge(ms: Double) = edit { _, edits -> JamTrackEdit.withNudge(edits, ms) }
+    fun adjustGainPercent(percent: Int) = edit { _, edits -> JamTrackEdit.withGain(edits, JamTrackEdit.gainOfPercent(percent)) }
+
+    /** Back to what is stored. */
+    fun adjustReset() {
+        val adjust = _ui.value.adjust ?: return
+        val stored = storedTrack(adjust.trackId) ?: return
+        _ui.update { it.copy(adjust = JamAdjusting.reset(adjust, stored)) }
+        applyLevels()
+        schedulePreview()
+    }
+
+    /** Close the editor. Anything unsaved is dropped, and the engine plays what is stored again. */
+    fun adjustClose() {
+        if (_ui.value.adjust == null) return
+        _ui.update { it.copy(adjust = null) }
+        previewJob?.cancel()
+        previewJob = null
+        rebuild()
+        refreshVideo()
+    }
+
+    /** "Salvar": only what changed goes up, and the answer is applied like the frame the room gets. */
+    fun adjustSave() {
+        val adjust = _ui.value.adjust ?: return
+        val stored = storedTrack(adjust.trackId) ?: return
+        if (adjust.saving) return
+        val patch = JamTrackEdit.patchFor(stored, adjust.edits)
+        if (patch.isEmpty) {
+            adjustClose()
+            return
+        }
+        _ui.update { it.copy(adjust = JamAdjusting.saving(adjust)) }
+        viewModelScope.launch {
+            try {
+                val answer = backend.updateTrack(adjust.trackId, UpdateJamTrackRequest.of(patch))
+                // The editor closes first: what the engine plays IS what is stored now, so closing restores nothing.
+                // Only this track's own editor: another take's editor opened while this save was out is not this answer's to close.
+                _ui.update { if (it.adjust?.trackId == adjust.trackId) it.copy(adjust = null) else it }
+                val now = _ui.value.state
+                if (now == null || now.accepts(answer.song)) onFrame(JamFrame.TrackUpdated(channelId, answer.song, answer.track))
+                rebuild()
+                refreshVideo()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val failure = jamWriteFailureOf(e)
+                // Frames that came while the save was out were not applied to the editor: it is reconciled now, so the
+                // next try cannot send an old edit over a newer stored value.
+                _ui.update { ui ->
+                    if (ui.adjust?.trackId != adjust.trackId) ui else ui.copy(adjust = JamAdjusting.failed(ui.adjust, failure)).reconciled()
+                }
+                if (failure == JamWriteFailure.Denied) refreshPermissions()
+            }
+        }
+    }
+
+    private fun schedulePreview() {
+        if (previewJob?.isActive == true) return
+        previewJob = viewModelScope.launch {
+            delay(PREVIEW_MS)
+            previewJob = null
+            rebuild()
+            refreshVideo()
+        }
+    }
+
+    private fun refreshVideo() {
+        val ui = _ui.value
+        video.load(JamMixRules.activeTracks(ui.liveTracks, ui.auditioning).filter { it.hasVideo })
+        video.park(ui.originMs + positionMs)
+    }
+
     // --- recording ---
 
     /**
@@ -518,7 +698,8 @@ class JamSongViewModel(
         }
         val addable = state.viewer.addableInstruments
         if (addable.isEmpty()) return null
-        // Nothing of the song keeps playing under the studio: it owns the speaker while it is open.
+        // Nothing of the song keeps playing under the studio: it owns the speaker while it is open, and an unsaved adjustment is not carried into it.
+        if (ui.adjust != null) adjustClose()
         if (ui.playing) pause()
         return JamStudioLaunch(
             channelId = channelId,
@@ -565,6 +746,9 @@ class JamSongViewModel(
     companion object {
         /** The video is checked against the audio clock this often. */
         const val VIDEO_SYNC_NANOS = 250_000_000L
+
+        /** A drag on a trim or a nudge re-places the mix at most this often. */
+        const val PREVIEW_MS = 60L
 
         fun factory(
             session: SessionStore,

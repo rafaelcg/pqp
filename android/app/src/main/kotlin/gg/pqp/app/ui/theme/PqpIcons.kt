@@ -400,6 +400,18 @@ private object Lucide {
         "M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915",
         "M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
     )
+    // Adjusting a recording: three faders (Lucide `sliders-horizontal`).
+    val slidersHorizontal by lucide(
+        "M21 4h-7",
+        "M10 4H3",
+        "M21 12h-9",
+        "M8 12H3",
+        "M21 20h-5",
+        "M12 20H3",
+        "M14 2v4",
+        "M8 10v4",
+        "M16 18v4",
+    )
     val trash2 by lucide(
         "M10 11v6",
         "M14 11v6",
@@ -688,6 +700,7 @@ object PqpIcons {
     val Confirm get() = Lucide.check
     val Add get() = Lucide.plus
     val Edit get() = Lucide.pencil
+    val Adjust get() = Lucide.slidersHorizontal
     val Delete get() = Lucide.trash2
     val Export get() = Lucide.download
     val Retry get() = Lucide.refreshCw

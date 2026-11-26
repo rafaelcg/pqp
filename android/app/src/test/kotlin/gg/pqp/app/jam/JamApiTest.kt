@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -30,12 +31,18 @@ class JamApiTest {
     private data class Answer(val status: Int, val body: String)
 
     private val received = LinkedBlockingQueue<Recorded>()
+
+    /** What the last request said about its body: the bucket checks both against what was signed. */
+    @Volatile private var lastContentType: String? = null
+    @Volatile private var lastContentLength: Long = -1
     private val answers = LinkedBlockingQueue<Answer>()
 
     @Before
     fun start() {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange: HttpExchange ->
+            lastContentType = exchange.requestHeaders.getFirst("Content-Type")
+            lastContentLength = exchange.requestHeaders.getFirst("Content-Length")?.toLongOrNull() ?: -1
             received += Recorded(
                 exchange.requestMethod,
                 exchange.requestURI.path,
@@ -114,6 +121,98 @@ class JamApiTest {
         val calls = generateSequence { received.poll() }.toList()
         assertEquals(listOf("PUT /api/jam-tracks/t/vote", "DELETE /api/jam-tracks/t/vote", "PATCH /api/jam-tracks/t"), calls.map { "${it.method} ${it.path}" })
         assertEquals("""{"inMix":true}""", calls.last().body)
+    }
+
+    private val trackAnswer =
+        """{"track":{"id":"t","songId":"s","gain":0.5},"song":{"id":"s","channelId":"c","title":"x"}}"""
+    private val songAnswer = """{"song":{"id":"s","channelId":"c","title":"Lithium"}}"""
+
+    @Test
+    fun `adjusting a take is a PATCH of only the fields that changed`() = runTest {
+        answers += Answer(200, trackAnswer)
+        val answer = client().updateJamTrack("t", UpdateJamTrackRequest.of(TrackPatch(offsetMs = -2000.0, trimEndMs = 750.0)))
+        assertEquals(0.5, answer.track.gain, 0.0)
+        val request = received.take()
+        assertEquals("PATCH", request.method)
+        assertEquals("/api/jam-tracks/t", request.path)
+        assertEquals("""{"offsetMs":-2000.0,"trimEndMs":750.0}""", request.body)
+        // A gain alone, as the slider sends it.
+        answers += Answer(200, trackAnswer)
+        client().updateJamTrack("t", UpdateJamTrackRequest.of(TrackPatch(gain = 1.25)))
+        assertEquals("""{"gain":1.25}""", received.take().body)
+    }
+
+    @Test
+    fun `a refused adjustment is an exception the screen can name, and the flag is told apart from a permission`() = runTest {
+        answers += Answer(403, """{"error":"You cannot edit somebody else's track"}""")
+        try {
+            client().updateJamTrack("t", UpdateJamTrackRequest.of(TrackPatch(gain = 0.5)))
+            fail("a 403 read as a saved adjustment")
+        } catch (e: ApiException) {
+            assertEquals(JamWriteFailure.Denied, jamWriteFailureOf(e))
+        }
+        answers += Answer(403, """{"error":"jam_channels_off"}""")
+        try {
+            client().updateJamTrack("t", UpdateJamTrackRequest.of(TrackPatch(gain = 0.5)))
+            fail("a 403 read as a saved adjustment")
+        } catch (e: ApiException) {
+            assertEquals(JamWriteFailure.Off, jamWriteFailureOf(e))
+        }
+        answers += Answer(422, """{"error":"jam_trim_invalid"}""")
+        try {
+            client().updateJamTrack("t", UpdateJamTrackRequest.of(TrackPatch(trimStartMs = 99999.0)))
+            fail("a 422 read as a saved adjustment")
+        } catch (e: ApiException) {
+            assertEquals(JamWriteFailure.Invalid, jamWriteFailureOf(e))
+        }
+    }
+
+    @Test
+    fun `editing a song is a PATCH, and clearing the artist sends an explicit null`() = runTest {
+        answers += Answer(200, songAnswer)
+        assertEquals("Lithium", client().updateJamSong("s", SongPatch(title = "Lithium")).title)
+        val title = received.take()
+        assertEquals("PATCH /api/jam-songs/s", "${title.method} ${title.path}")
+        assertEquals("""{"title":"Lithium"}""", title.body)
+        answers += Answer(200, songAnswer)
+        client().updateJamSong("s", SongPatch(setArtist = true, artist = null))
+        assertEquals("""{"artist":null}""", received.take().body)
+        answers += Answer(200, songAnswer)
+        client().updateJamSong("s", SongPatch(title = "Lithium", setArtist = true, artist = "Nirvana"))
+        assertEquals("""{"title":"Lithium","artist":"Nirvana"}""", received.take().body)
+    }
+
+    @Test
+    fun `a cover is a ticket for exactly these bytes, then a claim by upload id, and removal is a DELETE`() = runTest {
+        answers += Answer(201, """{"uploadId":"11111111-1111-4111-8111-111111111111","uploadUrl":"http://127.0.0.1/put","expiresAt":"2026-11-01T10:00:00.000Z"}""")
+        val ticket = client().jamCoverTicket("s", JamCover.SEND_TYPE, 123456)
+        assertEquals("11111111-1111-4111-8111-111111111111", ticket.uploadId)
+        val asked = received.take()
+        assertEquals("POST /api/jam-songs/s/uploads", "${asked.method} ${asked.path}")
+        assertEquals("""{"kind":"cover","contentType":"image/jpeg","byteSize":123456}""", asked.body)
+        answers += Answer(200, """{"song":{"id":"s","channelId":"c","title":"x","coverUrl":"http://x/c.jpg?sig=1"}}""")
+        assertEquals("http://x/c.jpg?sig=1", client().setJamCover("s", ticket.uploadId).coverUrl)
+        val claim = received.take()
+        assertEquals("PUT /api/jam-songs/s/cover", "${claim.method} ${claim.path}")
+        assertEquals("""{"uploadId":"11111111-1111-4111-8111-111111111111"}""", claim.body)
+        answers += Answer(200, songAnswer)
+        assertNull(client().removeJamCover("s").coverUrl)
+        val removal = received.take()
+        assertEquals("DELETE /api/jam-songs/s/cover", "${removal.method} ${removal.path}")
+    }
+
+    @Test
+    fun `the bytes go to the bucket with exactly the signed type and length`() = runTest {
+        answers += Answer(200, "")
+        val jpeg = ByteArray(40_000) { it.toByte() }
+        val progress = mutableListOf<Float>()
+        putJamCover(ApiClient.defaultHttpClient(), "$baseUrl/bucket/cover", jpeg, progress::add)
+        val request = received.take()
+        assertEquals("PUT /bucket/cover", "${request.method} ${request.path}")
+        assertEquals(1f, progress.last(), 0f)
+        assertTrue(progress.zipWithNext().all { (a, b) -> b >= a })
+        assertEquals("image/jpeg", lastContentType)
+        assertEquals(jpeg.size.toLong(), lastContentLength)
     }
 
     @Test

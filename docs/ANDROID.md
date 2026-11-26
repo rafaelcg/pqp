@@ -3750,8 +3750,11 @@ own** ("Gravar minha parte" on a song, "Gravar" on the wall for a first take of
 a new song; see "Recording a part" below). Code is `app/.../jam/` (the studio is
 `jam/record/`); iOS drew the playing scope (`docs/IOS.md`), and where a choice
 was arbitrary (the tile sizes, "falta voz", the unread rule, the audition)
-Android follows it so the two phones agree. Not here: recording a camera video
-(the studio is audio only), editing a cover, and the public jam site.
+Android follows it so the two phones agree. It also **edits a song** (name, artist
+and cover) and **adjusts a take** of its own (volume, place in time, cuts); see
+"Editing a song and adjusting a take" below. Not here: recording a camera video
+(the studio is audio only), framing a cover photo (the phone sends the centred
+square), and the public jam site.
 
 ### Invisible without the flag
 
@@ -4025,6 +4028,98 @@ under 45 ms is left alone, up to 350 ms is eased out with a 4 % speed change, pa
 that a seek (`JamVideoPlan`); at most four play, and before its slice starts a
 video waits on its first frame. File time is `song - offset` (kept inside the heard
 slice), one `offsetMs` for picture and sound, as on the web.
+
+### Editing a song and adjusting a take
+
+Both are the web's (`jam-edit-sheet.tsx`, `jam-track-adjust.tsx`, `jam-clip-editor.tsx`) with its words, ranges,
+steps and rounding, and both are **client only**: `PATCH /api/jam-songs/:id`, `POST /api/jam-songs/:id/uploads` with
+`kind: "cover"`, `PUT` and `DELETE /api/jam-songs/:id/cover`, and `PATCH /api/jam-tracks/:id`, all of which existed.
+Every one of these writes respects the per-server `jam_channels` flag the way the other Jam writes do: a 403
+`jam_channels_off` is said as "Gravar tá pausado neste servidor", and the controls are not drawn at all when
+`GET /api/jam/config` says the flag is off. A 403 that is **not** the flag is a permission ("Tu não pode editar essa
+música") and the screen reads what the person may do again (`refreshPermissions`).
+
+**Who sees what.** The song's author or a moderator (`viewer.isAuthor || viewer.canModerate`, flag on) sees a pencil
+in the song's top bar and "Editar música" in its menu (`JamEditPermissions.canEditSong`). A take's AUTHOR alone, flag
+on, sees the faders icon on that take's row (`canAdjustTrack`): the contract gives `gain`, `offsetMs` and the trims to the
+track's author only, so the song's author and a moderator do not nudge somebody else's take, they leave it out of the
+mix or delete it. Removing a cover is the one edit the flag does not gate, as on the server.
+
+**The edit sheet** (`JamEditSheet`, logic in `JamSongEditor`, tested without a screen): the song as the wall will draw it
+(the photo, square, with the name and artist as they are typed), a photo button, and the two fields. The text is
+checked with the server's own rule (`JamText`: bidi controls stripped, whitespace collapsed, something visible left,
+100 characters), so "Salvar" is never offered for a name the server refuses and a name of zero-width spaces says so.
+An untouched field follows the song (a name changed elsewhere is never written back over), only what changed is sent
+(`artist` cleared with an explicit `null`, which the app's JSON would otherwise omit), and a save that got halfway
+(the name went, the picture did not) asked again sends only the picture. The photo comes from the system photo picker
+(`PickVisualMedia.ImageOnly`, no storage permission). It is judged before it is decoded in full (no size or a side under
+400 px is refused in words, the web's `JAM_COVER_MIN_SIDE`), decoded at the smallest power-of-two subsample that keeps
+the 1024 square, made upright (`ImageDecoder` applies EXIF, the API 26 to 27 path does it by hand), cropped to the
+centred square, flattened onto the near-white of `--color-on-media` and sent as a 1024 x 1024 JPEG, under the 4 MiB
+`JAM_COVER_MAX_BYTES` (lower qualities are tried before it is refused). The bytes go to the presigned URL with exactly the
+signed `Content-Type` and `Content-Length` **when the photo is picked**, and are claimed (`PUT .../cover`) **when the
+person saves**, so closing the sheet leaves the old cover exactly as it was. A swipe or a tap outside does not throw away
+what was typed or picked: it asks first. Differences from the web, all deliberate: no framing step (the phone sends the
+centred square and the tile above the button shows exactly that), and the "too large" line says the photo and its 4 MB
+limit where the web reuses the recording's.
+
+**Adjusting a take** (`JamAdjustPanel`, arithmetic in `JamTrackEdit` and `JamClip`, state in `JamAdjust`): the faders
+icon opens an editor under the take's lane, with the transport still at the bottom so the take is **heard while it is
+moved**. It is a clip on the song's timeline with the band's waveform on its own row above it: drag an end to cut, drag
+the middle to move it, or step it earlier and later (a tap is 10 ms, holding repeats after 400 ms every 90 ms and
+speeds up to 50 and then 100 ms a step), one volume from 0 to 200 % in a box that says it is what everybody hears, a
+zoom between the whole song and its first three seconds, and "Voltar ao automático". The numbers are the web's, pinned to
+its source by `JamTrackEditTest`: a nudge is whole milliseconds within +-500 and is **added to the stored `offsetMs`**
+(the song time of the file's first sample, #1595) and nothing else; the head trim may go back to 0, neither trim leaves
+less than 500 ms to hear; the gain is clamped to 0..2, rounded to a hundredth, and a difference under 0.005 is no
+change; only the fields that changed are sent (`patchFor`), JavaScript's `Math.round` is reproduced (a half goes up, also
+below zero). Nothing is sent until "Salvar".
+
+*Heard at once.* While the editor is open the engine and the lanes read `JamSongUi.liveTracks`, the stored tracks with
+the unsaved edits laid on the one being adjusted. A volume is a level and changes the next buffer; a trim or a nudge
+re-places the mix, at most every 60 ms during a drag (each re-placement restarts the buffer), and the transport keeps
+its place in **song** time when the origin moves (`rebuild`). Closing without saving puts the stored numbers back.
+Adjusting a take that is not in the mix listens to it first (the row's own audition), so what is adjusted can be heard.
+
+*Against the live frames.* The edits are laid on a baseline, the stored numbers they started from
+(`JamAdjusting.reconcile`). A frame that leaves the stored numbers alone (a vote, a label) keeps them. Stored numbers that
+moved under the editor (the same person adjusting on another device) start the edits again from the new ones, because
+"so many ms on top of the stored offset" means something else once the offset moved, and the editor says so. While a
+save is out the editor is left alone (its own echo is about to say the same); the answer closes it and is applied like a
+frame, unless something newer already landed (`accepts`). A track deleted under the editor closes it. The one playhead
+across the lanes skips the open editor, which has one of its own on a different scale.
+
+*Staying reachable.* Save and the way out of the editor are a bar pinned over the transport (`JamAdjustBar`), with the
+error of a refused save directly above them, so they are on screen however far the editor is scrolled; the editor scrolls
+itself up under the top bar when it opens. Unsaved edits are never dropped silently: system Back, the back arrow, another
+take's editor and the studio all ask "Descartar as mudanças?" first (`JamSongUi.adjustDirty`). Every row of actions (the
+expanded controls, a competing take's Ouvir, Colocar na mix, faders and Apagar a faixa) is a `FlowRow` of whole buttons, so
+none disappears or breaks mid-word between 320 and 430 dp and from font scale 1.0 to 2.0; from 1.4 the lane's four
+controls drop under its title, the timing buttons stack and the volume readout sits above its slider. The stage reacts
+to horizontal drags only, so a vertical swipe that starts on it still scrolls the list. A flag that goes off under an
+open sheet leaves the sheet and its typed changes with an error, and the flag is read again when the screen comes back to
+the front or a write is refused for it, so the pencil and the faders follow it in both directions.
+
+**Motion** is a spring on the editor opening and closing, a handle that widens while it is held, a photo that lands
+with a small spring and a progress ring while it goes up; all of it is skipped under "remove animations"
+(`rememberReduceMotion`). The cut parts of a take are the instrument's colour pulled toward the stage by a fixed share
+(a flat shape), never a translucent wash. TalkBack gets each handle as an adjustable slider, and every control has
+a label.
+
+**Verified on an emulator** (Pixel 10 Pro profile, Android 17, local API with the dev bypass, `jam_channels` on, MinIO,
+device in pt-BR, light and dark, two accounts): the pencil and "Editar música" for the song's author and no faders icon on
+somebody else's take; a name and an artist edited, a photo from the system picker (a 1600 x 1200 JPEG) uploaded and
+claimed on Save, the song on the server read back as `title`, `artist` and a 1024 x 1024 JPEG of 75 KB at the cover's
+URL; a take nudged by holding "Mais tarde" (clamped at 500 ms), both ends dragged, the volume dragged to +62 %,
+playback continuing under it and the editor's clip and lane moving, then "Salvar": the server read back
+`offsetMs 500, trimStartMs 1546, trimEndMs 1099, gain 1.62`; another client changing the same take's offset and gain while the
+editor was open (the editor started again from the new numbers, said so, and showed the new volume); "Voltar ao guardado"
+closing with nothing sent; 403 from the API for another person editing the song or a moderator adjusting a take. **Not
+verified, needs a person or a real phone**: that the adjusted audio is actually audible and lines up by ear (the
+emulator's output was not listened to; the evidence is the engine's own mix length, the playhead and the lanes), a swipe
+on a small phone with a 2.0 font scale, TalkBack on the handles, the flag turned off while a sheet is open (the 403
+`jam_channels_off` mapping is unit-tested and was not driven on a device), and a non-moderator member (the local owner is
+always a moderator, so "no pencil for people who may not" is a unit test of `canEditSong`, not a screenshot).
 
 ### Audio focus, calls and the background
 

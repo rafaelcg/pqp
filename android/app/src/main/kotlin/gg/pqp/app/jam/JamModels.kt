@@ -290,6 +290,25 @@ data class JamTrackWithSong(
     val song: JamSongSummary,
 )
 
-/** `PATCH /api/jam-tracks/:trackId`, the one field the phone writes today. */
+/**
+ * `PATCH /api/jam-tracks/:trackId` (`updateJamTrackSchema`): every field optional, and only the ones that changed are
+ * sent (a null is omitted by the app's JSON settings, which is what "not sent" means here). `inMix` is the song's
+ * author's or a moderator's; the rest is the track's author's alone. `label` is not written by the phone.
+ */
 @Serializable
-data class UpdateJamTrackRequest(val inMix: Boolean? = null)
+data class UpdateJamTrackRequest(
+    val inMix: Boolean? = null,
+    val offsetMs: Double? = null,
+    val trimStartMs: Double? = null,
+    val trimEndMs: Double? = null,
+    val gain: Double? = null,
+) {
+    companion object {
+        fun of(patch: TrackPatch) = UpdateJamTrackRequest(
+            offsetMs = patch.offsetMs,
+            trimStartMs = patch.trimStartMs,
+            trimEndMs = patch.trimEndMs,
+            gain = patch.gain,
+        )
+    }
+}

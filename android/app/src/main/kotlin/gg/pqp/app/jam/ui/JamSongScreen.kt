@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalLayoutApi::class)
+
 package gg.pqp.app.jam.ui
 
 import android.content.ClipData
@@ -5,6 +7,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
@@ -18,11 +22,15 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -35,6 +43,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -67,6 +76,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,7 +90,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -105,6 +119,10 @@ import gg.pqp.app.R
 import gg.pqp.app.core.Backend
 import gg.pqp.app.jam.JamBidi
 import gg.pqp.app.jam.JamConfig
+import gg.pqp.app.jam.JamEditPermissions
+import gg.pqp.app.jam.JamMixRules
+import gg.pqp.app.jam.JamTrackEdit
+import gg.pqp.app.jam.JamWriteFailure
 import gg.pqp.app.jam.JamNaming
 import gg.pqp.app.jam.JamNeed
 import gg.pqp.app.jam.JamNotice
@@ -157,6 +175,8 @@ fun JamSongScreen(
     config: JamConfig,
     /** The studio opens over this screen, with the band as it is decoded here. */
     onRecord: (JamStudioLaunch) -> Unit,
+    /** Read the flag again: this screen stays open while it may change, and the wall does not start again for it. */
+    onRefreshConfig: () -> Unit,
     onBack: () -> Unit,
 ) {
     val ui by model.ui.collectAsStateWithLifecycle()
@@ -175,9 +195,32 @@ fun JamSongScreen(
     var confirmSong by remember { mutableStateOf(false) }
     var confirmTrack by remember { mutableStateOf<JamTrack?>(null) }
     var menu by remember { mutableStateOf(false) }
+    // The edit sheet's own state lives in the view model (a rotation keeps what was typed and the photo that went up).
+    var editing by rememberSaveable { mutableStateOf(false) }
+    val canEditSong = ui.state?.let { JamEditPermissions.canEditSong(it.viewer, config.enabled) } == true
+    fun openEditor() {
+        menu = false
+        model.editor.open()
+        editing = true
+    }
+
+    // Unsaved edits of a take are never dropped silently: whatever would leave them behind (back, another take's editor,
+    // the studio) asks first, the way the song sheet does.
+    var pendingAfterDiscard by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun guarded(action: () -> Unit) {
+        if (ui.adjustDirty) pendingAfterDiscard = action else action()
+    }
+    BackHandler(enabled = ui.adjustDirty) { guarded(onBack) }
+    val editorFailure by model.editor.ui.collectAsStateWithLifecycle()
+    // A write refused because the flag went off says the flag may have changed; and the screen coming back to the
+    // front reads it again, so the pencil and the faders come back with the flag as they went with it.
+    LaunchedEffect(editorFailure.failure, ui.adjust?.failure, editorFailure.done) {
+        if (editorFailure.failure == JamWriteFailure.Off || ui.adjust?.failure == JamWriteFailure.Off || editorFailure.done) onRefreshConfig()
+    }
 
     // The app left the screen: pause, so a song is never left playing to nobody.
     LifecycleStartEffect(songId) {
+        onRefreshConfig()
         onStopOrDispose { model.onBackgrounded() }
     }
     // The song screen closing frees the codecs, the mapped files and the speaker. A rotation is not closing.
@@ -218,11 +261,16 @@ fun JamSongScreen(
                     colors = pqpTopBarColors(),
                     title = {},
                     navigationIcon = {
-                        IconButton(onClick = onBack, modifier = Modifier.testTag("jam.song.back")) {
+                        IconButton(onClick = { guarded(onBack) }, modifier = Modifier.testTag("jam.song.back")) {
                             Icon(PqpIcons.Back, contentDescription = stringResource(R.string.jam_back))
                         }
                     },
                     actions = {
+                        if (canEditSong) {
+                            IconButton(onClick = ::openEditor, modifier = Modifier.testTag("jam.song.edit")) {
+                                Icon(PqpIcons.Edit, contentDescription = stringResource(R.string.jam_edit_open))
+                            }
+                        }
                         Box {
                             IconButton(onClick = { menu = true }, modifier = Modifier.testTag("jam.song.more")) {
                                 Icon(PqpIcons.More, contentDescription = stringResource(R.string.jam_more))
@@ -245,6 +293,14 @@ fun JamSongScreen(
                                         shareLink(context, link)
                                     },
                                 )
+                                if (canEditSong) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.jam_edit_open)) },
+                                        leadingIcon = { Icon(PqpIcons.Edit, contentDescription = null) },
+                                        onClick = ::openEditor,
+                                        modifier = Modifier.testTag("jam.song.editItem"),
+                                    )
+                                }
                                 if (ui.state?.let { JamPermissions.canDeleteSong(it.viewer) } == true) {
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.jam_delete_song), color = MaterialTheme.colorScheme.error) },
@@ -266,6 +322,13 @@ fun JamSongScreen(
             }
         },
         bottomBar = {
+            Column {
+                // The editor's Save and its way out, pinned over the transport so they never scroll away.
+                val editing = ui.adjust
+                val storedTake = editing?.let { open -> ui.state?.tracks?.firstOrNull { it.id == open.trackId } }
+                if (editing != null && storedTake != null) {
+                    JamAdjustBar(track = storedTake, adjust = editing, onSave = model::adjustSave, onClose = model::adjustClose)
+                }
             if (ui.phase == JamSongUi.Phase.Ready) {
                 TransportBar(
                     model = model,
@@ -275,17 +338,20 @@ fun JamSongScreen(
                         model.togglePlay()
                     },
                     onRecord = {
-                        // Whether, and why not, is the contract's: the flag, storage and what the server says this person may add.
-                        val state = ui.state
-                        val gate = state?.let { JamRecordRules.gate(config, it.song, it.viewer) }
-                        val launch = if (gate == RecordGate.Open) model.studioLaunch() else null
-                        when {
-                            launch != null -> onRecord(launch)
-                            gate is RecordGate.Blocked -> scope.launch { snackbars.showSnackbar(blockedText(gate.reason)) }
-                            else -> scope.launch { snackbars.showSnackbar(gettingBandText) }
+                        guarded {
+                            // Whether, and why not, is the contract's: the flag, storage and what the server says this person may add.
+                            val state = ui.state
+                            val gate = state?.let { JamRecordRules.gate(config, it.song, it.viewer) }
+                            val launch = if (gate == RecordGate.Open) model.studioLaunch() else null
+                            when {
+                                launch != null -> onRecord(launch)
+                                gate is RecordGate.Blocked -> scope.launch { snackbars.showSnackbar(blockedText(gate.reason)) }
+                                else -> scope.launch { snackbars.showSnackbar(gettingBandText) }
+                            }
                         }
                     },
                 )
+            }
             }
         },
     ) { padding ->
@@ -302,9 +368,50 @@ fun JamSongScreen(
                 }
                 JamSongUi.Phase.Failed -> Message(stringResource(R.string.jam_song_failed), stringResource(R.string.jam_retry), model::load)
                 JamSongUi.Phase.Gone -> Message(stringResource(R.string.jam_song_gone), null, {})
-                JamSongUi.Phase.Ready -> SongBody(model, ui, shared, viewerId, onDeleteTrack = { confirmTrack = it })
+                JamSongUi.Phase.Ready -> SongBody(
+                    model, ui, shared, viewerId,
+                    flagOn = config.enabled,
+                    onDeleteTrack = { confirmTrack = it },
+                    // Opening another take's editor, or closing this one, with edits unsaved asks first.
+                    onAdjust = { track, open -> guarded { if (open) model.adjustClose() else model.startAdjust(track) } },
+                )
             }
         }
+    }
+
+    val sheetSong = ui.state?.song
+    // Shown while it is open, whatever the flag says now: a flag that went off under a typed name is an error on the sheet,
+    // never a sheet that vanishes with the name in it.
+    if (editing && sheetSong != null) {
+        JamEditSheet(
+            song = sheetSong,
+            editor = model.editor,
+            onDismiss = {
+                editing = false
+                model.editor.close()
+            },
+        )
+    }
+
+    pendingAfterDiscard?.let { after ->
+        AlertDialog(
+            onDismissRequest = { pendingAfterDiscard = null },
+            title = { Text(stringResource(R.string.jam_edit_discard_title)) },
+            text = { Text(stringResource(R.string.jam_adjust_discard_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingAfterDiscard = null
+                        model.adjustClose()
+                        after()
+                    },
+                    modifier = Modifier.testTag("jam.adjust.discard"),
+                ) { Text(stringResource(R.string.jam_edit_discard), color = MaterialTheme.colorScheme.error, softWrap = false) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingAfterDiscard = null }) { Text(stringResource(R.string.jam_edit_keep_editing)) }
+            },
+        )
     }
 
     if (confirmSong) {
@@ -391,18 +498,43 @@ private fun SongBody(
     ui: JamSongUi,
     shared: JamSharedScope?,
     viewerId: String?,
+    flagOn: Boolean,
     onDeleteTrack: (JamTrack) -> Unit,
+    /** The faders were tapped on [JamTrack]; true when that take's editor is the one open. */
+    onAdjust: (JamTrack, Boolean) -> Unit,
 ) {
     val state = ui.state ?: return
     val song = state.song
     val stack = ui.stack
     val others = ui.otherTakes
     val reduce = rememberReduceMotion()
+    // The one playhead is drawn across the lanes and NOT across an open adjust editor, which has a playhead of its own on a
+    // different scale: where the editor sits is measured against the block, and the line skips it.
+    var stackCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var editorRange by remember { mutableStateOf<ClosedFloatingPointRange<Float>?>(null) }
+    LaunchedEffect(ui.adjust == null) { if (ui.adjust == null) editorRange = null }
+    // An editor that opens below the fold is brought up to the top of the list once it has grown to its height, so it
+    // is on screen where the finger just was (and a sibling's open editor, being replaced, is not left in the way).
+    val listState = rememberLazyListState()
+    var listCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var panelCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    LaunchedEffect(ui.adjust?.trackId) {
+        if (ui.adjust == null) return@LaunchedEffect
+        delay(if (reduce) 60 else 380)
+        val list = listCoordinates
+        val panel = panelCoordinates
+        if (list != null && panel != null && list.isAttached && panel.isAttached) {
+            val delta = panel.positionInRoot().y - list.positionInRoot().y - with(density) { 8.dp.toPx() }
+            if (reduce) listState.scrollBy(delta) else listState.animateScrollBy(delta)
+        }
+    }
 
     LazyColumn(
+        state = listState,
         contentPadding = PaddingValues(start = Spacing.gutter, end = Spacing.gutter, top = Spacing.sm, bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
-        modifier = Modifier.fillMaxSize().testTag("jam.song.list"),
+        modifier = Modifier.fillMaxSize().onGloballyPositioned { listCoordinates = it }.testTag("jam.song.list"),
     ) {
         item(key = "header") {
             SongHeader(model, ui, song, shared, Modifier.fillMaxWidth().aspectRatio(if (ui.videoTracks.isEmpty()) 1.5f else 16f / 9f))
@@ -414,18 +546,43 @@ private fun SongBody(
             val playheadColor = MaterialTheme.colorScheme.primary
             Column(
                 verticalArrangement = Arrangement.spacedBy(Spacing.md),
-                modifier = Modifier.drawWithContent {
-                    drawContent()
-                    val duration = ui.durationMs
-                    if (duration > 0 && stack.isNotEmpty()) {
-                        val x = JamPlayhead.x(model.positionMs, size.width, duration)
-                        drawLine(playheadColor.copy(alpha = 0.9f), Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
-                    }
-                },
+                modifier = Modifier
+                    .onGloballyPositioned { stackCoordinates = it }
+                    .drawWithContent {
+                        drawContent()
+                        val duration = ui.durationMs
+                        if (duration > 0 && stack.isNotEmpty()) {
+                            val x = JamPlayhead.x(model.positionMs, size.width, duration)
+                            val color = playheadColor.copy(alpha = 0.9f)
+                            val gap = editorRange
+                            if (gap == null) {
+                                drawLine(color, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+                            } else {
+                                if (gap.start > 0f) drawLine(color, Offset(x, 0f), Offset(x, gap.start), strokeWidth = 2.dp.toPx())
+                                if (gap.endInclusive < size.height) drawLine(color, Offset(x, gap.endInclusive), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+                            }
+                        }
+                    },
             ) {
                 stack.forEach { track ->
                     androidx.compose.runtime.key(track.id) {
-                        TrackRow(model, ui, track, viewerId, fresh = track.id in state.fresh, reduce = reduce, onDelete = { onDeleteTrack(track) })
+                        TrackRow(
+                            model, ui, track, viewerId,
+                            fresh = track.id in state.fresh,
+                            reduce = reduce,
+                            flagOn = flagOn,
+                            onDelete = { onDeleteTrack(track) },
+                            onAdjust = onAdjust,
+                            onEditorBounds = { coordinates ->
+                                panelCoordinates = coordinates
+                                val block = stackCoordinates
+                                if (block != null && block.isAttached && coordinates.isAttached) {
+                                    val top = block.localPositionOf(coordinates, Offset.Zero).y
+                                    val range = top..(top + coordinates.size.height)
+                                    if (range != editorRange) editorRange = range
+                                }
+                            },
+                        )
                     }
                 }
             }
@@ -442,7 +599,7 @@ private fun SongBody(
                 }
             }
             items(others, key = { "take-${it.id}" }) { track ->
-                OtherTakeRow(model, ui, track, viewerId, onDelete = { onDeleteTrack(track) }, modifier = Modifier.animateItem())
+                OtherTakeRow(model, ui, track, viewerId, flagOn = flagOn, onDelete = { onDeleteTrack(track) }, onAdjust = { onAdjust(track, false) }, modifier = Modifier.animateItem())
             }
         }
     }
@@ -606,7 +763,10 @@ private fun TrackRow(
     viewerId: String?,
     fresh: Boolean,
     reduce: Boolean,
+    flagOn: Boolean,
     onDelete: () -> Unit,
+    onAdjust: (JamTrack, Boolean) -> Unit,
+    onEditorBounds: (LayoutCoordinates) -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     val state = ui.state ?: return
@@ -620,6 +780,11 @@ private fun TrackRow(
     val auditioned = ui.auditioning[track.instrument] == track.id && !track.inMix
     var expanded by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
+    // The author's own take, with the flag on, is the only one that can be adjusted; the editor opens under its lane.
+    val stored = state.tracks.firstOrNull { it.id == track.id } ?: track
+    val canAdjust = JamEditPermissions.canAdjustTrack(stored, viewerId, flagOn)
+    val adjusting = ui.adjust?.trackId == track.id
+    val savedVolume = JamTrackEdit.volumeDelta(stored.gain)
 
     // Entrance: a row that arrives live slides up and fades in; at rest, nothing.
     val enter = remember { Animatable(if (reduce || !fresh) 1f else 0f) }
@@ -636,7 +801,87 @@ private fun TrackRow(
             .testTag("jam.track.${track.id}"),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm + 2.dp)) {
+        // The controls are the same four buttons wherever they sit: beside the title while the type is ordinary, and on a line
+        // of their own under it once the type is big, where beside it they leave the title no room (it was "Gui..." at 2.0).
+        val controls: @Composable () -> Unit = {
+            SmallToggle(
+                active = muted,
+                onClick = { model.toggleMute(track.id) },
+                description = stringResource(if (muted) R.string.jam_unmute else R.string.jam_mute, label),
+                testTag = "jam.mute.${track.id}",
+            ) {
+                Icon(if (muted) PqpIcons.ServerMuted else PqpIcons.Speakerphone, contentDescription = null, modifier = Modifier.size(18.dp))
+            }
+            SmallToggle(
+                active = soloed,
+                onClick = { model.toggleSolo(track.id) },
+                description = stringResource(if (soloed) R.string.jam_unsolo else R.string.jam_solo, label),
+                testTag = "jam.solo.${track.id}",
+            ) {
+                Text(stringResource(R.string.jam_solo_short), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            }
+            if (canAdjust) {
+                SmallToggle(
+                    active = adjusting,
+                    onClick = { onAdjust(stored, adjusting) },
+                    description = stringResource(R.string.jam_adjust_open),
+                    testTag = "jam.adjustOpen.${track.id}",
+                ) {
+                    Icon(PqpIcons.Adjust, contentDescription = null, modifier = Modifier.size(18.dp))
+                }
+            }
+            VotePill(model, ui, track, haptics)
+        
+        }
+        val bigType = LocalDensity.current.fontScale >= 1.4f
+        if (bigType) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm + 2.dp)) {
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape).background(tint).clickable { expanded = !expanded },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(track.instrument.icon(), contentDescription = null, tint = JamInk, modifier = Modifier.size(20.dp))
+                }
+                Column(
+                    Modifier.weight(1f).clickable { expanded = !expanded },
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                ) {
+                    Text(
+                        text = JamNaming.heading(track.instrument.title(), track.label),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = if (audible) colors.onSurface else colors.onSurfaceVariant,
+                    )
+                    Text(
+                        // The author's saved volume, said on its own lane when it is not the recorded level (the web does too).
+                        text = if (savedVolume != null) name + JamNaming.SEPARATOR + stringResource(R.string.jam_clip_saved_volume, savedVolume) else name,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (auditioned) {
+                        // Under the name and not beside the title: beside it the badge took the title's room.
+                        Text(
+                            text = stringResource(R.string.jam_auditioning),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = colors.onPrimary,
+                            softWrap = false,
+                            modifier = Modifier.padding(top = 2.dp).clip(RoundedCornerShape(50)).background(colors.primary).padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalArrangement = Arrangement.spacedBy(Spacing.xs), itemVerticalAlignment = Alignment.CenterVertically) {
+                    controls()
+                }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm + 2.dp)) {
             Box(
                 Modifier.size(40.dp).clip(CircleShape).background(tint).clickable { expanded = !expanded },
                 contentAlignment = Alignment.Center,
@@ -656,42 +901,53 @@ private fun TrackRow(
                     color = if (audible) colors.onSurface else colors.onSurfaceVariant,
                 )
                 Text(
-                    text = name,
+                    // The author's saved volume, said on its own lane when it is not the recorded level (the web does too).
+                    text = if (savedVolume != null) name + JamNaming.SEPARATOR + stringResource(R.string.jam_clip_saved_volume, savedVolume) else name,
                     style = MaterialTheme.typography.labelMedium,
                     color = colors.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (auditioned) {
+                    // Under the name and not beside the title: beside it the badge took the title's room.
+                    Text(
+                        text = stringResource(R.string.jam_auditioning),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.onPrimary,
+                        softWrap = false,
+                        modifier = Modifier.padding(top = 2.dp).clip(RoundedCornerShape(50)).background(colors.primary).padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
             }
-            if (auditioned) {
-                Text(
-                    text = stringResource(R.string.jam_auditioning),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.onPrimary,
-                    modifier = Modifier.clip(RoundedCornerShape(50)).background(colors.primary).padding(horizontal = 8.dp, vertical = 2.dp),
-                )
+                controls()
             }
-            SmallToggle(
-                active = muted,
-                onClick = { model.toggleMute(track.id) },
-                description = stringResource(if (muted) R.string.jam_unmute else R.string.jam_mute, label),
-                testTag = "jam.mute.${track.id}",
-            ) {
-                Icon(if (muted) PqpIcons.ServerMuted else PqpIcons.Speakerphone, contentDescription = null, modifier = Modifier.size(18.dp))
-            }
-            SmallToggle(
-                active = soloed,
-                onClick = { model.toggleSolo(track.id) },
-                description = stringResource(if (soloed) R.string.jam_unsolo else R.string.jam_solo, label),
-                testTag = "jam.solo.${track.id}",
-            ) {
-                Text(stringResource(R.string.jam_solo_short), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-            }
-            VotePill(model, ui, track, haptics)
         }
 
         Lane(model, ui, track, status, label)
+
+        AnimatedVisibility(
+            visible = adjusting,
+            enter = if (reduce) EnterTransition.None else expandVertically(spring(stiffness = 500f)) + fadeIn(),
+            exit = if (reduce) ExitTransition.None else shrinkVertically(spring(stiffness = 500f)) + fadeOut(),
+        ) {
+            val adjust = ui.adjust
+            if (adjust != null && adjust.trackId == track.id) {
+                JamAdjustPanel(
+                    track = stored,
+                    adjust = adjust,
+                    band = JamMixRules.activeTracks(ui.liveTracks, ui.auditioning).filter { it.id != track.id },
+                    originMs = ui.originMs,
+                    position = { model.positionMs },
+                    onTrimStart = model::adjustTrimStart,
+                    onTrimEnd = model::adjustTrimEnd,
+                    onNudge = model::adjustNudge,
+                    onGainPercent = model::adjustGainPercent,
+                    onReset = model::adjustReset,
+                    modifier = Modifier.onGloballyPositioned(onEditorBounds),
+                )
+            }
+        }
 
         AnimatedVisibility(
             visible = expanded,
@@ -914,18 +1170,24 @@ private fun ExpandedControls(
                 modifier = Modifier.weight(1f).semantics { contentDescription = description }.testTag("jam.volume.${track.id}"),
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), modifier = Modifier.fillMaxWidth()) {
+        // A row that wraps as whole buttons: no action ever disappears or breaks mid-word, at any width or type size.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             if (JamPermissions.canSetMix(viewer)) {
                 TextButton(onClick = { model.setInMix(track, !track.inMix) }, enabled = track.id !in ui.busy, modifier = Modifier.testTag("jam.mix.${track.id}")) {
-                    Text(stringResource(if (track.inMix) R.string.jam_take_out_of_mix else R.string.jam_put_in_mix))
+                    Text(stringResource(if (track.inMix) R.string.jam_take_out_of_mix else R.string.jam_put_in_mix), softWrap = false)
                 }
             }
             if (auditioned) {
-                TextButton(onClick = { model.stopAudition(track.instrument) }) { Text(stringResource(R.string.jam_audition_stop)) }
+                TextButton(onClick = { model.stopAudition(track.instrument) }) { Text(stringResource(R.string.jam_audition_stop), softWrap = false) }
             }
             if (JamPermissions.canDeleteTrack(track, viewer, viewerId)) {
                 TextButton(onClick = onDelete, modifier = Modifier.testTag("jam.deleteTrack.${track.id}")) {
-                    Text(stringResource(R.string.jam_delete_track), color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.jam_delete_track), color = MaterialTheme.colorScheme.error, softWrap = false)
                 }
             }
         }
@@ -938,7 +1200,9 @@ private fun OtherTakeRow(
     ui: JamSongUi,
     track: JamTrack,
     viewerId: String?,
+    flagOn: Boolean,
     onDelete: () -> Unit,
+    onAdjust: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -970,19 +1234,35 @@ private fun OtherTakeRow(
             }
             VotePill(model, ui, track, haptics)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm), verticalAlignment = Alignment.CenterVertically) {
+        // The actions wrap as whole buttons (a fixed row of four squeezed the last one out, or broke it a letter a line).
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             OutlinedButton(onClick = { model.audition(track) }, modifier = Modifier.testTag("jam.audition.${track.id}")) {
                 Icon(PqpIcons.Play, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.jam_audition))
+                Text(stringResource(R.string.jam_audition), softWrap = false)
             }
             if (JamPermissions.canSetMix(viewer)) {
                 TextButton(onClick = { model.setInMix(track, true) }, enabled = track.id !in ui.busy) {
-                    Text(stringResource(R.string.jam_put_in_mix))
+                    Text(stringResource(R.string.jam_put_in_mix), softWrap = false)
                 }
             }
+            if (JamEditPermissions.canAdjustTrack(track, viewerId, flagOn)) {
+                // Adjusting a take that is not in the mix means hearing it: it is listened to, and its lane opens in the stack.
+                val adjustLabel = stringResource(R.string.jam_adjust_open)
+                IconButton(
+                    onClick = onAdjust,
+                    modifier = Modifier.semantics { contentDescription = adjustLabel }.testTag("jam.adjustOpen.${track.id}"),
+                ) { Icon(PqpIcons.Adjust, contentDescription = null, modifier = Modifier.size(20.dp)) }
+            }
             if (JamPermissions.canDeleteTrack(track, viewer, viewerId)) {
-                TextButton(onClick = onDelete) { Text(stringResource(R.string.jam_delete_track), color = colors.error) }
+                TextButton(onClick = onDelete, modifier = Modifier.testTag("jam.deleteTrack.${track.id}")) {
+                    Text(stringResource(R.string.jam_delete_track), color = colors.error, softWrap = false)
+                }
             }
         }
     }
