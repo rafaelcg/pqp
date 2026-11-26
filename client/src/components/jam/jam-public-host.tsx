@@ -46,7 +46,7 @@ export interface JamPublicHostProps {
 }
 
 export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const me = useJamPublicMe(ready);
@@ -79,7 +79,7 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
     // "Voltar pra jam" strip for that. A different jam opened from the wall of a
     // member's own server closes the way it always did.
     if (routeTarget && leavesToJamSite(peekJamHandover(), routeTarget)) {
-      window.location.assign(jamSiteHomeUrl());
+      window.location.assign(jamSiteHomeUrl(window.location, locale));
       return;
     }
     // Opened by a click inside the app there is an entry to go back to; opened
@@ -89,7 +89,7 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
     } else {
       onClosed();
     }
-  }, [location.key, navigate, onClosed, routeTarget]);
+  }, [location.key, locale, navigate, onClosed, routeTarget]);
 
   // The account's own notices, as one toast.
   useEffect(() => {

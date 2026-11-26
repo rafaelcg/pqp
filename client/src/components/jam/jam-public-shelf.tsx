@@ -47,7 +47,7 @@ export function useJamPublicShelf(ownIds: ReadonlySet<string>): PublicJamSong[] 
 }
 
 export function JamPublicShelf({ songs, titled }: { songs: readonly PublicJamSong[]; titled: boolean }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   if (songs.length === 0) {
     return null;
   }
@@ -58,7 +58,7 @@ export function JamPublicShelf({ songs, titled }: { songs: readonly PublicJamSon
           {t("jam.public.shelf.title")}
         </h2>
         <a
-          href={jamSiteHomeUrl()}
+          href={jamSiteHomeUrl(window.location, locale)}
           target="_blank"
           rel="noreferrer"
           data-jam-public-all=""

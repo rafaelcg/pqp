@@ -227,9 +227,12 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
         </p>
         </div>
       </div>
-      <p className="mt-4 text-balance text-[15px] font-semibold leading-6 text-text" data-jam-tagline="">
-        {jt("song.tagline")}
-      </p>
+      {/* "Everyone records a part on top of the others" is an invitation; on a song that takes no part the line under the stage says it is complete, and the two together contradicted each other */}
+      {takes && (
+        <p className="mt-4 text-balance text-[15px] font-semibold leading-6 text-text" data-jam-tagline="">
+          {jt("song.tagline")}
+        </p>
+      )}
 
       {/* The bar (play, share, record) comes first and the tall stage after it: with the stage first the
           play button sat below the first screen and the record button was cut off (round 2, m6). */}

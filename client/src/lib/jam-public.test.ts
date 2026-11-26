@@ -22,9 +22,12 @@ describe("public jam addresses", () => {
     const hosted = { protocol: "https:", hostname: "pqp.gg", host: "pqp.gg" };
     const local = { protocol: "http:", hostname: "localhost", host: "localhost:5173" };
     expect(publicJamViewUrl(ID, hosted)).toBe(`https://jam.pqp.gg/m/${ID}`);
-    expect(jamSiteHomeUrl(hosted)).toBe("https://jam.pqp.gg/");
+    expect(jamSiteHomeUrl(hosted)).toBe("https://jam.pqp.gg/?signed=1");
+    expect(jamSiteHomeUrl(hosted, "pt-BR")).toBe("https://jam.pqp.gg/?signed=1&lang=pt-BR");
     expect(publicJamViewUrl(ID, local)).toBe(`http://localhost:5173/jam/m/${ID}`);
-    expect(jamSiteHomeUrl(local)).toBe("http://localhost:5173/jam");
+    expect(jamSiteHomeUrl(local)).toBe("http://localhost:5173/jam?signed=1");
+    // same origin: the saved choice is shared, so no `lang`
+    expect(jamSiteHomeUrl(local, "es")).toBe("http://localhost:5173/jam?signed=1");
   });
 });
 

@@ -353,6 +353,49 @@ function Empty({ tab, need }: { tab: JamTab; need: Instrument | null }) {
   );
 }
 
+/** The tab row's own height (a 44 px button and 4 px under it), as quiet bars. */
+function TabsSkeleton() {
+  return (
+    <div className="flex h-12 items-start gap-3">
+      <Skeleton className="mt-1.5 h-8 w-20 rounded-full" />
+      <Skeleton className="mt-1.5 h-8 w-16 rounded-full" />
+      <Skeleton className="mt-1.5 h-8 w-24 rounded-full" />
+    </div>
+  );
+}
+
+/**
+ * The home while the site asks the API whether it is on (`site.tsx`): the same
+ * frame the home draws while ITS data loads (tagline, the how-it-works strip, a
+ * hero skeleton, the tab row, eight card skeletons), so the answer swaps content
+ * in place instead of replacing a short placeholder with a tall page. The short
+ * placeholder is what moved the footer a whole screen on a phone (CLS about 0.2
+ * measured on a throttled phone, round 2).
+ */
+export function HomeBooting() {
+  return (
+    <div className={CONTAINER} aria-hidden="true" data-jam-booting="">
+      <div className="text-balance pt-6 text-[17px] font-semibold leading-6 text-text-secondary sm:text-lg lg:pt-8">{jt("home.tagline")}</div>
+      <div className="flex flex-col">
+        <div className="order-2 lg:order-1">
+          <Hero song={null} status="loading" />
+        </div>
+        <HowItWorks className="order-1 mt-5 lg:order-2 lg:mt-10" />
+      </div>
+      <div className="mt-10 sm:mt-14">
+        <TabsSkeleton />
+      </div>
+      <div className="mt-8">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-8 md:grid-cols-3 lg:grid-cols-4 lg:gap-x-6">
+          {Array.from({ length: 8 }, (_, index) => (
+            <CardSkeleton key={index} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function HomePage() {
   const [tab, setTab] = useState<JamTab>("top");
   const [need, setNeed] = useState<Instrument | null>(null);

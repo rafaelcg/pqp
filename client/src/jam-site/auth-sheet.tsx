@@ -7,8 +7,10 @@ import {
   type JamIntent,
 } from "@/lib/jam-intent";
 import { jamAttribution } from "./attribution";
+import { go } from "./go";
 import { withLanguage } from "./language";
 import { mainOrigin } from "./router";
+import { currentSignedIn } from "./session";
 import { button, Sheet } from "./ui";
 
 /**
@@ -69,11 +71,28 @@ function intentFor(request: Ask): JamIntent {
   };
 }
 
+/** Continue to the app with the intention carried (the sheet's button, and a signed-in visitor's every action). */
+function continueToApp(request: Ask): void {
+  const intent = intentFor(request);
+  try {
+    stashJamIntent(window.localStorage, intent);
+  } catch {
+    // The URL carries it anyway.
+  }
+  go(withLanguage(jamIntentHref(intent, mainOrigin(), jamAttribution())));
+}
+
 export function AskProvider({ children }: { children: ReactNode }) {
   const [request, setRequest] = useState<Ask | null>(null);
   const [open, setOpen] = useState(false);
   const [nonce, setNonce] = useState(0);
   const ask = useCallback((next: Ask) => {
+    // The app says this browser is signed in (`session.ts`): there is nothing to
+    // ask. Straight on, and the app does what was asked with the real session.
+    if (currentSignedIn()) {
+      continueToApp(next);
+      return;
+    }
     setRequest(next);
     setOpen(true);
     setNonce((count) => count + 1);
@@ -81,15 +100,8 @@ export function AskProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({ ask }), [ask]);
   const close = useCallback(() => setOpen(false), []);
 
-  const go = () => {
-    if (!request) return;
-    const intent = intentFor(request);
-    try {
-      stashJamIntent(window.localStorage, intent);
-    } catch {
-      // The URL carries it anyway.
-    }
-    window.location.assign(withLanguage(jamIntentHref(intent, mainOrigin(), jamAttribution())));
+  const goOn = () => {
+    if (request) continueToApp(request);
   };
 
   return (
@@ -118,7 +130,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
               </p>
             )}
             <div className="mt-6 flex flex-col gap-2 sm:flex-row-reverse">
-              <button type="button" onClick={go} data-jam-ask-go="" className={button("primary", "lg", "w-full sm:w-auto")}>
+              <button type="button" onClick={goOn} data-jam-ask-go="" className={button("primary", "lg", "w-full sm:w-auto")}>
                 {jt(`ask.${request.kind}.cta` as Parameters<typeof jt>[0])}
               </button>
               <button type="button" onClick={close} className={button("ghost", "lg", "w-full sm:w-auto")}>

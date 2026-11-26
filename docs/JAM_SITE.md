@@ -221,12 +221,79 @@ one), `act: "like"` likes once before the view paints, `act: "report"` opens the
 report dialog for the song or the one part, `new` opens the start sheet and the
 studio, and the take creates a standalone public jam. The intent is dropped after
 it is acted on, and `JAM_INTENT_PARAMS` are stripped from the address. The
-public page never knows it is signed in (it loads no auth): a returning
-signed-in visitor sees the sheet and continues to `/app`, where the intent is
-acted on at once. `jamReturnPath` and the site's `?from=app` notice are no
+public page loads no auth, but it is told whether the browser is signed in (next
+section): a signed-in visitor never meets the sheet, and every action above goes
+straight to `/app`, where the intent is acted on at once. `jamReturnPath` and the site's `?from=app` notice are no
 longer used by the app and are kept for an older build still in a tab.
 `docs/JAM_PUBLIC.md` section "In the app" says what the view is made of.
 
+
+## Does the site know who is signed in?
+
+**Short answer: it is told, it does not look.** The site loads no Clerk (decision
+kept: about 100 kB, no auth SDK, nothing to refuse a signed-out reader), so it
+cannot read a session. The app, which can, leaves a **hint** the site reads
+(`lib/jam-signed-in.ts`, `jam-site/session.ts`). User test round 2 (N4) found a
+person who had just signed up, and a member who followed "Ver todas no site",
+both asked for an account again by a header that said "Entrar".
+
+What the hint is: a boolean and the first word of the display name (at most 20
+characters, control characters removed), to draw a header. **It grants nothing.**
+No token, id, email or avatar address (those carry an id). Every call the site
+hands over still lands in the app, which authorises it with the real session; a
+wrong hint (a copied cookie, a sign-out in another browser) costs one click that
+ends on the app's own sign-in. Three carriers, read in this order:
+
+1. **A cookie `pqp_jam_in`**, scoped to `.pqp.gg` on the hosted instance (the one
+   thing `jam.pqp.gg` and `pqp.gg` share: their `localStorage` is not), `Secure`,
+   `SameSite=Lax`, thirty days, not `HttpOnly` (script reads it, nothing in it is
+   secret). Host-only everywhere else.
+2. **The app's `localStorage` copy** (`pqp:jam-signed-in`), which is the site's own
+   on every same-origin mount (`/jam`, a Pages preview, localhost).
+3. **`?signed=1` on a link from the app** (`jamSiteHomeUrl`: "Ver todas no site",
+   closing a song). The site keeps it for the visit in `sessionStorage` and takes it
+   off the address; it covers a browser that refuses the cookie. When the shared
+   cookie was there on arrival and is gone later, the session ended on the other
+   origin (its sign-out cannot reach this origin's `sessionStorage`), so the copy is
+   dropped (`readVisitHint`). The same links
+   carry `lang=<locale>` on the hosted instance so the site does not flip to the
+   browser's language.
+
+The app writes the hint whenever an account is ready (`App.tsx`, every boot renews
+it) and removes it on sign-out (`SignOutButton`, `signInAgain`) and whenever Clerk
+answers "nobody" (`ClerkAppGate`). Sent to every request to `pqp.gg` hosts, about
+25 bytes, and not on cross-origin API fetches (no credentials).
+
+What a signed-in visitor sees: their first name and an initial where "Entrar" was
+(a glyph when only the link's marker arrived), linking to `/app`, at every width;
+every record, like, report and start goes straight to the app, no sheet. A
+signed-out visitor sees "Entrar" at every width (it was hidden below 640 px).
+
+**Could the site read the Clerk session itself?** Clerk's documentation says that
+with a root domain set on a production instance "Clerk's authentication will work
+across all subdomains" and "user sessions will also be shared across the
+subdomains" (clerk.com/docs, "Deploy to production"), and that the Frontend API
+accepts cross-origin requests from any subdomain of the root domain unless a
+subdomain allowlist is configured. So in principle yes: load `@clerk/clerk-js` on
+`jam.pqp.gg` with the production publishable key. **Not verified**: nothing in this
+repository or a local run can show it for `jam.pqp.gg` (the dev bypass is not
+Clerk), and it costs the auth SDK on a public page. What it would need outside the
+repo, none of it done: that the production instance's root domain is `pqp.gg` (the
+Frontend API is `clerk.pqp.gg`, which suggests it is), `jam.pqp.gg` allowed if a
+subdomain allowlist is set in the Clerk dashboard, and `https://jam.pqp.gg` in
+`CLERK_AUTHORIZED_PARTIES` only if the site ever called an authenticated route
+(it does not). The cookie hint needs none of those.
+
+**While the app loads for a visitor from the site** (`JamHoldingScreen`): Jam's
+surface and word mark, the song's cover and title once the public route answers,
+"Abrindo a jam…". It stands in for the chat skeleton ("Carregando comunidades…")
+while the bootstrap runs and for Clerk's "Entrando…", and sits behind the age
+gate and the name step in a quiet form. **"Voltar pra jam" strip**: it lives on
+the app's home (it never shows over a public jam, which covers the app), and
+closing the song leaves the app for the site, so a visitor on the normal path had
+no reason to be on the app home: no persona saw it. It is reachable now from the
+site's account link, which lands on `/app` with the handover still alive in the
+same tab.
 
 ## Where visitors came from (attribution)
 

@@ -1344,6 +1344,8 @@
   "jam.handover.waiting": "Tu jam te está esperando",
   "jam.handover.back": "Volver a la jam",
   "jam.handover.dismiss": "Ahora no",
+  "jam.handover.opening": "Abriendo la jam…",
+  "jam.handover.openingNew": "Preparando el estudio…",
   "onboarding.you.later": "Luego lo arreglo",
   "onboarding.room.eyebrow": "Tu sala",
   "onboarding.room.title": "¿Dónde se va a juntar tu gente?",

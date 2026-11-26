@@ -7,6 +7,7 @@ import "../index.css";
 import "./jam-site.css";
 import { rememberArrival } from "./attribution";
 import { rememberLanguageArrival } from "./language";
+import { rememberSignedArrival } from "./session";
 import { JamSite } from "./site";
 
 /**
@@ -23,6 +24,8 @@ document.documentElement.dataset.jamSite = "";
 // the site moves with pushState and the sign-up buttons are pages away.
 rememberArrival();
 rememberLanguageArrival();
+// The app hands a signed-in person over with `?signed=1`: written down for the visit, off the address.
+rememberSignedArrival();
 
 const locale = detectLocale();
 void loadJamLocale(locale)

@@ -492,6 +492,7 @@ import {
   useJamArrival,
 } from "@/lib/jam-handover";
 import { parsePublicJamPath } from "@/lib/jam-public-links";
+import { forgetSignedIn, rememberSignedIn } from "@/lib/jam-signed-in";
 import {
   listenToPublicJam,
   openPublicJam,
@@ -506,6 +507,7 @@ import {
 } from "@/lib/jam-announcement";
 import { JamArrivalCard } from "@/components/onboarding/jam-arrival-card";
 import { JamHandoverStrip } from "@/components/onboarding/jam-handover-strip";
+import { JamHoldingScreen } from "@/components/onboarding/jam-holding-screen";
 import { JamPublicHost } from "@/components/jam/jam-public-host";
 import {
   addIntentFromSearch,
@@ -1009,6 +1011,7 @@ function ClerkAppGate() {
   const { isLoaded, isSignedIn } = useAuth();
   const { signIn, setActive } = useSignIn();
   const location = useLocation();
+  const jamArrivalAtGate = useJamArrival();
   stashConnectionCallbackFromWindow(location.pathname, location.search);
   /**
    * Come back to the URL they were trying to open, not to `/app`.
@@ -1211,8 +1214,22 @@ function ClerkAppGate() {
     setMfaCode("");
   }, [desktop]);
 
+  // Clerk answered and there is nobody: whatever the public jam site was told
+  // about this browser (`lib/jam-signed-in.ts`) is stale now.
+  const clerkSaysSignedOut = isLoaded && !isSignedIn;
+  useEffect(() => {
+    if (clerkSaysSignedOut) {
+      forgetSignedIn();
+    }
+  }, [clerkSaysSignedOut]);
+
   if (!isLoaded) {
-    return <AppLoadingShell label={t("app.loading.signingIn")} />;
+    // Somebody who came from the Jam site is waiting for a song, not for chat.
+    return jamArrivalAtGate ? (
+      <JamHoldingScreen handover={jamArrivalAtGate} />
+    ) : (
+      <AppLoadingShell label={t("app.loading.signingIn")} />
+    );
   }
 
   if (!isSignedIn) {
@@ -1654,6 +1671,7 @@ function MainAppContent({
         Clerk?: { signOut?: (options?: { redirectUrl?: string }) => Promise<void> };
       }
     ).Clerk;
+    forgetSignedIn();
     if (!isDevAuthBypassEnabled() && clerk?.signOut) {
       const home = desktopSignedOutPath();
       void clerk.signOut({ redirectUrl: home }).catch(() => {
@@ -2427,6 +2445,15 @@ function MainAppContent({
     defaultLocalSettings,
   );
   const [bootstrapReady, setBootstrapReady] = useState(false);
+  // The public jam site reads this to know the visitor is signed in
+  // (`lib/jam-signed-in.ts`): a boolean and a first name, written whenever an
+  // account is ready, and taken away when the session ends.
+  const hintedName = user?.displayName ?? null;
+  useEffect(() => {
+    if (bootstrapReady && user) {
+      rememberSignedIn(hintedName);
+    }
+  }, [bootstrapReady, user, hintedName]);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   /**
@@ -11114,6 +11141,10 @@ function MainAppContent({
   // stays put until the wizard takes it over.
   if (ageGate || (gateHandoff && !(bootstrapReady && user))) {
     return (
+      <>
+      {firstRunPath === "jam" && jamArrival ? (
+        <JamHoldingScreen handover={jamArrival} behindSheet />
+      ) : null}
       <AgeGateDialog
         status={ageGate ?? "pending"}
         stepsTotal={screensFor(firstRunPath).length}
@@ -11138,11 +11169,17 @@ function MainAppContent({
           setBootstrapAttempt((n) => n + 1);
         }}
       />
+      </>
     );
   }
 
   if (!bootstrapReady) {
-    return <AppLoadingShell label={t("app.loading.servers")} />;
+    // Jam's own holding state for a visitor from the Jam site, not a chat skeleton.
+    return jamArrival ? (
+      <JamHoldingScreen handover={jamArrival} />
+    ) : (
+      <AppLoadingShell label={t("app.loading.servers")} />
+    );
   }
 
   /**
@@ -11161,6 +11198,10 @@ function MainAppContent({
         ? servers.find((server) => server.id === roomJoin.serverId)
         : undefined;
     return (
+      <>
+      {firstRunPath === "jam" && jamArrival ? (
+        <JamHoldingScreen handover={jamArrival} behindSheet />
+      ) : null}
       <OnboardingFlow
         user={user}
         path={firstRunPath}
@@ -11217,6 +11258,7 @@ function MainAppContent({
           setGateHandoff(false);
         }}
       />
+      </>
     );
   }
 

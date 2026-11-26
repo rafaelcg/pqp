@@ -1,4 +1,4 @@
-import { MoonIcon as Moon, SunIcon as Sun, XIcon } from "./icons";
+import { MoonIcon as Moon, SunIcon as Sun, UserIcon, XIcon } from "./icons";
 import { useEffect, useState, type ReactNode } from "react";
 import { jamLanguage, jt } from "@/lib/i18n/jam-site";
 import { useAsk } from "./auth-sheet";
@@ -6,8 +6,9 @@ import { mainHref } from "./attribution";
 import { chooseLanguage, JAM_LANGUAGES } from "./language";
 import { Link, mainOrigin, useJamRoute } from "./router";
 import { jamPath } from "./route";
+import { appHref, useSignedIn } from "./session";
 import { setBrightness, useBrightness } from "./theme";
-import { button, buttonClass } from "./ui";
+import { buttonClass } from "./ui";
 import { cn } from "./util";
 
 /** The frame of every page: a quiet header, the page, a quiet footer. */
@@ -31,10 +32,45 @@ export function ThemeToggle() {
       onClick={() => setBrightness(next)}
       aria-label={jt("theme.toggle")}
       data-jam-theme-toggle=""
-      className={cn(buttonClass.base, buttonClass.icon)}
+      className={cn(buttonClass.base, buttonClass.icon, "max-[359px]:w-9")}
     >
       {brightness === "dark" ? <Sun className="h-[18px] w-[18px]" aria-hidden /> : <Moon className="h-[18px] w-[18px]" aria-hidden />}
     </button>
+  );
+}
+
+/**
+ * Where "Entrar" was. A visitor the app says is signed in (`session.ts`) gets
+ * their first name and an initial, linking to the app; everybody else gets
+ * "Entrar". Both are drawn at every width: at 390 px "Entrar" used to be hidden
+ * altogether (finding m10), which left a signed-out phone with no way to sign in.
+ */
+function AccountLink() {
+  const signedIn = useSignedIn();
+  if (signedIn) {
+    const initial = signedIn.name ? (Array.from(signedIn.name)[0] ?? "").toLocaleUpperCase() : "";
+    return (
+      <a
+        href={appHref("/app")}
+        aria-label={jt("nav.account")}
+        title={signedIn.name ? `${signedIn.name} · ${jt("nav.account")}` : jt("nav.account")}
+        data-jam-account=""
+        className={cn(buttonClass.base, buttonClass.ghost, "h-11 gap-2 px-1 text-sm sm:pl-1.5 sm:pr-4")}
+      >
+        <span
+          aria-hidden="true"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-soft text-sm font-extrabold text-on-accent-soft"
+        >
+          {initial || <UserIcon className="h-4 w-4" />}
+        </span>
+        {signedIn.name && <span className="max-w-[9rem] truncate max-sm:hidden">{signedIn.name}</span>}
+      </a>
+    );
+  }
+  return (
+    <a href={mainHref("/app", mainOrigin())} data-jam-signin="" className={cn(buttonClass.base, buttonClass.ghost, "h-11 px-2 text-sm max-[359px]:px-1.5 min-[390px]:px-2.5 min-[430px]:px-[18px]")}>
+      {jt("nav.signIn")}
+    </a>
   );
 }
 
@@ -44,13 +80,13 @@ export function Header() {
   const home = jamPath(mount, { kind: "home" });
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-surface-0">
-      <div className={cn(CONTAINER, "flex h-16 items-center gap-2 min-[390px]:gap-3")}>
+      <div className={cn(CONTAINER, "flex h-16 items-center gap-1 min-[390px]:gap-2 min-[430px]:gap-3")}>
         <Link
           href={home}
           aria-label={jt("nav.home")}
           className="inline-flex h-11 items-center rounded-[var(--radius-control)] outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
-          <Wordmark />
+          <Wordmark className="max-[389px]:text-[19px]" />
         </Link>
         <nav aria-label={jt("nav.label")} className="ml-3 hidden sm:block">
           <Link
@@ -65,14 +101,12 @@ export function Header() {
           </Link>
         </nav>
         <span className="flex-1" />
-        <a href={mainHref("/app", mainOrigin())} className={cn(button("ghost"), "max-sm:hidden")}>
-          {jt("nav.signIn")}
-        </a>
-        {/* below 360 px the long label ("Começar uma jam") does not fit beside the wordmark and the toggle: the short one
-            is drawn and the long one stays the name, which still contains it */}
-        <button type="button" data-jam-start="" aria-label={jt("nav.start")} onClick={() => ask({ kind: "start" })} className={button("primary")}>
-          <span className="max-[359px]:hidden">{jt("nav.start")}</span>
-          <span className="min-[360px]:hidden" aria-hidden="true">
+        <AccountLink />
+        {/* below 480 px the long label ("Começar uma jam") does not fit beside the wordmark, "Entrar" and the toggle (390
+            px is a common phone): the short one is drawn and the long one stays the name, which still contains it */}
+        <button type="button" data-jam-start="" aria-label={jt("nav.start")} onClick={() => ask({ kind: "start" })} className={cn(buttonClass.base, buttonClass.primary, "h-11 px-3 text-sm max-[359px]:px-2.5 min-[390px]:px-4 min-[430px]:px-[18px]")}>
+          <span className="max-[479px]:hidden">{jt("nav.start")}</span>
+          <span className="min-[480px]:hidden" aria-hidden="true">
             {jt("nav.startShort")}
           </span>
         </button>
