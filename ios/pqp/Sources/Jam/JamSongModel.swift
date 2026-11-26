@@ -451,10 +451,21 @@ final class JamSongModel {
     /// nothing restarts. Throws what the server said.
     func saveAdjustment(_ track: JamTrack, patch: JamTrackPatchBody) async throws {
         guard let session else { throw APIError.transport("No session") }
+        let before = tracks.first { $0.id == track.id }.map(JamStoredTake.init)
         let answer = try await session.api.updateJamTrack(id: track.id, patch: patch)
-        var next = state
-        next.apply(.trackUpdated(channelId: channel.id, song: answer.song, track: answer.track), auditioned: Set(auditioning.values))
-        state = next
+        // A track has no version number, so "is the answer older than the screen"
+        // is read from the screen: if a frame moved this take WHILE the request was
+        // out, and what it moved it to is not this answer's own numbers, a later
+        // change from another session got here first. The answer is then not laid
+        // over it (the frame is what the song holds); the preview is dropped and
+        // the engine follows the stored take.
+        let now = tracks.first { $0.id == track.id }.map(JamStoredTake.init)
+        let superseded = now != nil && now != before && now != JamStoredTake(answer.track)
+        if !superseded {
+            var next = state
+            next.apply(.trackUpdated(channelId: channel.id, song: answer.song, track: answer.track), auditioned: Set(auditioning.values))
+            state = next
+        }
         clearPreview(trackId: track.id)
         await syncEngine()
     }

@@ -550,6 +550,24 @@ final class JamAdjustModelTests: XCTestCase {
         song.stop()
     }
 
+    func testALateAnswerDoesNotGoOverANewerChangeFromAnotherSession() async throws {
+        let log = LockedBox<[SentRequest]>([])
+        let answer = "{\"track\":\(trackJSON(offset: 10)),\"song\":\(songJSON())}"
+        JamStubURLProtocol.handler = route(log: log, writeDelay: 0.4) { _ in (200, answer) }
+        let session = makeEditSession()
+        keep = session
+        let song = try await startedModel(session: session)
+        let adjust = JamAdjustModel(song: song, track: try XCTUnwrap(song.tracks.first))
+        adjust.nudge(by: 10)
+        let saving = Task { await adjust.save() }
+        try await Task.sleep(for: .milliseconds(100))
+        // Another session moved the take after this request left, and its frame arrived first.
+        song.apply(.jam(try XCTUnwrap(JamFrame.parse(Data("{\"type\":\"jam-track-updated\",\"channelId\":\"chan-1\",\"song\":\(songJSON()),\"track\":\(trackJSON(offset: 99))}".utf8)))))
+        _ = await saving.value
+        XCTAssertEqual(song.tracks.first?.offsetMs, 99, "the older answer (offset 10) is not laid over it")
+        song.stop()
+    }
+
     func testARefusedSaveKeepsTheEditsAndSaysWhy() async throws {
         let log = LockedBox<[SentRequest]>([])
         JamStubURLProtocol.handler = route(log: log) { _ in (403, "{\"error\":\"You cannot edit somebody else's track\"}") }
