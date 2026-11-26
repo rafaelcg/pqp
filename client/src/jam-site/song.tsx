@@ -5,8 +5,8 @@ import { jt } from "@/lib/i18n/jam-site";
 import { detectLocale } from "@/lib/locale";
 import type { JamInstrumentName } from "@/lib/jam-intent";
 import { noteJamPlay } from "./api";
-import { jamAttribution, mainHref } from "./attribution";
-import { jamShareHref } from "./share-url";
+import { mainHref } from "./attribution";
+import { ShareMenu, shareFromButton } from "./share-menu";
 import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
 import { SongCover } from "./art";
@@ -21,7 +21,7 @@ import { SongStage } from "./song-stage";
 import { SongTransport } from "./song-transport";
 import { button, Skeleton } from "./ui";
 import { useJamSong } from "./use-jam-data";
-import { ago, compactCount, clock, cn, copyText, initials, listOf, instrumentName, personLabel } from "./util";
+import { ago, compactCount, clock, cn, initials, listOf, instrumentName, personLabel } from "./util";
 
 /** The song page: the mosaic, one play button, the lanes, where it was born. */
 
@@ -113,10 +113,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
   const locale = detectLocale();
   const ask = useAsk();
   const [spot, setSpot] = useState<number | null>(null);
-  const [shared, setShared] = useState<string | null>(null);
-  // One hide timer at a time: an earlier toast's timer must not cut a newer one short.
-  const sharedTimer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(sharedTimer.current), []);
+  const [shareOpen, setShareOpen] = useState(false);
 
   const lastSpot = useRef<number | null>(null);
   const select = useCallback(
@@ -158,26 +155,20 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
     [ask, song.id, need],
   );
 
+  const shareSong = useMemo(
+    () => ({ id: song.id, title: song.title, joinMode: song.joinMode, needs: song.needs }),
+    [song.id, song.title, song.joinMode, song.needs],
+  );
   const share = async () => {
-    // ref=share unless the page was opened with a ref already (`share-url.ts`).
-    const url = jamShareHref(jamPath(mount, { kind: "song", songId: song.id }), window.location.origin, jamAttribution());
-    const who = song.startedBy.handle ? `@${song.startedBy.handle}` : personLabel(song.startedBy);
-    try {
-      if (typeof navigator.share === "function") {
-        await navigator.share({ title: song.title, text: jt("share.text", { title: song.title, who }), url });
-        return;
-      }
-    } catch (error) {
-      // The sheet was dismissed: nothing to say. Anything else falls to the copy.
-      if (error instanceof DOMException && error.name === "AbortError") return;
+    if (shareOpen) {
+      setShareOpen(false);
+      return;
     }
-    // "Link copied" only when the clipboard took it. When it did not (no
-    // permission, an insecure page), the toast is the link itself, said as
-    // what it is, and stays long enough to read and select.
-    const copied = await copyText(url);
-    setShared(copied ? jt("share.copied") : jt("share.manual", { url }));
-    window.clearTimeout(sharedTimer.current);
-    sharedTimer.current = window.setTimeout(() => setShared(null), copied ? 3500 : 9000);
+    // A phone: the system's share sheet, with the message prepared from what the song is missing.
+    // Anywhere else (or when the sheet cannot open), a small card with the link, copy, WhatsApp, X and Telegram.
+    if ((await shareFromButton(shareSong, locale)) === "open") {
+      setShareOpen(true);
+    }
   };
 
   useHead({
@@ -243,7 +234,10 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
         </p>
       )}
 
-      <div className="mt-6" data-jam-stagewrap="">
+      {/* The bar (play, share, record) comes first and the tall stage after it: with the stage first the
+          play button sat below the first screen and the record button was cut off (round 2, m6). */}
+      <div className="mt-6 flex flex-col" data-jam-stagewrap="">
+        <div className="order-2">
         <SongStage
           tracks={tracks}
           need={need}
@@ -253,6 +247,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
           onRecord={(instrument) => record(instrument)}
           label={jt("stage.label")}
         />
+        </div>
         <SongTransport
           player={player}
           likes={song.likes}
@@ -260,11 +255,12 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
           onLike={() => ask({ kind: "like", songId: song.id })}
           onShare={() => void share()}
           onRecord={takes ? () => record(need) : null}
-          shared={shared}
+          className="order-1 mb-5"
+          shareSlot={shareOpen ? <ShareMenu song={shareSong} locale={locale} onClose={() => setShareOpen(false)} /> : null}
         />
         {!takes && (
           <div
-            className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-[var(--radius-panel)] border border-border bg-surface-1 p-3 pl-4"
+            className="order-4 mt-4 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-[var(--radius-panel)] border border-border bg-surface-1 p-3 pl-4"
             data-jam-closed=""
           >
             <p className="min-w-0 flex-1 basis-48 text-[15px] font-semibold leading-5">{jt("song.closed.line")}</p>

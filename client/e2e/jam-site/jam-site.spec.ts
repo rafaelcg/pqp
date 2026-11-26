@@ -941,6 +941,10 @@ test.describe("shared links carry ref=share", () => {
     await withShare(page, "copy");
     await page.goto(`/jam/m/${SONG_A}`);
     await page.locator("[data-jam-share]").click();
+    // No share sheet here: a small card with the link, copy, and the three places to send it to.
+    await expect(page.locator("[data-jam-share-menu]")).toBeVisible();
+    await expect(page.locator("[data-jam-share-network]")).toHaveCount(3);
+    await page.locator("[data-jam-share-copy]").click();
     await expect(page.getByText("Link copiado").first()).toBeVisible();
     const [copied] = await read<string>(page, "__copied");
     expect(new URL(copied!).searchParams.get("ref")).toBe("share");
@@ -952,6 +956,7 @@ test.describe("shared links carry ref=share", () => {
     await withShare(page, "copy");
     await page.goto(`/jam/m/${SONG_A}?ref=clip-ana`);
     await page.locator("[data-jam-share]").click();
+    await page.locator("[data-jam-share-copy]").click();
     await expect.poll(async () => (await read<string>(page, "__copied")).length).toBe(1);
     const [copied] = await read<string>(page, "__copied");
     expect(new URL(copied!).searchParams.get("ref")).toBe("clip-ana");
@@ -1046,6 +1051,19 @@ test.describe("on a phone", () => {
       await expect(line).toBeVisible();
       const box = await line.boundingBox();
       expect(box!.y + box!.height, path).toBeLessThan(844);
+    }
+  });
+
+  test("play, share and record are all on the first screen of a song, on a short phone too", async ({ page }) => {
+    await mockApi(page);
+    for (const height of [844, 667]) {
+      await page.setViewportSize({ width: 390, height });
+      await page.goto(`/jam/m/${SONG_A}`);
+      for (const selector of ["[data-jam-toggle]", "[data-jam-share]", "[data-jam-record]"]) {
+        const box = await page.locator(selector).boundingBox();
+        expect(box, `${selector} at ${height}`).not.toBeNull();
+        expect(box!.y + box!.height, `${selector} at ${height}`).toBeLessThanOrEqual(height);
+      }
     }
   });
 

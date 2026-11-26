@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api";
 import { jamPublicErrorKind, publicJamListPath } from "./jam-public-api";
-import { jamSiteHomeUrl, parsePublicJamPath, publicJamAppPath, publicJamShareUrl } from "./jam-public-links";
+import { jamSiteHomeUrl, parsePublicJamPath, publicJamAppPath, publicJamViewUrl } from "./jam-public-links";
 import { openPublicJam, openPublicJamById, peekPublicJamRequest, publicJamRequestPath, takePublicJamIntent } from "./jam-public-nav";
 import { isPublicJamKey, publicJamKey } from "./jam-store";
 
@@ -21,10 +21,10 @@ describe("public jam addresses", () => {
   it("shares jam.pqp.gg on the hosted instance and /jam anywhere else", () => {
     const hosted = { protocol: "https:", hostname: "pqp.gg", host: "pqp.gg" };
     const local = { protocol: "http:", hostname: "localhost", host: "localhost:5173" };
-    expect(publicJamShareUrl(ID, hosted)).toBe(`https://jam.pqp.gg/m/${ID}`);
+    expect(publicJamViewUrl(ID, hosted)).toBe(`https://jam.pqp.gg/m/${ID}`);
     expect(jamSiteHomeUrl(hosted)).toBe("https://jam.pqp.gg/?signed=1");
     expect(jamSiteHomeUrl(hosted, "pt-BR")).toBe("https://jam.pqp.gg/?signed=1&lang=pt-BR");
-    expect(publicJamShareUrl(ID, local)).toBe(`http://localhost:5173/jam/m/${ID}`);
+    expect(publicJamViewUrl(ID, local)).toBe(`http://localhost:5173/jam/m/${ID}`);
     expect(jamSiteHomeUrl(local)).toBe("http://localhost:5173/jam?signed=1");
     // same origin: the saved choice is shared, so no `lang`
     expect(jamSiteHomeUrl(local, "es")).toBe("http://localhost:5173/jam?signed=1");

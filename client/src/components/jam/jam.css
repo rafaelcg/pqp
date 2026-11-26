@@ -193,6 +193,22 @@
   animation: jam-confirm-pop 480ms var(--ease-emphasized) backwards;
 }
 
+/* "Chama a galera": the card settles in after the check has popped. Opacity and a short rise, nothing else. */
+@keyframes jam-invite-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.jam-invite-in {
+  animation: jam-invite-in 360ms var(--ease-emphasized) 220ms backwards;
+}
+
 .jam-howto-lane {
   animation: jam-howto-lane 520ms var(--ease-emphasized) backwards;
   animation-delay: calc(var(--jam-l, 0) * 220ms + 150ms);
@@ -377,6 +393,7 @@
   .jam-count-beat,
   .jam-rec-dot,
   .jam-confirm-pop,
+  .jam-invite-in,
   .jam-howto-lane,
   .jam-eq,
   .jam-wave-live,
