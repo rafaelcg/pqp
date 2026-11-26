@@ -189,7 +189,9 @@ export function readVisitHint(
   try {
     const raw = storage.getItem(JAM_SIGNED_IN_KEY);
     const parsed = raw ? (JSON.parse(raw) as { cookie?: unknown }) : null;
-    if (parsed?.cookie === true && !cookiePresent) {
+    // Only an explicit "there was no cookie at arrival" keeps the copy alive without one; a record that
+    // does not say (any written before this field existed) is treated as if there had been.
+    if (parsed?.cookie !== false && !cookiePresent) {
       return null;
     }
   } catch {

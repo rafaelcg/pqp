@@ -208,6 +208,11 @@ describe("in the browser", () => {
     expect(readSignedIn()).toEqual({ name: null });
   });
 
+  it("does not trust a visit record that never said whether the cookie was there", () => {
+    writeStoredHint(sessionStorage, "Ana");
+    expect(readSignedIn()).toBeNull();
+  });
+
   it("forgetting clears the visit's copy too", () => {
     window.history.replaceState(null, "", "/jam?signed=1");
     adoptSignedParam();
