@@ -190,6 +190,24 @@ describe("in the browser", () => {
     expect(window.location.search).toBe("?ref=x");
   });
 
+  it("drops the visit's copy when the cookie that was there at arrival is gone (a sign-out on the other origin)", () => {
+    // the app wrote the shared cookie, then handed the visitor over with the marker
+    document.cookie = `${JAM_SIGNED_IN_COOKIE}=1.Ana; Path=/`;
+    window.history.replaceState(null, "", "/jam?signed=1");
+    adoptSignedParam();
+    expect(readSignedIn()).toEqual({ name: "Ana" });
+    // sessionStorage is this origin's own: the app's sign-out cannot reach it, but it removes the cookie
+    clearCookie();
+    expect(readSignedIn()).toBeNull();
+  });
+
+  it("keeps the visit's copy when there was no cookie at arrival (a browser that refuses it)", () => {
+    window.history.replaceState(null, "", "/jam?signed=1");
+    adoptSignedParam();
+    expect(readSignedIn()).toEqual({ name: null });
+    expect(readSignedIn()).toEqual({ name: null });
+  });
+
   it("forgetting clears the visit's copy too", () => {
     window.history.replaceState(null, "", "/jam?signed=1");
     adoptSignedParam();

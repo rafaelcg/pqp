@@ -152,6 +152,52 @@ export function writeStoredHint(storage: WritableStorage | null, name: string | 
   }
 }
 
+/**
+ * The copy a visit keeps when the app's marker (`?signed=1`) arrives. It also
+ * notes whether the shared cookie was there at that moment: if it was, the cookie
+ * works in this browser, and its later absence means the session ended on the
+ * other origin (whose sign-out cannot reach this origin's `sessionStorage`), so
+ * this copy must not outlive it. If it was not, cookies do not work here and the
+ * copy is all the visit has.
+ */
+export function writeVisitHint(
+  storage: WritableStorage | null,
+  name: string | null,
+  cookiePresent: boolean,
+  now: number = Date.now(),
+): void {
+  if (!storage) {
+    return;
+  }
+  try {
+    storage.setItem(JAM_SIGNED_IN_KEY, JSON.stringify({ value: encodeHint(name), at: now, cookie: cookiePresent }));
+  } catch {
+    // Storage denied: nothing else to try.
+  }
+}
+
+/** The visit's copy, unless the cookie that was there when it was written is gone now (a sign-out elsewhere). */
+export function readVisitHint(
+  storage: ReadableStorage | null,
+  cookiePresent: boolean,
+  now: number = Date.now(),
+): JamSignedIn | null {
+  const found = readStoredHint(storage, now);
+  if (!found || !storage) {
+    return null;
+  }
+  try {
+    const raw = storage.getItem(JAM_SIGNED_IN_KEY);
+    const parsed = raw ? (JSON.parse(raw) as { cookie?: unknown }) : null;
+    if (parsed?.cookie === true && !cookiePresent) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return found;
+}
+
 export function clearStoredHint(storage: WritableStorage | null): void {
   if (!storage) {
     return;
@@ -242,7 +288,8 @@ export function readSignedIn(): JamSignedIn | null {
   } catch {
     cookie = null;
   }
-  return hintFromCookieHeader(cookie) ?? readStoredHint(local()) ?? readStoredHint(session());
+  const fromCookie = hintFromCookieHeader(cookie);
+  return fromCookie ?? readStoredHint(local()) ?? readVisitHint(session(), false);
 }
 
 /** The site, at boot: the app handed the visitor over with `?signed=1`. Written down for the visit (this tab) only. */
@@ -251,7 +298,13 @@ export function adoptSignedParam(): void {
     return;
   }
   const known = readSignedIn();
-  writeStoredHint(session(), known?.name ?? null);
+  let cookie: string | null = null;
+  try {
+    cookie = document.cookie;
+  } catch {
+    cookie = null;
+  }
+  writeVisitHint(session(), known?.name ?? null, hintFromCookieHeader(cookie) !== null);
   try {
     window.history.replaceState(window.history.state, "", withoutSignedParam(window.location.href));
   } catch {

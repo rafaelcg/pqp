@@ -251,7 +251,10 @@ ends on the app's own sign-in. Three carriers, read in this order:
    on every same-origin mount (`/jam`, a Pages preview, localhost).
 3. **`?signed=1` on a link from the app** (`jamSiteHomeUrl`: "Ver todas no site",
    closing a song). The site keeps it for the visit in `sessionStorage` and takes it
-   off the address; it covers a browser that refuses the cookie. The same links
+   off the address; it covers a browser that refuses the cookie. When the shared
+   cookie was there on arrival and is gone later, the session ended on the other
+   origin (its sign-out cannot reach this origin's `sessionStorage`), so the copy is
+   dropped (`readVisitHint`). The same links
    carry `lang=<locale>` on the hosted instance so the site does not flip to the
    browser's language.
 

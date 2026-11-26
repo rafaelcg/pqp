@@ -674,6 +674,24 @@ test.describe("a visitor the app says is signed in", () => {
     await page.waitForURL(/\/app\?/);
   });
 
+  test("a sign-out elsewhere (the shared cookie goes) ends a visit that arrived with the marker", async ({ page }) => {
+    await mockApi(page);
+    await page.addInitScript(() => {
+      if (!sessionStorage.getItem("__seeded")) {
+        sessionStorage.setItem("__seeded", "1");
+        document.cookie = "pqp_jam_in=1.Ana; Path=/";
+      }
+    });
+    await page.goto("/jam?signed=1");
+    await expect(page.locator("[data-jam-account]")).toBeVisible();
+    await page.evaluate(() => {
+      document.cookie = "pqp_jam_in=; Path=/; Max-Age=0";
+      window.dispatchEvent(new Event("focus"));
+    });
+    await expect(page.locator("[data-jam-signin]")).toBeVisible();
+    await expect(page.locator("[data-jam-account]")).toHaveCount(0);
+  });
+
   test("a stranger with a junk hint is a stranger: Entrar and the sheet", async ({ page }) => {
     await mockApi(page);
     await page.addInitScript(() => {
