@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { JamPublicMeState } from "./jam-public-store";
 
 const api = vi.hoisted(() => ({
   me: vi.fn(),
@@ -8,8 +9,8 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/jam-public-nav", () => ({
-  openPublicJamById: api.openById,
-  openPublicJam: api.openNew,
+  listenToPublicJam: api.openById,
+  startPublicJam: api.openNew,
 }));
 
 vi.mock("@/lib/jam-public-api", () => ({
@@ -21,8 +22,16 @@ vi.mock("@/lib/jam-public-api", () => ({
 }));
 
 const store = await import("./jam-public-store");
+const { FEATURED_WINDOW } = await import("./jam-featured");
 
-const song = (id: string, artist: string | null) => ({ id, artist });
+type Mode = "open" | "wanted" | "closed";
+const song = (id: string, artist: string | null, joinMode: Mode = "open", parts = 1) => ({
+  id,
+  artist,
+  joinMode,
+  parts: Array.from({ length: parts }, () => ({})),
+  needs: [],
+});
 
 beforeEach(() => {
   api.me.mockReset();
@@ -53,30 +62,68 @@ describe("the announce field", () => {
 });
 
 describe("the song a door opens", () => {
-  it("is the first original among the most heard", async () => {
+  it("follows the site's hero rule: an original that still takes a part, over a closed hit", async () => {
     api.list.mockResolvedValue({
-      songs: [song("cover", "Banda Famosa"), song("original", null), song("other", null)],
+      songs: [
+        song("closed-hit", null, "closed"),
+        song("cover", "Banda Famosa", "wanted"),
+        song("wants", null, "wanted"),
+        song("other", null),
+      ],
     });
-    expect(await store.fetchTopPublicJamId()).toBe("original");
-    expect(api.list).toHaveBeenCalledWith({ sort: "top", limit: 10 });
+    expect(await store.fetchFeaturedPublicJam()).toEqual({ id: "wants", takesParts: true });
+    expect(api.list).toHaveBeenCalledWith({ sort: "top", limit: 12 });
   });
 
-  it("falls back to the top song when every one has an artist", async () => {
+  it("reads the same twelve as the site, not ten", () => {
+    expect(FEATURED_WINDOW).toBe(12);
+  });
+
+  it("falls to a closed original, saying it takes no part, when nothing takes one", async () => {
+    api.list.mockResolvedValue({ songs: [song("cover", "X", "closed"), song("closed", null, "closed")] });
+    expect(await store.fetchFeaturedPublicJam()).toEqual({ id: "closed", takesParts: false });
+  });
+
+  it("falls back to the first song when every one has an artist and takes a part", async () => {
     api.list.mockResolvedValue({ songs: [song("a", "X"), song("b", "Y")] });
-    expect(await store.fetchTopPublicJamId()).toBe("a");
+    expect(await store.fetchFeaturedPublicJam()).toEqual({ id: "a", takesParts: true });
+  });
+
+  it("skips a song with no part to hear", async () => {
+    api.list.mockResolvedValue({ songs: [song("bare", null, "open", 0), song("heard", null)] });
+    expect((await store.fetchFeaturedPublicJam())?.id).toBe("heard");
   });
 
   it("is null when there is no public song", async () => {
     api.list.mockResolvedValue({ songs: [] });
-    expect(await store.fetchTopPublicJamId()).toBeNull();
+    expect(await store.fetchFeaturedPublicJam()).toBeNull();
+  });
+});
+
+describe("whether a door offers Gravar minha parte", () => {
+  const me = (patch: Partial<JamPublicMeState> = {}): JamPublicMeState => ({
+    loaded: true,
+    enabled: true,
+    publishing: "open",
+    uploads: true,
+    announce: true,
+    ...patch,
+  });
+  it("needs a song that takes a part and an account that may record", () => {
+    expect(store.canRecordOnFeatured({ id: "a", takesParts: true }, me())).toBe(true);
+    expect(store.canRecordOnFeatured({ id: "a", takesParts: false }, me())).toBe(false);
+    expect(store.canRecordOnFeatured(null, me())).toBe(false);
+    expect(store.canRecordOnFeatured({ id: "a", takesParts: true }, me({ uploads: false }))).toBe(false);
+    expect(store.canRecordOnFeatured({ id: "a", takesParts: true }, me({ publishing: "blocked" }))).toBe(false);
+    expect(store.canRecordOnFeatured({ id: "a", takesParts: true }, me({ publishing: "review" }))).toBe(true);
   });
 });
 
 describe("the door with no song beside it", () => {
-  it("opens the top song playing, or the start sheet when there is none or the lookup failed", async () => {
+  it("opens the featured song waiting, or the start sheet when there is none or the lookup failed", async () => {
     api.list.mockResolvedValueOnce({ songs: [song("top", null)] });
     await store.openPublicJamsDoor();
-    expect(api.openById).toHaveBeenCalledWith("top", { play: true });
+    expect(api.openById).toHaveBeenCalledWith("top");
 
     api.list.mockResolvedValueOnce({ songs: [] });
     await store.openPublicJamsDoor();
@@ -94,6 +141,6 @@ describe("the door with no song beside it", () => {
     release({ songs: [song("first", null)] });
     await first;
     expect(api.openById).toHaveBeenCalledTimes(1);
-    expect(api.openById).toHaveBeenCalledWith("second", { play: true });
+    expect(api.openById).toHaveBeenCalledWith("second");
   });
 });

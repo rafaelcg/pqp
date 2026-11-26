@@ -10,9 +10,14 @@ import { track } from "@/lib/track";
  * public jams exist (`lib/jam-announcement.ts` has who, when and the store).
  * The queue in `App` decides and passes `enabled`; this only draws.
  *
- * `hasSong` is whether the top-song lookup found a public song. With one the
- * primary button is "Ouvir uma jam"; with none it is "Começar uma jam", which
- * is the honest offer on an empty catalogue. The caller does what each means.
+ * `hasSong` is whether the featured-song lookup found a public song (the site
+ * hero's rule, `lib/jam-featured.ts`). With one the primary button is "Ouvir
+ * uma jam" and the song waits for a tap on play; `canRecord` (the song takes a
+ * part and this account may record) adds "Gravar minha parte"; and "Começar a
+ * minha" is always there, because a card that says "grava a tua parte" must
+ * never leave somebody with only a song to hear. With no song the primary is
+ * "Começar uma jam", the honest offer on an empty catalogue. The caller does
+ * what each means.
  *
  * Painting records nothing in the store; it does count one `jam_news_view`
  * per page load. Both buttons, the X and Escape go through the caller, which
@@ -28,15 +33,25 @@ let viewedThisLoad = false;
 export function JamAnnouncementHint({
   enabled,
   hasSong,
+  canRecord = false,
   onShowingChange,
-  onOpen,
+  onListen,
+  onRecord,
+  onStart,
   onDismiss,
 }: {
   enabled: boolean;
   hasSong: boolean;
+  /** The featured song takes a part and this account may record one. */
+  canRecord?: boolean;
   /** Told whether the card is up, so typing only holds its entrance. */
   onShowingChange?: (showing: boolean) => void;
-  onOpen: () => void;
+  /** "Ouvir uma jam": the song, waiting for play. */
+  onListen: () => void;
+  /** "Gravar minha parte": the song, with the studio opening. */
+  onRecord: () => void;
+  /** "Começar a minha" (and the primary when there is no song). */
+  onStart: () => void;
   onDismiss: () => void;
 }) {
   const { t } = useTranslation();
@@ -94,14 +109,42 @@ export function JamAnnouncementHint({
             <Button
               size="sm"
               className="cta-lift rounded-full px-4"
-              data-jam-announcement-action=""
+              data-jam-announcement-action="listen"
               onClick={() => {
-                track("jam_news_click", { hasSong });
-                close(onOpen, false);
+                track("jam_news_click", { hasSong, action: hasSong ? "listen" : "start" });
+                close(hasSong ? onListen : onStart, false);
               }}
             >
               {hasSong ? t("jamAnnouncement.cta") : t("jamAnnouncement.ctaStart")}
             </Button>
+            {hasSong && canRecord && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="rounded-full px-4"
+                data-jam-announcement-action="record"
+                onClick={() => {
+                  track("jam_news_click", { hasSong, action: "record" });
+                  close(onRecord, false);
+                }}
+              >
+                {t("jamAnnouncement.record")}
+              </Button>
+            )}
+            {hasSong && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="rounded-full px-4"
+                data-jam-announcement-action="start"
+                onClick={() => {
+                  track("jam_news_click", { hasSong, action: "start" });
+                  close(onStart, false);
+                }}
+              >
+                {t("jamAnnouncement.start")}
+              </Button>
+            )}
             <Button
               size="sm"
               variant="ghost"

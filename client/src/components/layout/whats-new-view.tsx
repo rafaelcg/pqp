@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Menu, Sparkles, X } from "lucide-react";
 import { JamGlyph } from "@/components/jam/jam-art";
+import { Button } from "@/components/ui/button";
 import { blogMediaMarkdown } from "@/components/blog/blog-markdown";
 import { formatPostDate, formatPostShortDate } from "@/lib/blog/format";
 import { loadPostBody } from "@/lib/blog/bodies";
@@ -15,9 +16,16 @@ import {
   type BlogPost,
   type BlogReadLocale,
 } from "@/lib/blog/posts";
-import { subscribeEscapeUnlessOverlay } from "@/lib/escape-unless-overlay";
+import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
+import { parsePublicJamPath } from "@/lib/jam-public-links";
 import { useTranslation } from "@/lib/i18n";
-import { openPublicJamsDoor, useJamPublicMe } from "@/lib/jam-public-store";
+import { listenToPublicJam, recordOnPublicJam, startPublicJam } from "@/lib/jam-public-nav";
+import {
+  canRecordOnFeatured,
+  openPublicJamsDoor,
+  useJamPublicMe,
+  useJamPublicTop,
+} from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
 
 const MARKDOWN_PLUGINS = [remarkGfm];
@@ -61,12 +69,33 @@ export function WhatsNewView({
   const { t, locale } = useTranslation();
   const readLocale = blogReadLocaleFor(locale);
   const jamPublic = useJamPublicMe();
+  const jamTop = useJamPublicTop(jamPublic.enabled);
+  const jamFeatured = jamTop.status === "ready" ? jamTop.song : null;
+  // Only an answer of "no song" is an empty catalogue; a failed lookup says nothing about it.
+  const jamEmpty = jamTop.status === "ready" && jamTop.song === null;
   const [selectedSlug, setSelectedSlug] = useState(
     () => POSTS[0]?.slug ?? "",
   );
   const selected = POSTS.find((post) => post.slug === selectedSlug) ?? POSTS[0];
 
-  useEffect(() => subscribeEscapeUnlessOverlay(onClose), [onClose]);
+  // Escape closes Novidades, except while a public jam is open over it (the "A Jam
+  // abriu" row opens one): that song is on top and owns the key. Taking it here would
+  // mark the event handled and the song would not close (user test round 2, m8).
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (
+        event.key !== "Escape" ||
+        escapeOwnedByOverlay(event) ||
+        parsePublicJamPath(window.location.pathname)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   function selectPost(slug: string) {
     setSelectedSlug(slug);
@@ -108,24 +137,59 @@ export function WhatsNewView({
         </div>
 
         {jamPublic.enabled && (
-          <button
-            type="button"
+          <section
+            aria-label={t("whatsNew.jam.title")}
             data-whats-new-jam=""
-            onClick={() => void openPublicJamsDoor()}
-            className="mx-3 mb-3 flex items-center gap-3 rounded-xl border border-ink-4/60 bg-ink-2 px-3 py-2.5 text-left transition-colors hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+            className="mx-3 mb-3 flex flex-col gap-2.5 rounded-xl border border-ink-4/60 bg-ink-2 px-3 py-2.5"
           >
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-ink-3 text-signal">
-              <JamGlyph className="h-5 w-5" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-sm font-semibold text-paper">
-                {t("whatsNew.jam.title")}
+            <div className="flex items-center gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-ink-3 text-signal">
+                <JamGlyph className="h-5 w-5" />
               </span>
-              <span className="block text-xs leading-snug text-paper-muted">
-                {t("whatsNew.jam.body")}
-              </span>
-            </span>
-          </button>
+              <p className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-paper">
+                  {t("whatsNew.jam.title")}
+                </span>
+                <span className="block text-xs leading-snug text-paper-muted">
+                  {t("whatsNew.jam.body")}
+                </span>
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {!jamEmpty && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  data-whats-new-jam-listen=""
+                  onClick={() =>
+                    jamFeatured
+                      ? listenToPublicJam(jamFeatured.id)
+                      : void openPublicJamsDoor()
+                  }
+                >
+                  {t("whatsNew.jam.listen")}
+                </Button>
+              )}
+              {jamFeatured && canRecordOnFeatured(jamFeatured, jamPublic) && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  data-whats-new-jam-record=""
+                  onClick={() => recordOnPublicJam(jamFeatured.id)}
+                >
+                  {t("whatsNew.jam.record")}
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                data-whats-new-jam-start=""
+                onClick={startPublicJam}
+              >
+                {t("whatsNew.jam.start")}
+              </Button>
+            </div>
+          </section>
         )}
 
         <nav
