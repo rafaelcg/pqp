@@ -314,8 +314,8 @@ final class JamSongModel {
         if wasPlaying { startPlayback(from: engine.positionMs) } else { video.park(atSongMs: engine.originMs + engine.positionMs) }
     }
 
-    private func applyMix() {
-        for track in active {
+    private func applyMix(only id: String? = nil) {
+        for track in active where id == nil || track.id == id {
             engine.setMix(
                 JamEngine.Mix(gain: effective(track).gain, volume: volume(track.id), muted: false),
                 for: track.id
@@ -386,11 +386,14 @@ final class JamSongModel {
     /// trailing apply so the last position is always heard).
     func preview(_ track: JamTrack, edits: JamClipEdits) {
         let next = edits.placed(track)
+        let gainChanged = (previews[track.id]?.gain ?? track.gain) != next.gain
         let moved = previews[track.id].map { $0.offsetMs != next.offsetMs || $0.trimStartMs != next.trimStartMs || $0.trimEndMs != next.trimEndMs }
             ?? (next.offsetMs != track.offsetMs || next.trimStartMs != track.trimStartMs || next.trimEndMs != track.trimEndMs)
         previews[track.id] = next
         if moved { previewPlacementDirty = true }
-        applyMix()
+        // A drag of the clip changes no volume: only the edited take's mix is
+        // touched, and only when its gain moved, not every stem on every tick.
+        if gainChanged { applyMix(only: track.id) }
         if previewPlacementDirty { flushPreviewSoon() }
     }
 
@@ -460,6 +463,10 @@ final class JamSongModel {
     /// the cover): applied like `jam-song-updated`, which the writer's own
     /// socket gets too.
     func applySongEdit(_ song: JamSongSummary) {
+        // An answer that left the server before a newer change (another moderator,
+        // whose frame already arrived) is older than what is on screen: it does not
+        // go over it. The bump is the song's `updatedAt`.
+        guard song.updatedAt >= state.song.updatedAt else { return }
         var next = state
         next.apply(.songUpdated(channelId: channel.id, song: song))
         state = next

@@ -359,6 +359,21 @@ final class JamEditSongModelTests: XCTestCase {
         song.stop()
     }
 
+    func testAnOlderAnswerDoesNotGoOverANewerChangeThatArrivedFirst() async throws {
+        let log = LockedBox<[SentRequest]>([])
+        JamStubURLProtocol.handler = route(log: log) { _ in (200, "{}") }
+        let session = makeEditSession()
+        keep = session
+        let song = try await startedModel(session: session)
+        let newer = songJSON(title: "Newer from a moderator").replacingOccurrences(of: "22:01:40", with: "22:05:00")
+        song.applySongEdit(try Coding.decoder.decode(JamSongSummary.self, from: Data(newer.utf8)))
+        XCTAssertEqual(song.song.title, "Newer from a moderator")
+        // This phone's own request, answered late: it was made before that change.
+        song.applySongEdit(try Coding.decoder.decode(JamSongSummary.self, from: Data(songJSON(title: "Older answer").utf8)))
+        XCTAssertEqual(song.song.title, "Newer from a moderator")
+        song.stop()
+    }
+
     func testANothingToSaveSheetSendsNothing() async throws {
         let log = LockedBox<[SentRequest]>([])
         JamStubURLProtocol.handler = route(log: log) { _ in (200, "{}") }
