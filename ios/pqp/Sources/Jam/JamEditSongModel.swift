@@ -387,6 +387,8 @@ final class JamEditSongModel {
             // The server said this person may not edit: their permissions on
             // this song are read again, because they were wrong.
             if failure?.isDenied == true { await song.refreshPermissions() }
+            // The flag went off under an open song: its affordances are read again.
+            if failure == .kind(.off) { await song.refreshConfig() }
             return false
         }
     }

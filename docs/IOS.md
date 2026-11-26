@@ -1411,6 +1411,23 @@ leaves the edits alone; a save that fails leaves them for another try. A take
 deleted under the sheet leaves nothing to adjust. A swipe down cannot throw edits
 away: the button reads "Voltar ao salvo" and says so.
 
+**What stays on screen** (`JamSheetSupport.swift`). A refused Save is pinned under
+the toolbar (`JamNoticeBar`), never at the end of a scroll view, and so is the
+one-line note that the same account changed the take on another device; the
+reason the edit sheet's Save is unavailable ("Give the song a name.") is pinned
+above the keyboard; Reset lives in the adjuster's transport; all of them are
+announced to VoiceOver when they appear. Close, "Back to saved" and a swipe down
+on a sheet with unsaved work ask "Discard your changes?" (`jamGuardDismiss`:
+SwiftUI's `interactiveDismissDisabled` refuses the swipe without telling anyone on
+iOS 27, so a pan recognizer on the sheet's navigation bar hears the attempt). The
+flag is read again when the app returns to the foreground and after a refused
+write (`JamSongModel.refreshConfig`; a failed read is "do not know", never "off").
+The song's playhead is drawn by each lane, so it is never over an expanded row's
+controls. "Other takes" rows keep identity and vote on one line and let the
+actions (Listen, Adjust, Put in the mix) flow as whole pills beneath, so no label
+breaks mid-word and the vote is one column in every row, in either language, from
+the smallest phone to the largest type.
+
 **Design.** Opaque palette colours only (the band is thin muted bars, the heard
 stretch is the instrument's colour, a cut is the raised surface with border
 coloured bars, the song's start one lime line), the song screen's own cards,

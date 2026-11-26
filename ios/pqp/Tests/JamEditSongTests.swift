@@ -546,7 +546,8 @@ final class JamAdjustModelTests: XCTestCase {
         XCTAssertEqual(song.tracks.first?.offsetMs, 10)
         // Editable again once it has landed or failed.
         adjust.nudge(by: 5)
-        XCTAssertEqual(adjust.edits.nudgeMs, 15)
+        // The draft starts again from the saved take (nudges count from the stored offset).
+        XCTAssertEqual(adjust.edits.nudgeMs, 5)
         song.stop()
     }
 
@@ -645,6 +646,60 @@ final class JamAdjustModelTests: XCTestCase {
         XCTAssertEqual(stored.offsetMs, -60)
         XCTAssertEqual(song.effective(stored).offsetMs, -60, "the engine follows the stored numbers again")
         XCTAssertEqual(song.effective(stored).gain, 0.8)
+        // Said in one line, until the person moves anything again.
+        XCTAssertTrue(adjust.updatedElsewhere)
+        adjust.nudge(by: 10)
+        XCTAssertFalse(adjust.updatedElsewhere)
+        song.stop()
+    }
+
+    func testAVoteDoesNotSayTheTakeWasUpdatedElsewhereAndNeitherDoesTheOwnSave() async throws {
+        let log = LockedBox<[SentRequest]>([])
+        let answer = "{\"track\":\(trackJSON(offset: 10)),\"song\":\(songJSON())}"
+        JamStubURLProtocol.handler = route(log: log) { _ in (200, answer) }
+        let session = makeEditSession()
+        keep = session
+        let song = try await startedModel(session: session)
+        let adjust = JamAdjustModel(song: song, track: try XCTUnwrap(song.tracks.first))
+        song.apply(try frame(trackUpdated(trackJSON(votes: 3))))
+        adjust.reconcile()
+        XCTAssertFalse(adjust.updatedElsewhere, "a vote moves nothing the edits start from")
+        adjust.nudge(by: 10)
+        let landed = await adjust.save()
+        XCTAssertTrue(landed)
+        adjust.reconcile()
+        XCTAssertFalse(adjust.updatedElsewhere, "this sheet's own save is not another device")
+        song.stop()
+    }
+
+    func testTheFlagGoingOffUnderAnOpenSongIsReadAgainAndALostConnectionIsNotTakenForOff() async throws {
+        let log = LockedBox<[SentRequest]>([])
+        let enabled = LockedBox(true)
+        let offline = LockedBox(false)
+        JamStubURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/api/jam/config") {
+                if offline.value { return (0, 503, Data("{\"error\":\"database_unavailable\"}".utf8)) }
+                return (0, 200, Data("{\"enabled\":\(enabled.value),\"uploads\":true}".utf8))
+            }
+            if path.hasSuffix("/api/jam-songs/s1") { return (0, 200, Data(detailJSON.utf8)) }
+            log.value.append(SentRequest(method: request.httpMethod ?? "GET", path: path, json: nil))
+            return (0, 200, Data("{}".utf8))
+        }
+        let session = makeEditSession()
+        keep = session
+        let song = try await startedModel(session: session)
+        XCTAssertTrue(song.canEditSong)
+        // A failed read is "do not know": the pencil stays.
+        offline.value = true
+        await song.refreshConfig()
+        XCTAssertTrue(song.canEditSong)
+        // The server says off: the pencil and the adjuster go.
+        offline.value = false
+        enabled.value = false
+        await song.refreshConfig()
+        XCTAssertFalse(song.canEditSong)
+        XCTAssertFalse(song.canAdjust(try XCTUnwrap(song.tracks.first)))
         song.stop()
     }
 

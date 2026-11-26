@@ -11,6 +11,7 @@ struct JamSongView: View {
     @Environment(CallModel.self) private var call
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var model: JamSongModel
@@ -85,6 +86,11 @@ struct JamSongView: View {
             await model.start(session: session)
         }
         .onChange(of: callActive) { _, now in model.callActive = now }
+        // The flag is flipped per server with no deploy: back in the foreground, an
+        // open song asks again whether it may still be edited.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.refreshConfig() } }
+        }
         .onDisappear { model.stop() }
         .sensoryFeedback(.impact(weight: .medium), trigger: model.isPlaying)
     }

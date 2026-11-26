@@ -152,7 +152,6 @@ struct JamStackView: View {
     static let trailing: CGFloat = 56
     static let laneSpacing: CGFloat = 8
 
-    @State private var laneWidth: CGFloat = 0
 
     var body: some View {
         let tl = model.timeline
@@ -181,10 +180,6 @@ struct JamStackView: View {
             }
         }
         .animation(.jam(reduceMotion: reduceMotion), value: model.stack.map(\.id))
-        .overlay { playheadOverlay(tl.durationMs) }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-            laneWidth = max(0, width - Metrics.hPadding * 2 - Self.gutter - Self.trailing - Self.laneSpacing * 2)
-        }
     }
 
     // MARK: Ruler (the scrub strip)
@@ -232,28 +227,6 @@ struct JamStackView: View {
             let step = max(1000, durationMs / 20)
             model.seek(to: model.positionMs + (direction == .increment ? step : -step))
         }
-    }
-
-    // MARK: Playhead
-
-    /// One line down every lane, from the ruler to the last row.
-    private func playheadOverlay(_ durationMs: Double) -> some View {
-        GeometryReader { proxy in
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !model.isPlaying && !scrubbing)) { _ in
-                let _ = model.seekRevision
-                let x = Metrics.hPadding + Self.gutter + Self.laneSpacing
-                    + JamPlayhead.x(forPositionMs: model.positionMs, width: laneWidth, durationMs: durationMs)
-                Rectangle()
-                    .fill(Palette.signal)
-                    .frame(width: 2)
-                    .shadow(color: Palette.signal.opacity(0.6), radius: 4)
-                    .offset(x: x - 1, y: 40)
-                    .frame(height: max(0, proxy.size.height - 40), alignment: .top)
-                    .opacity(durationMs > 0 ? 1 : 0)
-            }
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }
 
@@ -368,6 +341,11 @@ struct JamTrackRow: View {
                 }
             }
             .frame(width: width, height: 44)
+            // The playhead is drawn by each LANE, not as one line over the whole stack: an
+            // expanded row's mute, solo and "Adjust my recording" are never under it, and
+            // rows that touch still read as one line (each segment is 3 pt taller than
+            // its lane at both ends, the gap between rows).
+            .overlay(alignment: .leading) { playhead(width: width) }
             .contentShape(Rectangle())
             .gesture(
                 SpatialTapGesture().onEnded { value in
@@ -377,6 +355,21 @@ struct JamTrackRow: View {
             )
         }
         .frame(height: 44)
+        .accessibilityHidden(true)
+    }
+
+    private func playhead(width: CGFloat) -> some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !model.isPlaying)) { _ in
+            let _ = model.seekRevision
+            let x = JamPlayhead.x(forPositionMs: model.positionMs, width: width, durationMs: timeline.durationMs)
+            Rectangle()
+                .fill(Palette.signal)
+                .frame(width: 2, height: 50)
+                .shadow(color: Palette.signal.opacity(0.6), radius: 4)
+                .offset(x: x - 1)
+                .opacity(timeline.durationMs > 0 ? 1 : 0)
+        }
+        .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 
@@ -572,7 +565,8 @@ struct JamOtherTakesView: View {
 
     private func row(_ track: JamTrack) -> some View {
         let hearing = model.isAuditioned(track)
-        return HStack(spacing: 10) {
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
             Avatar(name: track.avatarName, seed: track.authorId, size: 30, url: track.authorAvatarUrl)
                 .overlay(Circle().strokeBorder(track.instrument.color, lineWidth: 2))
             VStack(alignment: .leading, spacing: 2) {
@@ -582,15 +576,27 @@ struct JamOtherTakesView: View {
                 Text(verbatim: JamBidi.clean(track.label ?? track.displayName))
                     .font(JamFont.text(12))
                     .foregroundStyle(Palette.paperMuted)
-                    .lineLimit(1)
+                    .lineLimit(2)
             }
             Spacer(minLength: 6)
+            JamVoteButton(
+                count: track.voteCount, voted: model.isVoted(track.id),
+                busy: model.busyVotes.contains(track.id),
+                label: Text("Vote for \(JamTrackNaming.spoken(track))")
+            ) { Task { await model.vote(track) } }
+            }
+            // The actions sit under the names and flow as whole pills: the vote is the
+            // same column in every row, and no label is ever cut mid-word, from the
+            // smallest phone to the largest type, whatever the language.
+            FlowLayout(spacing: 8) {
             Button {
                 Haptics.selection()
                 model.audition(track)
             } label: {
                 Label(hearing ? "Hearing" : "Listen", systemImage: hearing ? "speaker.wave.2.fill" : "play.fill")
                     .font(JamFont.text(12, .bold))
+                    .lineLimit(1)
+                    .fixedSize()
                     .foregroundStyle(hearing ? Palette.inkDeep : Palette.paperSubtle)
                     .padding(.horizontal, 12)
                     .frame(minHeight: 44)
@@ -628,11 +634,8 @@ struct JamOtherTakesView: View {
                 .accessibilityLabel(Text("Put in the mix"))
                 .accessibilityIdentifier("jam.take.mix")
             }
-            JamVoteButton(
-                count: track.voteCount, voted: model.isVoted(track.id),
-                busy: model.busyVotes.contains(track.id),
-                label: Text("Vote for \(JamTrackNaming.spoken(track))")
-            ) { Task { await model.vote(track) } }
+            }
+            .padding(.leading, 40)
         }
         .padding(.horizontal, Metrics.hPadding)
         .padding(.vertical, 2)

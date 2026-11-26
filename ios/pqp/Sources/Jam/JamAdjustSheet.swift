@@ -11,10 +11,12 @@ import SwiftUI
 struct JamAdjustSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     let song: JamSongModel
     @State private var model: JamAdjustModel
     @State private var grabbing = false
+    @State private var confirmingDiscard = false
 
     init(song: JamSongModel, track: JamTrack) {
         self.song = song
@@ -48,8 +50,7 @@ struct JamAdjustSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button {
                         Haptics.selection()
-                        if model.isDirty { model.reset() }
-                        dismiss()
+                        requestClose()
                     } label: {
                         model.isDirty ? Text("Back to saved") : Text("Close")
                     }
@@ -62,10 +63,33 @@ struct JamAdjustSheet: View {
         }
         .presentationDetents([.large])
         .presentationBackground(Palette.ink)
-        // A swipe down would throw the edits away without a word; the button says it.
-        .interactiveDismissDisabled(model.isDirty || model.saving)
+        // Unsaved edits are not thrown away by a swipe: the swipe asks, like the button.
+        .jamGuardDismiss(isDirty: model.isDirty || model.saving) { requestClose() }
+        .confirmationDialog("Discard your changes?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
+            Button("Discard", role: .destructive) {
+                model.reset()
+                dismiss()
+            }
+            Button("Keep editing", role: .cancel) {}
+        } message: {
+            Text("You changed this recording and have not saved.")
+        }
         .onChange(of: storedKey) { _, _ in model.reconcile() }
         .onDisappear { song.endAdjust() }
+    }
+
+    /// Close, "Back to saved" and a swipe down: nothing unsaved goes without the question.
+    private func requestClose() {
+        guard !model.saving else { return }
+        if model.isDirty { confirmingDiscard = true } else { dismiss() }
+    }
+
+    /// What is pinned under the toolbar: a refused Save, or the note that the take
+    /// changed on another device. Always on screen, whatever the scroll position.
+    private var pinnedText: (text: String, tone: JamNoticeBar.Tone)? {
+        if let failure = model.failure { return (Self.message(for: failure), .problem) }
+        if model.updatedElsewhere { return (String(localized: "This recording was updated from another device."), .info) }
+        return nil
     }
 
     // MARK: Content
@@ -84,20 +108,24 @@ struct JamAdjustSheet: View {
                 )
                 timingCard(track)
                 volumeCard(track)
-                if let failure = model.failure { failureRow(failure) }
-                if model.isDirty { resetRow }
                 Color.clear.frame(height: 4)
             }
             .padding(.horizontal, Metrics.hPadding)
             .padding(.top, 8)
             .padding(.bottom, 12)
-            .animation(.jam(reduceMotion: reduceMotion), value: model.isDirty)
-            .animation(.jam(reduceMotion: reduceMotion), value: model.failure)
         }
         .scrollDisabled(grabbing)
         .safeAreaInset(edge: .bottom, spacing: 0) { transport }
         // Nothing is edited while a save is out (the model refuses too).
         .disabled(model.saving)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let pinned = pinnedText {
+                JamNoticeBar(text: pinned.text, tone: pinned.tone, identifier: pinned.tone == .problem ? "jam.adjust.error" : "jam.adjust.note")
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.jam(reduceMotion: reduceMotion), value: pinnedText?.text)
+        .jamAnnounce(pinnedText?.text)
     }
 
     private func header(_ track: JamTrack) -> some View {
@@ -183,19 +211,27 @@ struct JamAdjustSheet: View {
                 .accessibilityLabel(Text("Move the recording in time"))
                 .accessibilityValue(Text(verbatim: Self.nudgeWords(nudge)))
                 .accessibilityIdentifier("jam.adjust.nudgeValue")
-            HStack(spacing: 10) {
-                JamHoldStepButton(title: "Move earlier", symbol: "chevron.left", direction: -1, id: "jam.adjust.earlier") {
-                    model.nudge(by: $0)
-                }
-                JamHoldStepButton(title: "Move later", symbol: "chevron.right", direction: 1, id: "jam.adjust.later") {
-                    model.nudge(by: $0)
-                }
+            // Side by side while both labels fit on one line each, stacked when they do not
+            // (larger type, a longer language): never one wrapped and the other not.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { stepButtons }
+                VStack(spacing: 10) { stepButtons }
             }
             Text("Hold a button to go faster.")
                 .font(JamFont.text(12)).foregroundStyle(Palette.paperMuted)
         }
         .padding(14)
         .jamAdjustCard()
+    }
+
+    @ViewBuilder
+    private var stepButtons: some View {
+        JamHoldStepButton(title: "Move earlier", symbol: "chevron.left", direction: -1, id: "jam.adjust.earlier") {
+            model.nudge(by: $0)
+        }
+        JamHoldStepButton(title: "Move later", symbol: "chevron.right", direction: 1, id: "jam.adjust.later") {
+            model.nudge(by: $0)
+        }
     }
 
     /// "Right on time", "40 ms later", "40 ms earlier" (`jam.clip.*`).
@@ -236,47 +272,38 @@ struct JamAdjustSheet: View {
 
     // MARK: Failure, reset, save
 
-    private func failureRow(_ failure: JamEditFailure) -> some View {
-        Text(Self.message(for: failure))
-            .font(JamFont.text(13, .semibold))
-            .foregroundStyle(Palette.paper)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous).fill(Palette.surfaceRaised))
-            .overlay(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous).strokeBorder(Palette.danger, lineWidth: 1))
-            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
-            .accessibilityAddTraits(.updatesFrequently)
-            .accessibilityIdentifier("jam.adjust.error")
-    }
-
-    static func message(for failure: JamEditFailure) -> LocalizedStringKey {
+    static func message(for failure: JamEditFailure) -> String {
         switch failure {
-        case .denied: "You cannot adjust this recording."
-        case .invalid: "That did not work. Try again."
+        case .denied: String(localized: "You cannot adjust this recording.")
+        case .invalid: String(localized: "That did not work. Try again.")
         case .kind(let kind): JamEditCopy.message(for: kind)
         }
     }
 
-    private var resetRow: some View {
-        HStack {
-            Spacer(minLength: 0)
+    /// Back to the stored numbers, in the transport where it is always on screen
+    /// (it used to be the last thing in the scroll view).
+    @ViewBuilder
+    private var resetButton: some View {
+        if model.isDirty {
             Button {
                 Haptics.selection()
                 model.reset()
             } label: {
                 Label("Reset", systemImage: "arrow.counterclockwise")
-                    .font(JamFont.text(13, .semibold))
+                    .labelStyle(JamCompactLabelStyle(iconOnly: typeSize.isAccessibilitySize))
+                    .font(JamFont.text(14, .semibold))
                     .foregroundStyle(Palette.paper)
                     .padding(.horizontal, 14)
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
+                    .frame(minWidth: 44, minHeight: 44)
+                    .background(Capsule().fill(Palette.surfaceRaised))
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .disabled(model.saving)
+            .accessibilityLabel(Text("Reset"))
             .accessibilityIdentifier("jam.adjust.reset")
+            .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
         }
-        .transition(.opacity)
     }
 
     private var saveButton: some View {
@@ -289,6 +316,9 @@ struct JamAdjustSheet: View {
                 } else {
                     Text("Save")
                         .font(JamFont.text(15, .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .fixedSize(horizontal: false, vertical: true)
                         .foregroundStyle(model.isDirty ? Palette.inkDeep : Palette.paperMuted)
                 }
             }
@@ -324,7 +354,9 @@ struct JamAdjustSheet: View {
             .accessibilityIdentifier("jam.adjust.play")
             JamClock(model: song)
             Spacer(minLength: 0)
+            resetButton
         }
+        .animation(.jamQuick(reduceMotion: reduceMotion), value: model.isDirty)
         .padding(.horizontal, Metrics.hPadding)
         .padding(.vertical, 10)
         .background(Palette.surface.ignoresSafeArea(edges: .bottom))
@@ -346,19 +378,19 @@ private extension View {
 
 enum JamEditCopy {
     /// The web's `jam.error.*` lines for what a write can answer.
-    static func message(for kind: JamErrorKind) -> LocalizedStringKey {
+    static func message(for kind: JamErrorKind) -> String {
         switch kind {
-        case .off: "Recording is paused on this server."
-        case .closed: "This song is closed to new recordings."
-        case .instrumentNotWanted: "This song is not looking for that instrument."
-        case .songFull: "This song has no room for more tracks."
-        case .authorTrackLimit: "You already sent too many tracks to this song."
-        case .tooLarge: "The file came out too large."
-        case .storageOff: "This server cannot store recordings yet."
-        case .rateLimited: "Easy, that is a lot at once. Try again in a moment."
-        case .network: "No connection. Check your internet and try again."
-        case .gone: "That song is gone."
-        case .other: "That did not work. Try again."
+        case .off: String(localized: "Recording is paused on this server.")
+        case .closed: String(localized: "This song is closed to new recordings.")
+        case .instrumentNotWanted: String(localized: "This song is not looking for that instrument.")
+        case .songFull: String(localized: "This song has no room for more tracks.")
+        case .authorTrackLimit: String(localized: "You already sent too many tracks to this song.")
+        case .tooLarge: String(localized: "The file came out too large.")
+        case .storageOff: String(localized: "This server cannot store recordings yet.")
+        case .rateLimited: String(localized: "Easy, that is a lot at once. Try again in a moment.")
+        case .network: String(localized: "No connection. Check your internet and try again.")
+        case .gone: String(localized: "That song is gone.")
+        case .other: String(localized: "That did not work. Try again.")
         }
     }
 }
@@ -386,8 +418,9 @@ struct JamHoldStepButton: View {
             Text(title).font(JamFont.text(13, .bold))
             if direction > 0 { Image(systemName: symbol).font(JamFont.text(14, .bold)) }
         }
+        // One line each, never scaled or wrapped: when both do not fit side by side the
+        // card stacks them (`ViewThatFits`), so the pair is always symmetric.
         .lineLimit(1)
-        .minimumScaleFactor(0.8)
         .foregroundStyle(Palette.paper)
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, minHeight: 48)

@@ -29,6 +29,9 @@ final class JamAdjustModel {
     private(set) var failure: JamEditFailure?
     /// Bumped by a save that landed, for the one small confirmation.
     private(set) var savedRevision = 0
+    /// The edits were thrown away because the same account changed this take
+    /// somewhere else: said in one line until the person moves anything again.
+    private(set) var updatedElsewhere = false
 
     init(song: JamSongModel, track: JamTrack) {
         self.song = song
@@ -57,6 +60,7 @@ final class JamAdjustModel {
         guard let track, !saving else { return }
         draft.set(next)
         failure = nil
+        updatedElsewhere = false
         song.preview(track, edits: next)
     }
 
@@ -90,6 +94,8 @@ final class JamAdjustModel {
         guard let track else { return }
         if draft.reconcile(with: track, saving: saving) {
             song.clearPreview(trackId: trackId)
+            updatedElsewhere = true
+            failure = nil
         }
     }
 
@@ -105,12 +111,17 @@ final class JamAdjustModel {
         defer { saving = false }
         do {
             try await song.saveAdjustment(track, patch: body)
+            // Its own answer is the stored take now: the draft starts from it quietly,
+            // so the echo is not read as "changed on another device".
+            if let stored = self.track { draft.reset(to: stored) }
             savedRevision += 1
             return true
         } catch {
             if error.isCancellation { return false }
             failure = JamEditFailure.of(error)
             if failure?.isDenied == true { await song.refreshPermissions() }
+            // The flag went off under an open song: its affordances are read again.
+            if failure == .kind(.off) { await song.refreshConfig() }
             return false
         }
     }

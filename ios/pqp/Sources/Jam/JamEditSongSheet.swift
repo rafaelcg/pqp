@@ -35,12 +35,28 @@ struct JamEditSongSheet: View {
                     photoControls
                     // What Save is sending is what the sheet closes over: nothing is typed meanwhile.
                     fields.disabled(model.saving)
-                    if let failure = model.failure { failureRow(failure) }
                 }
                 .padding(Metrics.hPadding)
-                .animation(.jam(reduceMotion: reduceMotion), value: model.failure)
             }
             .scrollDismissesKeyboard(.interactively)
+            // A refused Save is pinned under the toolbar and the reason Save is not
+            // available sits above the keyboard: neither is ever below the fold.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let failure = model.failure {
+                    JamNoticeBar(text: Self.message(for: failure), identifier: "jam.edit.error")
+                        .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if let hint = hintText {
+                    JamNoticeBar(text: hint, identifier: "jam.edit.hint")
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.jam(reduceMotion: reduceMotion), value: model.failure)
+            .animation(.jam(reduceMotion: reduceMotion), value: hintText)
+            .jamAnnounce(model.failure.map(Self.message(for:)))
+            .jamAnnounce(hintText)
             .background(Palette.ink.ignoresSafeArea())
             .navigationTitle("Edit song")
             .navigationBarTitleDisplayMode(.inline)
@@ -57,7 +73,7 @@ struct JamEditSongSheet: View {
         }
         .presentationDetents([.large])
         .presentationBackground(Palette.ink)
-        .interactiveDismissDisabled(model.isDirty || model.saving)
+        .jamGuardDismiss(isDirty: model.isDirty || model.saving) { requestClose() }
         .confirmationDialog("Discard your changes?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
             Button("Discard", role: .destructive) { dismiss() }
             Button("Keep editing", role: .cancel) {}
@@ -74,7 +90,15 @@ struct JamEditSongSheet: View {
     }
 
     private func requestClose() {
+        guard !model.saving else { return }
         if model.isDirty { confirmingDiscard = true } else { dismiss() }
+    }
+
+    /// Why Save is not available, said where the keyboard cannot cover it.
+    private var hintText: String? {
+        if model.showsTitleProblem, let problem = model.titleProblem { return Self.message(for: problem) }
+        if model.showsArtistProblem { return String(localized: "That artist has nothing to read. Use letters or numbers, or leave it empty.") }
+        return nil
     }
 
     // MARK: The picture
@@ -177,27 +201,18 @@ struct JamEditSongSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             field(
                 "Song name", text: Binding(get: { model.title }, set: { if !model.saving { model.titleEdit = $0 } }),
-                prompt: "e.g. In Bloom", id: "jam.edit.title", field: .title
+                prompt: "e.g. In Bloom", id: "jam.edit.title", field: .title, invalid: model.showsTitleProblem
             )
-            if model.showsTitleProblem, let problem = model.titleProblem {
-                Text(Self.message(for: problem))
-                    .font(JamFont.text(12)).foregroundStyle(Palette.danger)
-                    .accessibilityIdentifier("jam.edit.titleError")
-            }
             field(
                 "Artist", text: Binding(get: { model.artist }, set: { if !model.saving { model.artistEdit = $0 } }),
-                prompt: "Leave empty if it is yours", id: "jam.edit.artist", field: .artist
+                prompt: "Leave empty if it is yours", id: "jam.edit.artist", field: .artist, invalid: model.showsArtistProblem
             )
-            if model.showsArtistProblem {
-                Text("That artist has nothing to read. Use letters or numbers, or leave it empty.")
-                    .font(JamFont.text(12)).foregroundStyle(Palette.danger)
-                    .accessibilityIdentifier("jam.edit.artistError")
-            }
         }
     }
 
     private func field(
-        _ title: LocalizedStringKey, text: Binding<String>, prompt: LocalizedStringKey, id: String, field: Field
+        _ title: LocalizedStringKey, text: Binding<String>, prompt: LocalizedStringKey, id: String, field: Field,
+        invalid: Bool
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(JamFont.text(13, .bold)).foregroundStyle(Palette.paperMuted)
@@ -211,39 +226,25 @@ struct JamEditSongSheet: View {
                 .padding(.horizontal, 14)
                 .frame(minHeight: 50)
                 .background(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous).fill(Palette.surface))
-                .overlay(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous).strokeBorder(Palette.border, lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous).strokeBorder(invalid ? Palette.danger : Palette.border, lineWidth: invalid ? 2 : 1))
                 .accessibilityLabel(Text(title))
                 .accessibilityIdentifier(id)
         }
     }
 
-    private func failureRow(_ failure: JamEditFailure) -> some View {
-        Text(Self.message(for: failure))
-            .font(JamFont.text(13, .semibold))
-            .foregroundStyle(Palette.paper)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous).fill(Palette.surfaceRaised))
-            .overlay(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous).strokeBorder(Palette.danger, lineWidth: 1))
-            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
-            .accessibilityAddTraits(.updatesFrequently)
-            .accessibilityIdentifier("jam.edit.error")
-    }
-
     /// What is wrong with the name, in the web's words (`jam.start.*`).
-    static func message(for problem: JamText.Problem) -> LocalizedStringKey {
+    static func message(for problem: JamText.Problem) -> String {
         switch problem {
-        case .empty: "Give the song a name."
-        case .invisible: "That name has nothing to read. Use letters or numbers."
-        case .long: "The name can be \(JamText.titleMax) characters at most."
+        case .empty: String(localized: "Give the song a name.")
+        case .invisible: String(localized: "That name has nothing to read. Use letters or numbers.")
+        case .long: String(localized: "The name can be \(JamText.titleMax) characters at most.")
         }
     }
 
-    static func message(for failure: JamEditFailure) -> LocalizedStringKey {
+    static func message(for failure: JamEditFailure) -> String {
         switch failure {
-        case .denied: "You cannot edit this song."
-        case .invalid: "Some of the text has nothing to read: the song's name or the artist. Go back and fix it."
+        case .denied: String(localized: "You cannot edit this song.")
+        case .invalid: String(localized: "Some of the text has nothing to read: the song's name or the artist. Go back and fix it.")
         case .kind(let kind): JamEditCopy.message(for: kind)
         }
     }
@@ -258,6 +259,9 @@ struct JamEditSongSheet: View {
                 } else {
                     Text("Save")
                         .font(JamFont.text(15, .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .fixedSize(horizontal: false, vertical: true)
                         .foregroundStyle(model.canSave ? Palette.inkDeep : Palette.paperMuted)
                 }
             }

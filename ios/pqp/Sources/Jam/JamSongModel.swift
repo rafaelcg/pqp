@@ -491,6 +491,18 @@ final class JamSongModel {
         await load()
     }
 
+    /// `GET /api/jam/config` again: the operator flips the flag per server with no
+    /// deploy, so a song that stays open (or comes back to the foreground) must not
+    /// keep offering what the server now refuses.
+    func refreshConfig() async {
+        guard let session else { return }
+        // A failed read is "do not know", not "off": the answer that hides the
+        // pencil is the server's, never a lost connection's.
+        let query = [URLQueryItem(name: "serverId", value: server.id)]
+        let fresh: JamConfig? = try? await session.api.get("/api/jam/config", query: query)
+        if let fresh, fresh != config { config = fresh }
+    }
+
     // MARK: - Transport
 
     func togglePlay() {

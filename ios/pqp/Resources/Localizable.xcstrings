@@ -3558,6 +3558,16 @@
         }
       }
     },
+    "This recording was updated from another device." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa gravação foi atualizada em outro aparelho."
+          }
+        }
+      }
+    },
     "This server cannot store recordings yet." : {
       "localizations" : {
         "pt-BR" : {
@@ -13070,6 +13080,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tu não pode mandar mensagem aqui."
+          }
+        }
+      }
+    },
+    "You changed this recording and have not saved." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu mexeu nessa gravação e não salvou."
           }
         }
       }
