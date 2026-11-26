@@ -146,6 +146,12 @@ export async function syncJamStems(
   engine: JamEngine,
   tracks: readonly StemTrack[],
   onStatus?: (trackId: string, status: StemStatus) => void,
+  /**
+   * Opt-in download progress, per stem: bytes so far and the size the response
+   * announced (null when it did not). Only the loads THIS call starts report;
+   * with no listener the loads read their body whole, as the studio's do.
+   */
+  onProgress?: (trackId: string, loaded: number, total: number | null) => void,
 ): Promise<void> {
   const book = bookOf(engine);
   const wanted = tracks.filter((track) => track.inMix);
@@ -188,12 +194,17 @@ export async function syncJamStems(
       }
       onStatus?.(track.id, "loading");
       const done = engine.player
-        .loadStem(track.id, track.audioUrl, {
-          offsetMs: track.offsetMs,
-          trimStartMs: track.trimStartMs,
-          trimEndMs: track.trimEndMs,
-          gain: track.gain,
-        })
+        .loadStem(
+          track.id,
+          track.audioUrl,
+          {
+            offsetMs: track.offsetMs,
+            trimStartMs: track.trimStartMs,
+            trimEndMs: track.trimEndMs,
+            gain: track.gain,
+          },
+          onProgress ? { onProgress: (loaded, total) => onProgress(track.id, loaded, total) } : undefined,
+        )
         .then(() => {
           book.installed.set(track.id, { key, url });
           return true;

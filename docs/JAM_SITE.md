@@ -164,6 +164,32 @@ goes through it; the in-app player is unchanged. Audio is fetched and decoded on
 the first press, never on the page view. A play is noted (`POST .../play`) on
 the first successful start.
 
+A song is a download of every stem before the first sound (the originals are
+FLAC, about 54 MB for three minutes of five parts), so the wait is shown, not
+hidden. Three small things, all client side, none of them shortens it (a
+smaller copy per track is the real fix, planned for after the flip):
+
+- **A skeleton on first paint.** `client/jam-site/index.html` carries static
+  markup and a few rules inside `#root` (header bar, a heading bar, three card
+  blocks, no text because the language is not known yet). React replaces it on
+  its first commit. Its colours are the site's role tokens, so the stored light
+  theme is not flashed dark, and the shimmer is a transform that is off under
+  `prefers-reduced-motion`.
+- **A busy play button.** While the stems load the button is `aria-busy` and
+  named "Carregando" (`transport.loading`).
+- **Download progress.** Opt-in: `JamPlayer.decode` / `loadStem` take an
+  `onProgress`, and without one they read the body with `arrayBuffer()` exactly
+  as the studio does. With one, `lib/jam/fetch-progress.ts` reads `res.body` and
+  reports bytes against `Content-Length` (dropped when the response has a
+  `Content-Encoding`, because the two would be different units).
+  `syncJamStems(engine, tracks, onStatus, onProgress)` reports per stem and
+  `jam-site/player.ts` sums them into `PlayerState.bytes`; a stem that has not
+  started yet is estimated at the mean of the others, and the label then reads
+  "12 de ~54 MB". The transport shows a ring round the button and that label in
+  place of the clock until the stems are ready. The public track has no byte
+  size (`audioBytes` exists only on the in-app track), so nothing is known before
+  the first response.
+
 ## Signed-out actions and the intent hand-over
 
 Listening and watching need no account. Like, report (the contract requires one),

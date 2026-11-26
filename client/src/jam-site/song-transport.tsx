@@ -1,8 +1,9 @@
 import { HeartIcon as Heart, LoaderIcon as Loader2, MicIcon as Mic, PauseIcon as Pause, PlayIcon as Play, Share2Icon as Share2 } from "./icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { jt } from "@/lib/i18n/jam-site";
+import { megabytes, songFraction } from "@/lib/jam/fetch-progress";
 import type { Instrument } from "./instruments";
-import type { PublicPlayer } from "./player";
+import type { PlayerState, PublicPlayer } from "./player";
 import { useClockDraw, usePlayerState } from "./use-player";
 import { button, buttonClass, focusRing } from "./ui";
 import { clock, cn } from "./util";
@@ -13,6 +14,17 @@ import { clock, cn } from "./util";
  * page re-renders with the song.
  */
 
+/** "Carregando 12 de 54 MB": what the stems have downloaded, in words. */
+function loadingLabel(bytes: PlayerState["bytes"]): string {
+  if (!bytes || bytes.loaded <= 0) return jt("transport.loading");
+  const locale = typeof document === "undefined" ? undefined : document.documentElement.lang || undefined;
+  const loaded = megabytes(bytes.loaded, locale);
+  if (bytes.total <= 0) return jt("transport.loadingBytes", { loaded });
+  // A size that is partly a guess (a stem that has not started) says so.
+  const total = `${bytes.exact ? "" : "~"}${megabytes(bytes.total, locale)}`;
+  return jt("transport.loadingProgress", { loaded, total });
+}
+
 function Seek({ player }: { player: PublicPlayer }) {
   const state = usePlayerState(player);
   const input = useRef<HTMLInputElement | null>(null);
@@ -20,6 +32,7 @@ function Seek({ player }: { player: PublicPlayer }) {
   const [drag, setDrag] = useState<number | null>(null);
   const dragging = useRef(false);
   const duration = Math.max(1, state.durationMs);
+  const loading = state.phase === "loading";
 
   const draw = useCallback(() => {
     const position = Math.min(duration, player.position());
@@ -49,9 +62,17 @@ function Seek({ player }: { player: PublicPlayer }) {
 
   return (
     <>
-      <span className="shrink-0 tabular-nums text-sm text-text-secondary" data-jam-time="">
+      {/* The clock stays mounted (its ref is drawn into) and is hidden while the stems download. The words are
+          aria-hidden: the play button carries "Carregando" and aria-busy, and a number that changes every
+          few hundred milliseconds is not something to read out. */}
+      <span className="shrink-0 tabular-nums text-sm text-text-secondary" data-jam-time="" hidden={loading}>
         <span ref={label}>0:00</span> / {clock(state.durationMs)}
       </span>
+      {loading && (
+        <span className="shrink-0 tabular-nums text-sm text-text-secondary" data-jam-progress="" aria-hidden="true">
+          {loadingLabel(state.bytes)}
+        </span>
+      )}
       <input
         ref={input}
         type="range"
@@ -113,6 +134,7 @@ export function SongTransport({
 }) {
   const state = usePlayerState(player);
   const loading = state.phase === "loading";
+  const fraction = loading ? songFraction(state.bytes) : null;
   const toggle = () => player.toggle();
 
   // Space plays and pauses when the focus is not in something that owns Space.
@@ -136,15 +158,23 @@ export function SongTransport({
       <button
         type="button"
         onClick={toggle}
-        aria-label={state.playing ? jt("transport.pause") : jt("transport.play")}
+        aria-label={loading ? jt("transport.loading") : state.playing ? jt("transport.pause") : jt("transport.play")}
+        aria-busy={loading}
         data-jam-toggle=""
         data-playing={state.playing ? "true" : "false"}
         data-phase={state.phase}
         className={cn(
-          "grid h-14 w-14 shrink-0 place-items-center rounded-full bg-text text-surface-0 transition-transform duration-[var(--duration-fast)] hover:scale-105 motion-reduce:transition-none motion-reduce:hover:scale-100",
+          "relative grid h-14 w-14 shrink-0 place-items-center rounded-full bg-text text-surface-0 transition-transform duration-[var(--duration-fast)] hover:scale-105 motion-reduce:transition-none motion-reduce:hover:scale-100",
           focusRing,
         )}
       >
+        {fraction !== null && (
+          // The download as a ring just outside the button: drawn from the state, never animated.
+          <svg className="pointer-events-none absolute -inset-1.5 h-[68px] w-[68px] -rotate-90 text-accent" viewBox="0 0 68 68" aria-hidden="true" data-jam-ring="" data-fraction={fraction.toFixed(3)}>
+            <circle cx="34" cy="34" r="32" fill="none" stroke="currentColor" strokeWidth="3" opacity="0.2" />
+            <circle cx="34" cy="34" r="32" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" pathLength={100} strokeDasharray={100} strokeDashoffset={100 - fraction * 100} />
+          </svg>
+        )}
         {loading ? (
           <Loader2 className="h-6 w-6 motion-safe:animate-spin" aria-hidden />
         ) : state.playing ? (
