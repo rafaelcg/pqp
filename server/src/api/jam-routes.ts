@@ -57,6 +57,7 @@ import {
   noteStarterMixDecision,
   setJamTakeAdmissionAnnouncer,
 } from "../services/jam-public.js";
+import { describeTakeForDecision, recordTakeDecision } from "../services/jam-take-notices.js";
 import { computeMemberPermissions } from "../services/permissions.js";
 import { findTimeoutForChannel, timeoutMessage } from "../services/sanctions.js";
 import { getChannel } from "../services/servers.js";
@@ -604,11 +605,21 @@ export function registerJamRoutes(router: Router): void {
     // The starter's own hand on the mix is written in the same transaction as
     // the change, so auto-accept can never act on a take they decided about.
     const starterDecided = patch.inMix !== undefined && track.song_author_id === user.id;
+    // The starter putting an outside take in the mix is the answer its sender
+    // is waiting for. Read BEFORE the change (afterwards it is no longer a
+    // take that waits); null for anything that is not that.
+    const answered =
+      starterDecided && patch.inMix === true && !track.in_mix && track.author_id !== user.id
+        ? await describeTakeForDecision(track.id)
+        : null;
     const updated = await updateJamTrack(
       track,
       patch,
       starterDecided ? (client) => noteStarterMixDecision(track.id, client) : undefined,
     );
+    if (answered) {
+      void recordTakeDecision(answered, "accepted");
+    }
     announceIn(song.channel_id, (channelId) => ({
       type: "jam-track-updated",
       channelId,
@@ -653,9 +664,18 @@ export function registerJamRoutes(router: Router): void {
     // `jam-track-deleted` would carry the now author-only summary to everybody,
     // and the phones, which have no such rule, would keep an empty tile), and the
     // author's own wall reads the song again the next time it asks.
+    // The starter declining an outside take is the answer its sender is waiting
+    // for; read before the delete, after which it is no longer a waiting take.
+    const declined =
+      track.song_author_id === user.id && track.author_id !== user.id && !track.in_mix
+        ? await describeTakeForDecision(track.id)
+        : null;
     const gone = await deleteJamTrack(track, {
       dropEmptySong: track.song_author_id === user.id || isModerator,
     });
+    if (declined) {
+      void recordTakeDecision(declined, "refused");
+    }
     if (gone?.songDeleted || gone?.song?.trackCount === 0) {
       announceIn(track.channel_id, (channelId) => ({
         type: "jam-song-deleted",

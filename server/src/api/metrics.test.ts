@@ -528,8 +528,9 @@ describeDb("GET /api/admin/metrics", () => {
         reminder: ZERO_SKIPS,
         waitlist: ZERO_SKIPS,
         bau: ZERO_SKIPS,
+        jam: ZERO_SKIPS,
       },
-      pushAttentionPassed: { message: 0, call: 0, stream: 0, reminder: 0, waitlist: 0, bau: 0 },
+      pushAttentionPassed: { message: 0, call: 0, stream: 0, reminder: 0, waitlist: 0, bau: 0, jam: 0 },
     });
 
     // The two human messages are both in a server channel, so the DM/group

@@ -1102,6 +1102,33 @@ Turn it on from controles → interruptores, or `PUT /api/admin/flags
 `server/src/api/jam-announcement-flag.test.ts` (with the flag as a row, the way
 production sets it) and `server/src/lib/flag-client-contract.test.ts`.
 
+## `jam_take_notices` (global, default ON, a kill switch)
+
+Notices about parts sent to public jams (`docs/JAM_PUBLIC.md` §"Telling the
+starter"): the starter hears that a stranger's part is waiting (a card in the app,
+a live frame, a push for a closed phone), and the sender hears when it is accepted
+or refused. A burst on one song is one item with a count. Behind
+`JAM_TAKE_NOTICES`, on unless it says `false`, `0` or `off`.
+
+- **Why on by default:** strictly additive. A card in the corner the person can
+  dismiss, a frame old clients ignore (a distinct frame type), and at most one
+  push per song per half hour, which respects DND, an explicit mute, a live socket
+  and blocks. It answers the launch test's N1; leaving it dark would ship the
+  bug it fixes.
+- **Off:** nothing is written to `jam_take_notices`, no decision frame, no push,
+  `GET /api/jam-public/notices` answers `{ notices: [] }`, and an online starter
+  gets the old toast again. What it does NOT touch: the "N partes esperando tua
+  resposta" block on the song, the wall's row and tile pill and the Communities row
+  (they read the inbox), and the `needs` rule (a pending take no longer fills what
+  a song asks for), which are not notices.
+- **Global**, read per request on every API machine; a flip crosses the cluster bus.
+- **Rollback:** `PUT /api/admin/flags { key: "jam_take_notices", enabled: false }`
+  or controles → interruptores.
+
+Pinned by `server/src/api/jam-take-notices.test.ts` (the flag as a row, both
+states) and `server/src/ws/jam-take-notices-cluster.test.ts` (two instances on the
+Postgres bus, off crossing the bus).
+
 ## `apps` (per server)
 
 The apps platform: small interactive things (Locadora, a game room) that a person

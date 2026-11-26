@@ -11,10 +11,11 @@ import {
   publicJamRequestPath,
   usePublicJamRequest,
 } from "@/lib/jam-public-nav";
-import { subscribeJamPublicNotices, useJamPublicMe } from "@/lib/jam-public-store";
+import { ackTakeNotice, getJamPublicWaiting, loadJamPublicWaiting, subscribeJamPublicNotices, useJamPublicMe, useJamPublicWaiting } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
 import { isolate } from "@/lib/bidi";
 import { JamPublicView } from "./jam-public-view";
+import { JamTakeNoticeCards } from "./jam-take-notice-cards";
 import { JamConsentDialog } from "./jam-public-waiting";
 
 /**
@@ -49,12 +50,15 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
   const location = useLocation();
   const navigate = useNavigate();
   const me = useJamPublicMe(ready);
+  const { notices } = useJamPublicWaiting();
   const route = ready ? parsePublicJamPath(location.pathname) : null;
   const request = usePublicJamRequest();
   const handled = useRef(0);
   const [toast, setToast] = useState<Toast | null>(null);
   const [leaving, setLeaving] = useState(false);
   const [consentOpen, setConsentOpen] = useState(false);
+  // A tap on a take notice for the song already open: the view has no live frames, so it is opened again (see `onOpen` below).
+  const [viewEpoch, setViewEpoch] = useState(0);
 
   // Somebody asked for a public jam (an arrival from jam.pqp.gg, a card, a toast).
   useEffect(() => {
@@ -92,12 +96,27 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
     if (!ready) {
       return;
     }
-    return subscribeJamPublicNotices((notice) => {
+    const show = (notice: JamPublicNotice) => {
       const next = toastFor(notice, t, () => setConsentOpen(true));
       if (next) {
         setLeaving(false);
         setToast(next);
       }
+    };
+    return subscribeJamPublicNotices((notice) => {
+      if (notice.kind === "take" && !notice.admitted) {
+        // With `jam_take_notices` on, the server wrote an item for this take and
+        // the card it draws IS the notice; the toast is only for a server that
+        // has no such item (the switch is off), so a person is not told twice.
+        void loadJamPublicWaiting().then(() => {
+          const carded = getJamPublicWaiting().notices.some((one) => one.kind === "take" && one.songId === notice.songId);
+          if (!carded) {
+            show(notice);
+          }
+        });
+        return;
+      }
+      show(notice);
     });
   }, [ready, t]);
   const toastKey = toast?.key ?? null;
@@ -116,14 +135,14 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
     return () => window.clearTimeout(timer);
   }, [leaving]);
 
-  if (!ready || (!route && !toast && !consentOpen)) {
+  if (!ready || (!route && !toast && !consentOpen && notices.length === 0)) {
     return null;
   }
   return (
     <>
       {route && (
         <JamPublicView
-          key={route.kind === "new" ? "new" : route.songId}
+          key={`${route.kind === "new" ? "new" : route.songId}:${viewEpoch}`}
           target={route.kind === "new" ? "new" : route.songId}
           viewerId={viewerId}
           onClose={close}
@@ -166,6 +185,24 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
             <X className="h-4 w-4" aria-hidden />
           </button>
         </div>
+      )}
+      {me.enabled && (
+        <JamTakeNoticeCards
+          notices={notices}
+          lifted={toast !== null}
+          onOpen={(notice) => {
+            ackTakeNotice(notice.id);
+            if (route?.kind === "song" && route.songId === notice.songId) {
+              // The song is on screen already, from before the part arrived, and the view
+              // reads its song once (no frame reaches it): opening it again is what puts
+              // the waiting part, and Aceitar and Recusar, in front of the person.
+              setViewEpoch((before) => before + 1);
+              return;
+            }
+            openPublicJamById(notice.songId);
+          }}
+          onDismiss={(notice) => ackTakeNotice(notice.id)}
+        />
       )}
       <JamConsentDialog open={consentOpen} onClose={() => setConsentOpen(false)} />
     </>

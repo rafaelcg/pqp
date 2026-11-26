@@ -29,6 +29,15 @@ export function JamPublicWaitingStrip() {
   if (!me.enabled || (waiting.consents.length === 0 && waiting.inbox.length === 0)) {
     return null;
   }
+  // Every waiting part is on one song: go straight to it, where they are the first thing on the page.
+  const openInbox = () => {
+    const songs = new Set(waiting.inbox.map((item) => item.songId));
+    if (songs.size === 1) {
+      openPublicJamById(waiting.inbox[0]!.songId);
+      return;
+    }
+    setInboxOpen(true);
+  };
   const row = "mx-3 mt-3 flex items-center justify-between gap-3 rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-3 text-sm text-text sm:mx-5";
   return (
     <>
@@ -51,7 +60,7 @@ export function JamPublicWaitingStrip() {
               ? t("jam.public.waiting.takeOne", { title: isolate(waiting.inbox[0]!.songTitle) })
               : t("jam.public.waiting.takes", { count: waiting.inbox.length, countLabel: waiting.inbox.length })}
           </span>
-          <Button size="sm" variant="secondary" className="pointer-coarse:h-11" onClick={() => setInboxOpen(true)} data-jam-waiting-open="inbox">
+          <Button size="sm" variant="secondary" className="pointer-coarse:h-11" onClick={() => openInbox()} data-jam-waiting-open="inbox">
             {t("jam.public.waiting.see")}
           </Button>
         </p>

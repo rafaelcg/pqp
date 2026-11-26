@@ -235,3 +235,67 @@ export function buildCommunityHomePostPushCopy(
       };
   }
 }
+
+export type JamTakePushKind = "take" | "accepted" | "refused";
+
+export interface JamTakePushCopyInput {
+  locale: StreamAlertLocale;
+  kind: JamTakePushKind;
+  /** The song's title, already truncated by the caller. It is the notification's own title. */
+  title: string;
+  /** How many takes this one notice stands for (a burst on one song is one push). */
+  count: number;
+  /** The instrument when the notice is about one; null or `other` says nothing about it. */
+  instrument: string | null;
+}
+
+const JAM_INSTRUMENT_WORD: Record<StreamAlertLocale, Record<string, string>> = {
+  "pt-BR": { guitar: "guitarra", bass: "baixo", drums: "bateria", vocals: "voz", keys: "teclado" },
+  en: { guitar: "guitar", bass: "bass", drums: "drums", vocals: "vocals", keys: "keys" },
+  es: { guitar: "guitarra", bass: "bajo", drums: "batería", vocals: "voz", keys: "teclado" },
+};
+
+/**
+ * A take waiting for the starter, or the starter's answer to a sender. Fixed
+ * pairs per language (never a template that grows a word in one language
+ * only). The song's title is the notification's title, a name the person can
+ * already see in the app; nothing about WHO sent the part, which is the
+ * starter's to read in the app.
+ */
+export function buildJamTakePushCopy(input: JamTakePushCopyInput): PushCopy {
+  const { locale, kind, title, count } = input;
+  const word = input.instrument ? JAM_INSTRUMENT_WORD[locale][input.instrument] : undefined;
+  const many = count > 1;
+  switch (locale) {
+    case "en": {
+      const part = word ? `${word} part` : "part";
+      if (kind === "take") {
+        return { title, body: many ? `${count} parts are waiting for your answer` : `A ${part} is waiting for your answer` };
+      }
+      if (kind === "accepted") {
+        return { title, body: many ? `${count} of your parts are in the song` : `Your ${part} is in the song` };
+      }
+      return { title, body: many ? `${count} of your parts did not make it in` : `Your ${part} did not make it in` };
+    }
+    case "es": {
+      const part = word ? `parte de ${word}` : "parte";
+      if (kind === "take") {
+        return { title, body: many ? `${count} partes esperan tu respuesta` : `Una ${part} espera tu respuesta` };
+      }
+      if (kind === "accepted") {
+        return { title, body: many ? `${count} partes tuyas entraron en la canción` : `Tu ${part} entró en la canción` };
+      }
+      return { title, body: many ? `${count} partes tuyas no entraron` : `Tu ${part} no entró` };
+    }
+    default: {
+      const part = word ? `parte de ${word}` : "parte";
+      if (kind === "take") {
+        return { title, body: many ? `${count} partes esperando tua resposta` : `Uma ${part} esperando tua resposta` };
+      }
+      if (kind === "accepted") {
+        return { title, body: many ? `${count} partes tuas entraram na música` : `Tua ${part} entrou na música` };
+      }
+      return { title, body: many ? `${count} partes tuas não entraram` : `Tua ${part} não entrou` };
+    }
+  }
+}

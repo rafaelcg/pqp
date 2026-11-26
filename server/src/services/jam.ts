@@ -278,7 +278,13 @@ function summarySelect(view: JamSummaryView): string {
     LEFT JOIN jam_uploads cover ON cover.id = sc.upload_id
     LEFT JOIN LATERAL (
       SELECT COUNT(*)::int AS track_count,
-             COALESCE(array_agg(DISTINCT t.instrument), '{}') AS instruments,
+             -- What is IN the band: an outside take still waiting for the
+             -- starter (public, from outside, out of the mix) is a request,
+             -- not a part, so it does not fill what the song asks for
+             -- (missingInstruments, and every client that works the need
+             -- out from this list) and keeps the song under "Falta alguém".
+             COALESCE(array_agg(DISTINCT t.instrument)
+                        FILTER (WHERE NOT (COALESCE(wpt.outside, FALSE) AND NOT t.in_mix)), '{}') AS instruments,
              COUNT(DISTINCT t.author_id)::int AS contributor_count,
              -- Earliest to latest HEARD sample. offset_ms is the song time of the
              -- stored file's first sample and a trim hides audio without moving
@@ -288,6 +294,7 @@ function summarySelect(view: JamSummaryView): string {
                FILTER (WHERE t.in_mix) AS mix_end,
              BOOL_OR(t.video_key IS NOT NULL) AS has_video
         FROM jam_tracks t
+        LEFT JOIN jam_public_tracks wpt ON wpt.track_id = t.id
        WHERE t.song_id = s.id AND t.deleted_at IS NULL ${trackFilter}
     ) agg ON TRUE
     -- The preview waveform: the in-mix track with the most signal. The sum runs

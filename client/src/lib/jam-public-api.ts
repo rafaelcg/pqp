@@ -7,6 +7,7 @@ import {
   type JamPublicLikeResponse,
   type JamPublicMeConfig,
   type JamPublicReportResponse,
+  type JamTakeNoticesResponse,
   type JamPublicSongCreated,
   type JamPublicSongForViewer,
   type JamPublicationResponse,
@@ -74,6 +75,12 @@ export const fetchJamPublicConsents = () =>
   apiFetch<JamPublicConsentsResponse>("/api/jam-public/consents");
 
 export const fetchJamPublicInbox = () => apiFetch<JamPublicInboxResponse>("/api/jam-public/inbox");
+
+/** The open take notices: parts waiting for this account's answer, and the starter's answers to its own. */
+export const fetchJamTakeNotices = () => apiFetch<JamTakeNoticesResponse>("/api/jam-public/notices");
+
+export const ackJamTakeNotice = (id: string) =>
+  apiFetch<{ ok: true }>("/api/jam-public/notices/ack", json("POST", { id }));
 
 export const fetchJamPublication = (songId: string) =>
   apiFetch<JamPublicationResponse>(`/api/jam-songs/${songId}/public`);

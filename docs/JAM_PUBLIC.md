@@ -367,14 +367,15 @@ that predates it: no menu entry, no strip, no shelf, no toast.
 | Where | What | Code |
 |---|---|---|
 | A song's `...` menu (its starter, channel song) | "Tornar pública", a sheet that says what becomes public (audio, video when allowed, names), the show-origin switch; once public the same entry is "Música pública": status, who answered what, outside requests waiting, the show-origin switch, the auto-accept switch ("Aceitar partes de fora sozinho", asks before turning on), unpublish | `jam-public-sheet.tsx`, `hooks/use-jam-publication.ts` |
-| The Jam wall | a quiet row when songs wait for the person's answer (`/consents`) or outside takes wait for them (`/inbox`); each opens a dialog | `jam-public-waiting.tsx` |
+| The Jam wall | a quiet row when songs wait for the person's answer (`/consents`) or outside takes wait for them (`/inbox`); with every waiting part on ONE song the button opens that song, else a dialog. A tile with parts waiting carries an accent pill ("N esperando") | `jam-public-waiting.tsx`, `jam-tile.tsx` |
+| Communities (the compass) | for a starter with no Jam channel, a row above the Jam door, "N partes esperando tua resposta", drawn only while something waits | `JamWaitingRow` in `communities-view.tsx` |
 | A song with a part of mine, made public | the three answers (pode ir, só o áudio, não) in the song itself too | `jam-public-parts.tsx`, `jam-public-panel.tsx` |
-| The starter's song | "Pedidos de fora": outside takes listed apart from the band; "Ouvir com a banda" is the lane audition (in place of the same instrument, the rest playing), then Aceitar (`inMix: true`) or Recusar (delete) | `JamPublicRequests` |
+| The starter's song | "N partes esperando tua resposta", an accent-bordered block at the TOP of the song, above the stage (it used to sit below it and a starter needed six minutes to find it): outside takes listed apart from the band; "Ouvir com a banda" is the lane audition (in place of the same instrument, the rest playing), then Aceitar (`inMix: true`) or Recusar (delete) | `JamPublicRequests` |
 | `/app/jam/<songId>` | the public view: the song panel, stage, lanes and studio of the channels, held in the jam store under `publicJamKey` (not a channel id), so there is no list, no frame and no reconnect read for it. Like (the count shows above 1), plays, origin, copy link, report the song or one part, "Gravar minha parte" | `jam-public-view.tsx` |
 | `/app/jam/new` | the start sheet, then the studio; the first take creates a standalone public jam (`POST /api/jam-public/songs`) | `use-jam-studio.ts` (`standalone`) |
 | The studio on a public jam | says whether the take is public or arrives as a request, one switch for the video, sends `publicConsent` | `jam-studio.tsx` |
 | The wall, under the songs | a "Públicas" row (`sort=top`, ten, minus the channel's own) and a link to the public site; the channel's own songs get a header only when both sections exist | `jam-public-shelf.tsx` |
-| Anywhere | `jam-public-notice` frames (a nudge: read again) become one toast, with "Responder" or "Ver" | `jam-public-host.tsx` |
+| Anywhere | `jam-public-notice` frames (a nudge: read again) become one toast, with "Responder" or "Ver"; the take notices (below) are a card in the same corner, persistent until answered | `jam-public-host.tsx`, `jam-take-notice-cards.tsx` |
 
 The view is a full-screen layer over the app, mounted once by `App`
 (`JamPublicHost`), and `syncRoute` leaves the address alone while it is open.
@@ -386,6 +387,92 @@ needs a server change.
 Not in this PR: a list of all public jams inside the app (the shelf links to the
 public site), the operator's review screens (they are in the dashboard), and
 votes on public songs (the contract has none).
+
+## Telling the starter (`jam_take_notices`)
+
+Launch user test, round 2, finding N1: a stranger sent a part to a public song and
+its starter needed 376 seconds and about 45 actions, by luck, to find it. Nothing
+had told them. Three things changed, and one thing about `needs`.
+
+**1. A waiting take is a notice, in the app's own mechanism** (the one the
+watch party waitlist and story notices use: a durable row the app reads, a live
+frame, a push; no email and no broadcast push).
+
+| Kind | To | When | Item says |
+|---|---|---|---|
+| `take` | the song's starter | an outside take arrived and waits for their answer (not when auto-accept already put it in) | the song and the instrument; a burst is ONE item with a count |
+| `accepted` | the person who sent it | the starter put it in the mix (`PATCH inMix: true`), or auto-accept did, more than 30 s after it was sent | the song and the instrument |
+| `refused` | the person who sent it | the starter deleted it while it waited | the song and the instrument |
+
+- **Durable:** `jam_take_notices` (`schema.sql`), one OPEN row per (person, song,
+  kind) (a partial unique index). The second take on a song raises `count` and
+  adds its instrument instead of making another item, which is the batching. A
+  `take` item's count and instruments are read LIVE from the takes still waiting
+  (`GET /api/jam-public/notices`), so answering them empties it and it needs no
+  clean-up; the stored ones are only what it said when last touched. Spent by
+  `POST /api/jam-public/notices/ack { id }` (the card's button or X); answered
+  items are swept after a week, unanswered ones after sixty days.
+- **Live:** the starter's is the existing `jam-public-notice`, `kind: "take"`, now
+  with `instrument` (additive). The sender's is a frame of its own,
+  `jam-take-decision`: `jam-public-notice` reads an unknown `kind` as `consent`
+  (`.catch`), so a tab that had not reloaded would have shown the sender a consent
+  question. A new frame type is ignored by every old client. Both go to every socket
+  of the account on every instance (`CLUSTER_BUS`); a lost frame costs nothing,
+  the card is on the next read (boot, a reconnect, any frame).
+- **Push:** the existing path (`push.ts`, `sendJamTakePush`), kind `jam` in
+  `product.pushSkipped`. A person with a live socket anywhere in the cluster, a
+  stored DND, or an explicit mute (`none` on the song's channel or server, or the
+  account's `default`; the account-wide `mentions` default does NOT silence it, it is
+  about their own song) gets none. Copy in the person's language (pt-BR, en, es),
+  the song's title as the title, the instrument, never who sent it; one live
+  notification per song and kind (`tag`). A tap opens `/app/jam/<songId>`. The
+  native apps do not parse that path: their tap opens the app (see the PR).
+- **Never told:** the person who recorded it; a recipient who blocked the other
+  (one direction, `notBlockedSql`'s rule). The take still waits in the starter's
+  inbox either way.
+- **Two machines:** a take lands on exactly one (that is its HTTP request), so the
+  frame is sent once and crosses the bus; the row upsert is the push CLAIM
+  (`pushed_at`, at most one push per item per 30 minutes, decided inside the one
+  statement), so two machines racing on the same song push once. Pinned by
+  `server/src/ws/jam-take-notices-cluster.test.ts` on the real bus.
+- **Nothing between BEGIN and COMMIT touches the network** and nothing here throws
+  into the take's request: the take was stored first, a notice that fails is a nudge
+  not given (`takeNotices.failed`).
+- **The flag** `jam_take_notices` (global, default ON, `JAM_TAKE_NOTICES=false` is the
+  environment off; it is strictly additive). Off writes nothing, sends nothing new,
+  and `GET /notices` answers an empty list; the old toast comes back for an online
+  starter. The persistent markers below and the `needs` rule are not behind it.
+
+**2. Where a starter finds it without a notice.** "N partes esperando tua
+resposta" is now an accent block at the top of the song, above the stage, with the
+takes listed first and Aceitar / Recusar in view; the wall's row opens the song
+when every waiting part is on one song; a tile carries a pill; and a starter with
+no Jam channel gets a row in the Communities directory. All of it reads the
+starter's inbox (the state), not the notice, so it stays when the flag is off.
+
+**3. A pending take does not fill `needs`.** `needs` and `missingInstruments`
+(`JamSongSummary`, `PublicJamSong`) used the instruments of EVERY live track, so
+one outside take waiting for the starter emptied what the song asks for and took
+it out of "Falta alguém" and the site's "wants a part" selection while nothing was
+in the mix. The instrument list now leaves out a track that is outside, public and
+out of the mix, in the channel summary (`summarySelect` in `jam.ts`), the public
+song (`live` in `jam-public.ts`) and the `?needs=` filter. The summary's
+`instruments` follows (it is what the band lanes and the web client's
+`songNeed` read), so the pending part is not a lane either until it is accepted.
+`missingInstruments` has been on the wire since #1579; the phones read it first and
+fall back to `instruments`, so both paths agree now.
+
+**4. The sender is told how they will hear back.** The after-send copy (the studio's
+done screen, the song's status line, the send hint) says that the starter's answer
+arrives as a notification here, and on the phone when notifications are on.
+
+**Counters** on `GET /api/admin/metrics`, `jamPublic.process.takeNotices` (per
+process, sum the machines): `created`, `merged` (a take folded into an open item),
+`byKind`, `decisionFrames`, `pushClaimed` (a push the item claimed), `pushTried`
+(of those, reached a device attempt; the rest hit DND, a mute or an open socket,
+see `product.pushSkipped.jam`), `pushHeldBack`, `skippedBlocked`, `skippedFlagOff`,
+`acked`, `failed`. `jamPublic.takeNoticesOpen` is the unanswered items right now.
+Healthy: `created` follows `takesRecorded` for outside takes, `failed` is zero.
 
 ## Launch gaps accepted (2026-11-20)
 
@@ -511,7 +598,8 @@ and refusals by limit (`rateLimited`) and by address bucket (`addressRefused`).
 | `server/src/services/jam-public-plays.ts` | The play counter |
 | `server/src/services/jam-public-media.ts` | Media URLs and the edge seam |
 | `tools/jam-media-edge/` | The edge Worker (R2 binding, colo cache, ranges); README is its runbook |
-| `server/src/services/jam-public-notify.ts` | The `jam-public-notice` frame |
+| `server/src/services/jam-public-notify.ts` | The `jam-public-notice` frame and the sender's `jam-take-decision` |
+| `server/src/services/jam-take-notices.ts` | The take notices: durable items, batching, the push claim, counters (§"Telling the starter") |
 | `server/src/api/jam-public-routes.ts` | Public, authenticated and operator routes |
 | `server/src/api/jam-routes.ts` | The private routes, with public access |
 | `server/src/api/jam-public.test.ts` | End to end on a real Postgres, with real ffmpeg where installed |
