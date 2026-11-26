@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   listenToPublicJam,
+  openMyJams,
   openPublicJam,
   openPublicJamById,
   peekPublicJamRequest,
@@ -39,6 +40,16 @@ describe("the three things a door offers", () => {
     const request = peekPublicJamRequest();
     expect(request?.target).toBe("new");
     expect(request && publicJamRequestPath(request)).toBe("/app/jam/new");
+  });
+
+  it("\"Tuas músicas\" opens at its own address and has no song to act on (round 3, N-3)", () => {
+    openMyJams();
+    const request = peekPublicJamRequest();
+    expect(request?.target).toBe("mine");
+    expect(request?.intent).toEqual({ kind: "mine" });
+    expect(request && publicJamRequestPath(request)).toBe("/app/jam/mine");
+    expect(takePublicJamIntent("mine")).toEqual({ kind: "mine" });
+    expect(takePublicJamIntent("mine")).toBeNull();
   });
 
   it("every request moves the nonce, so asking twice for the same song still opens it", () => {

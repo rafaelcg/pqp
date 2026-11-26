@@ -16,6 +16,7 @@ import {
 import { ackTakeNotice, getJamPublicWaiting, loadJamPublicWaiting, subscribeJamPublicNotices, useJamPublicMe, useJamPublicWaiting } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
 import { isolate } from "@/lib/bidi";
+import { JamMineView } from "./jam-mine-view";
 import { JamPublicView } from "./jam-public-view";
 import { JamTakeNoticeCards } from "./jam-take-notice-cards";
 import { JamConsentDialog } from "./jam-public-waiting";
@@ -71,7 +72,7 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
     navigate(publicJamRequestPath(request));
   }, [ready, request, navigate]);
 
-  const routeTarget = route ? (route.kind === "new" ? "new" : route.songId) : null;
+  const routeTarget = route ? (route.kind === "song" ? route.songId : route.kind) : null;
   const close = useCallback(() => {
     // Somebody who came from the Jam site for this song is not a member who
     // wandered into a jam: the chat home behind it is empty and has no way back
@@ -125,7 +126,12 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
   // transport. A toast that is held back (a recording is on, a song is open) keeps its place and its
   // nine seconds start when it is finally drawn.
   const hint = useJamHintContext();
-  const placement = jamNoticePlacement({ studio: hint.studio, song: hint.song, view: route !== null });
+  // Only a song's view has a slot for a card; the start sheet and "Tuas músicas" are covered screens too, so they hold.
+  const placement = jamNoticePlacement({
+    studio: hint.studio,
+    song: hint.song || (route !== null && route.kind !== "song"),
+    view: route?.kind === "song",
+  });
   const queue = jamNoticeQueue(notices, toast !== null, placement);
   const toastKey = toast !== null && queue.toast ? toast.key : null;
   useEffect(() => {
@@ -173,7 +179,8 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
   );
   return (
     <>
-      {route && (
+      {route?.kind === "mine" && <JamMineView onClose={close} />}
+      {route && route.kind !== "mine" && (
         <JamPublicView
           key={`${route.kind === "new" ? "new" : route.songId}:${viewEpoch}`}
           target={route.kind === "new" ? "new" : route.songId}

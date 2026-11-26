@@ -14,6 +14,7 @@ import {
   type AdminUnpublishJamRequest,
   type CreatePublicJamRequest,
   type JamInstrument,
+  type JamPublicMyPart,
   type JamPublication,
   type JamPublicationPart,
   type JamPublicationStatus,
@@ -1612,6 +1613,62 @@ export async function jamPublicInboxFor(userId: string): Promise<JamPublicInboxI
     }),
   );
   return items.filter((item): item is JamPublicInboxItem => item !== null);
+}
+
+/**
+ * The parts the caller sent to other people's public songs and where each stands
+ * (`jamPublicMyPartsResponseSchema`). Read from the rows themselves, not from the
+ * notices: the notices are what was said, these are what is true, and they are
+ * kept for a different time (a notice is spent when it is tapped).
+ */
+export async function myPublicParts(userId: string): Promise<JamPublicMyPart[]> {
+  const result = await getPool().query<{
+    track_id: string;
+    song_id: string;
+    title: string;
+    instrument: string;
+    in_mix: boolean;
+    deleted_at: Date | null;
+    declined_at: Date | null;
+    created_at: Date;
+    starter_name: string | null;
+  }>(
+    `SELECT t.id AS track_id, s.id AS song_id, s.title, t.instrument, t.in_mix, t.deleted_at,
+            pt.declined_at, t.created_at, su.display_name AS starter_name
+       FROM jam_public_tracks pt
+       JOIN jam_tracks t ON t.id = pt.track_id
+       JOIN jam_songs s ON s.id = pt.song_id AND s.deleted_at IS NULL
+       JOIN jam_public_songs p ON p.song_id = s.id
+            AND p.removed_at IS NULL AND p.unpublished_at IS NULL
+       LEFT JOIN users su ON su.id = s.author_id
+      WHERE pt.author_id = $1 AND pt.outside AND pt.removed_at IS NULL
+        AND s.author_id IS DISTINCT FROM $1
+        AND (t.deleted_at IS NULL
+             OR (pt.declined_at IS NOT NULL AND pt.declined_at > NOW() - INTERVAL '30 days'))
+      ORDER BY GREATEST(t.created_at, COALESCE(pt.declined_at, t.created_at)) DESC, t.id
+      LIMIT 100`,
+    [userId],
+  );
+  return result.rows.map((row) => ({
+    trackId: row.track_id,
+    songId: row.song_id,
+    title: row.title,
+    instrument: (JAM_INSTRUMENTS as readonly string[]).includes(row.instrument)
+      ? (row.instrument as JamInstrument)
+      : "other",
+    state: row.deleted_at !== null ? "refused" : row.in_mix ? "in" : "waiting",
+    startedBy: row.starter_name,
+    sentAt: row.created_at.toISOString(),
+    answeredAt: row.declined_at ? row.declined_at.toISOString() : null,
+  }));
+}
+
+/** The song's starter declined an outside take: the row remembers it, for "Tuas músicas". */
+export async function markTakeDeclined(trackId: string): Promise<void> {
+  await getPool().query(
+    `UPDATE jam_public_tracks SET declined_at = NOW() WHERE track_id = $1 AND outside AND declined_at IS NULL`,
+    [trackId],
+  );
 }
 
 /** The caller's published songs, newest first. */

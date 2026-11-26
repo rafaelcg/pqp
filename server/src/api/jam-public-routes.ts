@@ -49,6 +49,7 @@ import {
   jamPublicInboxFor,
   listPublicJams,
   myPublicJams,
+  myPublicParts,
   noteJamPublicAddressRefusal,
   pendingJamConsentsFor,
   publishJamSong,
@@ -420,6 +421,11 @@ export function registerJamPublicRoutes(router: Router): void {
 
   router.get("/api/jam-public/mine", async ({ user }) => ({
     songs: await myPublicJams(user.id),
+  }));
+
+  // The parts I sent to other people's public songs, and where each stands.
+  router.get("/api/jam-public/my-parts", async ({ user }) => ({
+    parts: await myPublicParts(user.id),
   }));
 
   // ---- a song's publication

@@ -8,9 +8,12 @@ import { withSignedParam } from "./jam-signed-in";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export type PublicJamRoute = { kind: "song"; songId: string } | { kind: "new" };
+export type PublicJamRoute = { kind: "song"; songId: string } | { kind: "new" } | { kind: "mine" };
 
-/** `/app/jam/<songId>`: a public jam opened inside the app, with no channel. `/app/jam/new` starts one. */
+/**
+ * `/app/jam/<songId>`: a public jam opened inside the app, with no channel. `/app/jam/new` starts one,
+ * `/app/jam/mine` is "Tuas músicas" (the songs the person started and the parts they sent).
+ */
 export function parsePublicJamPath(pathname: string): PublicJamRoute | null {
   const match = /^\/app\/jam\/([^/]+)\/?$/.exec(pathname);
   if (!match) {
@@ -25,6 +28,9 @@ export function parsePublicJamPath(pathname: string): PublicJamRoute | null {
   if (raw === "new") {
     return { kind: "new" };
   }
+  if (raw === "mine") {
+    return { kind: "mine" };
+  }
   return UUID.test(raw) ? { kind: "song", songId: raw } : null;
 }
 
@@ -33,6 +39,7 @@ export function publicJamAppPath(songId: string): string {
 }
 
 export const NEW_PUBLIC_JAM_PATH = "/app/jam/new";
+export const MINE_PUBLIC_JAM_PATH = "/app/jam/mine";
 
 interface Where {
   protocol: string;

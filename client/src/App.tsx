@@ -486,11 +486,7 @@ import {
   jamIntentFromSearch,
   takeJamIntent,
 } from "@/lib/jam-intent";
-import {
-  dismissJamHandover,
-  noteJamHandover,
-  useJamArrival,
-} from "@/lib/jam-handover";
+import { noteJamHandover, useJamArrival } from "@/lib/jam-handover";
 import { parsePublicJamPath } from "@/lib/jam-public-links";
 import { forgetSignedIn, rememberSignedIn } from "@/lib/jam-signed-in";
 import {
@@ -506,7 +502,6 @@ import {
   rememberJamAnnouncement,
 } from "@/lib/jam-announcement";
 import { JamArrivalCard } from "@/components/onboarding/jam-arrival-card";
-import { JamHandoverStrip } from "@/components/onboarding/jam-handover-strip";
 import { JamHoldingScreen } from "@/components/onboarding/jam-holding-screen";
 import { JamPublicHost } from "@/components/jam/jam-public-host";
 import {
@@ -1765,7 +1760,8 @@ function MainAppContent({
    */
   const [arrivedOnInviteLink, setArrivedOnInviteLink] = useState(false);
   // Somebody who came from the public jam site (`lib/jam-handover.ts`): the
-  // first run counts its own screens, and the shell keeps a way back.
+  // first run counts its own screens, closing their song leaves for the site,
+  // and the Jam card does not repeat what they just came from.
   const jamArrival = useJamArrival();
   /**
    * The server this session just walked into from an invite link, if the banner
@@ -11965,8 +11961,8 @@ function MainAppContent({
     sharing: voiceState.isSharingScreen || watchingAShare,
     appRunning: hintQuietSources.appRunning,
     campaignsYield,
-    // A visitor who came from the Jam site already has the Jam on screen as
-    // "Voltar pra jam" (`JamHandoverStrip`): one instruction, not two.
+    // A visitor who came from the Jam site already has the Jam on screen (their song,
+    // or "Tuas músicas"): one instruction, not two.
     arriving:
       (arrivalServerId !== null && arrivalServerId === selectedServerId) ||
       jamArrival !== null,
@@ -14444,25 +14440,6 @@ function MainAppContent({
           <div className="border-b border-warning/30 bg-warning/10 px-3 py-1 text-center text-xs text-warning">
             {t("chrome.devBypass")}
           </div>
-        )}
-
-        {jamArrival && !parsePublicJamPath(location.pathname) && (
-          <JamHandoverStrip
-            handover={jamArrival}
-            onReturn={() =>
-              openPublicJam(
-                jamArrival.target === "new"
-                  ? { kind: "new" }
-                  : {
-                      kind: "song",
-                      songId: jamArrival.target,
-                      record: false,
-                      instrument: null,
-                    },
-              )
-            }
-            onDismiss={dismissJamHandover}
-          />
         )}
 
         <ConnectionBanner

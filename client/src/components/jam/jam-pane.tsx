@@ -1,5 +1,5 @@
 import type { Channel, JamInstrument, JamSongSummary } from "@pqp/shared";
-import { CirclePause, CircleHelp, Headphones, Menu as MenuIcon, Mic, Music2, Plus, RefreshCw, Send, Trash2, X } from "lucide-react";
+import { CirclePause, CircleHelp, Headphones, ListMusic, Menu as MenuIcon, Mic, Music2, Plus, RefreshCw, Send, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -44,6 +44,8 @@ import "./jam.css";
 import { coverGradient } from "./jam-art";
 import { useElementWidth } from "./jam-bars";
 import { JamHowToDialog, JamHowToHero } from "./jam-howto";
+import { openMyJams } from "@/lib/jam-public-nav";
+import { useJamPublicMe } from "@/lib/jam-public-store";
 import { JamPublicShelf, useJamPublicShelf } from "./jam-public-shelf";
 import { JamPublicWaitingStrip } from "./jam-public-waiting";
 import { JamSongPanel } from "./jam-song-panel";
@@ -109,6 +111,7 @@ export function JamPane({
   const channelId = channel.id;
   const state = useJamChannel(channelId);
   const config = useJamConfig(server.id);
+  const publicMe = useJamPublicMe();
   const [filter, setFilter] = useState<JamWallFilter>("all");
   const [openSongId, setOpenSongIdState] = useState<string | null>(routeSongId);
   const [songGone, setSongGone] = useState(false);
@@ -695,6 +698,19 @@ export function JamPane({
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              {publicMe.enabled && (
+                <Tooltip label={t("jam.mine.door")}>
+                  <button
+                    type="button"
+                    onClick={openMyJams}
+                    aria-label={t("jam.mine.door")}
+                    data-jam-mine-door=""
+                    className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-secondary outline-none hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
+                  >
+                    <ListMusic className="h-5 w-5" aria-hidden />
+                  </button>
+                </Tooltip>
+              )}
               <Tooltip label={t("jam.wall.howItWorks")}>
                 <button
                   type="button"

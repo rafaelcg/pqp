@@ -12,6 +12,7 @@
  *                                              "report this jam", or one part of it,
  *                                              optionally already as a copyright report
  *   ?jam=new                                   "let me start a jam"
+ *   ?jam=mine                                  "show me my songs" (the signed-in chip on the site)
  *
  * TWO CARRIERS. On the hosted site the public pages live on `jam.pqp.gg` and
  * the app on `pqp.gg`: two origins, so a `localStorage` stash written by the
@@ -48,6 +49,8 @@ export type JamReportReason = "copyright";
 
 export type JamIntent =
   | { kind: "new" }
+  /** "Tuas músicas": the songs the person started and the parts they sent (`components/jam/jam-mine-view.tsx`). */
+  | { kind: "mine" }
   | {
       kind: "song";
       songId: string;
@@ -80,6 +83,9 @@ export function jamIntentFromSearch(search: string): JamIntent | null {
   if (raw === "new") {
     return { kind: "new" };
   }
+  if (raw === "mine") {
+    return { kind: "mine" };
+  }
   if (!UUID.test(raw)) {
     return null;
   }
@@ -101,6 +107,9 @@ export function jamIntentFromSearch(search: string): JamIntent | null {
 export function jamIntentQuery(intent: JamIntent): string {
   if (intent.kind === "new") {
     return "jam=new";
+  }
+  if (intent.kind === "mine") {
+    return "jam=mine";
   }
   const params = new URLSearchParams({ jam: intent.songId });
   if (intent.record) {
@@ -270,6 +279,9 @@ function encode(intent: JamIntent): string {
   if (intent.kind === "new") {
     return "new";
   }
+  if (intent.kind === "mine") {
+    return "mine";
+  }
   if (!intent.record) {
     if (intent.act === "like") return `${intent.songId}:like`;
     if (intent.act === "report") {
@@ -286,6 +298,9 @@ function encode(intent: JamIntent): string {
 function decode(value: string): JamIntent | null {
   if (value === "new") {
     return { kind: "new" };
+  }
+  if (value === "mine") {
+    return { kind: "mine" };
   }
   const [songId = "", flag, extra, extra2] = value.split(":");
   if (!UUID.test(songId)) {
@@ -393,6 +408,9 @@ export function rememberJamIntentFromLocation(
 export function jamReturnPath(intent: JamIntent): string {
   if (intent.kind === "new") {
     return "/jam?from=app&jam=new";
+  }
+  if (intent.kind === "mine") {
+    return "/jam";
   }
   const params = new URLSearchParams({ from: "app" });
   if (intent.record) {

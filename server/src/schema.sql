@@ -7998,6 +7998,10 @@ CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_video_pending
 -- part, so the starter taking it out of the mix again is not undone by the next
 -- sweep. NULL: not admitted that way.
 ALTER TABLE jam_public_tracks ADD COLUMN IF NOT EXISTS auto_admitted_at TIMESTAMPTZ;
+-- When the song's starter declined this outside take (set by the delete that answers it, never by the
+-- take's own author deleting it). "Tuas músicas" lists a refusal for thirty days from it, which is how a
+-- sender who was not online at that moment can still learn it. NULL: not declined.
+ALTER TABLE jam_public_tracks ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ;
 -- What the minute sweep reads: outside takes still out of the mix and never admitted.
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_auto_due
   ON jam_public_tracks (song_id) WHERE outside AND auto_admitted_at IS NULL AND removed_at IS NULL;

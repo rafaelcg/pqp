@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  jamPublicMyPartsResponseSchema,
   jamPublicSongCreatedSchema,
   jamTakeNoticesResponseSchema,
   jamUploadTicketSchema,
@@ -432,6 +433,56 @@ describeDb("telling the starter about takes", () => {
     // A deleted take is also gone for a person whose item was never read.
     expect((await call(taker, "DELETE", `/api/jam-tracks/${drums.body.track.id}`)).status).toBe(204);
     expect(await notices(taker)).toEqual([]);
+  });
+
+  it("my parts: what I sent to other people's songs, and how each was answered (round 3, N-3)", async () => {
+    const parts = async (as: Actor) => {
+      const reply = await call(as, "GET", "/api/jam-public/my-parts");
+      expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+      return jamPublicMyPartsResponseSchema.parse(reply.body).parts;
+    };
+    const song = await startSong();
+    expect(await parts(taker)).toEqual([]);
+    const bass = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    const drums = await addTrack(taker, song, "drums", { publicConsent: "yes" });
+    // A second bass: another version of the same instrument, which the sender will delete themselves.
+    const vocals = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    expect([bass.status, drums.status, vocals.status]).toEqual([201, 201, 201]);
+
+    // Every one waits, with the song's title and who started it.
+    const waiting = await parts(taker);
+    expect(waiting.map((one) => [one.instrument, one.state]).sort()).toEqual([
+      ["bass", "waiting"],
+      ["bass", "waiting"],
+      ["drums", "waiting"],
+    ]);
+    expect(waiting[0]).toMatchObject({ songId: song, title: "Aberta", startedBy: "Starter", answeredAt: null });
+
+    // Accepted is "in"; declined is "refused" (and stays listed, with when); the sender's own delete is neither, it is gone.
+    expect((await call(starter, "PATCH", `/api/jam-tracks/${bass.body.track.id}`, { inMix: true })).status).toBe(200);
+    expect((await call(starter, "DELETE", `/api/jam-tracks/${drums.body.track.id}`)).status).toBe(204);
+    expect((await call(taker, "DELETE", `/api/jam-tracks/${vocals.body.track.id}`)).status).toBe(204);
+    const answered = await parts(taker);
+    expect(answered.map((one) => [one.instrument, one.state]).sort()).toEqual([
+      ["bass", "in"],
+      ["drums", "refused"],
+    ]);
+    expect(answered.find((one) => one.instrument === "drums")!.answeredAt).not.toBeNull();
+
+    // The refusal is remembered with the notices off too: a notice is a nudge, this is a record.
+    await noticesFlag(false);
+    expect((await parts(taker)).map((one) => one.state).sort()).toEqual(["in", "refused"]);
+    await noticesFlag(true);
+
+    // Only mine: the starter and a stranger see none of them, and a refusal ages out after thirty days.
+    expect(await parts(starter)).toEqual([]);
+    expect(await parts(other)).toEqual([]);
+    await getPool().query(`UPDATE jam_public_tracks SET declined_at = NOW() - INTERVAL '31 days' WHERE track_id = $1`, [drums.body.track.id]);
+    expect((await parts(taker)).map((one) => one.state)).toEqual(["in"]);
+
+    // A song that stopped being public takes its parts off the list.
+    await getPool().query(`UPDATE jam_public_songs SET unpublished_at = NOW() WHERE song_id = $1`, [song]);
+    expect(await parts(taker)).toEqual([]);
   });
 
   it("a starter who blocked the recorder is not told (the take still waits in the inbox)", async () => {

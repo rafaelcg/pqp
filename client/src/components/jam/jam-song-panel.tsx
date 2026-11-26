@@ -20,7 +20,7 @@ import { bandFitsBelowStage, readBandOpen, writeBandOpen } from "@/lib/jam-band-
 import { setJamHintContext } from "@/lib/jam-hint-context";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cannotRecordReason, pickInstrument } from "@/lib/jam-record";
-import { dropInboxTake } from "@/lib/jam-public-store";
+import { dropInboxTake, loadJamPublicWaiting } from "@/lib/jam-public-store";
 import { notePublicPlay } from "@/lib/jam-public-api";
 import { oneAtATime, switchTakeIn } from "@/lib/jam-mix";
 import {
@@ -827,6 +827,11 @@ export function JamSongPanel({
           void guard(async () => {
             await deleteJamTrack(track.id);
             dropInboxTake(track.id);
+            // A part of mine that went in may have an "entrou" notice waiting: the server voids it with
+            // the part (round 3, N-5), and the read is what takes it off this screen too.
+            if (viewerId !== null && track.authorId === viewerId) {
+              void loadJamPublicWaiting();
+            }
             // When it was the song's last take the server took the song with it (if nobody
             // added one meanwhile): the reads below are what say which it was, so a take that
             // arrived in between is never taken for a deleted song.
