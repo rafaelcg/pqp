@@ -7,6 +7,8 @@
  * asks (`jam-site/player.ts`).
  */
 
+import { JAM_AUDIO_MAX_BYTES } from "@pqp/shared";
+
 /** Bytes received so far and the size the server announced, or null when it did not say. */
 export type FetchProgress = (loaded: number, total: number | null) => void;
 
@@ -32,18 +34,34 @@ export function announcedBytes(headers: Pick<Headers, "get">): number | null {
  * Read `res` to the end, reporting each chunk, and return the bytes. Without a
  * readable stream (an old engine, a mocked response) it falls back to
  * `arrayBuffer()` and reports the end only.
+ *
+ * The header is a hint, never a licence to allocate: a stem is an audio object,
+ * which the server caps at `JAM_AUDIO_MAX_BYTES`, so a `Content-Length` above
+ * that ceiling is refused before a byte is read, and a body that runs past it
+ * (whatever the header said) is cancelled and refused. `maxBytes` is a
+ * parameter for tests only.
  */
-export async function readWithProgress(res: Response, onProgress: FetchProgress): Promise<ArrayBuffer> {
+export async function readWithProgress(
+  res: Response,
+  onProgress: FetchProgress,
+  maxBytes: number = JAM_AUDIO_MAX_BYTES,
+): Promise<ArrayBuffer> {
   const total = announcedBytes(res.headers);
   const reader = res.body?.getReader();
+  if (total !== null && total > maxBytes) {
+    await reader?.cancel().catch(() => undefined);
+    throw new Error("jam: stem larger than allowed");
+  }
   if (!reader) {
     const bytes = await res.arrayBuffer();
+    if (bytes.byteLength > maxBytes) throw new Error("jam: stem larger than allowed");
     onProgress(bytes.byteLength, total === null ? bytes.byteLength : total);
     return bytes;
   }
-  // One buffer, written as the chunks arrive: sized by the announced length (or 1 MiB when there is none) and
-  // doubled if the body runs past it, so a finished stem is never held twice (chunks AND a flattened copy).
-  let buffer = new Uint8Array(total ?? 1_048_576);
+  // One buffer, written as the chunks arrive: sized by the announced length (at most the ceiling) or 1 MiB when
+  // there is none, and doubled (never past the ceiling) if the body runs past it, so a finished stem is never
+  // held twice (chunks AND a flattened copy).
+  let buffer = new Uint8Array(Math.min(total ?? 1_048_576, maxBytes));
   let loaded = 0;
   onProgress(0, total);
   for (;;) {
@@ -51,8 +69,12 @@ export async function readWithProgress(res: Response, onProgress: FetchProgress)
     if (done) {
       break;
     }
+    if (loaded + value.byteLength > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error("jam: stem larger than allowed");
+    }
     if (loaded + value.byteLength > buffer.byteLength) {
-      const grown = new Uint8Array(Math.max(buffer.byteLength * 2, loaded + value.byteLength));
+      const grown = new Uint8Array(Math.min(maxBytes, Math.max(buffer.byteLength * 2, loaded + value.byteLength)));
       grown.set(buffer.subarray(0, loaded));
       buffer = grown;
     }

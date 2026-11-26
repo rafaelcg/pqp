@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { JamPlayer } from "./player";
 import { announcedBytes, megabytes, readWithProgress, songBytes, songFraction } from "./fetch-progress";
 
-function streamed(chunks: number[], headers: Record<string, string> = {}): Response {
+function streamed(chunks: number[], headers: Record<string, string> = {}, onCancel?: () => void): Response {
   let at = 0;
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -11,6 +11,9 @@ function streamed(chunks: number[], headers: Record<string, string> = {}): Respo
         return;
       }
       controller.enqueue(new Uint8Array(chunks[at++]!).fill(7));
+    },
+    cancel() {
+      onCancel?.();
     },
   });
   return new Response(body, { headers });
@@ -74,6 +77,39 @@ describe("readWithProgress buffer", () => {
   it("grows past the 1 MiB start when no size was announced", async () => {
     const bytes = await readWithProgress(streamed([700_000, 700_000, 700_000]), () => undefined);
     expect(bytes.byteLength).toBe(2_100_000);
+  });
+});
+
+describe("readWithProgress ceiling", () => {
+  it("refuses an absurd Content-Length before reading or allocating anything", async () => {
+    const cancel = vi.fn();
+    const res = streamed([10], { "content-length": "9000000000000" }, cancel);
+    const seen = vi.fn();
+    await expect(readWithProgress(res, seen)).rejects.toThrow("larger than allowed");
+    expect(seen).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it("accepts a stem at the ceiling and refuses one a byte over it", async () => {
+    await expect(readWithProgress(streamed([100], { "content-length": "100" }), () => undefined, 100)).resolves.toHaveProperty("byteLength", 100);
+    await expect(readWithProgress(streamed([101], { "content-length": "101" }), () => undefined, 100)).rejects.toThrow("larger than allowed");
+  });
+
+  it("cancels a body that runs past the ceiling even though its header was small or missing", async () => {
+    for (const headers of [{ "content-length": "50" }, {}] as Array<Record<string, string>>) {
+      const cancel = vi.fn();
+      const res = streamed([60, 60], headers, cancel);
+      await expect(readWithProgress(res, () => undefined, 100)).rejects.toThrow("larger than allowed");
+      expect(cancel).toHaveBeenCalled();
+    }
+  });
+
+  it("never allocates beyond the ceiling for a header at it", async () => {
+    const alloc = vi.spyOn(globalThis, "Uint8Array");
+    await readWithProgress(streamed([10], { "content-length": "100" }), () => undefined, 100);
+    const sizes = alloc.mock.calls.map((call) => (call as unknown[])[0]).filter((n): n is number => typeof n === "number");
+    expect(Math.max(0, ...sizes)).toBeLessThanOrEqual(100);
+    alloc.mockRestore();
   });
 });
 
