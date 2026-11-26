@@ -344,7 +344,8 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
             <span role="alert">{studio.checkMethod === "tap-along" ? t("jam.latency.failed.tap") : t("jam.latency.failed")}</span>
           ) : (
             <>
-              <span className="font-bold">{t("jam.latency.explain.title")}</span> <span className="[@media(max-height:32rem)]:hidden">{t("jam.latency.explain.short")}</span>
+              <span className="block font-semibold">{t("jam.latency.explain.title")}</span>
+              <span className="block text-text-secondary [@media(max-height:32rem)]:hidden">{t("jam.latency.explain.short")}</span>
             </>
           )}
         </p>
@@ -490,7 +491,7 @@ export function LiveLane({
 /* ----------------------------------------------------------------- count-in */
 
 /** The big number of the count-in, one swell per beat. */
-export function Countdown({ beat, total, beatMs }: { beat: number; total: number; beatMs: number }) {
+export function Countdown({ beat, beatMs }: { beat: number; beatMs: number }) {
   const { t } = useTranslation();
   return (
     <div
@@ -514,9 +515,11 @@ export function Countdown({ beat, total, beatMs }: { beat: number; total: number
           {t("jam.studio.countdown")}
         </span>
       )}
-      <span className="absolute bottom-6 text-xs tabular-nums text-text-tertiary" aria-hidden>
-        {beat}/{total}
-      </span>
+      {beat > 0 && (
+        <span className="absolute bottom-6 text-sm font-semibold text-text-tertiary" aria-hidden>
+          {t("jam.studio.countdown")}
+        </span>
+      )}
     </div>
   );
 }

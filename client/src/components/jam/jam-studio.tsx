@@ -566,7 +566,9 @@ export function JamStudio({
                         ? t("jam.studio.stage.setupBody")
                         : t("jam.studio.stage.setupBodyAlone")
                       : recording
-                        ? t("jam.studio.stage.recordingBody")
+                        ? backing.length === 0
+                        ? t("jam.studio.stage.recordingBodyAlone")
+                        : t("jam.studio.stage.recordingBody")
                         : backing.length === 0
                           ? t("jam.studio.stage.reviewBodyAlone")
                           : t("jam.studio.stage.reviewBody")}
@@ -644,7 +646,7 @@ export function JamStudio({
                     onToggle={() => void studio.togglePlay()}
                     onSeek={(ms) => studio.engine?.player.seek(ms)}
                     title={reviewing ? t("jam.review.title") : t("jam.studio.hearBand")}
-                    caption={reviewing ? t("jam.studio.withBand") : t("jam.studio.hearBandHint")}
+                    caption={reviewing ? (backing.length === 0 ? t("jam.studio.takeAlone") : t("jam.studio.withBand")) : t("jam.studio.hearBandHint")}
                     scrubber={false}
                   />
                 )}
@@ -865,7 +867,7 @@ export function JamStudio({
           </div>
         )}
 
-        {phase === "countdown" && <Countdown beat={studio.beat} total={studio.beats} beatMs={(60 / studio.countIn.bpm) * 1000} />}
+        {phase === "countdown" && <Countdown beat={studio.beat} beatMs={(60 / studio.countIn.bpm) * 1000} />}
         {phase === "done" && studio.posted && (
           <DoneOverlay
             title={doneTitle}
@@ -902,7 +904,7 @@ export function JamStudio({
               <span aria-hidden className="h-12 w-12 rounded-full bg-danger transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] group-enabled:group-hover:scale-90 [@media(max-height:32rem)]:h-8 [@media(max-height:32rem)]:w-8" />
             </button>
             <p className="text-center text-[13px] font-semibold text-text-secondary [text-wrap:pretty] [@media(max-height:32rem)]:hidden">
-              {studio.mic === "opening" ? t("jam.studio.opening") : t("jam.studio.recordHint")}
+              {studio.mic === "opening" ? t("jam.studio.opening") : backing.length === 0 ? t("jam.studio.recordHintAlone") : t("jam.studio.recordHint")}
             </p>
           </div>
         )}
@@ -952,7 +954,7 @@ export function JamStudio({
               className="group flex h-16 items-center justify-center gap-3 rounded-full bg-accent text-lg font-extrabold text-on-accent shadow-[var(--shadow-2)] outline-none transition-[transform,box-shadow] duration-[var(--duration-fast)] hover:shadow-[var(--shadow-3)] focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 motion-safe:hover:scale-[1.01] active:scale-[0.98] sm:flex-1"
             >
               <Send className="h-5 w-5 transition-transform duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-safe:group-hover:translate-x-0.5 motion-safe:group-hover:-translate-y-0.5" aria-hidden />
-              {t("jam.review.post")}
+              {backing.length === 0 ? t("jam.review.postAlone") : t("jam.review.post")}
             </button>
             <Button variant="ghost" className="h-12 gap-2 rounded-full px-5 text-text-secondary" onClick={studio.discardTake} data-jam-again="">
               <RotateCcw className="h-4 w-4" aria-hidden />

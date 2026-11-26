@@ -58,6 +58,8 @@ export interface JamPublicPanelPieces {
   refreshPublication: () => void;
   /** The starter turned on auto-accept: outside parts go in the mix by themselves once the platform's checks clear. */
   autoAccept: boolean;
+  /** A visitor's own take on this public song is sent and not in the mix yet: the song page says so instead of offering to send another. */
+  viewerWaiting: boolean;
 }
 
 export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPieces {
@@ -364,5 +366,6 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
     copyLink: publicView && me.enabled ? copyLink : undefined,
     refreshPublication: () => void state.refresh(),
     autoAccept,
+    viewerWaiting: me.enabled && waitsForStarter,
   };
 }
