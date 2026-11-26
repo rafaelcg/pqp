@@ -11917,7 +11917,11 @@ function MainAppContent({
     sharing: voiceState.isSharingScreen || watchingAShare,
     appRunning: hintQuietSources.appRunning,
     campaignsYield,
-    arriving: arrivalServerId !== null && arrivalServerId === selectedServerId,
+    // A visitor who came from the Jam site already has the Jam on screen as
+    // "Voltar pra jam" (`JamHandoverStrip`): one instruction, not two.
+    arriving:
+      (arrivalServerId !== null && arrivalServerId === selectedServerId) ||
+      jamArrival !== null,
     typing: hintQuietSources.composerBusy,
     showing: jamNewsShowing,
   });
