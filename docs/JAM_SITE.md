@@ -80,7 +80,27 @@ the generic `noindex` card.
 
 ## What the pages draw
 
-- **Home (Palco).** A featured song, tabs, cards. The server sorts (`top`,
+- **Home (Palco).** A featured song, a three-step "Como funciona" strip, tabs,
+  cards. **The featured slot prefers an original**: of the first six of Em alta,
+  the first song with a part to show whose `artist` is null, else the first with
+  a part (`pickFeatured`, `src/jam-site/featured.ts`), so the showcase is never
+  somebody else's hit when an original is on the page. It also prefers a song
+  that takes a part (`joinMode` not `closed`, below): first original that takes
+  one, else first original, else first that takes one, else the first song. A
+  closed original still beats an open cover (the cover is the rights risk), and
+  its page says plainly that it takes no part. When the hero IS closed and other
+  songs still want one, up to three of them (those asking for an instrument
+  first, then open songs; a `wanted` song with nothing missing is left out, its
+  listed instruments are not in the payload, `pickWantingParts`) sit under it as "Essas tão pedindo gente" (`wants.*`), with
+  "Ver todas" opening Falta alguém, so a visitor always has something to record
+  on; nothing extra when the hero takes a part or none does. The hero reads the
+  top twelve (`FEATURED_WINDOW`) so a closed hero still finds some. **The strip**
+  (`how-it-works.tsx`, `intro.*` in the catalogues) says "Ouve. Não precisa de
+  conta." / "Grava a parte que falta, de fone, em cima da banda." / "Quem começou
+  escolhe o que entra na mistura." with the site's own icons on instrument-hue
+  chips; static, no request, and it is also on the empty home. It sits under the
+  hero from `lg` up, and ABOVE it on a phone (the hero's play button is a screen
+  down there, and a cold visitor should know what a jam is before it). The server sorts (`top`,
   `new`); `needs=` filters an instrument. **Em alta** is `top`, **Novas** is
   `new`, **Falta alguém** is `new` with the songs that ask for nobody dropped
   (and a row of instrument chips that become `needs=`), **Prontas** is `new`
@@ -114,6 +134,24 @@ the generic `noindex` card.
   in its lane's small "more" menu, reachable by keyboard: Enter or the down arrow
   opens it, Escape closes it and gives the focus back; no flag on every row),
   where it was born, report.
+- **A song that takes no part.** The public song carries `joinMode` (`open`,
+  `wanted`, `closed`: the song's own value, `packages/shared/src/jam-public.ts`,
+  filled by `mapPublicSong`), because `needs` is empty for `open` and `closed`
+  alike and the page could not tell them apart: in user test round 1 (B2) people
+  signed up to record on a closed song and met "Essa música tá fechada" in the
+  app. A three-value field rather than `acceptsParts: boolean` because it is the
+  song's real vocabulary (the app, both phones and the operator already speak
+  it) and costs the same on the wire; the site derives `takesParts` (not
+  `closed`). Additive: absent from an older server it reads `open`, which is
+  what every client assumed, and an unknown value from a newer one reads `open`
+  too. On a `closed` song the page draws no record button, no dashed tile and no
+  "Como entra uma parte" block; in their place one calm line, "Essa música tá
+  completa.", and "Começar a tua", which opens the "Começar uma jam" sheet
+  (`song.closed.*`). `wanted` with nothing missing still takes a part of the
+  listed instruments (the server's `addableInstruments`), so it keeps the
+  button. Tested on a real Postgres in `server/src/api/jam-public-join-mode.test.ts`.
+  The app, the phones and `docs/JAM_PUBLIC.md` can read the same field; none of
+  them do yet. This is a `packages/shared` and `server` change: `restarts-api`.
 
 ## Playing
 
@@ -208,6 +246,18 @@ account is where the question can be answered, so the link carries the answer:
   retention by channel in the same service (`retentionBySource`). The landing
   recorded is `/app`, because that is the page the account first loaded; the
   `ref` is the signal.
+
+**Shared links carry `ref=share`.** The song page's Compartilhar (Web Share API,
+else a copied link) hands out `<origin>/<path>?ref=share` (`jamShareHref`,
+`src/jam-site/share-url.ts`), so the people who come in through a shared link
+show up as their own row in the acquisition report. When the page was opened
+with a `ref` already (a clip, a post, an earlier share) that one is kept: it is
+who brought them. The arrival's `utm_*` are not copied onto the link. A visitor
+who arrives on `/m/<id>?ref=share` and presses Gravar goes to
+`/app?jam=<id>&record=1&instrument=...&ref=share` (the arrival's `ref` is
+remembered first-touch like any other), which `lib/acquisition.ts` stores as
+`users.acquisition_ref`. Tested in `share-url.test.ts` and
+`e2e/jam-site/jam-site.spec.ts`.
 
 Zone analytics says how many people looked, the acquisition report says how many
 of them signed up. Put a `?ref=` on every link you hand out for the site (a clip's

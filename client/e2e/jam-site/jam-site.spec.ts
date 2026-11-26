@@ -22,6 +22,7 @@ async function shot(page: Page, name: string): Promise<void> {
 const SONG_A = "0b8f2c1e-4d5a-4e6f-8a7b-1c2d3e4f5a6b";
 const SONG_B = "7a1d3b2c-9e8f-4a5b-8c6d-0e1f2a3b4c5d";
 const SONG_C = "5c4b3a29-1807-4f6e-9d5c-3b2a19087f6e";
+const SONG_D = "3d4c5b6a-7e8f-4a9b-8c0d-2e3f4a5b6c7d";
 
 const person = (name: string, handle: string | null = null) => ({ name, handle, avatarUrl: null });
 
@@ -49,6 +50,8 @@ function song(id: string, title: string, parts: Array<[string, string]>, needs: 
 const A = song(SONG_A, "Minuano", [["drums", "Leco"], ["guitar", "Tchelo"]], ["bass"], { likes: 48 });
 const B = song(SONG_B, "Riff solto", [["guitar", "Duda"]], ["vocals"]);
 const C = song(SONG_C, "Duo pronto", [["keys", "Gui"], ["bass", "Nanda"]], []);
+/** A song that takes no part from a visitor: only its starter adds. */
+const D = song(SONG_D, "Gravada e fechada", [["drums", "Leco"], ["guitar", "Tchelo"]], [], { joinMode: "closed" });
 
 function track(id: string, instrument: string, name: string, offsetMs = 0) {
   return {
@@ -124,7 +127,7 @@ async function mockApi(
     calls.list.push(url);
     // The hero's read (`useFeatured`, six of Em alta) can be held back, so the grid's
     // own first page lands before it, which is the order a slow network can pick.
-    if (options.featuredDelayMs && url.searchParams.get("limit") === "6") {
+    if (options.featuredDelayMs && url.searchParams.get("limit") === "12") {
       await new Promise((resolve) => setTimeout(resolve, options.featuredDelayMs));
     }
     if (url.searchParams.get("cursor") === "c2") {
@@ -135,7 +138,7 @@ async function mockApi(
   await page.route(/\/api\/public\/jams\/[0-9a-f-]{36}$/, async (route: Route) => {
     const id = route.request().url().split("/").pop()!;
     calls.detail.push(id);
-    const found = [A, B, C].find((candidate) => candidate.id === id);
+    const found = [A, B, C, D].find((candidate) => candidate.id === id);
     if (!found) return route.fulfill({ status: 404, json: { error: "not found" } });
     const tracks = found.parts.map((part, index) => track(`${id.slice(0, 8)}-t${index}`, part.instrument, part.person.name, index * 500));
     return route.fulfill({
@@ -604,6 +607,236 @@ test.describe("what needs an account", () => {
     await mockApi(page);
     await page.goto(`/jam/m/${SONG_A}?from=app&record=1`);
     await expect(page.locator("[data-jam-from-app]")).toContainText("Tua conta tá pronta");
+  });
+});
+
+test.describe("how it works and the featured slot", () => {
+  const ORIGINAL = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Cantiga nossa", [["vocals", "Lia"]], []);
+  const COVER = song("2e3d4c5b-6a7f-4e8d-9c0b-1b2c3d4e5f60", "Um hit", [["guitar", "Duda"]], ["bass"], { artist: "Banda Famosa", likes: 900 });
+
+  test("the strip is under the hero, in three steps, and costs no media request", async ({ page }) => {
+    await mockApi(page);
+    const media: string[] = [];
+    page.on("request", (request) => {
+      if (/\.(wav|webm|mp4|flac|mp3|ogg)(\?|$)/.test(request.url()) || request.resourceType() === "media") media.push(request.url());
+    });
+    await page.goto("/jam");
+    const how = page.locator("[data-jam-how]");
+    await expect(how).toBeVisible();
+    await expect(how.locator("[data-jam-how-step]")).toHaveCount(3);
+    await expect(how).toContainText("Como funciona");
+    await expect(how).toContainText("Ouve. Não precisa de conta.");
+    await expect(how).toContainText("Grava a parte que falta, de fone, em cima da banda.");
+    await expect(how).toContainText("Quem começou escolhe o que entra na mistura.");
+    // under the hero, above the tabs
+    const [hero, strip, tabs] = await Promise.all(
+      ["[data-jam-hero]", "[data-jam-how]", '[data-jam-tab="top"]'].map(async (selector) => (await page.locator(selector).boundingBox())!.y),
+    );
+    expect(hero).toBeLessThan(strip!);
+    expect(strip).toBeLessThan(tabs!);
+    await shot(page, "02-home-how-it-works");
+    await page.waitForTimeout(400);
+    expect(media).toEqual([]);
+  });
+
+  for (const [width, height] of [[360, 740], [320, 640]] as const) {
+    test(`on a ${width} px phone the strip comes before the hero, inside the first screen`, async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await mockApi(page);
+      await page.goto("/jam");
+      await expect(page.locator("[data-jam-hero]")).toBeVisible();
+      const strip = (await page.locator("[data-jam-how]").boundingBox())!;
+      const hero = (await page.locator("[data-jam-hero]").boundingBox())!;
+      expect(strip.y + strip.height).toBeLessThanOrEqual(hero.y);
+      expect(strip.y + strip.height).toBeLessThan(height);
+      await shot(page, `05-home-${width}`);
+    });
+  }
+
+  test("the strip is on the empty home too, and fits a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await mockApi(page, { songs: [] });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-empty]")).toBeVisible();
+    await expect(page.locator("[data-jam-how-step]")).toHaveCount(3);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    await shot(page, "03-home-empty-320");
+  });
+
+  test("the featured slot is the first original, not a more liked cover", async ({ page }) => {
+    await mockApi(page, { songs: [COVER, ORIGINAL, A] });
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${ORIGINAL.id}"]`)).toBeVisible();
+    // the cover is still on the page, as a card
+    await expect(page.locator(`[data-jam-card="${COVER.id}"]`)).toHaveCount(1);
+    await expect(page.locator(`[data-jam-card="${ORIGINAL.id}"]`)).toHaveCount(0);
+  });
+
+  test("with only covers the featured slot is the first song", async ({ page }) => {
+    await mockApi(page, { songs: [COVER, { ...ORIGINAL, artist: "Outra Banda" }] });
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${COVER.id}"]`)).toBeVisible();
+  });
+});
+
+test.describe("a song that takes no part", () => {
+  test("a closed song offers no record button and no dashed tile, only to start your own", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_D}`);
+    await expect(page.locator("[data-jam-toggle]")).toBeVisible();
+    await expect(page.locator("[data-jam-record]")).toHaveCount(0);
+    await expect(page.locator("[data-jam-need-tile]")).toHaveCount(0);
+    await expect(page.locator("[data-jam-closed]")).toContainText("Essa música tá completa.");
+    await shot(page, "06-song-closed");
+    await page.locator("[data-jam-closed-start]").click();
+    await expect(page.locator("dialog[open]")).toContainText("Pra começar uma jam tu precisa de uma conta");
+  });
+
+  test("an open song keeps its record button and dashed tile, and no closed note", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    await expect(page.locator("[data-jam-record]")).toBeVisible();
+    await expect(page.locator("[data-jam-need-tile]")).toBeVisible();
+    await expect(page.locator("[data-jam-closed]")).toHaveCount(0);
+  });
+
+  test("a closed song on a phone: the note is in the page, nothing scrolls sideways", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_D}`);
+    await expect(page.locator("[data-jam-closed]")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    await shot(page, "07-song-closed-320");
+  });
+
+  // A closed original is the hero (it beats an open cover), so the home points at what still takes a part.
+  const COVER_ASKS = song("2e3d4c5b-6a7f-4e8d-9c0b-1b2c3d4e5f60", "Um hit pedindo baixo", [["guitar", "Duda"]], ["bass"], {
+    artist: "Banda Famosa",
+    joinMode: "wanted",
+  });
+
+  test("a closed hero gets a 'these want a part' entry right under it, and its songs open", async ({ page }) => {
+    await mockApi(page, { songs: [D, COVER_ASKS] });
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${SONG_D}"]`)).toBeVisible();
+    const wants = page.locator("[data-jam-wants]");
+    await expect(wants).toContainText("Essas tão pedindo gente");
+    await expect(wants.locator("[data-jam-wants-song]")).toHaveCount(1);
+    await expect(wants).toContainText("Um hit pedindo baixo");
+    await expect(wants).toContainText("Falta um baixo.");
+    const hero = (await page.locator("[data-jam-hero]").boundingBox())!;
+    const box = (await wants.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(hero.y + hero.height - 1);
+    await shot(page, "08-home-closed-hero-wants");
+    await wants.locator("[data-jam-wants-song]").click();
+    await expect(page).toHaveURL(new RegExp(`/jam/m/${COVER_ASKS.id}$`));
+  });
+
+  test("'Ver todas' opens the Falta alguém tab", async ({ page }) => {
+    await mockApi(page, { songs: [D, COVER_ASKS] });
+    await page.goto("/jam");
+    await page.locator("[data-jam-wants-all]").click();
+    await expect(page.locator('[data-jam-tab="needs"]')).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("no entry when the hero takes a part, and none when no song does", async ({ page }) => {
+    await mockApi(page, { songs: [A, B, C] });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-hero]")).toBeVisible();
+    await expect(page.locator("[data-jam-wants]")).toHaveCount(0);
+    const closedToo = song("4a5b6c7d-8e9f-4a0b-8c1d-3e4f5a6b7c8d", "Outra fechada", [["keys", "Gui"]], [], { joinMode: "closed" });
+    await page.unroute("**/api/public/jams?**");
+    await page.route("**/api/public/jams?**", (route) => route.fulfill({ json: { songs: [D, closedToo], nextCursor: null } }));
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${SONG_D}"]`)).toBeVisible();
+    await expect(page.locator("[data-jam-wants]")).toHaveCount(0);
+  });
+
+  test("on a 360 px phone the entry fits and sits under the hero", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 740 });
+    await mockApi(page, { songs: [D, COVER_ASKS] });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-wants]")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    const link = (await page.locator("[data-jam-wants-song]").boundingBox())!;
+    expect(link.height).toBeGreaterThanOrEqual(44);
+    await page.locator("[data-jam-wants]").scrollIntoViewIfNeeded();
+    await shot(page, "09-home-closed-hero-wants-360");
+  });
+
+  test("the featured slot passes over a closed original for one that takes a part", async ({ page }) => {
+    const open = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Cantiga aberta", [["vocals", "Lia"]], []);
+    await mockApi(page, { songs: [D, open] });
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${open.id}"]`)).toBeVisible();
+    await expect(page.locator(`[data-jam-card="${SONG_D}"]`)).toHaveCount(1);
+  });
+});
+
+test.describe("shared links carry ref=share", () => {
+  /** A share sheet that records what it was handed, or none at all (the copy path). */
+  async function withShare(page: Page, mode: "sheet" | "copy") {
+    await page.addInitScript((m) => {
+      const w = window as unknown as { __shared: unknown[]; __copied: string[] };
+      w.__shared = [];
+      w.__copied = [];
+      Object.defineProperty(navigator, "share", {
+        configurable: true,
+        value: m === "sheet" ? async (data: unknown) => void w.__shared.push(data) : undefined,
+      });
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (text: string) => void w.__copied.push(text) },
+      });
+    }, mode);
+  }
+  const read = <T,>(page: Page, key: "__shared" | "__copied") => page.evaluate((k) => (window as never as Record<string, T[]>)[k]!, key);
+
+  test("the share sheet is handed the address with ref=share", async ({ page }) => {
+    await mockApi(page);
+    await withShare(page, "sheet");
+    await page.goto(`/jam/m/${SONG_A}`);
+    await page.locator("[data-jam-share]").click();
+    await expect.poll(async () => (await read<{ url: string }>(page, "__shared")).length).toBe(1);
+    const [data] = await read<{ url: string }>(page, "__shared");
+    const url = new URL(data!.url);
+    expect(url.pathname).toBe(`/jam/m/${SONG_A}`);
+    expect(url.searchParams.get("ref")).toBe("share");
+  });
+
+  test("the copied link has ref=share and the toast says it was copied", async ({ page }) => {
+    await mockApi(page);
+    await withShare(page, "copy");
+    await page.goto(`/jam/m/${SONG_A}`);
+    await page.locator("[data-jam-share]").click();
+    await expect(page.getByText("Link copiado").first()).toBeVisible();
+    const [copied] = await read<string>(page, "__copied");
+    expect(new URL(copied!).searchParams.get("ref")).toBe("share");
+    await shot(page, "04-song-share-copied");
+  });
+
+  test("a page opened with a ref keeps it on the link it shares", async ({ page }) => {
+    await mockApi(page);
+    await withShare(page, "copy");
+    await page.goto(`/jam/m/${SONG_A}?ref=clip-ana`);
+    await page.locator("[data-jam-share]").click();
+    await expect.poll(async () => (await read<string>(page, "__copied")).length).toBe(1);
+    const [copied] = await read<string>(page, "__copied");
+    expect(new URL(copied!).searchParams.get("ref")).toBe("clip-ana");
+  });
+
+  test("arriving on a shared link and pressing Gravar hands ref=share to the app", async ({ page }) => {
+    await mockApi(page);
+    await page.route("**/app?*", (route) => route.fulfill({ body: "<html><body>app</body></html>", contentType: "text/html" }));
+    await page.goto(`/jam/m/${SONG_A}?ref=share`);
+    await page.locator("[data-jam-record]").click();
+    await page.locator("[data-jam-ask-go]").click();
+    await page.waitForURL(/\/app\?/);
+    const url = new URL(page.url());
+    expect(url.searchParams.get("jam")).toBe(SONG_A);
+    expect(url.searchParams.get("record")).toBe("1");
+    expect(url.searchParams.get("ref")).toBe("share");
   });
 });
 

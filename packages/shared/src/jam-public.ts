@@ -3,6 +3,7 @@ import { reportReasonSchema } from "./reports.js";
 import {
   createJamSongSchema,
   jamInstrumentSchema,
+  jamJoinModeSchema,
   jamSongSummarySchema,
   jamTrackSchema,
   jamVideoSourceSchema,
@@ -343,6 +344,15 @@ export const publicJamSongSchema = z.object({
    * `JAM_INSTRUMENTS` order. Empty for `open` and `closed` songs.
    */
   needs: z.array(jamInstrumentSchema.catch("other")),
+  /**
+   * Who may add a part (`jam.ts`, JOIN MODES), the song's own `joinMode`.
+   * `needs` cannot say it: it is empty for `open` and for `closed` alike. A
+   * client that draws "record" must not offer it on `closed` (only the starter
+   * adds there). Additive: absent on a payload from a server older than this
+   * field, where it reads `open` (what every client assumed before), and an
+   * unknown value from a newer server reads `open` too.
+   */
+  joinMode: jamJoinModeSchema.catch("open").default("open"),
   /** Plays counted (once per song per address or account per hour). */
   plays: z.number().int().nonnegative(),
   /**

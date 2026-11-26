@@ -5,10 +5,12 @@ import { jt } from "@/lib/i18n/jam-site";
 import { detectLocale } from "@/lib/locale";
 import type { JamInstrumentName } from "@/lib/jam-intent";
 import { noteJamPlay } from "./api";
-import { mainHref } from "./attribution";
+import { jamAttribution, mainHref } from "./attribution";
+import { jamShareHref } from "./share-url";
 import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
 import { SongCover } from "./art";
+import { takesParts } from "./featured";
 import { asInstrument, type Instrument } from "./instruments";
 import { createPublicPlayer, warmJamEngine, type PublicPlayer } from "./player";
 import { Link, mainOrigin, useJamRoute } from "./router";
@@ -146,6 +148,8 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
     return () => window.removeEventListener("keydown", onKey);
   }, [spot, select]);
 
+  // A closed song takes no part from a visitor: no record button, no dashed tile (`needs` is empty there).
+  const takes = takesParts(song);
   const needs = useMemo(() => song.needs.map(asInstrument), [song.needs]);
   const need: Instrument | null = needs[0] ?? null;
   const record = useCallback(
@@ -155,7 +159,8 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
   );
 
   const share = async () => {
-    const url = `${window.location.origin}${jamPath(mount, { kind: "song", songId: song.id })}`;
+    // ref=share unless the page was opened with a ref already (`share-url.ts`).
+    const url = jamShareHref(jamPath(mount, { kind: "song", songId: song.id }), window.location.origin, jamAttribution());
     const who = song.startedBy.handle ? `@${song.startedBy.handle}` : personLabel(song.startedBy);
     try {
       if (typeof navigator.share === "function") {
@@ -251,9 +256,25 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
           need={need}
           onLike={() => ask({ kind: "like", songId: song.id })}
           onShare={() => void share()}
-          onRecord={() => record(need)}
+          onRecord={takes ? () => record(need) : null}
           shared={shared}
         />
+        {!takes && (
+          <div
+            className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-[var(--radius-panel)] border border-border bg-surface-1 p-3 pl-4"
+            data-jam-closed=""
+          >
+            <p className="min-w-0 flex-1 basis-48 text-[15px] font-semibold leading-5">{jt("song.closed.line")}</p>
+            <button
+              type="button"
+              onClick={() => ask({ kind: "start" })}
+              data-jam-closed-start=""
+              className={button("secondary", "md", "max-sm:w-full")}
+            >
+              {jt("song.closed.cta")}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="mt-12 grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_21rem] lg:gap-14">
@@ -275,12 +296,14 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
               <OriginCard origin={song.origin} />
             </section>
           )}
-          <section>
-            <h2 className="text-sm font-bold text-text-secondary">{jt("how.title")}</h2>
-            <p className="mt-2 text-[15px] leading-6 text-text-secondary" data-jam-auto-accept={song.autoAcceptOutside ? "on" : undefined}>
-              {song.autoAcceptOutside ? jt("how.auto") : jt("how.body", { who })}
-            </p>
-          </section>
+          {takes && (
+            <section>
+              <h2 className="text-sm font-bold text-text-secondary">{jt("how.title")}</h2>
+              <p className="mt-2 text-[15px] leading-6 text-text-secondary" data-jam-auto-accept={song.autoAcceptOutside ? "on" : undefined}>
+                {song.autoAcceptOutside ? jt("how.auto") : jt("how.body", { who })}
+              </p>
+            </section>
+          )}
           <div className="flex flex-wrap gap-1 border-t border-border pt-3">
             <button
               type="button"

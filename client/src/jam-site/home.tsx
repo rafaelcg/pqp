@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { jt } from "@/lib/i18n/jam-site";
 import { detectLocale } from "@/lib/locale";
 import { SongArt, SongCover } from "./art";
+import { pickFeatured, pickWantingParts } from "./featured";
+import { HowItWorks } from "./how-it-works";
 import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
 import { INSTRUMENT_LOOK, INSTRUMENTS, asInstrument, inkMix, type Instrument } from "./instruments";
@@ -13,7 +15,7 @@ import { jamPath } from "./route";
 import { CONTAINER, FromAppNotice } from "./shell";
 import { Badge } from "./tiles";
 import { button, focusRing, Skeleton } from "./ui";
-import { pickFeatured, useFeatured, useJamList, type JamTab } from "./use-jam-data";
+import { FEATURED_WINDOW, useFeatured, useJamList, type JamTab } from "./use-jam-data";
 import { cn, compactCount, instrumentName, listOf, personLabel } from "./util";
 
 const TABS: readonly JamTab[] = ["top", "needs", "new", "done"];
@@ -196,6 +198,67 @@ function Hero({ song, status }: { song: PublicJamSong | null; status: "loading" 
   );
 }
 
+/**
+ * Under a closed hero (a song that takes no part): a few songs that do, so a
+ * visitor who wants to record always has something to record on. Drawn only
+ * when `pickWantingParts` finds some. "Ver todas" is the Falta alguém tab.
+ */
+function WantsPart({ songs, onAll }: { songs: readonly PublicJamSong[]; onAll: () => void }) {
+  const songPath = useSongPath();
+  if (songs.length === 0) return null;
+  return (
+    <section aria-labelledby="jam-wants-title" data-jam-wants="" className="mt-6">
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="jam-wants-title" className="text-sm font-bold text-text-secondary">
+          {jt("wants.title")}
+        </h2>
+        <button
+          type="button"
+          onClick={onAll}
+          data-jam-wants-all=""
+          className={cn("min-h-11 rounded-sm px-1 text-sm font-bold text-text-secondary hover:text-text", focusRing)}
+        >
+          {jt("wants.all")}
+        </button>
+      </div>
+      <ul className="mt-2 grid gap-2 md:grid-cols-3">
+        {songs.map((song) => {
+          const first = song.needs[0] ? asInstrument(song.needs[0]) : null;
+          return (
+            <li key={song.id}>
+              <Link
+                href={songPath(song)}
+                data-jam-wants-song={song.id}
+                className={cn(
+                  "flex min-h-14 items-center gap-3 rounded-[var(--radius-panel)] border border-border bg-surface-1 p-2.5 transition-colors hover:bg-surface-2 motion-reduce:transition-none",
+                  focusRing,
+                )}
+              >
+                {first ? (
+                  <Badge instrument={first} className="h-10 w-10" />
+                ) : (
+                  <span aria-hidden="true" className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-accent text-on-accent">
+                    <Mic className="h-[18px] w-[18px]" />
+                  </span>
+                )}
+                <span className="min-w-0">
+                  <span className="block truncate text-[15px] font-bold leading-5">{song.title}</span>
+                  <span
+                    className="block truncate text-[13px] font-semibold leading-5"
+                    style={first ? { color: inkMix(first) } : undefined}
+                  >
+                    {first ? needSentence(song.needs) : jt("wants.any")}
+                  </span>
+                </span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 /** The first card of the grid: the one door to starting a jam, as tall as its neighbours. */
 function StartCard() {
   const ask = useAsk();
@@ -295,6 +358,13 @@ export function HomePage() {
   const [need, setNeed] = useState<Instrument | null>(null);
   const list = useJamList(tab, need);
   const featured = useFeatured();
+  // A closed hero takes no part: point at a few songs that do (nothing when the hero takes one, or none does).
+  const wanting = useMemo(() => pickWantingParts(featured.songs, featured.song), [featured.songs, featured.song]);
+  const showWanting = () => {
+    setTab("needs");
+    setNeed(null);
+    window.requestAnimationFrame(() => document.querySelector('[data-jam-tab="needs"]')?.scrollIntoView({ block: "start" }));
+  };
   const sentinel = useRef<HTMLDivElement | null>(null);
   const fromApp = useJamRoute().search.get("from") === "app";
 
@@ -339,7 +409,7 @@ export function HomePage() {
   // Waiting for the hero instead would hold usable cards behind a second request;
   // leaving nothing out would draw the hero's song as a card and pull it out a
   // moment later, shifting every card after it.
-  const heroId = tab !== "top" ? null : featured.status === "loading" ? (pickFeatured(list.songs)?.id ?? null) : (featured.song?.id ?? null);
+  const heroId = tab !== "top" ? null : featured.status === "loading" ? (pickFeatured(list.songs.slice(0, FEATURED_WINDOW))?.id ?? null) : (featured.song?.id ?? null);
   const shown = useMemo(() => (heroId ? list.songs.filter((song) => song.id !== heroId) : list.songs), [heroId, list.songs]);
   const cards = useMemo(() => shown.map((song, index) => <Card key={song.id} song={song} skippable={index >= SKIPPED_AFTER} />), [shown]);
 
@@ -349,7 +419,14 @@ export function HomePage() {
         {jt("home.tagline")}
       </h1>
       {fromApp && <FromAppNotice body={jt("fromApp.start")} />}
-      <Hero song={featured.song} status={featured.status} />
+      {/* On a phone the strip comes first: the hero's play button is a screen down, and a cold visitor should know what a jam is before it. From lg the hero sits beside its art and the strip goes under it. */}
+      <div className="flex flex-col">
+        <div className="order-2 lg:order-1">
+          <Hero song={featured.song} status={featured.status} />
+          <WantsPart songs={wanting} onAll={showWanting} />
+        </div>
+        <HowItWorks className="order-1 mt-5 lg:order-2 lg:mt-10" />
+      </div>
       <div className="mt-10 sm:mt-14">
         <Tabs tab={tab} onTab={setTab} need={need} onNeed={setNeed} />
       </div>
