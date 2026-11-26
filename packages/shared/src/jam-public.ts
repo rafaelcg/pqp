@@ -551,6 +551,11 @@ export const jamPublicMeConfigSchema = z.object({
   publishing: z.enum(["open", "review", "blocked"]),
   /** Object storage is configured (nothing can be recorded without it). */
   uploads: z.boolean(),
+  /**
+   * The "A Jam abriu" corner card may be offered (`jam_announcement`, only ever
+   * true beside `enabled`). Absent from an API that predates it: read it as off.
+   */
+  announce: z.boolean().optional(),
 });
 export type JamPublicMeConfig = z.infer<typeof jamPublicMeConfigSchema>;
 

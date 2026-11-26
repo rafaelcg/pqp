@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Menu, Sparkles, X } from "lucide-react";
+import { JamGlyph } from "@/components/jam/jam-art";
 import { blogMediaMarkdown } from "@/components/blog/blog-markdown";
 import { formatPostDate, formatPostShortDate } from "@/lib/blog/format";
 import { loadPostBody } from "@/lib/blog/bodies";
@@ -16,6 +17,7 @@ import {
 } from "@/lib/blog/posts";
 import { subscribeEscapeUnlessOverlay } from "@/lib/escape-unless-overlay";
 import { useTranslation } from "@/lib/i18n";
+import { openPublicJamsDoor, useJamPublicMe } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
 
 const MARKDOWN_PLUGINS = [remarkGfm];
@@ -58,6 +60,7 @@ export function WhatsNewView({
 }: WhatsNewViewProps) {
   const { t, locale } = useTranslation();
   const readLocale = blogReadLocaleFor(locale);
+  const jamPublic = useJamPublicMe();
   const [selectedSlug, setSelectedSlug] = useState(
     () => POSTS[0]?.slug ?? "",
   );
@@ -103,6 +106,27 @@ export function WhatsNewView({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {jamPublic.enabled && (
+          <button
+            type="button"
+            data-whats-new-jam=""
+            onClick={() => void openPublicJamsDoor()}
+            className="mx-3 mb-3 flex items-center gap-3 rounded-xl border border-ink-4/60 bg-ink-2 px-3 py-2.5 text-left transition-colors hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-ink-3 text-signal">
+              <JamGlyph className="h-5 w-5" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-semibold text-paper">
+                {t("whatsNew.jam.title")}
+              </span>
+              <span className="block text-xs leading-snug text-paper-muted">
+                {t("whatsNew.jam.body")}
+              </span>
+            </span>
+          </button>
+        )}
 
         <nav
           className="min-h-0 flex-1 overflow-y-auto px-3 pb-4"

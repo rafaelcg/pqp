@@ -1069,6 +1069,39 @@ with `true`, or deleting the row to follow the variable again. Pinned by
 it: on, off, pending items surviving a flip, and three reports still hiding a
 song with it off) and the old-reader table in `server/src/lib/flags.test.ts`.
 
+## `jam_announcement` (global, default off, client presentation only)
+
+"A Jam abriu": a one-time corner card that tells people already on pqp that
+public jams exist, with **Ouvir uma jam** (opens the most heard public jam in
+the app and plays it; **Começar uma jam** instead when nothing is public yet)
+and **Agora não**. Behind `JAM_ANNOUNCEMENT` (only `true` turns it on), born as
+a flag. **Global**, like `jam_public`: a public jam belongs to no server.
+
+- **The second step of the launch.** `jam_public` goes on first and is watched
+  (the review queue, the reports) for a day or two; this one goes on after, with
+  the What's New post and the QG post. Rollback is its own flag, off again once
+  it has done its job.
+- **Served as** `announce` on `GET /api/jam-public/config` (signed in), which
+  answers true only while `jam_public` is on too, so the card can never point at
+  a door that is shut (`jamAnnouncementEnabled` in
+  `server/src/lib/jam-public-config.ts`). The client reads it through
+  `client/src/lib/jam-public-store.ts`.
+- **Off is nothing at all**: no card, nothing stored. On, the client draws it
+  once per browser for anybody signed in who is not in a call, a share, an app,
+  over a live party or the watch-now strip, not while the arrival strip is up and
+  not already in Jam (`client/src/lib/jam-announcement.ts`,
+  `docs/ONBOARDING.md`). Open tabs follow on the next config refresh (focus or
+  10 min).
+- **Not behind it**: the Jam door in the Communities directory
+  (`docs/ONBOARDING.md`, "Jam door"). It follows `jam_public` alone, so it stays
+  after the card is gone and after this flag is turned off.
+- Umami (hosted only): `jam_news_view`, `jam_news_click`, `jam_news_dismiss`.
+
+Turn it on from controles → interruptores, or `PUT /api/admin/flags
+{ key: "jam_announcement", enabled: true }`. Pinned by
+`server/src/api/jam-announcement-flag.test.ts` (with the flag as a row, the way
+production sets it) and `server/src/lib/flag-client-contract.test.ts`.
+
 ## `apps` (per server)
 
 The apps platform: small interactive things (Locadora, a game room) that a person

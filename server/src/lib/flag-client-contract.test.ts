@@ -1002,3 +1002,45 @@ describe("locadora_guest and locadora_saves_announced against the public apps co
     expect(dashboard).toMatch(/\blocadora_saves_announced:\s*"/);
   });
 });
+
+/**
+ * `jam_announcement`: the one-time "A Jam abriu" corner card. Global, off by
+ * default, served as `announce` on the signed-in jam-public config, and only
+ * ever true while `jam_public` is on too.
+ */
+describe("jam_announcement against the jam-public config the client reads", () => {
+  it("is global, off by default, and served as `announce`", () => {
+    const def = FEATURE_FLAGS.jam_announcement;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/jam-public/config (announce)");
+  });
+
+  it("the server sends it beside jam_public and nowhere else", () => {
+    const lib = readFileSync(path.join(serverSrc, "lib/jam-public-config.ts"), "utf8");
+    expect(lib).toMatch(/jamPublicEnabled\(\) &&\s*isEnabled\("jam_announcement"\)/);
+    const service = readFileSync(path.join(serverSrc, "services/jam-public.ts"), "utf8");
+    expect(service).toMatch(/announce:\s*jamAnnouncementEnabled\(\)/);
+    const shared = readFileSync(
+      path.resolve(here, "../../../packages/shared/src/jam-public.ts"),
+      "utf8",
+    );
+    const body = /export const jamPublicMeConfigSchema = z\.object\(\{([\s\S]*?)\n\}\);/.exec(
+      shared,
+    )?.[1];
+    expect(body, "jamPublicMeConfigSchema not found in jam-public.ts").toBeTruthy();
+    expect([...body!.matchAll(/^ {2}([A-Za-z]\w*):/gm)].map((match) => match[1])).toEqual([
+      "enabled",
+      "publishing",
+      "uploads",
+      "announce",
+    ]);
+  });
+
+  it("the client keeps the field and the card reads it", () => {
+    const store = readFileSync(path.join(clientSrc, "lib/jam-public-store.ts"), "utf8");
+    expect(store).toMatch(/answer\.announce === true/);
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toMatch(/jamPublicMe\.announce/);
+  });
+});

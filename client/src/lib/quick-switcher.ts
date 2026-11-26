@@ -41,7 +41,9 @@ export type SwitcherItem =
       type: string;
       serverName: string;
     }
-  | { kind: "song"; id: string; song: SwitcherSong };
+  | { kind: "song"; id: string; song: SwitcherSong }
+  /** "Abrir o Jam": the public jams, for anybody, whether or not their server has a Jam channel. */
+  | { kind: "jam"; id: "jam:door" };
 
 /** What a song row needs: a Jam song the server matched for this viewer. */
 export interface SwitcherSong {
@@ -68,7 +70,18 @@ export interface SwitcherSources {
    * here beyond a query: a switcher that listed every song would be the wall.
    */
   songs?: readonly SwitcherSong[];
+  /** `jam_public` is on for this account: typing "jam" offers the public jams. */
+  jamDoor?: boolean;
 }
+
+/** Whether what was typed is somebody looking for Jam (the switcher and the message search both offer the door). */
+export function looksLikeJamQuery(query: string): boolean {
+  const needle = foldForSearch(query);
+  return needle.length > 0 && JAM_DOOR_WORDS.some((word) => word.startsWith(needle));
+}
+
+/** What somebody types looking for it. Folded like everything else, so "música" and "musica" are one. */
+const JAM_DOOR_WORDS = ["jam", "musica", "music", "cancion", "song", "banda", "band"] as const;
 
 export const SWITCHER_LIMITS = { person: 5, conversation: 4, server: 3, channel: 5, song: 4 } as const;
 
@@ -234,5 +247,11 @@ export function quickSwitcherItems(query: string, sources: SwitcherSources): Swi
     .slice(0, SWITCHER_LIMITS.song)
     .map((entry): SwitcherItem => ({ kind: "song", id: `song:${entry.song.id}`, song: entry.song }));
 
-  return [...personItems, ...groupItems, ...serverItems, ...channelItems, ...songItems];
+  // Typed, never in the empty list. Before everything else: it is where the person said they wanted to go.
+  const jamDoorItems: SwitcherItem[] =
+    sources.jamDoor && looksLikeJamQuery(query)
+      ? [{ kind: "jam", id: "jam:door" }]
+      : [];
+
+  return [...jamDoorItems, ...personItems, ...groupItems, ...serverItems, ...channelItems, ...songItems];
 }

@@ -136,6 +136,9 @@ import {
   dispatchJamPublicNotice,
   isJamPublicNotice,
   jamPublicReconnected,
+  openPublicJamsDoor,
+  useJamPublicMe,
+  useJamPublicTop,
 } from "@/lib/jam-public-store";
 import { JamPane } from "@/components/jam/jam-pane";
 import { createJamOnce } from "@/lib/jam-create";
@@ -483,7 +486,13 @@ import {
   takeJamIntent,
 } from "@/lib/jam-intent";
 import { parsePublicJamPath } from "@/lib/jam-public-links";
-import { openPublicJam } from "@/lib/jam-public-nav";
+import { openPublicJam, openPublicJamById } from "@/lib/jam-public-nav";
+import { JamAnnouncementHint } from "@/components/layout/jam-announcement-hint";
+import {
+  isJamAnnouncementSeen,
+  jamAnnouncementWanted,
+  rememberJamAnnouncement,
+} from "@/lib/jam-announcement";
 import { JamPublicHost } from "@/components/jam/jam-public-host";
 import {
   addIntentFromSearch,
@@ -1827,6 +1836,9 @@ function MainAppContent({
   // per-server stamp after one is written.
   const [forumNewsShowing, setForumNewsShowing] = useState(false);
   const [, setForumNewsStamps] = useState(0);
+  // "A Jam abriu" (`lib/jam-announcement.ts`), the same two.
+  const [jamNewsShowing, setJamNewsShowing] = useState(false);
+  const [, setJamNewsStamps] = useState(0);
   // The seasonal look invite (Halloween, Christmas): which look it is for, or
   // null out of season, once seen this season, or once dismissed this load.
   const [seasonalLookOffer, setSeasonalLookOffer] = useState(seasonalLookToOffer);
@@ -2103,6 +2115,8 @@ function MainAppContent({
     [],
   );
   const jamCreating = useRef(false);
+  // "Criar Jam" asks first: it adds a permanent channel to a shared server.
+  const [jamCreateAsk, setJamCreateAsk] = useState<{ parentId: string | null } | null>(null);
   const jamCreateUnsure = useRef<{ serverId: string; known: Set<string> } | null>(null);
   const refreshChannelListRef = useRef<
     (serverId: string, confirmingVanishedId?: string | null) => void
@@ -3561,9 +3575,10 @@ function MainAppContent({
   );
   const stableOnCreateChannel = useStableCallback(
     (type: ChannelType, isPrivate: boolean, parentId?: string | null) => {
-      // A Jam is an app you add, not a channel you name: one click, called "jam".
+      // A Jam is an app you add, not a channel you name: called "jam", after one
+      // question, because it lands in a server other people share.
       if (type === "jam") {
-        void handleCreateJam(parentId ?? null);
+        setJamCreateAsk({ parentId: parentId ?? null });
         return;
       }
       setChannelPrompt({ mode: "create", type, isPrivate, parentId: parentId ?? null });
@@ -8733,6 +8748,25 @@ function MainAppContent({
   setJamViewer(user?.id ?? null);
   const jamSidebar = useJamSidebar(channels);
   const jamHintContext = useJamHintContext();
+  // `jam_public` and `jam_announcement` for this account (`lib/jam-public-store.ts`).
+  // Asked once per identity, as soon as the account is ready; off or an older API
+  // reads as nothing. The top song is only looked up while the card could be drawn.
+  const jamPublicMe = useJamPublicMe(bootstrapReady);
+  const jamNewsPending = jamPublicMe.announce && !isJamAnnouncementSeen();
+  const jamTop = useJamPublicTop(jamNewsPending);
+  // Being in Jam by any route (a jam channel, a public jam) is the "A Jam abriu"
+  // card done: nobody needs to be told about what they are looking at. Only while
+  // the card is live, so with the flag off nothing is stored at all.
+  const inJam =
+    (selection.kind === "server" &&
+      channels.find((c) => c.id === selectedChannelId)?.type === "jam") ||
+    (bootstrapReady && parsePublicJamPath(location.pathname) !== null);
+  useEffect(() => {
+    if (jamNewsPending && inJam) {
+      rememberJamAnnouncement();
+      setJamNewsStamps((n) => n + 1);
+    }
+  }, [jamNewsPending, inJam]);
   // Opening a forum by any route (the list, a link, the card) is the "O fórum
   // abriu" card done for that server: nobody needs to be told about a forum
   // they are reading. Only while the card is live: with the flag off nothing
@@ -11844,6 +11878,40 @@ function MainAppContent({
       void selectChannel(forumNewsChannelId);
     }
   };
+  /**
+   * "A Jam abriu" (`lib/jam-announcement.ts`): wanted or not. Its own gate holds
+   * it in a call, a share, an app, over a party and the watch-now strip; the
+   * queue below still decides whether it gets the corner (`hint_budget`).
+   */
+  const jamNewsWanted = jamAnnouncementWanted({
+    announce: jamPublicMe.announce,
+    topReady: jamTop.status === "ready",
+    seen: isJamAnnouncementSeen(),
+    inJam,
+    automated: isAutomatedBrowser(),
+    inCall: voiceState.status !== "idle",
+    sharing: voiceState.isSharingScreen || watchingAShare,
+    appRunning: hintQuietSources.appRunning,
+    campaignsYield,
+    arriving: arrivalServerId !== null && arrivalServerId === selectedServerId,
+    typing: hintQuietSources.composerBusy,
+    showing: jamNewsShowing,
+  });
+  const jamNewsSongId = jamTop.status === "ready" ? jamTop.songId : null;
+  const closeJamNews = (open: boolean) => {
+    rememberJamAnnouncement();
+    setJamNewsStamps((n) => n + 1);
+    if (!open) {
+      return;
+    }
+    // "Ouvir uma jam": the top public song, playing. With none yet, the sheet
+    // that starts one.
+    if (jamNewsSongId) {
+      openPublicJamById(jamNewsSongId, { play: true });
+    } else {
+      openPublicJam({ kind: "new" });
+    }
+  };
   const cornerHint = winningCornerHint(
     {
       communityHomePost: Boolean(
@@ -11873,6 +11941,7 @@ function MainAppContent({
         campaignsYield,
       }),
       forumNews: forumNewsChannelId !== null && qgHintReady,
+      jamNews: jamNewsWanted && qgHintReady,
       voiceClean: wantsVoiceCleanHint,
       seasonalLook:
         seasonalLookOffer !== null && qgHintReady && !campaignsYield,
@@ -13732,6 +13801,14 @@ function MainAppContent({
             setDirectoryOpen(false);
             await refreshAfterJoin(serverId);
           }}
+          onListenJam={(songId) => {
+            setDirectoryOpen(false);
+            openPublicJamById(songId, { play: true });
+          }}
+          onStartJam={() => {
+            setDirectoryOpen(false);
+            openPublicJam({ kind: "new" });
+          }}
           onReport={(community) =>
             setReportTarget({
               kind: "community",
@@ -15309,6 +15386,23 @@ function MainAppContent({
         onClose={() => setMicPromptPartyId(null)}
       />
       <ConfirmDialog
+        open={jamCreateAsk !== null}
+        title={t("jam.createConfirm.title")}
+        description={t("jam.createConfirm.body")}
+        confirmLabel={t("jam.createConfirm.confirm")}
+        cancelLabel={t("jam.createConfirm.cancel")}
+        destructive={false}
+        initialFocus="confirm"
+        onConfirm={() => {
+          const ask = jamCreateAsk;
+          setJamCreateAsk(null);
+          if (ask) {
+            void handleCreateJam(ask.parentId);
+          }
+        }}
+        onClose={() => setJamCreateAsk(null)}
+      />
+      <ConfirmDialog
         open={pendingDeleteChannelId !== null}
         title={t("chrome.deleteChannel")}
         description={t("chrome.deleteChannelConfirm")}
@@ -15401,6 +15495,13 @@ function MainAppContent({
         onShowingChange={setForumNewsShowing}
         onOpen={() => closeForumNews(true)}
         onDismiss={() => closeForumNews(false)}
+      />
+      <JamAnnouncementHint
+        enabled={effectiveCornerHint === "jamNews"}
+        hasSong={jamNewsSongId !== null}
+        onShowingChange={setJamNewsShowing}
+        onOpen={() => closeJamNews(true)}
+        onDismiss={() => closeJamNews(false)}
       />
       <AppsHint
         enabled={effectiveCornerHint === "appsNews"}
@@ -15593,6 +15694,9 @@ function MainAppContent({
             channels: selection.kind === "server" ? channels : [],
             openServerName:
               selection.kind === "server" ? (selectedServer?.name ?? null) : null,
+            // Typing "jam" offers the public jams whenever `jam_public` is on,
+            // for every member, with or without a Jam channel in the open server.
+            jamDoor: jamPublicMe.enabled,
           }}
           searchServerName={
             selection.kind === "server" ? (selectedServer?.name ?? null) : null
@@ -15614,6 +15718,10 @@ function MainAppContent({
             void loadChannels(serverId);
           }}
           onSelectChannel={stableOnSelectChannel}
+          onOpenJams={() => {
+            setWhatsNewOpen(false);
+            void openPublicJamsDoor();
+          }}
           onOpenJamSong={(song) => {
             setWhatsNewOpen(false);
             navigate(jamSongRoutePath(song.serverId, song.channelId, song.id), {
