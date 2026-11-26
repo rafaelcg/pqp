@@ -286,6 +286,97 @@ describe("the middleware on a song", () => {
   });
 });
 
+describe("the page's language, which the client trusts over the browser's", () => {
+  // The bug: a Spanish browser was told `pqp:locale = en` and the client believed it over
+  // `navigator.languages`, so the whole site rendered in English.
+  const NO_COVER = { ...SONG, song: { ...SONG.song, coverUrl: null } };
+  const meta = (html: string) => html.match(/<meta name="pqp:locale" content="([^"]*)" \/>/)?.[1];
+  const htmlLang = (html: string) => html.match(/<html lang="([^"]*)">/)?.[1];
+
+  async function pageAt(url: string, headers: Record<string, string> = {}) {
+    stubApi({
+      [`/api/public/jams/${ID}`]: () => Response.json(NO_COVER),
+      "/api/public/jams/config": () => Response.json({ enabled: true }),
+    });
+    const onRequest = await freshMiddleware();
+    return (await onRequest(ctx(url, headers))).text();
+  }
+
+  const CASES: Array<[string, Record<string, string>, string]> = [
+    ["es-MX", { "accept-language": "es-MX,es;q=0.9" }, "es"],
+    ["bare es", { "accept-language": "es" }, "es"],
+    ["es-AR with an English fallback", { "accept-language": "es-AR,en;q=0.5" }, "es"],
+    ["pt-BR", { "accept-language": "pt-BR,pt;q=0.9,en;q=0.8" }, "pt-BR"],
+    ["en-US", { "accept-language": "en-US,en;q=0.9" }, "en"],
+    ["no header at all (a crawler)", {}, "pt-BR"],
+    ["a junk header", { "accept-language": ";;;,*,xx-YY" }, "pt-BR"],
+    ["a language the site does not have", { "accept-language": "fr-FR,fr;q=0.9" }, "pt-BR"],
+  ];
+
+  for (const [name, headers, expected] of CASES) {
+    it(`says ${expected} for ${name}, on the home and on a song, in the tag and on <html>`, async () => {
+      for (const url of [`https://jam.pqp.gg/m/${ID}`, "https://jam.pqp.gg/", "https://pqp.gg/jam", `https://pqp.gg/jam/m/${ID}`]) {
+        const html = await pageAt(url, headers);
+        expect(meta(html), url).toBe(expected);
+        expect(htmlLang(html), url).toBe(expected);
+        expect(html.match(/<html /g), url).toHaveLength(1);
+      }
+    });
+  }
+
+  it("lets ?lang= override the header, in every language, and a junk ?lang= fall back to English", async () => {
+    for (const [query, header, expected] of [
+      ["?lang=es", "pt-BR", "es"],
+      ["?lang=es-MX", "en-US", "es"],
+      ["?lang=pt", "es-MX", "pt-BR"],
+      ["?lang=pt-BR", "en-US", "pt-BR"],
+      ["?lang=en", "es-MX", "en"],
+      ["?lang=klingon", "es-MX", "en"],
+    ] as const) {
+      const html = await pageAt(`https://jam.pqp.gg/m/${ID}${query}`, { "accept-language": header });
+      expect(meta(html), query).toBe(expected);
+      expect(htmlLang(html), query).toBe(expected);
+    }
+  });
+
+  it("keeps the card in Portuguese or English: Spanish readers get the English words and picture", async () => {
+    const es = await pageAt(`https://jam.pqp.gg/m/${ID}`, { "accept-language": "es-MX" });
+    expect(es).toContain("Played by Leco, Tchelo and Juju. Needs bass: record your part.");
+    expect(es).toContain("og-jam-en.png");
+    expect(es).toContain('<meta property="og:locale" content="en_US" />');
+    expect(es).not.toContain("es_");
+    const esHome = await pageAt("https://jam.pqp.gg/", { "accept-language": "es-MX" });
+    expect(esHome).toContain("pqp jam: songs anybody can listen to and play along with");
+    const pt = await pageAt(`https://jam.pqp.gg/m/${ID}`, { "accept-language": "pt-BR" });
+    expect(pt).toContain("og-jam.png");
+    expect(pt).toContain('<meta property="og:locale" content="pt_BR" />');
+  });
+
+  it("says the page's language even for a song the API will not answer for", async () => {
+    stubApi({ [`/api/public/jams/${ID}`]: () => new Response("{}", { status: 404 }) });
+    const onRequest = await freshMiddleware();
+    const html = await (await onRequest(ctx(`https://jam.pqp.gg/m/${ID}`, { "accept-language": "es-MX" }))).text();
+    expect(meta(html)).toBe("es");
+    expect(htmlLang(html)).toBe("es");
+    expect(html).toContain("og-jam-en.png");
+  });
+
+  it("is cached per language: the answer varies on Accept-Language", async () => {
+    stubApi({ [`/api/public/jams/${ID}`]: () => Response.json(SONG) });
+    const onRequest = await freshMiddleware();
+    const response = await onRequest(ctx(`https://jam.pqp.gg/m/${ID}`, { "accept-language": "es-MX" }));
+    expect(response.headers.get("vary")).toContain("accept-language");
+  });
+
+  it("leaves the shell alone when the API cannot be reached (the client then asks the browser)", async () => {
+    stubApi({ [`/api/public/jams/${ID}`]: () => new Response("boom", { status: 503 }) });
+    const onRequest = await freshMiddleware();
+    const html = await (await onRequest(ctx(`https://jam.pqp.gg/m/${ID}`, { "accept-language": "es-MX" }))).text();
+    expect(html).toBe(SHELL);
+    expect(meta(html)).toBeUndefined();
+  });
+});
+
 describe("a song stored before the server stripped bidi controls", () => {
   const RLO = "‮";
   const BIDI = /[‪-‮⁦-⁩]/;

@@ -218,9 +218,22 @@ caption, a post) and each one shows up as its own row.
 The edge (`handleJam`, `src/lib/jam-meta.ts`) writes the head of `/m/<id>`:
 title, who played, "Falta baixo: grava a tua parte", canonical to
 `https://jam.pqp.gg/m/<id>` whichever mount served the page, JSON-LD
-`MusicRecording`. English for Spanish readers, like the other cards; the language
-is chosen as for every public page (`preferredLocale`: `?lang=`, then
-`Accept-Language`, Portuguese when a crawler sends neither).
+`MusicRecording`. The language is chosen as for every public page
+(`preferredLocale`: `?lang=`, then `Accept-Language`, Portuguese when a crawler
+sends neither, Spanish for `es` and `es-*`).
+
+**The page's language and the card's are two things.** The edge writes the
+NEGOTIATED language, Spanish included, into `<meta name="pqp:locale">` and into
+`<html lang>` (the shell ships `lang="en"`; `injectJamHead` rewrites it), because
+the client trusts `pqp:locale` before `navigator.languages`
+(`fromServedDocument`, `lib/locale.ts`, which is unchanged). Writing `en` there
+for a Mexican browser, as it once did, rendered the whole site in English. The
+CARD (title, description, `og:locale`, the picture and its alt) has no Spanish
+catalogue, so for Spanish readers it stays English (`cardLocaleOf`): a Spanish
+unfurl reads `en_US` and `og-jam-en.png`. Writing a Spanish card is a catalogue
+and a third picture, and nothing else to change. Pinned by `lib/jam-edge.test.ts`
+(es, pt-BR, en, no header, a junk header, a language the site lacks, `?lang=`
+over the header, on the home and a song, on both mounts).
 
 **The picture** is one of two, and never a signed URL:
 
@@ -260,6 +273,31 @@ Three small catalogues, `src/locales/jam-site/{en,pt-BR,es}.json`, with their ow
 i18next instance (`lib/i18n/jam-site.ts`) so the site does not carry the app's
 500 kB English catalogue. `i18n:check` compares them like the main ones. pt-BR is
 `tu`.
+
+**Which language shows** is `detectLocale` (`lib/locale.ts`), the app's own rule,
+not a second one: `?lang=`, then the saved choice (`localStorage` `pqp:locale`,
+the key the app writes, so on the `/jam` mount the two agree), then the
+`pqp:locale` the edge wrote, then `navigator.languages`, then English.
+
+**The language switch** is in the footer (`LanguageSwitch` in `shell.tsx`,
+`jam-site/language.ts`): three buttons, Português, English and Español, each
+named in its own language and marked with `lang`, in a group labelled
+`footer.language`, the current one `aria-pressed`, 44 px tall, no motion. A click
+is the app's language picker: save the choice, reload the same path, query and
+hash, with `?lang=` removed once the choice is stored (it would outrank the very
+choice) and set when storage is blocked (so that load still honours the click).
+It is not in the header: at 320 px the wordmark, "Começar" and the theme toggle
+already fill it.
+
+**What the hand-over carries.** A language the visitor ASKED for (a `?lang=` on
+the address they arrived on, a saved choice, or a click on the switch) is added
+as `lang=<locale>` to every link to the app (`mainHref`, the sign-up sheet's
+button). The app already reads `?lang=` first, so its first screen speaks it; on
+`jam.pqp.gg` the two origins do not share `localStorage`, so without it a
+Português pick would be forgotten at the door. A language only implied by the
+browser is not added: the app infers the same one from the same browser. The app
+does not keep `?lang=` across the sign-up redirect; that is the app's, and
+nothing was added there.
 
 ## Try it
 

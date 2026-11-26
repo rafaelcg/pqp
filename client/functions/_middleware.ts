@@ -841,8 +841,9 @@ async function handleJam(context: PagesContext, url: URL, target: JamTarget): Pr
     return shell;
   }
   const locale = preferredLocale(url.search, context.request.headers.get("accept-language"));
-  // The cards are written in Portuguese and English; Spanish readers get English.
-  const cardLocale = locale === "pt-BR" ? "pt-BR" : "en";
+  // The page is in the negotiated language, Spanish included. The CARD is
+  // written in Portuguese and English only; `renderJamHead` keeps it English
+  // for Spanish readers (`cardLocaleOf`).
   let song: JamSongMeta | null = null;
   let enabled: boolean;
   if (target.kind === "song") {
@@ -865,7 +866,7 @@ async function handleJam(context: PagesContext, url: URL, target: JamTarget): Pr
     { target, song, enabled },
     // The cover is OUR address on the API (stable, public songs only), never
     // the signed URL the song's JSON carries; the card is the jam site's own.
-    { locale: cardLocale, siteOrigin: url.origin, apiOrigin },
+    { locale, siteOrigin: url.origin, apiOrigin },
   );
   const response = rewritten(shell, injected.html);
   if (injected.noindex) {

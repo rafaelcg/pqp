@@ -5,6 +5,7 @@ import {
   rememberJamAttribution,
   type JamAttribution,
 } from "@/lib/jam-intent";
+import { withLanguage } from "./language";
 
 /**
  * The browser half of the public site's attribution (`lib/jam-intent.ts` has
@@ -42,5 +43,5 @@ export function jamAttribution(): JamAttribution | null {
 
 /** A link to a path on the main site that keeps where the person came from. */
 export function mainHref(path: string, origin: string): string {
-  return jamMainHref(path, origin, jamAttribution());
+  return withLanguage(jamMainHref(path, origin, jamAttribution()));
 }

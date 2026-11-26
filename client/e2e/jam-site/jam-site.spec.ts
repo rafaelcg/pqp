@@ -708,6 +708,102 @@ test.describe("the host mount", () => {
   });
 });
 
+test.describe("the language", () => {
+  // The Vite page has no edge in front of it, so this is the browser's half: `navigator.languages`,
+  // the saved choice and `?lang=`. The edge's half (`pqp:locale`, `<html lang>`) is `jam-edge.test.ts`.
+  test.describe("of a Spanish browser", () => {
+    test.use({ locale: "es-MX" });
+
+    test("is Spanish on the home and on a song, with <html lang> to match", async ({ page }) => {
+      await mockApi(page);
+      for (const path of ["/jam", `/jam/m/${SONG_A}`]) {
+        await page.goto(path);
+        await expect(page.locator("main")).toBeVisible();
+        await expect(page.getByRole("link", { name: "Conocer pqp" })).toBeVisible();
+        await expect(page.locator("html")).toHaveAttribute("lang", "es");
+      }
+      await page.goto("/jam");
+      await expect(page.locator("[data-jam-tagline]")).toHaveText("Canciones hechas en conjunto, una parte grabada a la vez.");
+    });
+
+    test("the footer switch goes to Portuguese and English, keeps the page, and the choice survives moving about", async ({ page }) => {
+      await mockApi(page);
+      await page.goto(`/jam/m/${SONG_A}?ref=clip-ana`);
+      const group = page.getByRole("group", { name: "Idioma" });
+      await expect(group.getByRole("button", { name: "Español" })).toHaveAttribute("aria-pressed", "true");
+      await expect(group.getByRole("button", { name: "Português" })).toHaveAttribute("aria-pressed", "false");
+
+      await group.getByRole("button", { name: "Português" }).click();
+      await expect(page).toHaveURL(new RegExp(`/jam/m/${SONG_A}\\?ref=clip-ana$`));
+      await expect(page.locator("html")).toHaveAttribute("lang", "pt-BR");
+      await expect(page.getByRole("link", { name: "Conhecer o pqp" })).toBeVisible();
+      expect(await page.evaluate(() => localStorage.getItem("pqp:locale"))).toBe("pt-BR");
+
+      // Move within the site (pushState) and the language stays.
+      await page.getByRole("link", { name: "pqp jam, início" }).click();
+      await expect(page).toHaveURL(/\/jam$/);
+      await expect(page.locator("[data-jam-tagline]")).toHaveText("Músicas feitas em conjunto, uma parte gravada por vez.");
+      // A fresh load, with the browser still Spanish, stays Portuguese: the choice outranks it.
+      await page.goto("/jam");
+      await expect(page.locator("html")).toHaveAttribute("lang", "pt-BR");
+
+      await page.getByRole("group", { name: "Idioma" }).getByRole("button", { name: "English" }).click();
+      await expect(page.locator("html")).toHaveAttribute("lang", "en");
+      await expect(page.locator("[data-jam-tagline]")).toHaveText("Songs built together, one recorded part at a time.");
+    });
+
+    test("the switch is reachable and usable from the keyboard", async ({ page }) => {
+      await mockApi(page);
+      await page.goto("/jam");
+      await page.getByRole("button", { name: "Português" }).focus();
+      await page.keyboard.press("Tab");
+      await expect(page.getByRole("button", { name: "English" })).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(page.locator("html")).toHaveAttribute("lang", "en");
+    });
+
+    test("a language asked for rides into the app, and one only implied by the browser does not", async ({ page }) => {
+      await mockApi(page);
+      await page.goto("/jam");
+      await expect(page.locator("header").getByRole("link", { name: "Entrar" })).toHaveAttribute("href", "/app?ref=jam");
+      await page.getByRole("button", { name: "English" }).click();
+      await expect(page.locator("html")).toHaveAttribute("lang", "en");
+      await expect(page.locator("header").getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/app?ref=jam&lang=en");
+      await page.locator("[data-jam-start]").click();
+      await page.getByRole("button", { name: "Create an account and start" }).click();
+      await expect(page).toHaveURL(/\/app\?jam=new&ref=jam&lang=en$/);
+    });
+  });
+
+  test("?lang= beats a Portuguese browser, and the switch drops it once the choice is stored", async ({ page }) => {
+    await mockApi(page);
+    await page.goto("/jam?lang=es");
+    await expect(page.locator("html")).toHaveAttribute("lang", "es");
+    await page.getByRole("button", { name: "English" }).click();
+    await expect(page).toHaveURL(/\/jam$/);
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  });
+
+  test("the switch fits a 320 px footer and stays 44 px tall", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await mockApi(page);
+    for (const path of ["/jam", `/jam/m/${SONG_A}`]) {
+      await page.goto(path);
+      const group = page.locator("[data-jam-language]");
+      await group.scrollIntoViewIfNeeded();
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(overflow, path).toBeLessThanOrEqual(0);
+      for (const button of await group.getByRole("button").all()) {
+        const box = await button.boundingBox();
+        expect(box!.height, path).toBeGreaterThanOrEqual(44);
+        expect(box!.x + box!.width, path).toBeLessThanOrEqual(320);
+        expect(box!.x, path).toBeGreaterThanOrEqual(0);
+      }
+      await shot(page, `language-320-${path.includes("/m/") ? "song" : "home"}`);
+    }
+  });
+});
+
 // A real local API, seeded by tools/jam-site-seed. Skipped without JAM_SITE_API.
 const LIVE_API = process.env.JAM_SITE_API;
 const LIVE_IDS = process.env.JAM_SITE_IDS;
