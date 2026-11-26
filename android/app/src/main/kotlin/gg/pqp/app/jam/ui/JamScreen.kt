@@ -158,6 +158,7 @@ fun JamScreen(
                         viewerId = viewerId,
                         config = wallState.config,
                         onRecord = ::openStudio,
+                        onRefreshConfig = wall::refreshConfig,
                         onBack = { openSong = null },
                     )
                 }

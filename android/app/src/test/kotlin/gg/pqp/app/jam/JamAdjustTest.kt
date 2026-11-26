@@ -131,6 +131,22 @@ class JamAdjustTest {
         assertSame(u, u.reconciled())
     }
 
+    @Test
+    fun `unsaved edits are dirty and only then does leaving ask`() {
+        val mine = track("a")
+        assertFalse("no editor, nothing to lose", ui(mine).adjustDirty)
+        val opened = JamAdjusting.open(mine)
+        assertFalse("an editor nobody touched", ui(mine, adjust = opened).adjustDirty)
+        val edited = JamAdjusting.edit(opened, JamTrackEdit.withNudge(opened.edits, 40.0))
+        assertTrue(ui(mine, adjust = edited).adjustDirty)
+        // Edits put back to what is stored are not a loss.
+        val back = JamAdjusting.edit(edited, JamTrackEdit.editsFromTrack(mine))
+        assertFalse(ui(mine, adjust = back).adjustDirty)
+        // Stored numbers that moved restart the edits (reconciled), and a restarted editor has nothing to lose.
+        val restarted = ui(mine.copy(gain = 0.7), adjust = edited).reconciled()
+        assertFalse(restarted.adjustDirty)
+    }
+
     // --- the reducer ---
 
     @Test

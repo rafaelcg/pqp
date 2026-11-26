@@ -1869,6 +1869,7 @@
     <string name="jam_adjust_save">Save</string>
     <string name="jam_adjust_back">Back to saved</string>
     <string name="jam_adjust_busy">Saving</string>
+    <string name="jam_adjust_discard_body">You changed this recording and have not saved.</string>
     <string name="jam_adjust_reset_note">The saved numbers moved, so your changes started again from them.</string>
     <string name="jam_clip_hint">Drag the ends to trim. Drag the middle to move it.</string>
     <string name="jam_clip_zoom">How much to show</string>

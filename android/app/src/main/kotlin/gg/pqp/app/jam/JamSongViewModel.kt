@@ -81,6 +81,14 @@ data class JamSongUi(
         return if (now == editing) this else copy(adjust = now)
     }
 
+    /** Unsaved edits are open: leaving, or opening another take's editor, would throw them away and so asks first. */
+    val adjustDirty: Boolean
+        get() {
+            val editing = adjust ?: return false
+            val stored = state?.tracks?.firstOrNull { it.id == editing.trackId } ?: return false
+            return JamTrackEdit.isEdited(stored, editing.edits)
+        }
+
     val stack: List<JamTrack> get() = JamMixRules.stack(liveTracks, auditioning)
     val otherTakes: List<JamTrack> get() = JamMixRules.otherTakes(liveTracks, auditioning)
 
@@ -573,7 +581,13 @@ class JamSongViewModel(
         val stored = storedTrack(track.id) ?: return
         if (stored.authorId != backend.viewerId) return
         _ui.update { it.copy(adjust = JamAdjusting.open(stored)) }
-        if (!stored.inMix && _ui.value.auditioning[stored.instrument] != stored.id) audition(stored)
+        // A take that is not playing right now (out of the mix, or in it but replaced by a competing take that is being
+        // listened to) has no lane to open under, so it is brought on: the mix's own take by going back to the mix,
+        // a competing one by listening to it.
+        val playing = JamMixRules.activeTracks(_ui.value.state?.tracks.orEmpty(), _ui.value.auditioning).any { it.id == stored.id }
+        if (!playing) {
+            if (stored.inMix) stopAudition(stored.instrument) else audition(stored)
+        }
     }
 
     private fun edit(change: (JamTrack, TakeEdits) -> TakeEdits) {

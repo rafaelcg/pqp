@@ -1859,6 +1859,7 @@
     <string name="jam_adjust_save">Salvar</string>
     <string name="jam_adjust_back">Voltar ao guardado</string>
     <string name="jam_adjust_busy">Salvando</string>
+    <string name="jam_adjust_discard_body">Tu mexeu nessa gravação e não salvou.</string>
     <string name="jam_adjust_reset_note">Os números guardados mudaram, então tuas mudanças recomeçaram a partir deles.</string>
     <string name="jam_clip_hint">Arrasta as pontas pra cortar. Arrasta o meio pra mover.</string>
     <string name="jam_clip_zoom">Quanto mostrar</string>

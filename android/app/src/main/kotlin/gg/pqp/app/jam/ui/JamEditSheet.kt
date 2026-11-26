@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -191,7 +192,7 @@ fun JamEditSheet(song: JamSongSummary, editor: JamSongEditor, onDismiss: () -> U
                     reduce = reduce,
                     onPick = ::launchPicker,
                 )
-                Row(Modifier.width(220.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().widthIn(max = 320.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedButton(
                         onClick = ::launchPicker,
                         enabled = !ui.saving && !ui.uploading,
@@ -201,8 +202,7 @@ fun JamEditSheet(song: JamSongSummary, editor: JamSongEditor, onDismiss: () -> U
                         Text(
                             stringResource(if (hasPhoto) R.string.jam_edit_change_photo else R.string.jam_edit_add_photo),
                             modifier = Modifier.padding(start = 8.dp),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            softWrap = false,
                         )
                     }
                     if (hasPhoto) {

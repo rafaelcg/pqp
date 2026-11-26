@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalLayoutApi::class)
+
 package gg.pqp.app.jam.ui
 
 import androidx.compose.animation.core.animateDpAsState
@@ -7,10 +9,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -109,6 +115,12 @@ import kotlinx.coroutines.withTimeoutOrNull
 private const val HOLD_DELAY_NS = 400_000_000L
 private const val REPEAT_NS = 90_000_000L
 
+/**
+ * The editor's body, under the lane. Its title and helper have their own full-width lines (a narrow column beside the
+ * buttons wrapped mid-word at big type); the actions that matter at every moment, Save and the way out, are NOT here:
+ * they are [JamAdjustBar], pinned above the transport, so they are in reach however far the editor is scrolled and
+ * while the timing and volume controls are in use.
+ */
 @Composable
 fun JamAdjustPanel(
     /** The track as it is STORED: the edits are laid on it. */
@@ -124,8 +136,6 @@ fun JamAdjustPanel(
     onNudge: (Double) -> Unit,
     onGainPercent: (Int) -> Unit,
     onReset: () -> Unit,
-    onSave: () -> Unit,
-    onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -142,33 +152,18 @@ fun JamAdjustPanel(
             .testTag("jam.adjust.${track.id}"),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    stringResource(R.string.jam_adjust_title, track.instrument.label()),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    stringResource(R.string.jam_adjust_note),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = colors.onSurfaceVariant,
-                )
-            }
-            TextButton(onClick = onClose, enabled = !busy, modifier = Modifier.testTag("jam.adjust.close")) {
-                Text(stringResource(if (edited) R.string.jam_adjust_back else R.string.jam_close), maxLines = 1)
-            }
-            Button(
-                onClick = onSave,
-                enabled = edited && !busy,
-                modifier = Modifier.heightIn(min = 40.dp).testTag("jam.adjust.save"),
-            ) {
-                if (busy) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = colors.onPrimary)
-                } else {
-                    Text(stringResource(R.string.jam_adjust_save), fontWeight = FontWeight.Bold, maxLines = 1)
-                }
-            }
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                stringResource(R.string.jam_adjust_title, track.instrument.label()),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.testTag("jam.adjust.title"),
+            )
+            Text(
+                stringResource(R.string.jam_adjust_note),
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.onSurfaceVariant,
+            )
         }
 
         Text(stringResource(R.string.jam_clip_hint), style = MaterialTheme.typography.bodySmall)
@@ -194,7 +189,7 @@ fun JamAdjustPanel(
         if (edited && !busy) {
             TextButton(onClick = onReset, modifier = Modifier.align(Alignment.End).testTag("jam.adjust.reset")) {
                 Icon(PqpIcons.Undo, contentDescription = null, modifier = Modifier.size(16.dp))
-                Text(stringResource(R.string.jam_rec_nudge_reset), modifier = Modifier.padding(start = 6.dp), maxLines = 1)
+                Text(stringResource(R.string.jam_rec_nudge_reset), modifier = Modifier.padding(start = 6.dp), softWrap = false)
             }
         } else if (adjust.resets > 0 && !busy) {
             Text(
@@ -204,19 +199,66 @@ fun JamAdjustPanel(
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
-        adjust.failure?.let { failure ->
-            Text(
-                text = adjustFailureText(failure),
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.onErrorContainer,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(colors.errorContainer)
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
-                    .semantics { liveRegion = LiveRegionMode.Polite }
-                    .testTag("jam.adjust.error"),
-            )
+    }
+}
+
+/**
+ * Save and the way out of the adjust editor, with the error of a refused save right above them. Pinned over the
+ * transport by the screen while an editor is open, so it never scrolls away, and the two buttons wrap as whole buttons
+ * (never mid-word) when the type is large or the phone narrow.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun JamAdjustBar(
+    track: JamTrack,
+    adjust: JamAdjust,
+    onSave: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+    val edited = JamTrackEdit.isEdited(track, adjust.edits)
+    val busy = adjust.saving
+    Surface(color = colors.surfaceContainerHigh, modifier = modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            adjust.failure?.let { failure ->
+                Text(
+                    text = adjustFailureText(failure),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.onErrorContainer,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(colors.errorContainer)
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite }
+                        .testTag("jam.adjust.error"),
+                )
+            }
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.sm, Alignment.End),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                itemVerticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onClose, enabled = !busy, modifier = Modifier.testTag("jam.adjust.close")) {
+                    Text(stringResource(if (edited) R.string.jam_adjust_back else R.string.jam_close), softWrap = false)
+                }
+                Button(
+                    onClick = onSave,
+                    enabled = edited && !busy,
+                    modifier = Modifier.heightIn(min = 44.dp).testTag("jam.adjust.save"),
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = colors.onPrimary)
+                    } else {
+                        Text(stringResource(R.string.jam_adjust_save), fontWeight = FontWeight.Bold, softWrap = false)
+                    }
+                }
+            }
         }
     }
 }
@@ -239,15 +281,15 @@ private fun adjustFailureText(failure: JamWriteFailure): String = stringResource
 private fun ZoomChoice(zoom: ClipZoom, onChange: (ClipZoom) -> Unit) {
     val options = listOf(ClipZoom.Whole to R.string.jam_clip_zoom_whole, ClipZoom.Close to R.string.jam_clip_zoom_close)
     val label = stringResource(R.string.jam_clip_zoom)
-    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().semantics { contentDescription = label }) {
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().height(IntrinsicSize.Min).semantics { contentDescription = label }) {
         options.forEachIndexed { index, (value, text) ->
             SegmentedButton(
                 selected = zoom == value,
                 onClick = { onChange(value) },
                 shape = SegmentedButtonDefaults.itemShape(index, options.size),
-                modifier = Modifier.testTag("jam.adjust.zoom.${value.name.lowercase()}"),
+                modifier = Modifier.fillMaxHeight().testTag("jam.adjust.zoom.${value.name.lowercase()}"),
                 icon = {},
-            ) { Text(stringResource(text), style = MaterialTheme.typography.labelMedium, maxLines = 1) }
+            ) { Text(stringResource(text), style = MaterialTheme.typography.labelMedium, maxLines = 2, textAlign = TextAlign.Center) }
         }
     }
 }
@@ -255,7 +297,11 @@ private fun ZoomChoice(zoom: ClipZoom, onChange: (ClipZoom) -> Unit) {
 @Composable
 private fun Legend(track: JamTrack) {
     val colors = MaterialTheme.colorScheme
-    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.md), verticalAlignment = Alignment.CenterVertically) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md),
+        verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
         LegendItem(colors.outline, stringResource(R.string.jam_clip_band), line = false)
         LegendItem(track.instrument.color(), stringResource(R.string.jam_clip_your_take), line = false)
         LegendItem(colors.primary, stringResource(R.string.jam_clip_song_start), line = true)
@@ -271,7 +317,7 @@ private fun LegendItem(color: Color, text: String, line: Boolean) {
                 .clip(CircleShape)
                 .background(color),
         )
-        Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, softWrap = false)
     }
 }
 
@@ -306,6 +352,7 @@ private fun ClipStage(
     val bandRow = colors.surfaceContainer
     var widthPx by remember { mutableIntStateOf(0) }
     var held by remember { mutableStateOf<Held?>(null) }
+    var lastMoved by remember { mutableStateOf(Grip.End) }
     val liveWindow = JamClip.window(track, edits, zoom)
     val view = held?.window ?: liveWindow
     val span = JamClip.span(track, edits)
@@ -350,10 +397,10 @@ private fun ClipStage(
             .onSizeChanged { widthPx = it.width }
             .pointerInput(Unit) {
                 var total = 0f
-                detectDragGestures(
+                detectHorizontalDragGestures(
                     onDragStart = { offset ->
                         val (stored, w, on) = latestStage
-                        if (!on || w <= 0) return@detectDragGestures
+                        if (!on || w <= 0) return@detectHorizontalDragGestures
                         val win = latestView
                         val e = latestEdits
                         val s = JamClip.span(stored, e)
@@ -362,20 +409,25 @@ private fun ClipStage(
                         val reachPx = HANDLE_REACH.toPx()
                         val nearStart = kotlin.math.abs(offset.x - startX)
                         val nearEnd = kotlin.math.abs(offset.x - endX)
+                        // Overlapping handles: the one nearer the touch, and when they are as near as each other the one
+                        // that was moved last (so a handle dragged onto the other can be dragged back off it).
+                        val startIsNearer = nearStart < nearEnd || (nearStart == nearEnd && lastMoved == Grip.Start)
                         val grip = when {
-                            nearStart <= reachPx && nearStart <= nearEnd -> Grip.Start
+                            nearStart <= reachPx && startIsNearer -> Grip.Start
                             nearEnd <= reachPx -> Grip.End
+                            nearStart <= reachPx -> Grip.Start
                             offset.x in startX..endX -> Grip.Body
                             else -> null
                         }
+                        if (grip == Grip.Start || grip == Grip.End) lastMoved = grip
                         total = 0f
                         held = grip?.let { Held(it, e, win) }
                         if (grip != null) haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
                     },
-                    onDrag = { change, drag ->
-                        val grab = held ?: return@detectDragGestures
+                    onHorizontalDrag = { change, drag ->
+                        val grab = held ?: return@detectHorizontalDragGestures
                         change.consume()
-                        total += drag.x
+                        total += drag
                         val ms = total * JamClip.msPerPixel(grab.window, latestStage.second.toFloat())
                         when (grab.grip) {
                             Grip.Start -> trimStart(grab.edits.trimStartMs + ms)
@@ -537,12 +589,17 @@ private fun TimingCard(edits: TakeEdits, enabled: Boolean, onNudge: (Double) -> 
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(colors.surfaceContainerHigh).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        // The title and the readout share a line while they fit and the readout drops under the title when they do not.
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
                 stringResource(R.string.jam_rec_nudge_title),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f),
             )
             Text(
                 nudgeWords(edits.nudgeMs),
@@ -553,23 +610,38 @@ private fun TimingCard(edits: TakeEdits, enabled: Boolean, onNudge: (Double) -> 
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("jam.adjust.nudgeValue"),
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+        // At big type two buttons side by side cannot hold their words: they stack, each the full width.
+        val stacked = LocalDensity.current.fontScale >= 1.4f
+        val earlier: @Composable (Modifier) -> Unit = { m ->
             HoldNudgeButton(
                 label = stringResource(R.string.jam_rec_earlier),
                 icon = PqpIcons.SlideLeft,
                 sign = -1,
                 enabled = enabled,
                 onStep = { step(current.nudgeMs + it) },
-                modifier = Modifier.weight(1f).testTag("jam.adjust.earlier"),
+                modifier = m.testTag("jam.adjust.earlier"),
             )
+        }
+        val later: @Composable (Modifier) -> Unit = { m ->
             HoldNudgeButton(
                 label = stringResource(R.string.jam_rec_later),
                 icon = PqpIcons.Forward,
                 sign = 1,
                 enabled = enabled,
                 onStep = { step(current.nudgeMs + it) },
-                modifier = Modifier.weight(1f).testTag("jam.adjust.later"),
+                modifier = m.testTag("jam.adjust.later"),
             )
+        }
+        if (stacked) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                earlier(Modifier.fillMaxWidth())
+                later(Modifier.fillMaxWidth())
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+                earlier(Modifier.weight(1f))
+                later(Modifier.weight(1f))
+            }
         }
         Text(stringResource(R.string.jam_rec_hold_hint), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
     }
@@ -631,7 +703,7 @@ fun HoldNudgeButton(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (sign < 0) Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, softWrap = false)
             if (sign > 0) Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
         }
     }
@@ -647,30 +719,41 @@ private fun VolumeCard(edits: TakeEdits, enabled: Boolean, onGainPercent: (Int) 
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(colors.surfaceContainerHigh).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(Spacing.xs),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Icon(PqpIcons.Speakerphone, contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(16.dp))
-            Text(stringResource(R.string.jam_clip_everybody), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
-            Slider(
-                value = percent.toFloat(),
-                onValueChange = { onGainPercent(it.roundToInt()) },
-                valueRange = 0f..JamTrackEdit.GAIN_MAX_PERCENT.toFloat(),
-                enabled = enabled,
-                colors = SliderDefaults.colors(thumbColor = colors.primary, activeTrackColor = colors.primary),
-                modifier = Modifier
-                    .weight(1f)
-                    .semantics { contentDescription = description; stateDescription = delta }
-                    .testTag("jam.adjust.volume"),
-            )
+        // The words and the readout share a line while they fit; the readout drops under them when they do not, whole.
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(PqpIcons.Speakerphone, contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                Text(stringResource(R.string.jam_clip_everybody), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+            }
             Text(
                 delta,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = colors.onSurfaceVariant,
-                textAlign = TextAlign.End,
-                modifier = Modifier.width(64.dp).testTag("jam.adjust.volumeValue"),
+                softWrap = false,
+                modifier = Modifier.testTag("jam.adjust.volumeValue"),
             )
         }
+        Slider(
+            value = percent.toFloat(),
+            onValueChange = { onGainPercent(it.roundToInt()) },
+            valueRange = 0f..JamTrackEdit.GAIN_MAX_PERCENT.toFloat(),
+            enabled = enabled,
+            colors = SliderDefaults.colors(
+                thumbColor = colors.primary,
+                activeTrackColor = colors.primary,
+                // The card is surfaceContainerHigh: the default inactive track is nearly the same colour and cannot be seen.
+                inactiveTrackColor = colors.outline,
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = description; stateDescription = delta }
+                .testTag("jam.adjust.volume"),
+        )
     }
 }

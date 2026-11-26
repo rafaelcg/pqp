@@ -219,6 +219,15 @@ class JamWallViewModel(
     /** Pull to refresh. A failed refresh keeps the wall. */
     fun refresh() {
         load()
+        refreshConfig()
+    }
+
+    /**
+     * Read the flag again. A song screen that stays open never starts the wall again, so a write refused with
+     * `jam_channels_off` (or the screen coming back to the front) asks for it, and the pencil and the faders follow the
+     * answer in both directions.
+     */
+    fun refreshConfig() {
         viewModelScope.launch { _state.update { it.copy(config = backend.config(serverId)) } }
     }
 
