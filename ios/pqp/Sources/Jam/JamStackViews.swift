@@ -180,6 +180,9 @@ struct JamStackView: View {
             }
         }
         .animation(.jam(reduceMotion: reduceMotion), value: model.stack.map(\.id))
+        .overlayPreferenceValue(JamLaneFrameKey.self) { anchors in
+            JamPlayheadLayer(model: model, anchors: anchors, durationMs: tl.durationMs)
+        }
     }
 
     // MARK: Ruler (the scrub strip)
@@ -341,11 +344,11 @@ struct JamTrackRow: View {
                 }
             }
             .frame(width: width, height: 44)
-            // The playhead is drawn by each LANE, not as one line over the whole stack: an
-            // expanded row's mute, solo and "Adjust my recording" are never under it, and
-            // rows that touch still read as one line (each segment is 3 pt taller than
-            // its lane at both ends, the gap between rows).
-            .overlay(alignment: .leading) { playhead(width: width) }
+            // Each lane reports where it is; ONE layer over the stack draws the playhead
+            // in all of them from one clock (see `JamPlayheadLayer`). The line is only ever
+            // over lanes, so an expanded row's mute, solo and "Adjust my recording" are
+            // never under it.
+            .anchorPreference(key: JamLaneFrameKey.self, value: .bounds) { [track.id: $0] }
             .contentShape(Rectangle())
             .gesture(
                 SpatialTapGesture().onEnded { value in
@@ -355,21 +358,6 @@ struct JamTrackRow: View {
             )
         }
         .frame(height: 44)
-        .accessibilityHidden(true)
-    }
-
-    private func playhead(width: CGFloat) -> some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !model.isPlaying)) { _ in
-            let _ = model.seekRevision
-            let x = JamPlayhead.x(forPositionMs: model.positionMs, width: width, durationMs: timeline.durationMs)
-            Rectangle()
-                .fill(Palette.signal)
-                .frame(width: 2, height: 50)
-                .shadow(color: Palette.signal.opacity(0.6), radius: 4)
-                .offset(x: x - 1)
-                .opacity(timeline.durationMs > 0 ? 1 : 0)
-        }
-        .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 
@@ -651,5 +639,48 @@ struct JamOtherTakesView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - The playhead, one clock for every lane
+
+/// Where each lane is, in the stack's own space (keyed by track id).
+struct JamLaneFrameKey: PreferenceKey {
+    static let defaultValue: [String: Anchor<CGRect>] = [:]
+
+    static func reduce(value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// ONE `TimelineView` for the whole song: the playhead of every lane is drawn in a
+/// single `Canvas` from one reading of the engine's clock, at most 30 times a
+/// second whatever the number of takes (a row per take used to mean a timeline per
+/// take). The rows are not re-evaluated by it. Each segment is 3 pt taller than its
+/// lane at both ends, the gap between rows, so rows that touch read as one line,
+/// and it exists only where a lane is: never over an expanded row's controls.
+struct JamPlayheadLayer: View {
+    let model: JamSongModel
+    let anchors: [String: Anchor<CGRect>]
+    let durationMs: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            let lanes = anchors.values.map { proxy[$0] }
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !model.isPlaying)) { _ in
+                let _ = model.seekRevision
+                let position = model.positionMs
+                Canvas { context, _ in
+                    guard durationMs > 0 else { return }
+                    for lane in lanes {
+                        let x = lane.minX + JamPlayhead.x(forPositionMs: position, width: lane.width, durationMs: durationMs)
+                        let line = CGRect(x: x - 1, y: lane.minY - 3, width: 2, height: lane.height + 6)
+                        context.fill(Path(line), with: .color(Palette.signal))
+                    }
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

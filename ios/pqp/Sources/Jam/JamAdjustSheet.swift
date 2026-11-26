@@ -463,17 +463,23 @@ final class JamHoldRepeater {
         direction: Double,
         delayMs: Double = JamClipEdits.holdDelayMs,
         repeatMs: Double = JamClipEdits.repeatMs,
+        sleep: @escaping (Double) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
         step: @escaping (Double) -> Void
     ) {
         guard task == nil else { return }
         step(direction * JamClipEdits.nudgeStep(heldMs: 0))
         task = Task {
-            do { try await Task.sleep(for: .milliseconds(delayMs)) } catch { return }
+            do { try await sleep(delayMs) } catch { return }
+            guard !Task.isCancelled else { return }
             var held = delayMs
+            // Checked before EVERY step, not only by the loop: a sleep that finished just as
+            // the finger lifted returns normally, and `end()` (which runs on the same actor,
+            // so never between this check and the step) has cancelled the task by then.
             while !Task.isCancelled {
                 step(direction * JamClipEdits.nudgeStep(heldMs: held))
                 held += repeatMs
-                do { try await Task.sleep(for: .milliseconds(repeatMs)) } catch { return }
+                do { try await sleep(repeatMs) } catch { return }
+                guard !Task.isCancelled else { return }
             }
         }
     }

@@ -258,6 +258,35 @@ final class JamHoldRepeaterTests: XCTestCase {
         XCTAssertFalse(repeater.isHolding)
     }
 
+    /// The boundary: the delay finishes (the sleep RETURNS, it is not cancelled) at the very
+    /// moment the finger lifts. A sleeper that releases just before it returns is exactly that.
+    func testAReleaseAtTheBoundaryOfTheDelayStepsNoMore() async throws {
+        let repeater = JamHoldRepeater()
+        var steps: [Double] = []
+        repeater.begin(
+            direction: 1, delayMs: 50, repeatMs: 30,
+            sleep: { _ in repeater.end() },   // returns normally, after the release
+            step: { steps.append($0) }
+        )
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(steps, [10], "only the press itself")
+
+        // And the same at the boundary of a REPEAT: one repeat, released as its sleep returns.
+        var more: [Double] = []
+        var sleeps = 0
+        let second = JamHoldRepeater()
+        second.begin(
+            direction: 1, delayMs: 10, repeatMs: 10,
+            sleep: { _ in
+                sleeps += 1
+                if sleeps == 2 { second.end() }   // the sleep after the first repeat
+            },
+            step: { more.append($0) }
+        )
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(more.count, 2, "the press and the one repeat that was already due, none after the release")
+    }
+
     func testAHoldRepeatsAfterTheDelayAndStopsTheMomentItEnds() async throws {
         let repeater = JamHoldRepeater()
         var steps: [Double] = []
