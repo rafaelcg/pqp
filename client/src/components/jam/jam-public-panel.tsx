@@ -133,6 +133,12 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
     joinMode: song.joinMode,
     wantedInstruments: song.wantedInstruments,
     instruments: song.instruments,
+    // What this visitor sent that the starter has not put in yet: the same rule the "sent" card
+    // uses, so the two share messages for one person and one song cannot disagree (round 3, N-2).
+    pending:
+      publicView && !isStarter
+        ? tracks.filter((track) => viewerId !== null && track.authorId === viewerId && !track.inMix).map((track) => track.instrument)
+        : [],
   };
 
   // Answers arrive while the song is open: the sheet reads again every time it opens.

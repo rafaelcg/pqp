@@ -12073,10 +12073,11 @@ function MainAppContent({
   const publicJamOpen =
     bootstrapReady && parsePublicJamPath(location.pathname) !== null;
   const effectiveCornerHint =
-    dmToastActive || jamHintContext.studio || publicJamOpen ? null : cornerHint;
+    dmToastActive || jamHintContext.studio || jamHintContext.notice || publicJamOpen ? null : cornerHint;
   const liveAttachedHint =
     !hintsQuiet &&
     !publicJamOpen &&
+    !jamHintContext.notice &&
     (effectiveCornerHint === null || effectiveCornerHint === "shortcuts")
       ? attachedFeatureHint
       : null;

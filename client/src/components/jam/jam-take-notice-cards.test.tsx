@@ -17,10 +17,10 @@ const item = (over: Partial<JamTakeNotice> = {}): JamTakeNotice => ({
   ...over,
 });
 
-function html(notices: JamTakeNotice[], lifted = false): string {
+function html(notices: JamTakeNotice[], more = 0, placement: "overlay" | "inline" = "overlay"): string {
   return renderToStaticMarkup(
     <I18nProvider>
-      <JamTakeNoticeCards notices={notices} lifted={lifted} onOpen={vi.fn()} onDismiss={vi.fn()} />
+      <JamTakeNoticeCards notice={notices[0] ?? null} more={more} placement={placement} onOpen={vi.fn()} onDismiss={vi.fn()} />
     </I18nProvider>,
   );
 }
@@ -53,10 +53,27 @@ describe("JamTakeNoticeCards", () => {
     expect(html([item({ kind: "refused" })])).toContain("did not make it in");
   });
 
-  it("at most two cards stack, and a toast in the corner lifts them instead of covering it", () => {
-    const three = html([item({ id: "a" }), item({ id: "b", kind: "accepted" }), item({ id: "c", kind: "refused" })], true);
-    expect(three.match(/data-jam-take-notice=/g)).toHaveLength(2);
-    expect(three).toContain("148px");
+  it("draws ONE card and says how many wait behind it (round 3, N-1: they were a stack that covered the record button)", () => {
+    const one = html([item({ id: "a" })], 2);
+    expect(one.match(/data-jam-take-notice=/g)).toHaveLength(1);
+    expect(one).toContain("data-jam-take-notice-more=\"2\"");
+    expect(one).toContain("2 more");
+    expect(html([item()], 0)).not.toContain("data-jam-take-notice-more");
+  });
+
+  it("floats at the corner on a desktop and above the bar on a phone, never at the top where the app's own buttons are", () => {
+    const out = html([item()]);
+    expect(out).toContain("data-placement=\"overlay\"");
+    expect(out).toContain("fixed");
+    expect(out).toContain("sm:bottom-4");
+    expect(out).not.toContain("sm:top-");
+  });
+
+  it("inside a view it is in the flow, not fixed, so it cannot cover the song's controls", () => {
+    const out = html([item()], 0, "inline");
+    expect(out).toContain("data-placement=\"inline\"");
+    expect(out).not.toContain("fixed");
+    expect(out).not.toContain("elevation-3");
   });
 
   it("an unnamed instrument has words of its own", () => {

@@ -333,6 +333,9 @@ export function JamStudio({
           joinMode: inviteSong?.joinMode ?? draft?.joinMode ?? "open",
           wantedInstruments: inviteSong?.wantedInstruments ?? draft?.wantedInstruments ?? [],
           instruments: inviteSong?.instruments ?? [],
+          // An outside take waits for the starter unless they let outside takes in by themselves: the
+          // message says so, and does not ask the sender's friends for the part they just sent.
+          pending: outsideTake && !autoAcceptOutside ? [studio.instrument] : [],
         }
       : null;
 
@@ -934,7 +937,6 @@ export function JamStudio({
             {inviteSubject && (
               <JamInviteCard
                 subject={inviteSubject}
-                justSent={studio.instrument}
                 surface={created ? "created" : "sent"}
               />
             )}

@@ -13,14 +13,22 @@ import { useSyncExternalStore } from "react";
 export interface JamHintContext {
   wall: boolean;
   studio: boolean;
+  /** A song is open (its panel is on screen, in a channel's wall or as a public view): its transport and record button are in play. */
+  song: boolean;
+  /**
+   * A Jam notice (a part arrived, a part was answered, the starter's toast) is drawn over the app
+   * right now. The corner queue yields while it is: one thing at a time asking for the person's
+   * eyes, and the notice is the one they are waiting for (round 3, N-1).
+   */
+  notice: boolean;
 }
 
-let current: JamHintContext = { wall: false, studio: false };
+let current: JamHintContext = { wall: false, studio: false, song: false, notice: false };
 const listeners = new Set<() => void>();
 
 export function setJamHintContext(patch: Partial<JamHintContext>): void {
   const next = { ...current, ...patch };
-  if (next.wall === current.wall && next.studio === current.studio) {
+  if (next.wall === current.wall && next.studio === current.studio && next.song === current.song && next.notice === current.notice) {
     return;
   }
   current = next;

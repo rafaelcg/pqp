@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { setJamHintContext, useJamHintContext } from "@/lib/jam-hint-context";
+import { jamNoticePlacement, jamNoticeQueue } from "@/lib/jam-notice-placement";
 import { leavesToJamSite, peekJamHandover, rebindJamHandover } from "@/lib/jam-handover";
 import { jamSiteHomeUrl, parsePublicJamPath, publicJamAppPath } from "@/lib/jam-public-links";
 import {
@@ -119,7 +121,13 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
       show(notice);
     });
   }, [ready, t]);
-  const toastKey = toast?.key ?? null;
+  // What is drawn, and where (`lib/jam-notice-placement.ts`): one thing at a time, never over a
+  // transport. A toast that is held back (a recording is on, a song is open) keeps its place and its
+  // nine seconds start when it is finally drawn.
+  const hint = useJamHintContext();
+  const placement = jamNoticePlacement({ studio: hint.studio, song: hint.song, view: route !== null });
+  const queue = jamNoticeQueue(notices, toast !== null, placement);
+  const toastKey = toast !== null && queue.toast ? toast.key : null;
   useEffect(() => {
     if (toastKey === null) {
       return;
@@ -127,6 +135,12 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
     const timer = window.setTimeout(() => setLeaving(true), SHOW_MS);
     return () => window.clearTimeout(timer);
   }, [toastKey]);
+  // The corner's cards yield while a notice is up (`JamHintContext.notice`).
+  const overlayUp = me.enabled && (queue.toast || (queue.card !== null && placement === "overlay"));
+  useEffect(() => {
+    setJamHintContext({ notice: overlayUp });
+    return () => setJamHintContext({ notice: false });
+  }, [overlayUp]);
   useEffect(() => {
     if (!leaving) {
       return;
@@ -138,6 +152,25 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
   if (!ready || (!route && !toast && !consentOpen && notices.length === 0)) {
     return null;
   }
+  const cards = (where: "overlay" | "inline") => (
+    <JamTakeNoticeCards
+      notice={queue.card}
+      more={queue.more}
+      placement={where}
+      onOpen={(notice) => {
+        ackTakeNotice(notice.id);
+        if (route?.kind === "song" && route.songId === notice.songId) {
+          // The song is on screen already, from before the part arrived, and the view
+          // reads its song once (no frame reaches it): opening it again is what puts
+          // the waiting part, and Aceitar and Recusar, in front of the person.
+          setViewEpoch((before) => before + 1);
+          return;
+        }
+        openPublicJamById(notice.songId);
+      }}
+      onDismiss={(notice) => ackTakeNotice(notice.id)}
+    />
+  );
   return (
     <>
       {route && (
@@ -146,6 +179,7 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
           target={route.kind === "new" ? "new" : route.songId}
           viewerId={viewerId}
           onClose={close}
+          noticeSlot={me.enabled && placement === "inline" ? cards("inline") : null}
           onSongStarted={(songId) => {
             // A jam started by a visitor is now the jam they came from.
             rebindJamHandover(songId);
@@ -153,13 +187,13 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
           }}
         />
       )}
-      {toast && me.enabled && (
+      {toast && me.enabled && queue.toast && (
         <div
           role="status"
           aria-live="polite"
           data-jam-public-toast=""
           className={cn(
-            "elevation-3 pointer-events-auto fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+72px)] z-50 flex items-center gap-3 rounded-[var(--radius-card)] p-3 sm:inset-x-auto sm:bottom-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:w-96",
+            "elevation-3 pointer-events-auto fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+72px)] z-50 flex items-center gap-3 rounded-[var(--radius-card)] bg-surface-2 p-3 sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-96",
             leaving ? "animate-toast-out" : "animate-toast-in",
           )}
         >
@@ -186,24 +220,7 @@ export function JamPublicHost({ viewerId, ready, onClosed }: JamPublicHostProps)
           </button>
         </div>
       )}
-      {me.enabled && (
-        <JamTakeNoticeCards
-          notices={notices}
-          lifted={toast !== null}
-          onOpen={(notice) => {
-            ackTakeNotice(notice.id);
-            if (route?.kind === "song" && route.songId === notice.songId) {
-              // The song is on screen already, from before the part arrived, and the view
-              // reads its song once (no frame reaches it): opening it again is what puts
-              // the waiting part, and Aceitar and Recusar, in front of the person.
-              setViewEpoch((before) => before + 1);
-              return;
-            }
-            openPublicJamById(notice.songId);
-          }}
-          onDismiss={(notice) => ackTakeNotice(notice.id)}
-        />
-      )}
+      {me.enabled && placement === "overlay" && cards("overlay")}
       <JamConsentDialog open={consentOpen} onClose={() => setConsentOpen(false)} />
     </>
   );

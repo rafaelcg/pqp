@@ -17,6 +17,7 @@ import {
 } from "@/lib/jam-api";
 import type { BandLane } from "@/lib/jam-clip";
 import { bandFitsBelowStage, readBandOpen, writeBandOpen } from "@/lib/jam-band-pref";
+import { setJamHintContext } from "@/lib/jam-hint-context";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cannotRecordReason, pickInstrument } from "@/lib/jam-record";
 import { dropInboxTake } from "@/lib/jam-public-store";
@@ -174,6 +175,12 @@ export function JamSongPanel({
       toggleRef.current();
     }
   }, [playNonce]);
+
+  // A song is open: the app's notices keep off its transport (`lib/jam-notice-placement.ts`).
+  useEffect(() => {
+    setJamHintContext({ song: true });
+    return () => setJamHintContext({ song: false });
+  }, []);
 
   // Opening a song puts the keyboard in it: focus lands on the song's name, so
   // Tab goes through the song and Escape closes it. (Not stolen back later: this

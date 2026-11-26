@@ -407,6 +407,33 @@ describeDb("telling the starter about takes", () => {
     expect(await notices(taker)).toHaveLength(1);
   });
 
+  it("an accepted item goes when its part does: the sender deletes it, or the starter takes it back out (round 3, N-5)", async () => {
+    const song = await startSong();
+    const bass = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    const drums = await addTrack(taker, song, "drums", { publicConsent: "yes" });
+    for (const one of [bass, drums]) {
+      expect((await call(starter, "PATCH", `/api/jam-tracks/${one.body.track.id}`, { inMix: true })).status).toBe(200);
+    }
+    await vi.waitFor(async () => expect((await notices(taker)).map((one) => one.kind)).toEqual(["accepted"]));
+    expect((await notices(taker))[0]).toMatchObject({ songId: song, instruments: ["bass", "drums"], count: 2 });
+
+    // One of the two parts goes: the other is still in, so the item stands.
+    expect((await call(taker, "DELETE", `/api/jam-tracks/${bass.body.track.id}`)).status).toBe(204);
+    expect((await notices(taker)).map((one) => one.kind)).toEqual(["accepted"]);
+
+    // The last one is taken back out of the mix by the starter (an undo of "Aceitar"): nothing is in any more.
+    expect((await call(starter, "PATCH", `/api/jam-tracks/${drums.body.track.id}`, { inMix: false })).status).toBe(200);
+    expect(await notices(taker)).toEqual([]);
+
+    // And it stays spent: accepting again is a new answer with a new item.
+    expect((await call(starter, "PATCH", `/api/jam-tracks/${drums.body.track.id}`, { inMix: true })).status).toBe(200);
+    await vi.waitFor(async () => expect((await notices(taker)).map((one) => one.kind)).toEqual(["accepted"]));
+
+    // A deleted take is also gone for a person whose item was never read.
+    expect((await call(taker, "DELETE", `/api/jam-tracks/${drums.body.track.id}`)).status).toBe(204);
+    expect(await notices(taker)).toEqual([]);
+  });
+
   it("a starter who blocked the recorder is not told (the take still waits in the inbox)", async () => {
     const song = await startSong();
     await getPool().query(`INSERT INTO user_blocks (user_id, blocked_user_id) VALUES ($1, $2)`, [starter.id, taker.id]);
