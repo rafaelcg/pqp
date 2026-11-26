@@ -4089,6 +4089,17 @@ save is out the editor is left alone (its own echo is about to say the same); th
 frame, unless something newer already landed (`accepts`). A track deleted under the editor closes it. The one playhead
 across the lanes skips the open editor, which has one of its own on a different scale.
 
+*Staying reachable.* Save and the way out of the editor are a bar pinned over the transport (`JamAdjustBar`), with the
+error of a refused save directly above them, so they are on screen however far the editor is scrolled; the editor scrolls
+itself up under the top bar when it opens. Unsaved edits are never dropped silently: system Back, the back arrow, another
+take's editor and the studio all ask "Descartar as mudanças?" first (`JamSongUi.adjustDirty`). Every row of actions (the
+expanded controls, a competing take's Ouvir, Colocar na mix, faders and Apagar a faixa) is a `FlowRow` of whole buttons, so
+none disappears or breaks mid-word between 320 and 430 dp and from font scale 1.0 to 2.0; from 1.4 the lane's four
+controls drop under its title, the timing buttons stack and the volume readout sits above its slider. The stage reacts
+to horizontal drags only, so a vertical swipe that starts on it still scrolls the list. A flag that goes off under an
+open sheet leaves the sheet and its typed changes with an error, and the flag is read again when the screen comes back to
+the front or a write is refused for it, so the pencil and the faders follow it in both directions.
+
 **Motion** is a spring on the editor opening and closing, a handle that widens while it is held, a photo that lands
 with a small spring and a progress ring while it goes up; all of it is skipped under "remove animations"
 (`rememberReduceMotion`). The cut parts of a take are the instrument's colour pulled toward the stage by a fixed share
