@@ -13,7 +13,8 @@ import {
   fetchJamPublicMe,
   fetchPublicJams,
 } from "@/lib/jam-public-api";
-import { openPublicJam, openPublicJamById } from "@/lib/jam-public-nav";
+import { FEATURED_WINDOW, pickFeatured, takesParts } from "@/lib/jam-featured";
+import { listenToPublicJam, startPublicJam } from "@/lib/jam-public-nav";
 
 /**
  * What the signed-in account knows about public jams: the flag and what this
@@ -260,26 +261,35 @@ export function useJamPublicMe(active = true): JamPublicMeState {
 
 // ---- the song to open --------------------------------------------------------
 
-/** How many of the top songs are looked at to pick the one a door opens. */
-const TOP_LOOKUP = 10;
+/** What a door into public jams opens: the featured song, and whether it takes a part from the person. */
+export interface FeaturedPublicJam {
+  id: string;
+  /** Not `closed`: only then does a door offer "Gravar minha parte" (a closed song has no record button). */
+  takesParts: boolean;
+}
 
 /**
- * The song a door into public jams opens: the first of the most heard that has
- * no artist (an original, which is what the product wants to show), else the
- * first of them. `null` when there is no public song at all.
+ * The song a door into public jams opens, picked by the public site's own hero
+ * rule (`pickFeatured` in `lib/jam-featured.ts`, over the same twelve of Em
+ * alta): an original that still takes a part, else any original, else any song
+ * that takes one, else the first. `null` when there is no public song with a
+ * part to hear at all.
+ *
+ * It used to be "the most heard original", which at launch is a finished
+ * song: the card promised "grava a tua parte" and opened one that took none.
  */
-export async function fetchTopPublicJamId(): Promise<string | null> {
-  const page = await fetchPublicJams({ sort: "top", limit: TOP_LOOKUP });
-  const songs = page.songs;
-  return (songs.find((song) => !song.artist?.trim()) ?? songs[0])?.id ?? null;
+export async function fetchFeaturedPublicJam(): Promise<FeaturedPublicJam | null> {
+  const page = await fetchPublicJams({ sort: "top", limit: FEATURED_WINDOW });
+  const song = pickFeatured(page.songs);
+  return song ? { id: song.id, takesParts: takesParts(song) } : null;
 }
 
 /**
  * A door into public jams that has no song to show beside it (the quick
- * switcher's "Abrir o Jam", the Novidades strip): the top public song, playing,
- * or the sheet that starts one when there is none or the lookup failed (a
- * failed lookup says nothing about the catalogue, and starting is always
- * available).
+ * switcher's "Abrir o Jam", the search dialog's): the featured song, waiting
+ * for a tap on play, or the sheet that starts one when there is none or the
+ * lookup failed (a failed lookup says nothing about the catalogue, and
+ * starting is always available).
  */
 let doorRun = 0;
 
@@ -289,9 +299,9 @@ export async function openPublicJamsDoor(): Promise<void> {
   doorRun += 1;
   const mine = doorRun;
   const startedAt = typeof window === "undefined" ? "" : window.location.pathname;
-  let songId: string | null = null;
+  let featured: FeaturedPublicJam | null = null;
   try {
-    songId = await fetchTopPublicJamId();
+    featured = await fetchFeaturedPublicJam();
   } catch {
     // Not an answer: fall through to starting one.
   }
@@ -299,22 +309,22 @@ export async function openPublicJamsDoor(): Promise<void> {
   if (mine !== doorRun || moved) {
     return;
   }
-  if (songId) {
-    openPublicJamById(songId, { play: true });
+  if (featured) {
+    listenToPublicJam(featured.id);
   } else {
-    openPublicJam({ kind: "new" });
+    startPublicJam();
   }
 }
 
 export type JamPublicTop =
   | { status: "idle" | "loading" | "error" }
-  | { status: "ready"; songId: string | null };
+  | { status: "ready"; song: FeaturedPublicJam | null };
 
 /**
- * The top public song, asked once while `active` (a card or a door that may
- * draw). `ready` with a null id is an answer: there is nothing to listen to
- * yet, and the surface offers starting one instead. `error` is not an answer,
- * and a surface that says something about it waits for one.
+ * The featured public song, asked once while `active` (a card or a door that
+ * may draw). `ready` with a null song is an answer: there is nothing to listen
+ * to yet, and the surface offers starting one instead. `error` is not an
+ * answer, and a surface that says something about it waits for one.
  */
 export function useJamPublicTop(active: boolean): JamPublicTop {
   const [top, setTop] = useState<JamPublicTop>({ status: "idle" });
@@ -332,9 +342,9 @@ export function useJamPublicTop(active: boolean): JamPublicTop {
     }
     started.current = true;
     setTop({ status: "loading" });
-    void fetchTopPublicJamId().then(
-      (songId) => {
-        if (alive.current) setTop({ status: "ready", songId });
+    void fetchFeaturedPublicJam().then(
+      (song) => {
+        if (alive.current) setTop({ status: "ready", song });
       },
       () => {
         if (alive.current) setTop({ status: "error" });
@@ -342,6 +352,14 @@ export function useJamPublicTop(active: boolean): JamPublicTop {
     );
   }, [active]);
   return top;
+}
+
+/**
+ * Whether a door offers "Gravar minha parte": the featured song takes a part
+ * and this account may record one (storage on, not blocked from publishing).
+ */
+export function canRecordOnFeatured(song: FeaturedPublicJam | null, me: JamPublicMeState): boolean {
+  return song !== null && song.takesParts && me.uploads && me.publishing !== "blocked";
 }
 
 /** Who is waiting for this account's answer, and the starter's inbox. Empty while the flag is off. */

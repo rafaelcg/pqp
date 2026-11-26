@@ -83,7 +83,7 @@ the generic `noindex` card.
 - **Home (Palco).** A featured song, a three-step "Como funciona" strip, tabs,
   cards. **The featured slot prefers an original**: of the first six of Em alta,
   the first song with a part to show whose `artist` is null, else the first with
-  a part (`pickFeatured`, `src/jam-site/featured.ts`), so the showcase is never
+  a part (`pickFeatured`, `lib/jam-featured.ts`, re-exported by `src/jam-site/featured.ts`; the app's own doors into public jams, the "A Jam abriu" card, Novidades, the directory strip, search and Cmd+K, pick their song with the same function), so the showcase is never
   somebody else's hit when an original is on the page. It also prefers a song
   that takes a part (`joinMode` not `closed`, below): first original that takes
   one, else first original, else first that takes one, else the first song. A

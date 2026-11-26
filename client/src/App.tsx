@@ -135,6 +135,7 @@ import { dispatchJamFrame, dispatchJamReconnected } from "@/lib/jam-frames";
 import {
   dispatchJamPublicNotice,
   isJamPublicNotice,
+  canRecordOnFeatured,
   jamPublicReconnected,
   openPublicJamsDoor,
   useJamPublicMe,
@@ -492,7 +493,12 @@ import {
 } from "@/lib/jam-handover";
 import { parsePublicJamPath } from "@/lib/jam-public-links";
 import { forgetSignedIn, rememberSignedIn } from "@/lib/jam-signed-in";
-import { openPublicJam, openPublicJamById } from "@/lib/jam-public-nav";
+import {
+  listenToPublicJam,
+  openPublicJam,
+  recordOnPublicJam,
+  startPublicJam,
+} from "@/lib/jam-public-nav";
 import { JamAnnouncementHint } from "@/components/layout/jam-announcement-hint";
 import {
   isJamAnnouncementSeen,
@@ -11967,19 +11973,25 @@ function MainAppContent({
     typing: hintQuietSources.composerBusy,
     showing: jamNewsShowing,
   });
-  const jamNewsSongId = jamTop.status === "ready" ? jamTop.songId : null;
-  const closeJamNews = (open: boolean) => {
+  const jamNewsSong = jamTop.status === "ready" ? jamTop.song : null;
+  const jamNewsCanRecord = canRecordOnFeatured(jamNewsSong, jamPublicMe);
+  /**
+   * The card's actions. Every one stamps the card (somebody who acted on it
+   * has nothing left to be told) and opens through `lib/jam-public-nav.ts`,
+   * which never starts the music.
+   */
+  const closeJamNews = (action: "listen" | "record" | "start" | "dismiss") => {
     rememberJamAnnouncement();
     setJamNewsStamps((n) => n + 1);
-    if (!open) {
+    if (action === "dismiss") {
       return;
     }
-    // "Ouvir uma jam": the top public song, playing. With none yet, the sheet
-    // that starts one.
-    if (jamNewsSongId) {
-      openPublicJamById(jamNewsSongId, { play: true });
+    if (action === "start" || !jamNewsSong) {
+      startPublicJam();
+    } else if (action === "record") {
+      recordOnPublicJam(jamNewsSong.id);
     } else {
-      openPublicJam({ kind: "new" });
+      listenToPublicJam(jamNewsSong.id);
     }
   };
   const cornerHint = winningCornerHint(
@@ -12038,7 +12050,15 @@ function MainAppContent({
         !campaignsYield &&
         attachedFeatureHint === null,
     },
-    { quiet: hintsQuiet },
+    {
+      quiet: hintsQuiet,
+      // A new account is invited to the QG before it is told "A Jam abriu"; a
+      // member is told the news first (`cornerOrder`, `lib/corner-hints.ts`).
+      // `justOnboarded` for the session the wizard finishes in, whose local
+      // `user` does not carry `onboardedAt` yet.
+      newcomer:
+        justOnboarded || isRecentNewcomer(user?.preferences?.onboardedAt),
+    },
   );
   // A DM arrival card and the bottom-right onboarding queue would collide on
   // a phone, so a toast up wins the corner for its duration — same yield the
@@ -12048,9 +12068,15 @@ function MainAppContent({
   // Nothing in the corner while the Jam studio is open: a standing card there can
   // sit over the end of "Mandar pra banda" (and the studio says its own first-run
   // words inline).
-  const effectiveCornerHint = dmToastActive || jamHintContext.studio ? null : cornerHint;
+  // No corner card over a public jam either: the song view covers the app, and
+  // a card under it would still take the Escape that closes the song.
+  const publicJamOpen =
+    bootstrapReady && parsePublicJamPath(location.pathname) !== null;
+  const effectiveCornerHint =
+    dmToastActive || jamHintContext.studio || publicJamOpen ? null : cornerHint;
   const liveAttachedHint =
     !hintsQuiet &&
+    !publicJamOpen &&
     (effectiveCornerHint === null || effectiveCornerHint === "shortcuts")
       ? attachedFeatureHint
       : null;
@@ -13873,11 +13899,15 @@ function MainAppContent({
           }}
           onListenJam={(songId) => {
             setDirectoryOpen(false);
-            openPublicJamById(songId, { play: true });
+            listenToPublicJam(songId);
+          }}
+          onRecordJam={(songId) => {
+            setDirectoryOpen(false);
+            recordOnPublicJam(songId);
           }}
           onStartJam={() => {
             setDirectoryOpen(false);
-            openPublicJam({ kind: "new" });
+            startPublicJam();
           }}
           onReport={(community) =>
             setReportTarget({
@@ -15587,10 +15617,13 @@ function MainAppContent({
       />
       <JamAnnouncementHint
         enabled={effectiveCornerHint === "jamNews"}
-        hasSong={jamNewsSongId !== null}
+        hasSong={jamNewsSong !== null}
+        canRecord={jamNewsCanRecord}
         onShowingChange={setJamNewsShowing}
-        onOpen={() => closeJamNews(true)}
-        onDismiss={() => closeJamNews(false)}
+        onListen={() => closeJamNews("listen")}
+        onRecord={() => closeJamNews("record")}
+        onStart={() => closeJamNews("start")}
+        onDismiss={() => closeJamNews("dismiss")}
       />
       <AppsHint
         enabled={effectiveCornerHint === "appsNews"}
@@ -15810,6 +15843,10 @@ function MainAppContent({
           onOpenJams={() => {
             setWhatsNewOpen(false);
             void openPublicJamsDoor();
+          }}
+          onStartJam={() => {
+            setWhatsNewOpen(false);
+            startPublicJam();
           }}
           onOpenJamSong={(song) => {
             setWhatsNewOpen(false);

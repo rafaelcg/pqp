@@ -17,7 +17,7 @@ import { isHintSeen, rememberHint } from "@/lib/hints";
  * and on top of the queue's own rules (`hint_budget`) it never shows in a call,
  * while sharing or watching a share, in a running app, or over a live party or
  * the watch-now strip. Nor while the arrival strip is up for somebody who just
- * joined (one instruction for one screen), nor before the top-song lookup has
+ * joined (one instruction for one screen), nor before the featured-song lookup has
  * answered: the primary button's label depends on it ("Ouvir uma jam" or, with
  * nothing public yet, "Começar uma jam"), and a card must not paint one label
  * and swap it. Typing only holds its ENTRANCE.
@@ -54,7 +54,7 @@ export function rememberJamAnnouncement(
 export interface JamAnnouncementFacts {
   /** `announce` on the jam-public config (already beside `jam_public`). */
   announce: boolean;
-  /** The top-song lookup answered (a song, or none). A failed ask is not an answer. */
+  /** The featured-song lookup answered (a song, or none). A failed ask is not an answer. */
   topReady: boolean;
   /** Stamped on this device or in this load. */
   seen: boolean;

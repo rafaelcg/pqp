@@ -26,10 +26,15 @@ import { hintDietHides } from "./hint-diet";
  *     server where `forum_announcement` is on (`lib/forum-announcement.ts`).
  *     News about the server on screen, so it beats the year-round campaigns;
  *     it never wants the corner in a call, so it never meets voiceClean
- *  4d. jamNews: "A Jam abriu", once per browser, to anybody signed in while
+ *  3b. jamNews: "A Jam abriu", once per browser, to anybody signed in while
  *     `jam_announcement` is on beside `jam_public` (`lib/jam-announcement.ts`).
- *     Right after the forum card: both are launch news, and the forum's is
- *     about the server on screen so it goes first
+ *     NEWS, so its audience is somebody who already knew pqp: for a member it
+ *     goes BEFORE the QG invite (an invitation to a room, which a member who
+ *     never joined it was being asked before hearing the news that brought
+ *     them back: user test round 2, n9). For a NEW account (first run done
+ *     within a week, or this session) there is nothing before it to be news
+ *     against, and the first card is the house: QG first, the Jam card the
+ *     moment the QG card is gone (`cornerOrder`)
  *  5. voiceClean — the one-time Voz limpa nudge, above the user bar; after
  *     the first-run cards, before the app-invite campaigns (`lib/voice-clean.ts`)
  *  6. seasonalLook: "the Halloween look is here", once per season; a short
@@ -45,10 +50,10 @@ import { hintDietHides } from "./hint-diet";
 export const CORNER_HINT_ORDER = [
   "communityHomePost",
   "notifyOffer",
+  "jamNews",
   "qg",
   "listingNudge",
   "forumNews",
-  "jamNews",
   "voiceClean",
   "seasonalLook",
   "mobileBeta",
@@ -60,6 +65,21 @@ export const CORNER_HINT_ORDER = [
 export type CornerHintId = (typeof CORNER_HINT_ORDER)[number];
 
 /**
+ * The order for this person: the same list, except that for a new account the
+ * Jam announcement waits for the QG invite instead of passing it. One order per
+ * person at a time, so the rule "one card at a time" is untouched: this only
+ * decides who is first in line, never how many are drawn.
+ */
+export function cornerOrder(newcomer: boolean): readonly CornerHintId[] {
+  if (!newcomer) {
+    return CORNER_HINT_ORDER;
+  }
+  const rest = CORNER_HINT_ORDER.filter((id) => id !== "jamNews");
+  const at = rest.indexOf("qg") + 1;
+  return [...rest.slice(0, at), "jamNews", ...rest.slice(at)];
+}
+
+/**
  * A Baú publish and a missed-DM notification offer are things that happened,
  * not campaigns: a quiet context never holds them (`lib/hint-quiet.ts`).
  */
@@ -69,6 +89,9 @@ export const QUIET_EXEMPT_CORNER_IDS: ReadonlySet<CornerHintId> = new Set([
 ]);
 
 /**
+ * `newcomer`: the account finished first-run within the week, or in this
+ * session (`cornerOrder`).
+ *
  * `quiet`: unsolicited hints wait (a quiet context, or the hint switches have
  * not been read yet; see `lib/hint-quiet.ts`). The ids in
  * `QUIET_EXEMPT_CORNER_IDS` still win. A hidden-by-the-diet id
@@ -77,9 +100,9 @@ export const QUIET_EXEMPT_CORNER_IDS: ReadonlySet<CornerHintId> = new Set([
  */
 export function winningCornerHint(
   wanting: Partial<Record<CornerHintId, boolean>>,
-  options: { quiet?: boolean } = {},
+  options: { quiet?: boolean; newcomer?: boolean } = {},
 ): CornerHintId | null {
-  for (const id of CORNER_HINT_ORDER) {
+  for (const id of cornerOrder(options.newcomer === true)) {
     if (!wanting[id] || hintDietHides(id)) {
       continue;
     }

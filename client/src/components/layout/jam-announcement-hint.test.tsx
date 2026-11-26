@@ -49,7 +49,7 @@ describe("the Jam announcement card", () => {
         enabled={false}
         hasSong
         onShowingChange={onShowingChange}
-        onOpen={vi.fn()}
+        onListen={vi.fn()} onRecord={vi.fn()} onStart={vi.fn()}
         onDismiss={vi.fn()}
       />,
     );
@@ -59,8 +59,8 @@ describe("the Jam announcement card", () => {
     expect(onShowingChange).toHaveBeenLastCalledWith(false);
   });
 
-  it("is a labelled landmark with the picture, a title, one line and two actions, not a live region", async () => {
-    await mount(<JamAnnouncementHint enabled hasSong onOpen={vi.fn()} onDismiss={vi.fn()} />);
+  it("is a labelled landmark with the picture, a title, one line and its actions, not a live region", async () => {
+    await mount(<JamAnnouncementHint enabled hasSong onListen={vi.fn()} onRecord={vi.fn()} onStart={vi.fn()} onDismiss={vi.fn()} />);
     const aside = card()!;
     expect(aside.tagName).toBe("ASIDE");
     expect(aside.getAttribute("aria-label")).toBe("The Jam is open");
@@ -76,35 +76,81 @@ describe("the Jam announcement card", () => {
   });
 
   it("with no public song the primary button offers starting one", async () => {
-    await mount(<JamAnnouncementHint enabled hasSong={false} onOpen={vi.fn()} onDismiss={vi.fn()} />);
+    await mount(<JamAnnouncementHint enabled hasSong={false} onListen={vi.fn()} onRecord={vi.fn()} onStart={vi.fn()} onDismiss={vi.fn()} />);
     expect(button("Start a jam")).toBeTruthy();
     expect(document.body.textContent).not.toContain("Hear a jam");
   });
 
   it("counts one view per load, however often it comes back", async () => {
-    await mount(<JamAnnouncementHint enabled hasSong onOpen={vi.fn()} onDismiss={vi.fn()} />);
+    await mount(<JamAnnouncementHint enabled hasSong onListen={vi.fn()} onRecord={vi.fn()} onStart={vi.fn()} onDismiss={vi.fn()} />);
     await act(async () => {
-      root!.render(<JamAnnouncementHint enabled={false} hasSong onOpen={vi.fn()} onDismiss={vi.fn()} />);
+      root!.render(<JamAnnouncementHint enabled={false} hasSong onListen={vi.fn()} onRecord={vi.fn()} onStart={vi.fn()} onDismiss={vi.fn()} />);
     });
     await act(async () => {
-      root!.render(<JamAnnouncementHint enabled hasSong onOpen={vi.fn()} onDismiss={vi.fn()} />);
+      root!.render(<JamAnnouncementHint enabled hasSong onListen={vi.fn()} onRecord={vi.fn()} onStart={vi.fn()} onDismiss={vi.fn()} />);
     });
     expect(events().filter((name) => name === "jam_news_view")).toHaveLength(1);
   });
 
-  it("the primary button opens, counts a click and is not a dismissal", async () => {
-    const onOpen = vi.fn();
+  it("the primary button listens, counts a click and is not a dismissal", async () => {
+    const onListen = vi.fn();
+    const onStart = vi.fn();
     const onDismiss = vi.fn();
-    await mount(<JamAnnouncementHint enabled hasSong onOpen={onOpen} onDismiss={onDismiss} />);
+    await mount(
+      <JamAnnouncementHint enabled hasSong onListen={onListen} onRecord={vi.fn()} onStart={onStart} onDismiss={onDismiss} />,
+    );
     await act(async () => button("Hear a jam").click());
-    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onListen).toHaveBeenCalledTimes(1);
+    expect(onStart).not.toHaveBeenCalled();
     expect(onDismiss).not.toHaveBeenCalled();
     expect(events()).toEqual(["jam_news_view", "jam_news_click"]);
+    expect(umami.track.mock.calls[1]?.[1]).toMatchObject({ action: "listen" });
+  });
+
+  it("always offers Start mine beside the song, and it starts a song of one's own", async () => {
+    const onListen = vi.fn();
+    const onRecord = vi.fn();
+    const onStart = vi.fn();
+    await mount(
+      <JamAnnouncementHint enabled hasSong onListen={onListen} onRecord={onRecord} onStart={onStart} onDismiss={vi.fn()} />,
+    );
+    // Not every song takes a part: no record button then, but starting is never missing.
+    expect(button("Record my part")).toBeUndefined();
+    await act(async () => button("Start mine").click());
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onListen).not.toHaveBeenCalled();
+    expect(onRecord).not.toHaveBeenCalled();
+    expect(umami.track.mock.calls.at(-1)?.[1]).toMatchObject({ action: "start" });
+  });
+
+  it("offers Record my part only when the song takes one, and that opens the recording", async () => {
+    const onListen = vi.fn();
+    const onRecord = vi.fn();
+    await mount(
+      <JamAnnouncementHint enabled hasSong canRecord onListen={onListen} onRecord={onRecord} onStart={vi.fn()} onDismiss={vi.fn()} />,
+    );
+    await act(async () => button("Record my part").click());
+    expect(onRecord).toHaveBeenCalledTimes(1);
+    expect(onListen).not.toHaveBeenCalled();
+    expect(umami.track.mock.calls.at(-1)?.[1]).toMatchObject({ action: "record" });
+  });
+
+  it("with no song the one button starts one, and there is no second Start", async () => {
+    const onStart = vi.fn();
+    const onListen = vi.fn();
+    await mount(
+      <JamAnnouncementHint enabled hasSong={false} canRecord onListen={onListen} onRecord={vi.fn()} onStart={onStart} onDismiss={vi.fn()} />,
+    );
+    expect(button("Start mine")).toBeUndefined();
+    expect(button("Record my part")).toBeUndefined();
+    await act(async () => button("Start a jam").click());
+    expect(onStart).toHaveBeenCalledTimes(1);
+    expect(onListen).not.toHaveBeenCalled();
   });
 
   it("Not now, the X and Escape each dismiss it and count a dismissal", async () => {
     const onDismiss = vi.fn();
-    await mount(<JamAnnouncementHint enabled hasSong onOpen={vi.fn()} onDismiss={onDismiss} />);
+    await mount(<JamAnnouncementHint enabled hasSong onListen={vi.fn()} onRecord={vi.fn()} onStart={vi.fn()} onDismiss={onDismiss} />);
     await act(async () => button("Not now").click());
     await act(async () =>
       card()!.querySelector<HTMLButtonElement>('button[aria-label="Dismiss the Jam notice"]')!.click(),
@@ -120,7 +166,7 @@ describe("the Jam announcement card", () => {
     const before = document.createElement("button");
     before.textContent = "channel";
     document.body.append(before);
-    await mount(<JamAnnouncementHint enabled hasSong onOpen={vi.fn()} onDismiss={vi.fn()} />);
+    await mount(<JamAnnouncementHint enabled hasSong onListen={vi.fn()} onRecord={vi.fn()} onStart={vi.fn()} onDismiss={vi.fn()} />);
     before.focus();
     const later = button("Not now");
     await act(async () => {
