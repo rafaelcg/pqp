@@ -268,7 +268,7 @@ deleted song or take is not in it, and deleting a song deletes its takes.
 | `returningRecorders7d` | accounts with a live take in the last 7 days **and** a live take in the 7 days before (days 8 to 14): the return number |
 | `public.firstPublished7d` | songs first published in the last 7 days and still public (not unpublished, removed or deleted). One waiting in review counts: a new account's first publish waits there |
 | `public.outsideTakes7d` | live takes from somebody other than the starter, received through public access in the last 7 days, minus the ones an operator removed |
-| `public.outsideTakesAdmitted7d` | of those, the ones in the mix now (the starter put them in, or auto-accept did). A starter who takes one back out lowers it; the schema keeps no separate "admitted" event |
+| `public.outsideTakesAdmitted7d` | "Partes de fora na mix agora (7 dias)": outside takes from the last 7 days that are in the mix now (the starter put them in, or auto-accept did). A starter who takes one back out lowers it; the schema keeps no separate "admitted" event |
 | `votes7d` | votes cast in the last 7 days on takes that still exist |
 
 There are **no targets yet**, on purpose: there is no baseline to set them
