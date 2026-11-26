@@ -10,6 +10,7 @@ import {
   segmentAt,
   songDurationMs,
 } from "./timeline";
+import { type FetchProgress, readWithProgress } from "./fetch-progress";
 import { attachVideo as attachVideoElement } from "./video-sync";
 
 /**
@@ -103,12 +104,13 @@ export class JamPlayer {
   // -- stems ---------------------------------------------------------------
 
   /** Decode encoded audio (FLAC, WAV, anything the browser reads) on this context. */
-  async decode(data: ArrayBuffer | Blob | string): Promise<AudioBuffer> {
+  async decode(data: ArrayBuffer | Blob | string, options: { onProgress?: FetchProgress } = {}): Promise<AudioBuffer> {
     let bytes: ArrayBuffer;
     if (typeof data === "string") {
       const res = await fetch(data);
       if (!res.ok) throw new Error(`jam: fetch ${res.status}`);
-      bytes = await res.arrayBuffer();
+      // Progress is opt-in: without a listener the body is read whole, exactly as before.
+      bytes = options.onProgress ? await readWithProgress(res, options.onProgress) : await res.arrayBuffer();
     } else if (data instanceof Blob) {
       bytes = await data.arrayBuffer();
     } else {
@@ -143,8 +145,9 @@ export class JamPlayer {
     id: string,
     data: ArrayBuffer | Blob | string,
     placement: Omit<JamStemInit, "id" | "buffer"> = {},
+    options: { onProgress?: FetchProgress } = {},
   ): Promise<JamStemState> {
-    const buffer = await this.decode(data);
+    const buffer = await this.decode(data, options);
     this.addStem({ id, buffer, ...placement });
     return this.stem(id)!;
   }

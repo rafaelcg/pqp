@@ -1,4 +1,5 @@
 import type { PublicJamTrack } from "@pqp/shared";
+import { songBytes, type SongBytes, type StemBytes } from "@/lib/jam/fetch-progress";
 
 /**
  * Playing a public song.
@@ -69,6 +70,13 @@ export interface PlayerState {
   solo: string | null;
   /** The stems of the tracks are decoded and the videos can follow the clock. */
   stemsReady: boolean;
+  /**
+   * What has been downloaded of the stems while they load, from the responses'
+   * `Content-Length`; null outside a load (and before the first byte). `total`
+   * is 0 when no stem has said its size, and `exact` is false while a stem's
+   * size is a guess.
+   */
+  bytes: SongBytes | null;
 }
 
 type Engine = Awaited<ReturnType<SessionModule["getJamEngine"]>>;
@@ -115,6 +123,7 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
     durationMs: options.durationMs,
     solo: null,
     stemsReady: false,
+    bytes: null,
   };
   const listeners = new Set<() => void>();
   let engine: Engine | null = null;
@@ -192,13 +201,34 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
     }));
   }
 
+  /**
+   * Fold the per-stem byte counts into the state, at most every 120 ms (a chunk
+   * arrives far more often than a number can be read) and always when a stem's
+   * size first becomes known or the load is over.
+   */
+  function trackBytes() {
+    const stems = new Map<string, StemBytes>();
+    let last = 0;
+    return {
+      report(trackId: string, loaded: number, total: number | null) {
+        const first = !stems.has(trackId) || stems.get(trackId)!.total !== total;
+        stems.set(trackId, { loaded, total });
+        const now = performance.now();
+        if (disposed || (!first && now - last < 120)) return;
+        last = now;
+        set({ bytes: songBytes([...stems.values()], tracks.length) });
+      },
+    };
+  }
+
   async function load(session: SessionModule): Promise<Engine | null> {
     const next = await session.getJamEngine();
     if (disposed) return null;
     engine = next;
-    set({ phase: "loading" });
+    set({ phase: "loading", bytes: null });
     let wanted = stemTracks();
-    await session.syncJamStems(next, wanted);
+    const progress = trackBytes();
+    await session.syncJamStems(next, wanted, undefined, progress.report);
     if (disposed) return null;
     let missing = wanted.filter((track) => !next.player.stem(track.id));
     if (missing.length > 0 && options.refreshTracks) {
@@ -207,13 +237,13 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
       if (fresh && !disposed) {
         tracks = fresh;
         wanted = stemTracks();
-        await session.syncJamStems(next, wanted);
+        await session.syncJamStems(next, wanted, undefined, progress.report);
         missing = wanted.filter((track) => !next.player.stem(track.id));
       }
     }
     if (disposed) return null;
     if (missing.length > 0) {
-      set({ phase: "error" });
+      set({ phase: "error", bytes: null });
       return null;
     }
     follow(next);
@@ -223,7 +253,7 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
         next.player.updateStem(track.id, { solo: track.id === state.solo });
       }
     }
-    set({ phase: "ready", stemsReady: true, durationMs: next.player.durationMs || state.durationMs });
+    set({ phase: "ready", stemsReady: true, bytes: null, durationMs: next.player.durationMs || state.durationMs });
     return next;
   }
 

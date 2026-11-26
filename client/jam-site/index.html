@@ -42,7 +42,47 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- A skeleton for the seconds before React: the bundle, the catalogue and the
+         locale file all come before the first render, and on a slow link that is
+         a blank page. It is plain markup and a few rules INSIDE the root, so React
+         replaces it on its first commit and nothing has to remove it. No text (the
+         language is not known yet), its colours are the site's own role tokens
+         (the stylesheet is render-blocking, so the tokens and the stored theme are
+         both on the element by now, light included), its blocks have the header's
+         and the page column's measurements so the swap does not move anything, and
+         the shimmer is a transform on a pseudo-element, off for reduced motion. -->
+    <div id="root">
+      <div class="jam-boot" aria-hidden="true">
+        <style>
+          .jam-boot { min-height: 100dvh; background: var(--color-surface-0, #090e12); }
+          .jam-boot-bar { height: 64px; box-sizing: border-box; border-bottom: 1px solid var(--color-border, rgba(255, 255, 255, 0.08)); }
+          .jam-boot-page { box-sizing: border-box; width: 100%; max-width: 76rem; margin: 0 auto; padding: 32px 16px; }
+          @media (min-width: 640px) { .jam-boot-page { padding-left: 32px; padding-right: 32px; } }
+          .jam-boot-block { position: relative; overflow: hidden; background: var(--color-surface-2, #1b242c); border-radius: 12px; }
+          .jam-boot-head { height: 44px; width: min(28rem, 70%); }
+          .jam-boot-cards { display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 32px; }
+          @media (min-width: 768px) { .jam-boot-cards { grid-template-columns: repeat(3, 1fr); } }
+          .jam-boot-card { height: 224px; border-radius: 16px; background: var(--color-surface-1, #121920); }
+          @media (prefers-reduced-motion: no-preference) {
+            .jam-boot-block::after {
+              content: ""; position: absolute; inset: 0;
+              background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+              transform: translateX(-100%); animation: jam-boot-shimmer 1.4s ease-in-out infinite;
+            }
+            @keyframes jam-boot-shimmer { to { transform: translateX(100%); } }
+          }
+        </style>
+        <div class="jam-boot-bar"></div>
+        <div class="jam-boot-page">
+          <div class="jam-boot-block jam-boot-head"></div>
+          <div class="jam-boot-cards">
+            <div class="jam-boot-block jam-boot-card"></div>
+            <div class="jam-boot-block jam-boot-card"></div>
+            <div class="jam-boot-block jam-boot-card"></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/jam-site/entry.tsx"></script>
   </body>
 </html>
