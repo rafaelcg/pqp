@@ -3,14 +3,18 @@ import type {
   JamPublicConsentRequest,
   JamPublicInboxItem,
   JamPublicNotice,
+  JamTakeDecision,
+  JamTakeNotice,
 } from "@pqp/shared";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { onConfigRefresh } from "@/lib/config-refresh";
 import {
+  ackJamTakeNotice,
   answerJamConsent,
   fetchJamPublicConsents,
   fetchJamPublicInbox,
   fetchJamPublicMe,
+  fetchJamTakeNotices,
   fetchPublicJams,
 } from "@/lib/jam-public-api";
 import { openPublicJam, openPublicJamById } from "@/lib/jam-public-nav";
@@ -55,9 +59,15 @@ const UNKNOWN: JamPublicMeState = {
 export interface JamPublicWaiting {
   consents: readonly JamPublicConsentRequest[];
   inbox: readonly JamPublicInboxItem[];
+  /**
+   * The open take notices (`jam_take_notices`): parts waiting for this account
+   * as a starter, and the starter's answers to the parts it sent. The card
+   * the host draws; empty while the server's flag is off.
+   */
+  notices: readonly JamTakeNotice[];
 }
 
-const NOTHING: JamPublicWaiting = { consents: [], inbox: [] };
+const NOTHING: JamPublicWaiting = { consents: [], inbox: [], notices: [] };
 
 let me: JamPublicMeState = UNKNOWN;
 let waiting: JamPublicWaiting = NOTHING;
@@ -86,6 +96,11 @@ export function resetJamPublic(): void {
   meLoad = null;
   waitingLoad = null;
   emit();
+}
+
+/** What the store holds right now (a handler that must look after a read, not hook into render). */
+export function getJamPublicWaiting(): JamPublicWaiting {
+  return waiting;
 }
 
 /** Test seam: what the store holds right now. */
@@ -162,12 +177,14 @@ export function loadJamPublicWaiting(): Promise<void> {
   const run = Promise.all([
     fetchJamPublicConsents().catch(() => null),
     fetchJamPublicInbox().catch(() => null),
+    fetchJamTakeNotices().catch(() => null),
   ])
-    .then(([consents, inbox]) => {
+    .then(([consents, inbox, notices]) => {
       if (mine !== epoch) return;
       waiting = {
         consents: consents ? consents.pending : waiting.consents,
         inbox: inbox ? inbox.takes : waiting.inbox,
+        notices: notices ? notices.notices : waiting.notices,
       };
       emit();
     })
@@ -196,25 +213,53 @@ export async function answerConsent(songId: string, choice: JamPublicConsent): P
   }
 }
 
-/** A take left the inbox (put in the mix, or removed): drop it without waiting for the read. */
+/**
+ * A take left the inbox (put in the mix, or removed): drop it without waiting
+ * for the read. The starter's notice for that song follows when this was the
+ * last take waiting on it (the server empties it the same way).
+ */
 export function dropInboxTake(trackId: string): void {
-  waiting = { ...waiting, inbox: waiting.inbox.filter((one) => one.track.id !== trackId) };
+  const dropped = waiting.inbox.find((one) => one.track.id === trackId);
+  const inbox = waiting.inbox.filter((one) => one.track.id !== trackId);
+  const songDone = dropped ? !inbox.some((one) => one.songId === dropped.songId) : false;
+  waiting = {
+    ...waiting,
+    inbox,
+    notices: songDone
+      ? waiting.notices.filter((one) => !(one.kind === "take" && one.songId === dropped!.songId))
+      : waiting.notices,
+  };
   emit();
+}
+
+/** The person tapped or dismissed a take notice: it leaves the list at once, and the server keeps it spent. */
+export function ackTakeNotice(id: string): void {
+  waiting = { ...waiting, notices: waiting.notices.filter((one) => one.id !== id) };
+  emit();
+  void ackJamTakeNotice(id).catch(() => undefined);
 }
 
 // ---- the frame ---------------------------------------------------------------
 
 const noticeListeners = new Set<(notice: JamPublicNotice) => void>();
 
-/** `jam-public-notice` is not in the chat frame union: this is how the one handler in App tells them apart. */
-export function isJamPublicNotice(message: { type?: unknown }): message is JamPublicNotice {
-  return message.type === "jam-public-notice";
+/**
+ * `jam-public-notice` is not in the chat frame union: this is how the one handler in App tells them apart.
+ * The sender's `jam-take-decision` rides the same door (a distinct frame type, so a tab that predates it
+ * ignores it instead of reading an unknown kind as a consent question).
+ */
+export function isJamPublicNotice(message: { type?: unknown }): message is JamPublicNotice | JamTakeDecision {
+  return message.type === "jam-public-notice" || message.type === "jam-take-decision";
 }
 
-export function dispatchJamPublicNotice(notice: JamPublicNotice): void {
+export function dispatchJamPublicNotice(notice: JamPublicNotice | JamTakeDecision): void {
   // A nudge: read again. The durable lists are the truth.
   if (me.enabled) {
     void loadJamPublicWaiting();
+  }
+  if (notice.type === "jam-take-decision") {
+    // The card the list draws is the whole notice; nothing else listens.
+    return;
   }
   for (const listener of noticeListeners) {
     listener(notice);

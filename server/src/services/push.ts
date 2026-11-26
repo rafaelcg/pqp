@@ -6,6 +6,8 @@ import { getPreferences, mergePreferences } from "./preferences.js";
 import {
   buildCommunityHomePostPushCopy,
   buildConversationPushCopy,
+  buildJamTakePushCopy,
+  type JamTakePushKind,
   buildStreamStartedPushCopy,
   resolvePushLocale,
   resolveStreamAlertLocale,
@@ -1861,6 +1863,116 @@ export function pushWatchPartyWaitlistApproved(
       error,
     );
   });
+}
+
+// ------------------------------------------------------------ Jam take notice
+
+/**
+ * A take waiting for the starter, or the starter's answer to the person who
+ * sent it (`services/jam-take-notices.ts`, runtime flag `jam_take_notices`).
+ * WHO is told, and that a block or a repeat was already refused, is decided
+ * there. Narrowed here by what only a push can see: nobody with a live socket
+ * in the cluster (the card and the frame are that notice), a stored DND, and
+ * an explicit mute.
+ */
+export interface JamTakePushEvent {
+  userId: string;
+  kind: JamTakePushKind;
+  songId: string;
+  title: string;
+  count: number;
+  instrument: string | null;
+  /** The song's channel and server, when it has them; a standalone song has neither. */
+  serverId: string | null;
+  channelId: string | null;
+}
+
+/**
+ * The level a jam take notice reads. Not `resolvePushLevel`: it is about the
+ * person's own song or part, a "you specifically" event like a reply, so the
+ * account-wide `mentions` default that `desktop_notify_default_on` writes must
+ * not silence it. Only an explicit `none` does: on the song's channel, on its
+ * server, or the account's own `default`.
+ */
+export function resolveJamPushLevel(
+  settings: UserPreferences | null,
+  serverId: string | null,
+  channelId: string | null,
+): "all" | "none" {
+  const notifications = settings?.notifications;
+  if (channelId && notifications?.channels?.[channelId] === "none") {
+    return "none";
+  }
+  if (serverId && notifications?.servers?.[serverId] === "none") {
+    return "none";
+  }
+  return notifications?.default === "none" ? "none" : "all";
+}
+
+export function buildJamTakePayload(
+  event: Pick<JamTakePushEvent, "kind" | "songId" | "title" | "count" | "instrument">,
+  locale: StreamAlertLocale,
+): PushPayload {
+  const copy = buildJamTakePushCopy({
+    locale,
+    kind: event.kind,
+    title: truncateLabel(event.title),
+    count: event.count,
+    instrument: event.instrument,
+  });
+  return {
+    title: copy.title,
+    body: copy.body,
+    // The web client opens the song inside the app (`parsePublicJamPath`).
+    path: `/app/jam/${event.songId}`,
+    // One live notification per song and kind: a second one replaces the first.
+    tag: `jam-take:${event.songId}:${event.kind}`,
+  };
+}
+
+/** The awaitable pipeline: true when it tried a device, false when a rule refused. */
+export async function sendJamTakePush(event: JamTakePushEvent): Promise<boolean> {
+  const transports = readTransports();
+  if (!transports) {
+    return false;
+  }
+  const skipContext: PushSkipContext = event.serverId ? { serverId: event.serverId } : {};
+  if (splitOnLiveSocket([event.userId], "jam", skipContext).length === 0) {
+    return false;
+  }
+  const preferenceRows = await getPool().query<PreferenceRow>(
+    `SELECT user_id, settings FROM user_preferences WHERE user_id = $1`,
+    [event.userId],
+  );
+  const preferences = new Map<string, UserPreferences>(
+    preferenceRows.rows.map((row) => [row.user_id, row.settings]),
+  );
+  if (withoutDnd([event.userId], preferences, "jam", skipContext).length === 0) {
+    return false;
+  }
+  const settings = preferences.get(event.userId) ?? null;
+  if (resolveJamPushLevel(settings, event.serverId, event.channelId) === "none") {
+    notePushSkipped("jam", "muted", event.userId, skipContext);
+    return false;
+  }
+  const payload = buildJamTakePayload(
+    event,
+    resolveStreamAlertLocale((settings as { locale?: unknown } | null)?.locale),
+  );
+  await deliverToUsers([event.userId], () => payload, transports, MESSAGE_DELIVERY, "jam", skipContext);
+  return true;
+}
+
+/** Fire-and-forget, the contract of every `push*` entry point. */
+export function pushJamTake(event: JamTakePushEvent, onDone?: (tried: boolean) => void): void {
+  if (!isAnyPushEnabled()) {
+    return;
+  }
+  void sendJamTakePush(event)
+    .then((tried) => onDone?.(tried))
+    .catch((error: unknown) => {
+      console.error(`[push] jam take fan-out failed for song ${event.songId}:`, error);
+    });
 }
 
 // ------------------------------------------------------------ Baú new post

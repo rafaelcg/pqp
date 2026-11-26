@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import type { JamDetail } from "@/lib/jam-state";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
+import { useJamPublicWaiting } from "@/lib/jam-public-store";
 import { useJamStoreEpoch } from "@/lib/jam-store";
 import { JAM_TILE_SPAN, songNeed, type JamNeed, type JamTileSize } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
@@ -68,6 +69,8 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
   const { t } = useTranslation();
   const needLabel = useNeedLabel();
   const need = songNeed(song);
+  // Parts from outside waiting for this account's answer on this song (the starter's inbox).
+  const waitingTakes = useJamPublicWaiting().inbox.filter((item) => item.songId === song.id).length;
   const hero = size === "hero" && !compact;
   const cover = useJamCover(song.coverUrl);
   const covered = cover.src !== null && cover.status !== "failed";
@@ -152,6 +155,16 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
           style={{ viewTransitionName: selected ? undefined : `jam-cover-${song.id}` } as CSSProperties}
         >
           <JamArtwork song={song} cover={cover} tracks={detail?.tracks} loadVideo={near} animate={Boolean(entrance || fresh)} eager={hero} />
+          {waitingTakes > 0 && (
+            <span
+              data-jam-tile-waiting={waitingTakes}
+              title={t("jam.public.requests.banner", { count: waitingTakes, countLabel: waitingTakes })}
+              className="pointer-events-none absolute left-2 top-2 z-[2] flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[11px] font-extrabold text-on-accent shadow-[var(--shadow-2)]"
+            >
+              <span className="sr-only">{t("jam.public.requests.banner", { count: waitingTakes, countLabel: waitingTakes })}</span>
+              <span aria-hidden="true">{t("jam.public.requests.count", { count: waitingTakes, countLabel: waitingTakes })}</span>
+            </span>
+          )}
         </div>
 
         {/* the footer: the words, the people, what it needs, and play */}

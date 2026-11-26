@@ -245,7 +245,9 @@ Every write adds a `jam_public_audit` row (action, song, track, user, actor:
 `dashboard` with a NULL id for the token, `operator` and the id for a session,
 reason). `GET /api/admin/metrics` carries a `jamPublic` block (published, in
 review, hidden by reports, removed, plays, likes, verdicts by status,
-quarantined objects, and per-process refusals by limit).
+quarantined objects, and per-process refusals by limit), plus `process.takeNotices`
+(notices about parts sent to a song: items created and folded, pushes claimed and
+tried, answers sent, `failed`) and `takeNoticesOpen`; see `docs/JAM_PUBLIC.md` §"Telling the starter".
 
 ### Jam numbers: does Jam work
 

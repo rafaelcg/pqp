@@ -2234,6 +2234,7 @@ async function jamPublicMetrics(): Promise<JamPublicMetrics> {
       removed: 0,
       plays: 0,
       likes: 0,
+      takeNoticesOpen: 0,
       scans: { covers: {}, videos: {}, quarantined: 0 },
       process: perProcess,
     };

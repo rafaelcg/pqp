@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { ApiError, fetchCommunities, joinCommunity } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { jamSiteHomeUrl } from "@/lib/jam-public-links";
-import { useJamPublicMe, useJamPublicTop } from "@/lib/jam-public-store";
+import { openPublicJamById } from "@/lib/jam-public-nav";
+import { useJamPublicMe, useJamPublicTop, useJamPublicWaiting } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
 import { CommunityCard, CommunityCardSkeleton } from "./community-card";
 import {
@@ -363,6 +364,7 @@ export function CommunitiesView({
             </Button>
           </div>
 
+          {onStartJam && <JamWaitingRow />}
           {onStartJam && (
             <JamDoor onListen={onListenJam} onStart={onStartJam} />
           )}
@@ -460,6 +462,41 @@ export function CommunitiesView({
  * drawn while the flag is off or the first answer is out, and the song lookup
  * settles before the strip appears, so its buttons never swap under the cursor.
  */
+/**
+ * Parts from outside waiting for THIS account's answer, said where a starter who
+ * has no Jam channel looks (the launch test's starter went through the news, the
+ * compass and the site before finding the one that had been sent). Drawn only
+ * with something waiting; the tap opens the song, where they are listed first.
+ */
+function JamWaitingRow() {
+  const { t } = useTranslation();
+  const me = useJamPublicMe();
+  const { inbox } = useJamPublicWaiting();
+  if (!me.enabled || inbox.length === 0) {
+    return null;
+  }
+  const songs = [...new Set(inbox.map((item) => item.songId))];
+  return (
+    <section
+      role="status"
+      data-jam-door-waiting={inbox.length}
+      className="mt-3 flex flex-col gap-3 rounded-2xl border-2 border-signal bg-ink-2 p-4 sm:flex-row sm:items-center sm:justify-between"
+    >
+      <p className="flex items-center gap-2 font-display text-base font-bold">
+        <Music2 aria-hidden="true" className="h-4 w-4 text-signal" />
+        {t("jam.public.requests.banner", { count: inbox.length, countLabel: inbox.length })}
+      </p>
+      <Button
+        className="shrink-0 self-start sm:self-auto"
+        data-jam-door-waiting-open=""
+        onClick={() => openPublicJamById(songs[0]!)}
+      >
+        {t("jam.public.card.reply")}
+      </Button>
+    </section>
+  );
+}
+
 function JamDoor({
   onListen,
   onStart,

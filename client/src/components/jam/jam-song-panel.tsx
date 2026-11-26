@@ -466,37 +466,7 @@ export function JamSongPanel({
 
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 sm:px-5">
         {pub.strip && <div className="-mx-3 sm:-mx-5">{pub.strip}</div>}
-        {isEmpty ? (
-          <div
-            data-jam-empty-song=""
-            className="mt-4 flex flex-col items-start gap-3 rounded-[var(--radius-card)] bg-surface-2 p-4"
-          >
-            <h3 className="font-display text-lg font-extrabold text-text">{t("jam.song.empty.title")}</h3>
-            <p className="text-sm leading-snug text-text-secondary [text-wrap:pretty]">{t("jam.song.empty.body")}</p>
-            {canManage && enabled && (
-              <Button variant="secondary" size="sm" data-jam-empty-delete="" onClick={() => setConfirmSong(true)}>
-                {t("jam.song.delete")}
-              </Button>
-            )}
-          </div>
-        ) : (
-        <>
-        {stageOn && (
-          <JamStage
-            tracks={stageTracks}
-            viewerId={viewerId}
-            lanes={playback.lanes}
-            anySolo={anySolo}
-            attachVideo={playback.attachVideo}
-            clock={playback.clock}
-            onSolo={soloFromStage}
-            // the part the song asks for gets its own tile only for somebody who may add it
-            missing={reason === null ? missingSlots.filter((instrument) => addable.includes(instrument)) : []}
-            onRecord={reason === null ? (instrument) => onRecord(instrument, true) : undefined}
-            loading={!detail}
-            playing={playing}
-          />
-        )}
+        {/* Parts waiting for the starter's answer come FIRST, above the stage: finding them took a starter six minutes when they sat below it (launch test N1). */}
         <JamPublicRequests
           autoAccept={pub.autoAccept}
           takes={requestTakes}
@@ -528,6 +498,37 @@ export function JamSongPanel({
             setPendingDelete(track);
           }}
         />
+        {isEmpty ? (
+          <div
+            data-jam-empty-song=""
+            className="mt-4 flex flex-col items-start gap-3 rounded-[var(--radius-card)] bg-surface-2 p-4"
+          >
+            <h3 className="font-display text-lg font-extrabold text-text">{t("jam.song.empty.title")}</h3>
+            <p className="text-sm leading-snug text-text-secondary [text-wrap:pretty]">{t("jam.song.empty.body")}</p>
+            {canManage && enabled && (
+              <Button variant="secondary" size="sm" data-jam-empty-delete="" onClick={() => setConfirmSong(true)}>
+                {t("jam.song.delete")}
+              </Button>
+            )}
+          </div>
+        ) : (
+        <>
+        {stageOn && (
+          <JamStage
+            tracks={stageTracks}
+            viewerId={viewerId}
+            lanes={playback.lanes}
+            anySolo={anySolo}
+            attachVideo={playback.attachVideo}
+            clock={playback.clock}
+            onSolo={soloFromStage}
+            // the part the song asks for gets its own tile only for somebody who may add it
+            missing={reason === null ? missingSlots.filter((instrument) => addable.includes(instrument)) : []}
+            onRecord={reason === null ? (instrument) => onRecord(instrument, true) : undefined}
+            loading={!detail}
+            playing={playing}
+          />
+        )}
         <section className="mt-1" aria-labelledby={`band-${song.id}`}>
           <div
             className={cn(

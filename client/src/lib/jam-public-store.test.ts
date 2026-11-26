@@ -17,6 +17,8 @@ vi.mock("@/lib/jam-public-api", () => ({
   fetchPublicJams: api.list,
   fetchJamPublicConsents: vi.fn().mockResolvedValue({ pending: [] }),
   fetchJamPublicInbox: vi.fn().mockResolvedValue({ takes: [] }),
+  fetchJamTakeNotices: vi.fn().mockResolvedValue({ notices: [] }),
+  ackJamTakeNotice: vi.fn().mockResolvedValue({ ok: true }),
   answerJamConsent: vi.fn(),
 }));
 
