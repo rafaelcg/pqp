@@ -62,6 +62,21 @@ describe("readWithProgress", () => {
   });
 });
 
+describe("readWithProgress buffer", () => {
+  it("returns exactly the bytes that arrived whatever the header said, in order", async () => {
+    for (const announced of ["40", "100", undefined]) {
+      const headers: Record<string, string> = announced ? { "content-length": announced } : {};
+      const bytes = await readWithProgress(streamed([30, 30], headers), () => undefined);
+      expect(bytes.byteLength).toBe(60);
+      expect([...new Uint8Array(bytes)].every((b) => b === 7)).toBe(true);
+    }
+  });
+  it("grows past the 1 MiB start when no size was announced", async () => {
+    const bytes = await readWithProgress(streamed([700_000, 700_000, 700_000]), () => undefined);
+    expect(bytes.byteLength).toBe(2_100_000);
+  });
+});
+
 describe("songBytes", () => {
   it("is null before anything has reported", () => {
     expect(songBytes([], 5)).toBeNull();

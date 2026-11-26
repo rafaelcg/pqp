@@ -41,7 +41,9 @@ export async function readWithProgress(res: Response, onProgress: FetchProgress)
     onProgress(bytes.byteLength, total === null ? bytes.byteLength : total);
     return bytes;
   }
-  const chunks: Uint8Array[] = [];
+  // One buffer, written as the chunks arrive: sized by the announced length (or 1 MiB when there is none) and
+  // doubled if the body runs past it, so a finished stem is never held twice (chunks AND a flattened copy).
+  let buffer = new Uint8Array(total ?? 1_048_576);
   let loaded = 0;
   onProgress(0, total);
   for (;;) {
@@ -49,19 +51,19 @@ export async function readWithProgress(res: Response, onProgress: FetchProgress)
     if (done) {
       break;
     }
-    chunks.push(value);
+    if (loaded + value.byteLength > buffer.byteLength) {
+      const grown = new Uint8Array(Math.max(buffer.byteLength * 2, loaded + value.byteLength));
+      grown.set(buffer.subarray(0, loaded));
+      buffer = grown;
+    }
+    buffer.set(value, loaded);
     loaded += value.byteLength;
     onProgress(loaded, total !== null && loaded > total ? null : total);
   }
-  const out = new Uint8Array(loaded);
-  let at = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, at);
-    at += chunk.byteLength;
-  }
   // The stream ended: what arrived is the whole of it, whatever the header said.
   onProgress(loaded, loaded);
-  return out.buffer;
+  // Exactly sized in the usual case (the header was right), so no copy; a trimmed copy otherwise.
+  return loaded === buffer.byteLength ? (buffer.buffer as ArrayBuffer) : buffer.slice(0, loaded).buffer;
 }
 
 export interface StemBytes {
