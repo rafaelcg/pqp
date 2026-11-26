@@ -155,6 +155,8 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const [progress, setProgress] = useState<JamPostProgress>({ stage: "uploading", fraction: 0 });
   const [postError, setPostError] = useState<JamErrorKind | null>(null);
   const [posted, setPosted] = useState<{ songId: string; trackId: string } | null>(null);
+  /** A standalone jam this studio just created: where it stands publicly (only `live` can be shared with a stranger). */
+  const [createdStatus, setCreatedStatus] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   /** The song went away under a take: post it as a song of its own instead. */
   const [detached, setDetached] = useState<NewSongDraft | null>(null);
@@ -687,7 +689,10 @@ export function useJamStudio(args: UseJamStudioArgs) {
           nonce: source.nonce,
         };
         const { song } = standalone
-          ? await createPublicJam(body).then((created) => ({ song: created.song }))
+          ? await createPublicJam(body).then((created) => {
+              setCreatedStatus(created.publication.status);
+              return { song: created.song };
+            })
           : await createJamSong(channelId, body);
         createdSongId.current = song.id;
         targetSong = song.id;
@@ -1022,6 +1027,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
     swapFailed,
     outcome,
     posted,
+    createdStatus,
     startError,
     levelClock,
     startRecording,

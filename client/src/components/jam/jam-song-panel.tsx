@@ -1,5 +1,5 @@
 import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
-import { ArrowLeft, Camera, Check, ChevronDown, Link2, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Send, Trash2, X } from "lucide-react";
+import { ArrowLeft, Camera, Check, ChevronDown, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Send, Share2, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -320,7 +320,7 @@ export function JamSongPanel({
   // A song with nothing in it yet is its author's alone, so a link to it would lead nowhere.
   const canShare = !isEmpty && song.trackCount > 0;
   // In a public view the share button copies the address anybody can open; a chat card needs a channel.
-  const shareAction = pub.copyLink ?? (() => setSharing(true));
+  const shareAction = pub.share ?? (() => setSharing(true));
   const manageItems: ContextMenuItemDef[] =
     canManage && enabled
       ? [
@@ -366,6 +366,9 @@ export function JamSongPanel({
   // the header is one calm row, and the words ("Send to chat", "Edit song") are the tooltip and the menu's.
   const iconButton =
     "grid h-9 w-9 shrink-0 place-items-center rounded-full text-text-secondary outline-none pointer-coarse:h-11 pointer-coarse:w-11 transition-[background-color,color] duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96] motion-reduce:transition-none";
+  // The public share is the one action that brings people in, so it reads as a button and not as one more icon.
+  const shareButton =
+    "inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full bg-surface-2 text-sm font-bold text-text outline-none max-sm:w-9 sm:px-3.5 pointer-coarse:h-11 pointer-coarse:max-sm:w-11 transition-[background-color,color] duration-[var(--duration-fast)] hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring active:scale-[0.96] motion-reduce:transition-none";
   const editPill = canEdit ? (
     <button
       type="button"
@@ -379,7 +382,7 @@ export function JamSongPanel({
     </button>
   ) : null;
 
-  const shareLabel = pub.copyLink ? t("jam.public.menu.copyLink") : t("jam.share.title");
+  const shareLabel = pub.share ? t("jam.invite.share") : t("jam.share.title");
   const sharePill = canShare ? (
     <button
       type="button"
@@ -387,9 +390,16 @@ export function JamSongPanel({
       onClick={shareAction}
       aria-label={shareLabel}
       title={shareLabel}
-      className={iconButton}
+      className={pub.share ? shareButton : iconButton}
     >
-      {pub.copyLink ? <Link2 className="h-[18px] w-[18px]" aria-hidden /> : <Send className="h-[18px] w-[18px]" aria-hidden />}
+      {pub.share ? (
+        <>
+          <Share2 className="h-[18px] w-[18px]" aria-hidden />
+          <span className="max-sm:sr-only">{t("jam.invite.share")}</span>
+        </>
+      ) : (
+        <Send className="h-[18px] w-[18px]" aria-hidden />
+      )}
     </button>
   ) : null;
 

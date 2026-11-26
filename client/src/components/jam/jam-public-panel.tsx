@@ -1,13 +1,14 @@
 import type { JamPublicSongForViewer, JamSongSummary, JamTrack } from "@pqp/shared";
-import { Flag, Globe, Heart, Link2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Flag, Globe, Heart, Share2 } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ReportTarget } from "@/components/chat/report-dialog";
 import { ReportDialog } from "@/components/deferred-panels";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { useJamPublication } from "@/hooks/use-jam-publication";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { fetchPublicSongForViewer, likePublicJam } from "@/lib/jam-public-api";
-import { publicJamShareUrl } from "@/lib/jam-public-links";
+import { jamShareable } from "@/lib/jam-share-link";
+import { publicJamViewUrl } from "@/lib/jam-public-links";
 import {
   answerConsent,
   useJamPublicMe,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
 import { isolate } from "@/lib/bidi";
+import { useJamInviteButton, type JamInviteSubject } from "./jam-invite";
 import { JamConsentChoices, useConsentAnswer } from "./jam-public-parts";
 import { JamPublicSheet } from "./jam-public-sheet";
 
@@ -52,8 +54,12 @@ export interface JamPublicPanelPieces {
   overlays: ReactNode;
   /** Report one part of the song. Undefined when this viewer has nothing to report (their own part, a private song). */
   reportTrack: ((trackId: string) => void) | undefined;
-  /** In a public view the share button copies the public address. */
-  copyLink: (() => void) | undefined;
+  /**
+   * Share this song with people outside: a phone's share sheet, or a card with the link and WhatsApp, X and
+   * Telegram. Undefined where the song has no public page a stranger can open (a private channel song, the
+   * flag off): the panel then keeps its chat share.
+   */
+  share: (() => void) | undefined;
   /** The viewer started this song and public jams are on: the song's public state changed (refresh what depends on it). */
   refreshPublication: () => void;
   /** The starter turned on auto-accept: outside parts go in the mix by themselves once the platform's checks clear. */
@@ -72,14 +78,6 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
   const state = useJamPublication(song.id, me.enabled && involved);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [report, setReport] = useState<ReportTarget | null>(null);
-  const [copied, setCopied] = useState(false);
-  const copyTimer = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
-    },
-    [],
-  );
 
   // What a visitor sees of a public jam: its counts, where it came from, whether they liked it.
   const [meta, setMeta] = useState<JamPublicSongForViewer | null>(null);
@@ -127,15 +125,15 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
     }
   }
 
-  const copyLink = useCallback(() => {
-    const url = publicJamShareUrl(song.id);
-    const done = () => {
-      setCopied(true);
-      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
-      copyTimer.current = window.setTimeout(() => setCopied(false), 2600);
-    };
-    void navigator.clipboard?.writeText(url).then(done, () => undefined);
-  }, [song.id]);
+  const inviteSubject: JamInviteSubject = {
+    id: song.id,
+    title: song.title,
+    coverUrl: song.coverUrl,
+    artist: song.artist,
+    joinMode: song.joinMode,
+    wantedInstruments: song.wantedInstruments,
+    instruments: song.instruments,
+  };
 
   // Answers arrive while the song is open: the sheet reads again every time it opens.
   const refreshPublication = state.refresh;
@@ -152,6 +150,10 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
     onAutoAcceptChange?.(autoAccept);
   }, [autoAccept, onAutoAcceptChange]);
   const on = publication !== null && ["live", "review", "hidden"].includes(publication.status);
+  // A stranger can open the public page of a public view and of a channel song that is live; nothing else.
+  const publicShare =
+    me.enabled && (publicView || (publication !== null && jamShareable(publication.status) && song.channelId !== null));
+  const invite = useJamInviteButton(publicShare ? inviteSubject : null);
   const canPublish = me.enabled && isStarter && me.publishing !== "blocked" && song.channelId !== null;
   const showSheet = me.enabled && isStarter && (canPublish || on);
   const pendingConsent = waiting.consents.some((one) => one.songId === song.id);
@@ -172,8 +174,11 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
         onSelect: () => setSheetOpen(true),
       });
     }
+    if (publicShare && !publicView) {
+      menuItems.push({ id: "share-public", label: t("jam.invite.title"), icon: Share2, onSelect: () => void invite.onPress() });
+    }
     if (publicView) {
-      menuItems.push({ id: "copy-link", label: t("jam.public.menu.copyLink"), icon: Link2, onSelect: copyLink });
+      menuItems.push({ id: "share-public", label: t("jam.invite.share"), icon: Share2, onSelect: () => void invite.onPress() });
       if (!isStarter) {
         menuItems.push({
           id: "report",
@@ -284,7 +289,7 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
       </p>,
     );
   }
-  if (me.enabled && publicView && (meta || copied)) {
+  if (me.enabled && publicView && meta) {
     const origin = meta?.song.origin ?? null;
     lines.push(
       <p key="meta" data-jam-public-line="meta" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] font-semibold text-text-secondary">
@@ -321,11 +326,6 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
           ) : (
             <span data-jam-origin="">{t("jam.public.origin", { name: isolate(origin.name) })}</span>
           ))}
-        {copied && (
-          <span role="status" data-jam-copied="">
-            {t("jam.public.linkCopied")}
-          </span>
-        )}
       </p>,
     );
   }
@@ -350,10 +350,11 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
           songTitle={song.title}
           originName={originName}
           state={state}
-          publicUrl={publicJamShareUrl(song.id)}
+          publicUrl={publicJamViewUrl(song.id)}
         />
       )}
       {report && <ReportDialog target={report} onClose={() => setReport(null)} />}
+      {invite.dialog}
     </>
   );
 
@@ -363,7 +364,7 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
     pendingTakeIds,
     overlays,
     reportTrack,
-    copyLink: publicView && me.enabled ? copyLink : undefined,
+    share: publicView && me.enabled ? () => void invite.onPress() : undefined,
     refreshPublication: () => void state.refresh(),
     autoAccept,
     viewerWaiting: me.enabled && waitsForStarter,
