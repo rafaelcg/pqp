@@ -68,7 +68,11 @@ struct Avatar: View {
     /// URL just means the monogram shows, never a broken frame.
     var url: String? = nil
 
-    private var initials: String {
+    private var initials: String { Avatar.initials(of: name) }
+
+    /// The monogram of a name: the first letter of its first two words, or "?".
+    /// Static so the rule can be pinned without drawing a view.
+    static func initials(of name: String) -> String {
         let parts = name.split(separator: " ").prefix(2)
         let letters = parts.compactMap { $0.first.map(String.init) }
         return letters.isEmpty ? "?" : letters.joined().uppercased()

@@ -54,6 +54,9 @@ struct HomeView: View {
         /// Set when the link was a message (a forwarded card): the channel
         /// opens scrolled to it.
         var jumpToMessageId: String? = nil
+        /// Set when the link was a jam song: `channel` is the jam channel and
+        /// its wall opens with this song on top, once.
+        var jamSongId: String? = nil
     }
 
     /// Conversas on a phone: which tab is up. Seeded by the landing rule once
@@ -231,7 +234,8 @@ struct HomeView: View {
             opensBau: restored.opensBau,
             initialBau: restored.bau,
             initialForum: restored.forum,
-            initialMessageId: restored.jumpToMessageId
+            initialMessageId: restored.jumpToMessageId,
+            initialJamSongId: restored.jamSongId
         )
     }
 
@@ -306,6 +310,12 @@ struct HomeView: View {
             // A forwarded message's card: the channel, scrolled to the message.
             await openChannel(serverId: serverId, channelId: channelId, messageId: messageId)
 
+        case .jamSong(let serverId, let channelId, let songId):
+            if await openJamSong(request, serverId: serverId, channelId: channelId, songId: songId) {
+                superseded = true
+                return
+            }
+
         case .forumPost(let serverId, let forumId, let postId):
             guard let server = await resolveServer(serverId) else { return }
             tab = .servidores
@@ -365,6 +375,48 @@ struct HomeView: View {
         } else {
             restoredChannel = RestoredChannel(server: server, channel: nil)
         }
+    }
+
+    /// A jam song's link: the server's channel list, the jam's wall on top of
+    /// it, the song on top of that (the wall opens it, see `JamWallView`).
+    /// Android lands the same way (`DeepLinkTarget.JamSong`). The two ways it
+    /// cannot land both end in a sentence rather than in silence: a server this
+    /// account is not in, a jam channel it cannot see or that is gone. A song
+    /// that is gone inside a jam the person can see is the wall's to say, and
+    /// the wall stays under it.
+    ///
+    /// Two awaits sit before anything is committed, so a newer request that
+    /// arrived meanwhile has its own `follow` running: this one stops without
+    /// touching the screen and answers true ("superseded"), so it does not
+    /// mark the newer request handled either.
+    private func openJamSong(
+        _ request: DeepLinkTarget, serverId: String, channelId: String, songId: String
+    ) async -> Bool {
+        guard let server = await resolveServer(serverId) else {
+            guard session.navigationRequest == request else { return true }
+            session.linkError = JamSongLinkMessage.unavailable
+            return false
+        }
+        let channels: [Channel]
+        do {
+            channels = try await session.api.channels(serverId: serverId)
+        } catch {
+            guard session.navigationRequest == request else { return true }
+            session.linkError = JamSongLinkMessage.forFailure(error)
+            return false
+        }
+        guard session.navigationRequest == request else { return true }
+        guard let jam = channels.first(where: { $0.id == channelId && $0.isJam }) else {
+            // The channel is not there for this account: land on the server so
+            // the tap still goes somewhere, and say why the song did not open.
+            tab = .servidores
+            restoredChannel = RestoredChannel(server: server, channel: nil)
+            session.linkError = JamSongLinkMessage.unavailable
+            return false
+        }
+        tab = .servidores
+        restoredChannel = RestoredChannel(server: server, channel: jam, jamSongId: songId)
+        return false
     }
 
     /// A post a push named, asked twice before giving up: a tap on a

@@ -319,6 +319,13 @@ struct JamTrack: Decodable, Identifiable, Hashable, Sendable {
     /// The person (a label is separate: rows show `label ?? displayName`).
     var displayName: String { authorName ?? "?" }
 
+    /// What an `Avatar` is handed. A name that starts with a bidi control
+    /// (an unclosed U+202E, say) makes the monogram's first character that
+    /// control, which draws as nothing: an empty coloured circle. The same
+    /// `JamBidi.clean` every other Jam line goes through; a name that is only
+    /// controls becomes "" and the avatar falls back to "?".
+    var avatarName: String { JamBidi.clean(displayName) }
+
     /// `jamTrackPlayedMs` in the contract: the length it plays for.
     var playedMs: Double { max(0, durationMs - trimStartMs - trimEndMs) }
     /// Where its heard slice starts and ends on the song timeline: the file

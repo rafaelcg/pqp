@@ -187,4 +187,90 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertEqual(DeepLink.normalizeInviteCode(""), "")
         XCTAssertEqual(DeepLink.normalizeInviteCode("   "), "")
     }
+
+    // MARK: - Jam song links
+
+    /// What "Copiar link" on a song hands out on every client
+    /// (`jamSongRoutePath`, `client/src/lib/app-route.ts`; `DeepLinkTarget.JamSong`
+    /// on Android).
+    func testAJamSongPathNamesTheServerTheJamAndTheSong() {
+        XCTAssertEqual(
+            DeepLink.target(path: "/app/server/srv-1/channel/jam-1/song/song-1"),
+            .jamSong(serverId: "srv-1", channelId: "jam-1", songId: "song-1")
+        )
+        // The leading /app is optional, as for every other route.
+        XCTAssertEqual(
+            DeepLink.target(path: "/server/srv-1/channel/jam-1/song/song-1/"),
+            .jamSong(serverId: "srv-1", channelId: "jam-1", songId: "song-1")
+        )
+    }
+
+    func testAJamSongLinkResolvesFromAUniversalLinkAndFromTheCustomScheme() throws {
+        let expected = DeepLinkTarget.jamSong(serverId: "srv-1", channelId: "jam-1", songId: "song-1")
+        XCTAssertEqual(
+            DeepLink.target(url: try XCTUnwrap(URL(string: "https://pqp.gg/app/server/srv-1/channel/jam-1/song/song-1"))),
+            expected
+        )
+        // A query or a fragment is not part of the song.
+        XCTAssertEqual(
+            DeepLink.target(url: try XCTUnwrap(URL(string: "https://pqp.gg/app/server/srv-1/channel/jam-1/song/song-1?utm=1#x"))),
+            expected
+        )
+        // Under pqp:// the first segment is the host.
+        XCTAssertEqual(
+            DeepLink.target(url: try XCTUnwrap(URL(string: "pqp://server/srv-1/channel/jam-1/song/song-1"))),
+            expected
+        )
+        // The link a phone itself builds is the link it parses.
+        let built = try XCTUnwrap(JamLinks.song(serverId: "srv-1", channelId: "jam-1", songId: "song-1"))
+        XCTAssertEqual(DeepLink.target(url: built), expected)
+        // Percent-encoded ids are decoded once, like every other route.
+        XCTAssertEqual(
+            DeepLink.target(path: "/app/server/srv%2D1/channel/jam-1/song/song%2D1"),
+            expected
+        )
+    }
+
+    func testAMalformedJamSongLinkIsNotADestinationOrIsAnotherRoute() {
+        // No song id: not a song. Five segments is no route at all.
+        XCTAssertNil(DeepLink.target(path: "/app/server/srv-1/channel/jam-1/song"))
+        XCTAssertNil(DeepLink.target(path: "/app/server/srv-1/channel/jam-1/song/"))
+        // A song id with a route behind it is not a song link.
+        XCTAssertNil(DeepLink.target(path: "/app/server/srv-1/channel/jam-1/song/song-1/extra"))
+        // Missing the channel: the song's channel is part of the link.
+        XCTAssertNil(DeepLink.target(path: "/app/server/srv-1/song/song-1"))
+        // A different word in the song's slot is a different route.
+        XCTAssertEqual(
+            DeepLink.target(path: "/app/server/srv-1/channel/forum-1/post/post-1"),
+            .forumPost(serverId: "srv-1", forumId: "forum-1", postId: "post-1")
+        )
+        XCTAssertNil(DeepLink.target(path: "/app/server/srv-1/channel/jam-1/songs/song-1"))
+        XCTAssertNil(DeepLink.target(path: "/app/server/srv-1/channel/jam-1/Song/song-1"))
+    }
+
+    /// Like every other route here the https host is not what decides: only a
+    /// domain in the entitlement can deliver a universal link. What the host
+    /// does decide is a tap in a message (`BauShare.inAppTarget`), where a
+    /// foreign host keeps its link for Safari.
+    func testAJamSongLinkOnAnotherHostIsOnlyOurRouteWhenTheAppAsksForPathsNotForTaps() throws {
+        let foreign = try XCTUnwrap(URL(string: "https://example.com/app/server/srv-1/channel/jam-1/song/song-1"))
+        XCTAssertEqual(
+            DeepLink.target(url: foreign),
+            .jamSong(serverId: "srv-1", channelId: "jam-1", songId: "song-1")
+        )
+        XCTAssertNil(BauShare.inAppTarget(for: foreign, currentOrigin: nil))
+        let ours = try XCTUnwrap(URL(string: "https://pqp.gg/app/server/srv-1/channel/jam-1/song/song-1"))
+        XCTAssertEqual(
+            BauShare.inAppTarget(for: ours, currentOrigin: nil),
+            .jamSong(serverId: "srv-1", channelId: "jam-1", songId: "song-1")
+        )
+        // Only a song is claimed from a tap: a plain channel link stays with Safari.
+        XCTAssertNil(BauShare.inAppTarget(for: try XCTUnwrap(URL(string: "https://pqp.gg/app/server/srv-1/channel/jam-1")), currentOrigin: nil))
+    }
+
+    func testAJamSongPushDoesNotSilenceABannerOverAChat() {
+        XCTAssertTrue(PushPresentation.shouldInterrupt(
+            path: "/app/server/srv-1/channel/jam-1/song/song-1", visibleChannelId: "jam-1"
+        ))
+    }
 }
