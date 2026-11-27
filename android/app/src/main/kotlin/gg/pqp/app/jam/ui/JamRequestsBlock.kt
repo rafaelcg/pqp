@@ -104,7 +104,7 @@ fun JamRequestsBlock(
                 RequestRow(
                     track = track,
                     heard = auditioning[track.instrument] == track.id,
-                    busy = requests.busy == track.id,
+                    busy = requests.busy != null,
                     failure = requests.failure?.takeIf { it.trackId == track.id },
                     onListen = { onListen(track) },
                     onAccept = { onAccept(track) },
@@ -287,13 +287,13 @@ fun JamAnswerBox(
 
 /** "Recusar esse pedido?": the recording is deleted, so it asks. */
 @Composable
-fun JamDeclineDialog(track: JamTrack, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+fun JamDeclineDialog(track: JamTrack, enabled: Boolean, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.jam_requests_decline_title)) },
         text = { Text(stringResource(R.string.jam_requests_decline_body)) },
         confirmButton = {
-            TextButton(onClick = onConfirm, modifier = Modifier.testTag("jam.decline.confirm")) {
+            TextButton(onClick = onConfirm, enabled = enabled, modifier = Modifier.testTag("jam.decline.confirm")) {
                 Text(stringResource(R.string.jam_requests_decline), color = MaterialTheme.colorScheme.error)
             }
         },

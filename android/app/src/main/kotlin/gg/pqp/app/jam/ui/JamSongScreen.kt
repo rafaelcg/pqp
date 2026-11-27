@@ -231,7 +231,7 @@ fun JamSongScreen(
     // The song's public state is read for its starter and for anybody with a part in it (the server answers null for the
     // rest), and again when a part arrives for the starter: the share button and the waiting block read it.
     val involved = ui.state?.let { it.viewer.isAuthor || it.tracks.any { track -> viewerId != null && track.authorId == viewerId } } == true
-    LaunchedEffect(publicEnabled, involved, pending.size) {
+    LaunchedEffect(publicEnabled, involved, pending.isNotEmpty()) {
         if (publicEnabled && involved) model.readPublication()
     }
 
@@ -416,7 +416,7 @@ fun JamSongScreen(
     }
 
     requests.confirmDecline?.let { track ->
-        JamDeclineDialog(track = track, onConfirm = model.requests::confirmDecline, onDismiss = model.requests::cancelDecline)
+        JamDeclineDialog(track = track, enabled = requests.busy == null, onConfirm = model.requests::confirmDecline, onDismiss = model.requests::cancelDecline)
     }
 
     val sheetSong = ui.state?.song
@@ -640,12 +640,7 @@ private fun SongBody(
                         auditioning = ui.auditioning,
                         requests = requests,
                         onListen = { track ->
-                            when {
-                                ui.auditioning[track.instrument] == track.id -> model.stopAudition(track.instrument)
-                                // The song's own read may not hold it yet (the frame is behind the notice): read again.
-                                state.tracks.none { it.id == track.id } -> model.load()
-                                else -> model.listen(track)
-                            }
+                            if (ui.auditioning[track.instrument] == track.id) model.stopAudition(track.instrument) else model.listen(track)
                         },
                         onAccept = model.requests::accept,
                         onDecline = model.requests::askDecline,

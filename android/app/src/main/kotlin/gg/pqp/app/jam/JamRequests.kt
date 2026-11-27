@@ -94,9 +94,9 @@ class JamRequests(
 
     fun confirmDecline() {
         val track = _ui.value.confirmDecline ?: return
-        _ui.update { it.copy(confirmDecline = null) }
+        // Another answer is out: the confirmation stays (its button is off meanwhile) instead of vanishing with nothing done.
         if (_ui.value.busy != null) return
-        _ui.update { it.copy(busy = track.id, failure = null) }
+        _ui.update { it.copy(confirmDecline = null, busy = track.id, failure = null) }
         scope.launch {
             try {
                 backend.deleteTrack(track.id)
@@ -150,7 +150,15 @@ class JamRequests(
         val failure = jamWriteFailureOf(e)
         _ui.update { it.copy(failure = JamRequestFailure(trackId.orEmpty(), action, failure)) }
         if (failure == JamWriteFailure.Denied) permissionsChanged()
-        // A part that is already gone (the sender deleted it while the starter listened) is not waiting any more.
-        if (failure == JamWriteFailure.Gone) hook.changed()
+        // A part that is already gone (the sender deleted it while the starter listened) is not waiting any more:
+        // it leaves the song and the inbox too, instead of staying actionable and failing again.
+        if (failure == JamWriteFailure.Gone && track != null) {
+            song()?.let { held ->
+                apply(JamFrame.TrackDeleted(channelId, held.copy(trackCount = (held.trackCount - 1).coerceAtLeast(0)), track.id))
+            }
+            endAudition(track)
+            hook.dropped(track.id)
+            hook.changed()
+        }
     }
 }

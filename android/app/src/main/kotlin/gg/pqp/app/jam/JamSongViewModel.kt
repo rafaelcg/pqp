@@ -208,6 +208,10 @@ class JamSongViewModel(
                     ).reconciled()
                 }
                 syncStems()
+                listenAfterLoad?.let { id ->
+                    listenAfterLoad = null
+                    loaded.tracks.firstOrNull { it.id == id }?.let(::listen)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiException) {
@@ -466,8 +470,17 @@ class JamSongViewModel(
         syncStems()
     }
 
+    /** A take asked to be heard before the song's own read held it: heard as soon as the read lands. */
+    private var listenAfterLoad: String? = null
+
     /** "Ouvir com a banda": hear this take in place of the mix's of its instrument, and play as soon as it can. */
     fun listen(track: JamTrack) {
+        if (_ui.value.state?.tracks?.none { it.id == track.id } != false) {
+            // The frame is behind the notice: read the song again and hear the take when it is there.
+            listenAfterLoad = track.id
+            load()
+            return
+        }
         audition(track)
         if (_ui.value.playing) return
         if (_ui.value.ready) play() else playAfterLoad = true

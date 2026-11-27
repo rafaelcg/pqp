@@ -7,9 +7,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -78,21 +79,24 @@ fun JamWaitingStrip(songs: List<JamNoticeRules.WaitingSong>, onSee: () -> Unit, 
 fun JamInboxSheet(songs: List<JamNoticeRules.WaitingSong>, onOpen: (String) -> Unit, onDismiss: () -> Unit) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, modifier = Modifier.testTag("jam.inbox")) {
-        Column(
+        LazyColumn(
             Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .padding(horizontal = Spacing.gutter, vertical = Spacing.sm),
+                .navigationBarsPadding(),
+            contentPadding = PaddingValues(horizontal = Spacing.gutter, vertical = Spacing.sm),
             verticalArrangement = Arrangement.spacedBy(Spacing.md),
         ) {
-            Text(stringResource(R.string.jam_inbox_title), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
-            Text(
-                stringResource(R.string.jam_inbox_hint),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            songs.forEach { song ->
+            item(key = "head") {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                    Text(stringResource(R.string.jam_inbox_title), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
+                    Text(
+                        stringResource(R.string.jam_inbox_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            items(songs, key = { it.songId }) { song ->
                 Row(
                     Modifier
                         .fillMaxWidth()

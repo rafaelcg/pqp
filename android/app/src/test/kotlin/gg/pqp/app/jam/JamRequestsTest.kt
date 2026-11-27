@@ -158,6 +158,11 @@ class JamRequestsTest {
         advanceUntilIdle()
         assertEquals(JamWriteFailure.Gone, w.requests.ui.value.failure?.failure)
         assertEquals(1, w.hook.changed)
+        // It is gone from the song and the inbox too, so it cannot be answered (and fail) again.
+        assertEquals(listOf("t1"), w.hook.dropped)
+        val frame = w.applied.single() as JamFrame.TrackDeleted
+        assertEquals("t1", frame.trackId)
+        assertEquals(2, frame.song.trackCount)
     }
 
     @Test
@@ -172,6 +177,7 @@ class JamRequestsTest {
         w.requests.confirmDecline()
         advanceUntilIdle()
         assertEquals(listOf("inMix t1 true"), w.backend.calls)
+        assertEquals("the confirmation waits instead of vanishing with nothing done", "t3", w.requests.ui.value.confirmDecline?.id)
         gate.complete(Unit)
         advanceUntilIdle()
         assertNull(w.requests.ui.value.busy)

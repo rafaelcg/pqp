@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -87,6 +88,7 @@ class JamNoticeStoreTest {
         override suspend fun ack(id: String) {
             ackFailure?.let { throw it }
             acked += id
+            notices = JamTakeNoticesResponse(notices.notices.filterNot { it.id == id })
         }
     }
 
@@ -278,7 +280,7 @@ class JamNoticeStoreTest {
     }
 
     @Test
-    fun `acking spends the item at once and tells the server, even if the server cannot be reached`() = runTest {
+    fun `acking spends the item at once and tells the server`() = runTest {
         val backend = Backend().apply { notices = JamTakeNoticesResponse(listOf(notice("n1", "s1"), notice("n2", "s2"))) }
         val store = store(backend)
         advanceUntilIdle()
@@ -289,7 +291,45 @@ class JamNoticeStoreTest {
         backend.ackFailure = java.io.IOException("offline")
         store.ack("n2")
         advanceUntilIdle()
-        assertTrue("a failed ack does not bring the card back", store.state.value.notices.isEmpty())
+        // The server never spent n2 (the ack was refused), so the read that follows brings it back: what is drawn is what the
+        // server holds, not a card that looks spent and returns with some later read.
+        assertEquals(listOf("n2"), store.state.value.notices.map { it.id })
+    }
+
+    @Test
+    fun `a refused ack reads again, so what is drawn is what the server holds`() = runTest {
+        val backend = Backend().apply { notices = JamTakeNoticesResponse(listOf(notice("n1", "s1"))) }
+        val store = store(backend, retryMs = emptyList())
+        advanceUntilIdle()
+        backend.ackFailure = java.io.IOException("offline")
+        val reads = backend.noticesReads
+        store.ack("n1")
+        advanceUntilIdle()
+        assertTrue("the server never spent it, so it is read again", backend.noticesReads > reads)
+        assertEquals(listOf("n1"), store.state.value.notices.map { it.id })
+    }
+
+    @Test
+    fun `a config read that failed on the network is asked again, and again on reconnect`() = runTest {
+        val backend = Backend().apply { configFailure = java.io.IOException("offline") }
+        val store = store(backend, retryMs = listOf(3_000))
+        runCurrent()
+        assertFalse(store.state.value.loaded)
+        backend.configFailure = null
+        advanceTimeBy(3_500)
+        advanceUntilIdle()
+        assertTrue(store.state.value.enabled)
+
+        val second = Backend().apply { configFailure = java.io.IOException("offline") }
+        val other = store(second, retryMs = emptyList())
+        advanceUntilIdle()
+        assertFalse(other.state.value.loaded)
+        second.configFailure = null
+        second.connectionFlow.value = RealtimeState.Reconnecting
+        advanceUntilIdle()
+        second.connectionFlow.value = RealtimeState.Ready
+        advanceUntilIdle()
+        assertTrue("a reconnect reads the flag when it is still unknown", other.state.value.enabled)
     }
 
     @Test

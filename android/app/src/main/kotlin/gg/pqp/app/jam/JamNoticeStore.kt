@@ -118,7 +118,9 @@ class JamNoticeStore(
             backend.connection.collect { connection ->
                 if (connection == RealtimeState.Ready) {
                     // Frames sent while the socket was down are gone, so read again.
-                    if (wasDown && _state.value.enabled) loadWaiting()
+                    if (wasDown) {
+                        if (_state.value.enabled) loadWaiting() else if (!_state.value.loaded) loadMe()
+                    }
                     wasDown = false
                 } else {
                     wasDown = true
@@ -144,6 +146,8 @@ class JamNoticeStore(
         waitingLoad?.cancel()
         meLoad?.cancel()
         retryJob?.cancel()
+        meRetry?.cancel()
+        meRetry = null
         waitingLoad = null
         meLoad = null
         retryJob = null
@@ -169,11 +173,30 @@ class JamNoticeStore(
                 // An API that predates the routes, or one with the flag off, reads as off. A network failure keeps
                 // what was there (nothing, the first time) and is asked again with the next nudge.
                 val status = (e as? ApiException)?.status
-                if (status == 404 || status == 401 || status == 403) _state.value = JamNoticeState(loaded = true)
+                if (status == 404 || status == 401 || status == 403) {
+                    _state.value = JamNoticeState(loaded = true)
+                } else {
+                    // Not an answer: asked again (3, 10 and 30 seconds), and on the next reconnect, so a transient failure
+                    // at sign-in does not leave notices off for the whole session.
+                    retryMe(0)
+                }
             }
         }
         meLoad = run
         return run
+    }
+
+    private var meRetry: Job? = null
+
+    private fun retryMe(attempt: Int) {
+        if (attempt >= retryMs.size || meRetry?.isActive == true) return
+        val mine = epoch
+        meRetry = scope.launch {
+            delay(retryMs[attempt])
+            if (mine != epoch || _state.value.loaded) return@launch
+            loadMe().join()
+            if (!_state.value.loaded) retryMe(attempt + 1)
+        }
     }
 
     /** The inbox and the notice items, asked together. Coalesced: a burst of frames is one read. */
@@ -198,6 +221,15 @@ class JamNoticeStore(
         waitingLoad = run
         return run
     }
+
+    private suspend fun runCatchingAck(block: suspend () -> Unit): Unit? =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
 
     private suspend fun <T> runCatchingRead(block: suspend () -> T): T? =
         try {
@@ -269,7 +301,9 @@ class JamNoticeStore(
     /** A tap on a card's button, or its X: the item leaves the list at once, and the server keeps it spent. */
     fun ack(id: String) {
         _state.update { it.copy(notices = it.notices.filterNot { notice -> notice.id == id }) }
-        scope.launch { runCatchingRead { backend.ack(id) } }
+        // A refused ack leaves the item open on the server: read again so what is drawn is what the server holds
+        // (the card comes back, rather than looking spent and returning with the next read).
+        scope.launch { if (runCatchingAck { backend.ack(id) } == null) refresh() }
     }
 
     /** A take left the inbox (accepted, or removed): drop it without waiting for the read. */
