@@ -462,6 +462,12 @@ song (`live` in `jam-public.ts`) and the `?needs=` filter. The summary's
 `missingInstruments` has been on the wire since #1579; the phones read it first and
 fall back to `instruments`, so both paths agree now.
 
+**3b. An "entrou" item goes when its part does** (round 3, N-5). `listJamTakeNotices`
+reads an `accepted` item against the sender's own parts on the song: while none of
+them is live and in the mix (the sender deleted it, or the starter took it back out
+of the mix, the "Desfazer" below) the item is spent instead of announcing a part
+that no longer exists. The client reads again after a delete of its own.
+
 **4. The sender is told how they will hear back.** The after-send copy (the studio's
 done screen, the song's status line, the send hint) says that the starter's answer
 arrives as a notification here, and on the phone when notifications are on.
@@ -473,6 +479,46 @@ process, sum the machines): `created`, `merged` (a take folded into an open item
 see `product.pushSkipped.jam`), `pushHeldBack`, `skippedBlocked`, `skippedFlagOff`,
 `acked`, `failed`. `jamPublic.takeNoticesOpen` is the unanswered items right now.
 Healthy: `created` follows `takesRecorded` for outside takes, `failed` is zero.
+
+## Tuas músicas, the starter's answer, and where notices may draw (round 3 minors)
+
+**Tuas músicas** (`/app/jam/mine`, `components/jam/jam-mine-view.tsx`, `lib/jam-mine.ts`)
+is a returning person's one place for what they made: the public songs they
+started (`GET /api/jam-public/mine`, each with how many parts wait for their
+answer) and the parts they sent to other people's songs
+(`GET /api/jam-public/my-parts`, new: `jamPublicMyPartsResponseSchema`), each in
+one of `waiting`, `in`, `refused`. A refusal has no row to read once the delete
+has happened, so the starter's delete of a waiting outside take stamps
+`jam_public_tracks.declined_at` (whatever the notices flag says: a notice is a
+nudge, this is a record); the list shows it for thirty days. The sender's own
+delete of a waiting take is neither, it is gone; a song unpublished or removed
+takes its parts off the list. Doors: the site's account chip (`?jam=mine`, a
+`mine` jam intent in `lib/jam-intent.ts`), the Jam wall's header and the
+compass's Jam row. It has "Ver no site" and a back arrow that leaves for the site
+when the visitor came from it. **`restarts-api`**: the endpoint, the column and the
+route are server changes.
+
+**After Aceitar and Recusar** (`jam-answer-notice.tsx`) the starter is told what
+happened where they answered: "entrou na música, já aparece pra quem abre ela, no
+site e no app", with "Desfazer" for eight seconds (`PATCH inMix: false` on the same
+take: it goes back to the queue, and the sender's "entrou" item is voided by §3b),
+or "Parte recusada", with no undo (a declined take is deleted and the API cannot
+bring it back).
+
+**Where a Jam notice may draw** (`lib/jam-notice-placement.ts`, N-1). One at a
+time: the toast holds the cards back, only the newest card is drawn with "Mais N
+esperando depois dessa". Never over a transport: with the studio open nothing is
+drawn (it waits), over a public view the card is drawn in the flow above the song
+(`noticeSlot`), over a channel's own song panel it waits, and the corner queue
+yields while one is up (`JamHintContext.notice`). On a desktop it sits at the
+bottom right where the corner cards are, not at the top where the app's own
+buttons are.
+
+**The share message** (`lib/jam-share-text.ts`, N-2): `jamStillNeeds` is the one
+rule for what a song still asks for (the server's `needs` is the same list), the
+sent card and the song page's share button both pass the sender's own waiting
+parts (`pending`), and the message says that the part "entra quando quem começou
+aceitar" and asks only for what is still missing.
 
 ## Launch gaps accepted (2026-11-20)
 

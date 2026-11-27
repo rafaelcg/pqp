@@ -23,6 +23,7 @@ const SONG_A = "0b8f2c1e-4d5a-4e6f-8a7b-1c2d3e4f5a6b";
 const SONG_B = "7a1d3b2c-9e8f-4a5b-8c6d-0e1f2a3b4c5d";
 const SONG_C = "5c4b3a29-1807-4f6e-9d5c-3b2a19087f6e";
 const SONG_D = "3d4c5b6a-7e8f-4a9b-8c0d-2e3f4a5b6c7d";
+const SONG_E = "9e8d7c6b-5a49-4382-9170-6f5e4d3c2b1a";
 
 const person = (name: string, handle: string | null = null) => ({ name, handle, avatarUrl: null });
 
@@ -52,6 +53,8 @@ const B = song(SONG_B, "Riff solto", [["guitar", "Duda"]], ["vocals"]);
 const C = song(SONG_C, "Duo pronto", [["keys", "Gui"], ["bass", "Nanda"]], []);
 /** A song that takes no part from a visitor: only its starter adds. */
 const D = song(SONG_D, "Gravada e fechada", [["drums", "Leco"], ["guitar", "Tchelo"]], [], { joinMode: "closed" });
+/** A song that asks for more than one instrument (round 3, n-8). */
+const E = song(SONG_E, "Pede duas", [["guitar", "Tchelo"]], ["drums", "vocals", "keys"], { joinMode: "wanted" });
 
 function track(id: string, instrument: string, name: string, offsetMs = 0) {
   return {
@@ -138,7 +141,7 @@ async function mockApi(
   await page.route(/\/api\/public\/jams\/[0-9a-f-]{36}$/, async (route: Route) => {
     const id = route.request().url().split("/").pop()!;
     calls.detail.push(id);
-    const found = [A, B, C, D].find((candidate) => candidate.id === id);
+    const found = [A, B, C, D, E].find((candidate) => candidate.id === id);
     if (!found) return route.fulfill({ status: 404, json: { error: "not found" } });
     const tracks = found.parts.map((part, index) => track(`${id.slice(0, 8)}-t${index}`, part.instrument, part.person.name, index * 500));
     return route.fulfill({
@@ -632,7 +635,10 @@ test.describe("a visitor the app says is signed in", () => {
     const hint = signedIn("Rafa");
     await page.addInitScript(({ key, raw }) => localStorage.setItem(key, raw), hint);
     await page.goto(`/jam/m/${SONG_A}`);
-    await expect(page.locator("[data-jam-account]")).toContainText("Rafa");
+    // The chip is the door to "Tuas músicas" in the app; the name is on its title (round 3, N-3).
+    await expect(page.locator("[data-jam-account]")).toContainText("Tuas músicas");
+    await expect(page.locator("[data-jam-account]")).toHaveAttribute("title", "Rafa · Tuas músicas");
+    await expect(page.locator("[data-jam-account]")).toHaveAttribute("href", /\/app\?jam=mine/);
     await expect(page.locator("[data-jam-signin]")).toHaveCount(0);
     await page.locator("[data-jam-record]").click();
     await page.waitForURL(/\/app\?/);
@@ -710,7 +716,8 @@ test.describe("a visitor the app says is signed in", () => {
       document.cookie = "pqp_jam_in=1.Ana; Path=/";
     });
     await page.goto("/jam");
-    await expect(page.locator("[data-jam-account]")).toContainText("Ana");
+    // The name is on the chip's title, the words are the door's (round 3, N-3).
+    await expect(page.locator("[data-jam-account]")).toHaveAttribute("title", /Ana/);
   });
 
   for (const width of [320, 390, 1280]) {
@@ -815,8 +822,8 @@ test.describe("a song that takes no part", () => {
     await expect(page.locator("[data-jam-toggle]")).toBeVisible();
     await expect(page.locator("[data-jam-record]")).toHaveCount(0);
     await expect(page.locator("[data-jam-need-tile]")).toHaveCount(0);
-    await expect(page.locator("[data-jam-closed]")).toContainText("Essa música tá completa.");
-    // "Cada pessoa grava a sua parte em cima das outras" over "tá completa" contradicted itself
+    await expect(page.locator("[data-jam-closed]")).toContainText("Essa música tá fechada: só quem começou grava nela.");
+    // "Cada pessoa grava a parte dela em cima das outras" over a closed song contradicted itself
     await expect(page.locator("[data-jam-tagline]")).toHaveCount(0);
     await shot(page, "06-song-closed");
     await page.locator("[data-jam-closed-start]").click();
@@ -829,7 +836,7 @@ test.describe("a song that takes no part", () => {
     await expect(page.locator("[data-jam-record]")).toBeVisible();
     await expect(page.locator("[data-jam-need-tile]")).toBeVisible();
     await expect(page.locator("[data-jam-closed]")).toHaveCount(0);
-    await expect(page.locator("[data-jam-tagline]")).toContainText("Cada pessoa grava a sua parte");
+    await expect(page.locator("[data-jam-tagline]")).toContainText("Cada pessoa grava a parte dela");
   });
 
   test("a closed song on a phone: the note is in the page, nothing scrolls sideways", async ({ page }) => {
@@ -1106,7 +1113,7 @@ test.describe("the host mount", () => {
     const jam = `http://jam.localhost:${host.port}`;
     await page.goto(`${jam}/`);
     await expect(page.locator("[data-jam-card]")).toHaveCount(2);
-    await page.locator("[data-jam-hero]").getByRole("link", { name: "Abrir a música" }).click();
+    await page.locator("[data-jam-hero]").getByRole("link", { name: "Abrir sem tocar" }).click();
     await expect(page).toHaveURL(`${jam}/m/${SONG_A}`);
     await expect(page.locator("[data-jam-song]")).toBeVisible();
   });
@@ -1205,6 +1212,58 @@ test.describe("the language", () => {
       }
       await shot(page, `language-320-${path.includes("/m/") ? "song" : "home"}`);
     }
+  });
+});
+
+test.describe("round 3 minors", () => {
+  test("every instrument the song asks for is a choice on the first screen, and each carries its own to the app (n-8)", async ({ page }) => {
+    await mockApi(page);
+    await page.route("**/app?*", (route) => route.fulfill({ body: "<html><body>app</body></html>", contentType: "text/html" }));
+    await page.goto(`/jam/m/${SONG_E}`);
+    await expect(page.locator("[data-jam-record]")).toContainText("Gravar a bateria");
+    await expect(page.locator("[data-jam-record-alt]")).toHaveCount(2);
+    await expect(page.locator("[data-jam-record-alt=vocals]")).toBeVisible();
+    // three dashed tiles on the stage, one per instrument asked for
+    await expect(page.locator("[data-jam-need-tile]")).toHaveCount(3);
+    await shot(page, "n8-several-needs");
+    await page.locator("[data-jam-record-alt=vocals]").click();
+    await expect(page.locator("dialog[open]")).toContainText("Pra gravar tu precisa de uma conta");
+    await page.locator("[data-jam-ask-go]").click();
+    await page.waitForURL(/\/app\?/);
+    expect(new URL(page.url()).searchParams.get("instrument")).toBe("vocals");
+  });
+
+  test("a song with one need still has one record button and no list of others", async ({ page }) => {
+    await mockApi(page);
+    await page.goto(`/jam/m/${SONG_A}`);
+    await expect(page.locator("[data-jam-record]")).toHaveCount(1);
+    await expect(page.locator("[data-jam-record-others]")).toHaveCount(0);
+  });
+
+  test("the song pauses under the account sheet and stays paused when it closes (round 1 m9)", async ({ page }) => {
+    await mockApi(page);
+    const warmed = page.waitForResponse((response) => /jam-session/.test(response.url()), { timeout: 20_000 });
+    await page.goto(`/jam/m/${SONG_A}`);
+    await warmed;
+    await page.waitForLoadState("networkidle");
+    const toggle = page.locator("[data-jam-toggle]");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("data-playing", "true", { timeout: 15_000 });
+    await page.locator("[data-jam-record]").click();
+    await expect(page.locator("dialog[open]")).toBeVisible();
+    await expect(toggle).toHaveAttribute("data-playing", "false");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    // closing the sheet starts nothing: playing is a press
+    await page.waitForTimeout(400);
+    await expect(toggle).toHaveAttribute("data-playing", "false");
+  });
+
+  test("the hero's play says where it goes, and a card's has a tooltip (m5)", async ({ page }) => {
+    await mockApi(page);
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-hero] [data-jam-play-label]")).toContainText("Ouvir na página da música");
+    await expect(page.locator("[data-jam-card] [data-jam-play]").first()).toHaveAttribute("title", /Abre a música e já começa a tocar/);
   });
 });
 

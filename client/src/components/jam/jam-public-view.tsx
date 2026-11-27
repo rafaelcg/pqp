@@ -53,9 +53,14 @@ export interface JamPublicViewProps {
   onClose: () => void;
   /** A new jam got its first part: the address becomes the song's. */
   onSongStarted: (songId: string) => void;
+  /**
+   * A Jam notice, drawn in the flow above the song (`lib/jam-notice-placement.ts`): it moves the song
+   * down, so it can never sit over play, record or share. Not drawn while the studio is open.
+   */
+  noticeSlot?: React.ReactNode;
 }
 
-export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamPublicViewProps) {
+export function JamPublicView({ target, viewerId, onClose, onSongStarted, noticeSlot = null }: JamPublicViewProps) {
   const { t } = useTranslation();
   const me = useJamPublicMe();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -279,6 +284,7 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted }: JamP
 
   return frame(
     <>
+      {studio === null && noticeSlot}
       <div className="min-h-0 flex-1" inert={studio !== null}>
         <JamSongPanel
           key={song.id}

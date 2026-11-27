@@ -364,6 +364,17 @@ spread, the browser's own estimate, and a field to type the round trip
 medido"). After recording, the review says what the take was corrected by and
 from which source. The per-take nudge ("Empurrar o tempo") sits under "Ajustar".
 
+**Plain words on the chip** (user test round 3, m1): the chip says "Atraso do fone
+medido" or "Atraso do fone: o navegador chutou" and no longer "Fone · uns 32 ms
+(estimado)", and the take's line says "confere de ouvido" instead of "aproximado".
+The milliseconds are in the tooltip, for whoever wants them. **The recording clock**
+(`RecordingClock`) has a dot beside it that breathes while the take is made (still
+under reduced motion): the clock counts whole seconds and sat on 0:00 for the first
+one, which read as a stall (round 3, n13). Measured with the fake device, the
+count-in beats come about 600 ms apart and recording starts one beat after the
+fourth, so there was no dead moment, only a clock that did not move; the band and
+the microphone were running the whole time.
+
 ## Taps
 
 Measured by `e2e/jam-web.spec.ts`:

@@ -510,6 +510,34 @@ export function LiveLane({
 /* ----------------------------------------------------------------- count-in */
 
 /** The big number of the count-in, one swell per beat. */
+export function formatRecordingTime(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, "0")}`;
+}
+
+/**
+ * The clock while recording, with a live dot beside it. User test round 3 (n13): after the
+ * count-in the clock sat on 0:00 for a whole second (it counts seconds, and the first one has
+ * not ended yet) and read as a stall. Nothing was wrong, the band and the microphone were
+ * running, so the screen now says so: a dot that breathes while the take is being made (still,
+ * under reduced motion) and the clock beside it.
+ */
+export function RecordingClock({ elapsedMs }: { elapsedMs: number }) {
+  const { t } = useTranslation();
+  const time = formatRecordingTime(elapsedMs);
+  return (
+    <span
+      role="timer"
+      aria-label={t("jam.studio.recording", { time })}
+      data-jam-recording-clock=""
+      className="inline-flex items-center gap-2 font-display text-3xl font-extrabold tabular-nums text-text"
+    >
+      <span aria-hidden="true" data-jam-rec-dot="" className="h-3 w-3 rounded-full bg-danger motion-safe:animate-pulse" />
+      {time}
+    </span>
+  );
+}
+
 export function Countdown({ beat, beatMs }: { beat: number; beatMs: number }) {
   const { t } = useTranslation();
   return (

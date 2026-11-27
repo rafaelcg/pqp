@@ -59,7 +59,7 @@ afterEach(() => {
 
 describe("JamInviteCard on a desktop (no Web Share API)", () => {
   it("shows the song, the prepared message and the public link with ref=share", () => {
-    mount(wanted, { justSent: "vocals" });
+    mount(wanted);
     const text = host.textContent ?? "";
     expect(text).toContain("Maré baixa");
     expect(text).toContain("it needs bass");
@@ -108,10 +108,23 @@ describe("JamInviteCard on a desktop (no Web Share API)", () => {
     expect(host.querySelector("[data-jam-invite]")!.getAttribute("data-kind")).toBe("listen");
   });
 
-  it("leaves out the part the person just sent", () => {
-    mount({ ...wanted, instruments: [] }, { justSent: "drums" });
-    expect(host.textContent).toContain("it needs bass.");
-    expect(host.textContent).not.toContain("bass and drums");
+  it("leaves out the part the person just sent, and says it waits for the starter (round 3, N-2)", () => {
+    mount({ ...wanted, instruments: [], pending: ["drums"] });
+    const message = host.querySelector("[data-jam-invite-message]")!.textContent!;
+    expect(message).toContain("I sent my drums part");
+    expect(message).toContain("whoever started the jam accepts it");
+    expect(message).toContain("It still needs bass.");
+    expect(message).not.toContain("bass and drums");
+    // The line under the title says the same thing as the message, from the same rule.
+    expect(host.querySelector("[data-jam-invite-song]")!.textContent).toContain("bass");
+    expect(host.querySelector("[data-jam-invite-song]")!.textContent).not.toContain("drums");
+  });
+
+  it("without a part waiting the message is the plain one (a visitor with nothing sent)", () => {
+    mount({ ...wanted, instruments: [], pending: [] });
+    const message = host.querySelector("[data-jam-invite-message]")!.textContent!;
+    expect(message).not.toContain("I sent my");
+    expect(message).toContain("it needs bass and drums");
   });
 });
 
@@ -119,7 +132,7 @@ describe("JamInviteCard on a phone (Web Share API)", () => {
   it("the primary opens the system sheet with the title, the message and the link, and the copy is the quiet one", async () => {
     const share = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, "share", { value: share, configurable: true, writable: true });
-    mount(wanted, { justSent: "vocals" });
+    mount(wanted);
     expect(host.querySelector("[data-jam-invite-networks]")).toBeNull();
     expect(host.querySelector("[data-jam-invite-share]")).not.toBeNull();
     await act(async () => {

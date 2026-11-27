@@ -1,4 +1,4 @@
-import type { JamPublicSongForViewer, JamSongSummary, JamTrack } from "@pqp/shared";
+import type { JamInstrument, JamPublicSongForViewer, JamSongSummary, JamTrack } from "@pqp/shared";
 import { Flag, Globe, Heart, Share2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ReportTarget } from "@/components/chat/report-dialog";
@@ -8,6 +8,7 @@ import { useJamPublication } from "@/hooks/use-jam-publication";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { fetchPublicSongForViewer, likePublicJam } from "@/lib/jam-public-api";
 import { jamShareable } from "@/lib/jam-share-link";
+import { jamPendingOf } from "@/lib/jam-share-text";
 import { publicJamViewUrl } from "@/lib/jam-public-links";
 import {
   answerConsent,
@@ -133,6 +134,10 @@ export function useJamPublicPanel(args: UseJamPublicPanelArgs): JamPublicPanelPi
     joinMode: song.joinMode,
     wantedInstruments: song.wantedInstruments,
     instruments: song.instruments,
+    // What this visitor sent that the starter has not put in yet: the same rule the "sent" card
+    // uses, so the two share messages for one person and one song cannot disagree (round 3, N-2).
+    // The same in a public view and in a channel's own song (`jamPendingOf`).
+    pending: jamPendingOf(tracks, viewerId, isStarter) as JamInstrument[],
   };
 
   // Answers arrive while the song is open: the sheet reads again every time it opens.

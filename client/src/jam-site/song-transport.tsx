@@ -6,7 +6,8 @@ import type { Instrument } from "./instruments";
 import type { PlayerState, PublicPlayer } from "./player";
 import { useClockDraw, usePlayerState } from "./use-player";
 import { button, buttonClass, focusRing } from "./ui";
-import { clock, cn } from "./util";
+import { INSTRUMENT_LOOK } from "./instruments";
+import { clock, cn, instrumentName } from "./util";
 
 /**
  * Play, the time, the seek bar, like, share and the one record button. The
@@ -115,7 +116,7 @@ function Seek({ player }: { player: PublicPlayer }) {
 export function SongTransport({
   player,
   likes,
-  need,
+  needs,
   onLike,
   onShare,
   onRecord,
@@ -124,12 +125,15 @@ export function SongTransport({
 }: {
   player: PublicPlayer;
   likes: number;
-  /** The first instrument the song asks for, or null. */
-  need: Instrument | null;
+  /**
+   * EVERY instrument the song still asks for, in the order it asks (round 3, n-8: only the first was
+   * offered, and a singer on a drums-and-voice song met "Gravar a bateria" and found "Voz" only in the studio).
+   */
+  needs: readonly Instrument[];
   onLike: () => void;
   onShare: () => void;
-  /** Null on a song that takes no part (closed): there is no record button then. */
-  onRecord: (() => void) | null;
+  /** Null on a song that takes no part (closed): there is no record button then. `null` instrument: any. */
+  onRecord: ((instrument: Instrument | null) => void) | null;
   /** The share card, drawn under the bar when the share button opened it. */
   shareSlot?: React.ReactNode;
   /** Extra layout from the page (it moves the bar above the stage on a phone). */
@@ -210,15 +214,42 @@ export function SongTransport({
         </button>
       </div>
       {onRecord && (
-        <button
-          type="button"
-          onClick={onRecord}
-          data-jam-record=""
-          className={cn(button("primary"), "order-6 w-full basis-full md:order-none md:w-auto md:basis-auto")}
-        >
-          <Mic className="h-[18px] w-[18px]" aria-hidden />
-          {need ? jt(`record.${need}` as Parameters<typeof jt>[0]) : jt("record.any")}
-        </button>
+        <div className="order-6 flex w-full basis-full flex-col gap-2 md:order-none md:w-auto md:basis-auto md:flex-row md:items-center" data-jam-record-group="">
+          <button
+            type="button"
+            onClick={() => onRecord(needs[0] ?? null)}
+            data-jam-record=""
+            className={cn(button("primary"), "w-full md:w-auto")}
+          >
+            <Mic className="h-[18px] w-[18px]" aria-hidden />
+            {needs[0] ? jt(`record.${needs[0]}` as Parameters<typeof jt>[0]) : jt("record.any")}
+          </button>
+          {needs.length > 1 && (
+            // The song asks for more than one part: every one is a choice on the first screen, the first as the
+            // main button and the rest as smaller ones beside it, each naming its own instrument.
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label={jt("record.others")} data-jam-record-others="">
+              <span className="text-[13px] font-semibold text-text-secondary" aria-hidden="true">
+                {jt("record.or")}
+              </span>
+              {needs.slice(1, 6).map((instrument) => {
+                const Icon = INSTRUMENT_LOOK[instrument].icon;
+                return (
+                  <button
+                    key={instrument}
+                    type="button"
+                    onClick={() => onRecord(instrument)}
+                    data-jam-record-alt={instrument}
+                    aria-label={jt(`record.${instrument}` as Parameters<typeof jt>[0])}
+                    className={cn(button("secondary"), "gap-1.5 px-3.5 capitalize")}
+                  >
+                    <Icon className={cn("h-[18px] w-[18px]", INSTRUMENT_LOOK[instrument].ink)} aria-hidden />
+                    {instrumentName(instrument)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
       {shareSlot}
       {state.phase === "error" && (

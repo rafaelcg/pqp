@@ -91,15 +91,17 @@ describe("a signed-out visitor", () => {
 });
 
 describe("a visitor the app says is signed in", () => {
-  it("sees their name where Entrar was, linking to the app", () => {
+  it("sees their initial and \"Tuas músicas\" where Entrar was, linking to that list in the app (round 3, N-3)", () => {
     signIn("Rafa");
     mount();
     expect(host!.querySelector("[data-jam-signin]")).toBeNull();
     const account = host!.querySelector<HTMLAnchorElement>("[data-jam-account]")!;
-    expect(account.textContent).toContain("Rafa");
+    expect(account.textContent).toContain("Tuas músicas");
     expect(account.querySelector("[aria-hidden]")?.textContent).toBe("R");
-    expect(account.getAttribute("href")).toBe("/app");
-    expect(account.getAttribute("aria-label")).toBe("Abrir o pqp");
+    expect(account.getAttribute("href")).toBe("/app?jam=mine");
+    expect(account.getAttribute("aria-label")).toBe("Tuas músicas");
+    // The name is still there for anyone who hovers the chip.
+    expect(account.getAttribute("title")).toBe("Rafa · Tuas músicas");
   });
 
   it("draws a glyph, not a blank, when the hint has no name", () => {

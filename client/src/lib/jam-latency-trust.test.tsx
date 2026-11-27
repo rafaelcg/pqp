@@ -82,16 +82,17 @@ describe("the header chip", () => {
     return host.querySelector<HTMLElement>("[data-jam-latency-chip]")!;
   }
 
-  it("calls a guess a guess, with no 'set' wording and no dot", () => {
+  it("calls a guess a guess, with no 'measured' wording and no dot", () => {
     const el = chip("estimate", "low");
-    expect(el.textContent).toBe("Headphones · about 33 ms (estimated)");
-    expect(el.textContent).not.toMatch(/set/i);
+    // Plain words (round 3, m1): no "ms" on the chip, and a guess is never called measured.
+    expect(el.textContent).toBe("Headphone delay: the browser guessed");
+    expect(el.textContent).not.toMatch(/measured|\bms\b/i);
     expect(el.querySelector(".bg-accent")).toBeNull();
   });
 
-  it("says 'set' and shows the dot only for a measurement", () => {
+  it("says 'measured' and shows the dot only for a measurement", () => {
     const el = chip("loopback", "high");
-    expect(el.textContent).toBe("Headphones set · 33 ms");
+    expect(el.textContent).toBe("Headphone delay measured");
     expect(el.querySelector(".bg-accent")).not.toBeNull();
   });
 });

@@ -165,6 +165,11 @@ goes through it; the in-app player is unchanged. Audio is fetched and decoded on
 the first press, never on the page view. A play is noted (`POST .../play`) on
 the first successful start.
 
+**A sheet covers the player.** The account sheet (and every `Sheet`, through
+`jam-site/cover.ts`) pauses the song under it, and uncovering starts nothing
+(round 1 m9, still open in round 3). It uses the page's own player API
+(`usePauseWhenCovered`), not the engine.
+
 A song is a download of every stem before the first sound (the originals are
 FLAC, about 54 MB for three minutes of five parts), so the wait is shown, not
 hidden. Three small things, all client side, none of them shortens it (a
@@ -264,9 +269,12 @@ it) and removes it on sign-out (`SignOutButton`, `signInAgain`) and whenever Cle
 answers "nobody" (`ClerkAppGate`). Sent to every request to `pqp.gg` hosts, about
 25 bytes, and not on cross-origin API fetches (no credentials).
 
-What a signed-in visitor sees: their first name and an initial where "Entrar" was
-(a glyph when only the link's marker arrived), linking to `/app`, at every width;
-every record, like, report and start goes straight to the app, no sheet. A
+What a signed-in visitor sees: their initial (a glyph when only the link's marker
+arrived) and "Tuas músicas" where "Entrar" was (a small note instead of the words
+below 640 px; the name is on the chip's title), linking to `/app?jam=mine`, which
+opens **Tuas músicas** in the app (`docs/JAM_PUBLIC.md` §"Tuas músicas"; user test
+round 3, N-3: the chip used to land on the chat home); every record, like, report
+and start goes straight to the app, no sheet. A
 signed-out visitor sees "Entrar" at every width (it was hidden below 640 px).
 
 **Could the site read the Clerk session itself?** Clerk's documentation says that
@@ -288,12 +296,13 @@ subdomain allowlist is set in the Clerk dashboard, and `https://jam.pqp.gg` in
 surface and word mark, the song's cover and title once the public route answers,
 "Abrindo a jam…". It stands in for the chat skeleton ("Carregando comunidades…")
 while the bootstrap runs and for Clerk's "Entrando…", and sits behind the age
-gate and the name step in a quiet form. **"Voltar pra jam" strip**: it lives on
-the app's home (it never shows over a public jam, which covers the app), and
-closing the song leaves the app for the site, so a visitor on the normal path had
-no reason to be on the app home: no persona saw it. It is reachable now from the
-site's account link, which lands on `/app` with the handover still alive in the
-same tab.
+gate and the name step in a quiet form. **There is no "Voltar pra jam" strip
+any more** (round 3, N-4). It lived on the app's home only, and a visitor from the
+site never lands there: closing their song leaves for the site, and the account
+chip opens "Tuas músicas", which has "Ver no site" and a back arrow that leaves for
+the site too (`leavesToJamSite` with the handover target `mine`). Three rounds of
+testers, nobody saw it, so it went rather than stay a surface nobody can reach.
+The handover record stays: the first run and the leave-on-close read it.
 
 ## Where visitors came from (attribution)
 

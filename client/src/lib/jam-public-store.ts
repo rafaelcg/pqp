@@ -166,6 +166,38 @@ export function loadJamPublicMe(options: { force?: boolean } = {}): Promise<void
   return run;
 }
 
+/** Set by the last read of the waiting lists: one of the three answers did not arrive, so a list is out of date. */
+let waitingStale = false;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+const WAITING_RETRY_MS = [3000, 10000, 30000] as const;
+
+/**
+ * Read the waiting lists again AFTER something this person did that changes them (a delete of
+ * their own part, an undo, a decline), as a best effort that never gets in the way of what they
+ * did: the action already succeeded and has been applied locally, so a failed read must not make
+ * it look undone (Farol, PR 1778). It cannot reject (every one of the three reads has its own
+ * catch); when one of them failed the list it feeds is stale, so the read is tried again a few
+ * times, 3, 10 and 30 seconds later, one retry in flight at a time.
+ */
+export function refreshJamPublicWaiting(attempt = 0): void {
+  void loadJamPublicWaiting()
+    .catch(() => undefined)
+    .then(() => {
+      if (!waitingStale || attempt >= WAITING_RETRY_MS.length || retryTimer !== null) {
+        return;
+      }
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        refreshJamPublicWaiting(attempt + 1);
+      }, WAITING_RETRY_MS[attempt]);
+    });
+}
+
+/** Test seam: is a list known to be out of date. */
+export function jamPublicWaitingStaleForTests(): boolean {
+  return waitingStale;
+}
+
 /** The consent requests and the starter's inbox, asked together. */
 export function loadJamPublicWaiting(): Promise<void> {
   if (!me.enabled) {
@@ -182,6 +214,7 @@ export function loadJamPublicWaiting(): Promise<void> {
   ])
     .then(([consents, inbox, notices]) => {
       if (mine !== epoch) return;
+      waitingStale = consents === null || inbox === null || notices === null;
       waiting = {
         consents: consents ? consents.pending : waiting.consents,
         inbox: inbox ? inbox.takes : waiting.inbox,

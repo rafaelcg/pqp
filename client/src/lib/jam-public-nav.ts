@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { JamIntent } from "@/lib/jam-intent";
-import { NEW_PUBLIC_JAM_PATH, publicJamAppPath } from "@/lib/jam-public-links";
+import { MINE_PUBLIC_JAM_PATH, NEW_PUBLIC_JAM_PATH, publicJamAppPath } from "@/lib/jam-public-links";
 
 /**
  * Asking the app to open a public jam: the arrival intent from jam.pqp.gg
@@ -14,7 +14,7 @@ import { NEW_PUBLIC_JAM_PATH, publicJamAppPath } from "@/lib/jam-public-links";
  */
 
 export interface PublicJamRequest {
-  /** `new` starts a standalone public jam. */
+  /** `new` starts a standalone public jam, `mine` opens "Tuas músicas". */
   target: string;
   intent: JamIntent | null;
   /** Moves on every request, so asking twice for the same song still opens it. */
@@ -35,7 +35,7 @@ function emit(): void {
 export function openPublicJam(intent: JamIntent): void {
   nonce += 1;
   current = {
-    target: intent.kind === "new" ? "new" : intent.songId,
+    target: intent.kind === "new" ? "new" : intent.kind === "mine" ? "mine" : intent.songId,
     intent,
     nonce,
   };
@@ -70,9 +70,18 @@ export function startPublicJam(): void {
   openPublicJam({ kind: "new" });
 }
 
+/** "Tuas músicas": the songs I started and the parts I sent, each with its state. */
+export function openMyJams(): void {
+  openPublicJam({ kind: "mine" });
+}
+
 /** The address a request opens. */
 export function publicJamRequestPath(request: PublicJamRequest): string {
-  return request.target === "new" ? NEW_PUBLIC_JAM_PATH : publicJamAppPath(request.target);
+  return request.target === "new"
+    ? NEW_PUBLIC_JAM_PATH
+    : request.target === "mine"
+      ? MINE_PUBLIC_JAM_PATH
+      : publicJamAppPath(request.target);
 }
 
 /** The intent for `target` once, then nothing: the view that acts on it calls this. */

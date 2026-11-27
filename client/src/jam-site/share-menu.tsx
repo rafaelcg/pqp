@@ -33,7 +33,7 @@ const NETWORK_LABEL: Record<JamShareNetwork, string> = { whatsapp: "WhatsApp", x
 /** The prepared message for a song, in the reader's language. */
 export function shareMessage(song: JamShareSong, locale: Locale): string {
   return jamShareText(song, {
-    say: (kind, vars) => jt(`share.msg.${kind}` as Parameters<typeof jt>[0], vars),
+    say: (kind, vars) => jt(`share.msg.${kind}` as Parameters<typeof jt>[0], { title: vars.title, list: vars.list, count: vars.count }),
     name: (instrument) => instrumentName(instrument),
     list: (names) => listOf(names, locale),
   });

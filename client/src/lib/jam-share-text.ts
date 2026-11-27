@@ -18,8 +18,15 @@ export type JamShareKind = "needs" | "open" | "listen";
 export interface JamShareSong {
   title: string;
   joinMode: "open" | "wanted" | "closed";
-  /** The instruments still missing, as ids ("bass"), in the order the song asks for them. */
+  /** The instruments still missing, as ids ("bass"), in the order the song asks for them (`jamStillNeeds`). */
   needs: readonly string[];
+  /**
+   * The instruments the sender already sent that wait for the song's starter, as ids. The message says
+   * so: a friend who opens the link hears the song WITHOUT them, and "falta bateria" from somebody whose
+   * drums are on their way would be untrue from where they stand. Empty or absent for everybody else
+   * (the site's visitor has no part of their own to speak of).
+   */
+  pending?: readonly string[];
 }
 
 export function jamShareKind(song: Pick<JamShareSong, "joinMode" | "needs">): JamShareKind {
@@ -33,8 +40,14 @@ export function jamShareKind(song: Pick<JamShareSong, "joinMode" | "needs">): Ja
 }
 
 export interface JamShareWords {
-  /** The sentence for a kind, with `{title}`, `{list}` and `count` filled by the caller's catalogue. */
-  say: (kind: JamShareKind, vars: { title: string; list: string; count: number }) => string;
+  /**
+   * The sentence for a kind, with `{title}`, `{list}` and `count` filled by the caller's catalogue.
+   * With `pending` the sentence also says that the sender's own part (`mine`, "bateria") waits for the starter.
+   */
+  say: (
+    kind: JamShareKind,
+    vars: { title: string; list: string; count: number; pending: boolean; mine: string },
+  ) => string;
   /** An instrument's name in the reader's language, lower case: "baixo". */
   name: (instrument: string) => string;
   /** "baixo e voz", in the language's own list grammar. */
@@ -45,23 +58,54 @@ export interface JamShareWords {
 export function jamShareText(song: JamShareSong, words: JamShareWords): string {
   const kind = jamShareKind(song);
   const names = kind === "needs" ? song.needs.map((one) => words.name(one)) : [];
+  const mine = (song.pending ?? []).map((one) => words.name(one));
   return words
-    .say(kind, { title: song.title, list: words.list(names), count: names.length })
+    .say(kind, {
+      title: song.title,
+      list: words.list(names),
+      count: names.length,
+      pending: mine.length > 0,
+      mine: words.list(mine),
+    })
     .replace(/\s+/g, " ")
     .trim();
 }
 
 /**
- * What is still missing once the person's own part is in: the song's wanted
- * instruments, minus those already in it, minus the one they just recorded
- * (they cannot ask their friends for the part they just sent).
+ * The instruments of the viewer's own parts that wait for somebody else's answer: the parts
+ * they recorded that are not in the mix, on a song they did not start. The same rule for a
+ * public view and for a channel's own song (a channel song's second take of an instrument
+ * already in the band is excluded anyway by `jamStillNeeds`, so it changes nothing there, and
+ * a share from either surface cannot ask for what the person has already sent).
  */
-export function jamMissingAfter(
+export function jamPendingOf(
+  tracks: ReadonlyArray<{ authorId: string | null; inMix: boolean; instrument: string }>,
+  viewerId: string | null,
+  isStarter: boolean,
+): string[] {
+  if (viewerId === null || isStarter) {
+    return [];
+  }
+  return [...new Set(tracks.filter((track) => track.authorId === viewerId && !track.inMix).map((track) => track.instrument))];
+}
+
+/**
+ * WHAT A SONG STILL NEEDS: the ONE rule, for the share card, the song page's own
+ * share button and (as the server's `needs`, which is the same rule) the public site.
+ *
+ * The instruments the song asks for, minus those already in the band, minus the
+ * ones the person sent that wait for the starter (`pending`): they cannot ask their
+ * friends for a part they just sent. User test round 3 (N-2): the card said "falta
+ * voz" and the song page's share said "faltam bateria e voz" for the same sender
+ * and the same song, because only one of the two knew about the part in the queue.
+ * An open or closed song names nothing.
+ */
+export function jamStillNeeds(
   song: { joinMode: "open" | "wanted" | "closed"; wantedInstruments: readonly string[]; instruments: readonly string[] },
-  justSent: string | null,
+  pending: readonly string[] = [],
 ): string[] {
   if (song.joinMode !== "wanted") {
     return [];
   }
-  return song.wantedInstruments.filter((one) => one !== justSent && !song.instruments.includes(one));
+  return song.wantedInstruments.filter((one) => !pending.includes(one) && !song.instruments.includes(one));
 }

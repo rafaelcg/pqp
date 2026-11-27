@@ -20,13 +20,17 @@ import { getApiBaseUrl } from "@/lib/utils";
  * into the chat product (Amigos, an empty Comunidades) with no way back to the
  * thing they signed up for (finding M1 of the launch user test).
  *
- * So this record outlives the intent, for one session, and three things read it:
+ * So this record outlives the intent, for one session, and two things read it:
  *
  *  - the first run, which counts the screens of the `jam` path and shows "tua
  *    jam tá esperando" with the song's title on the ones it does show;
  *  - the public jam view's close, which takes a visitor to the Jam site's list
  *    instead of the chat home (`leavesToJamSite`);
- *  - one strip in the app shell with "Voltar pra jam" (`JamHandoverStrip`).
+ *  Round 3 (N-4): there used to be a third reader, a strip at the top of the app's home
+ *  with "Voltar pra jam". It rendered on exactly one path, the app home with the record
+ *  alive in the same tab, and a visitor from the site never lands there (closing the song
+ *  leaves for the site, and the account chip opens "Tuas músicas"): three rounds of
+ *  testers, nobody saw it. It is gone, so there is no surface nobody can reach.
  *
  * WHERE IT LIVES. `sessionStorage`: it is about this tab's visit and must not
  * follow the person into tomorrow's tab, and it survives the Clerk round trip
@@ -39,7 +43,7 @@ import { getApiBaseUrl } from "@/lib/utils";
  */
 
 export interface JamHandover {
-  /** A song id, or `new` (the person came to start one). */
+  /** A song id, `new` (the person came to start one) or `mine` (their own list, "Tuas músicas"). */
   target: string;
   /** They came to record: the studio opens on `instrument` when the song is open. */
   record: boolean;
@@ -62,6 +66,9 @@ export function handoverFromIntent(
 ): JamHandover {
   if (intent.kind === "new") {
     return { target: "new", record: false, instrument: null, title: null, at: now };
+  }
+  if (intent.kind === "mine") {
+    return { target: "mine", record: false, instrument: null, title: null, at: now };
   }
   return {
     target: intent.songId,
@@ -225,7 +232,7 @@ export function peekJamHandover(): JamHandover | null {
  */
 export function noteJamHandover(intent: JamIntent): void {
   const held = peekJamHandover();
-  const target = intent.kind === "new" ? "new" : intent.songId;
+  const target = intent.kind === "new" ? "new" : intent.kind === "mine" ? "mine" : intent.songId;
   set(handoverFromIntent(intent, Date.now(), held && held.target === target ? held.title : null));
 }
 
@@ -235,11 +242,6 @@ export function rebindJamHandover(songId: string): void {
   if (held && held.target === "new") {
     set({ ...held, target: songId, record: false, instrument: null, at: Date.now() });
   }
-}
-
-/** "Not now": the strip goes, and so does the leave-on-close. */
-export function dismissJamHandover(): void {
-  set(null);
 }
 
 /**
@@ -310,7 +312,7 @@ const requested = new Set<string>();
  * saying "tua jam tá esperando" without a name, which is still true.
  */
 export function resolveJamHandoverTitle(handover: JamHandover | null): void {
-  if (!handover || handover.target === "new" || requested.has(handover.target)) {
+  if (!handover || handover.target === "new" || handover.target === "mine" || requested.has(handover.target)) {
     return;
   }
   const target = handover.target;

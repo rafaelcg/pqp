@@ -54,6 +54,21 @@ describe("the URL", () => {
     expect(jamIntentFromSearch("?jam=new")).toEqual({ kind: "new" });
   });
 
+  it("\"my songs\" is an intent of its own, the one the site's account chip hands over (round 3, N-3)", () => {
+    expect(jamIntentFromSearch("?jam=mine")).toEqual({ kind: "mine" });
+    expect(jamIntentFromSearch("?jam=MINE&ref=jam")).toEqual({ kind: "mine" });
+    expect(jamIntentHref({ kind: "mine" })).toBe("/app?jam=mine&ref=jam");
+    expect(jamReturnPath({ kind: "mine" })).toBe("/jam");
+    const storage = new Map<string, string>();
+    const store = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => void storage.set(key, value),
+      removeItem: (key: string) => void storage.delete(key),
+    };
+    stashJamIntent(store, { kind: "mine" }, 1000);
+    expect(peekJamIntent(store, 1000)).toEqual({ kind: "mine" });
+  });
+
   it("carries a like and a report, and the part a report names", () => {
     const track = "5c4b3a29-1807-4f6e-9d5c-3b2a19087f6e";
     expect(jamIntentFromSearch(`?jam=${ID}&act=like`)).toMatchObject({ act: "like", trackId: null });
