@@ -36,6 +36,7 @@ import { JamLaneFrame, JamLaneIdentity, JAM_BAND_BOX } from "./jam-lane-frame";
 import { bandOf, Ruler } from "./jam-song-panel";
 import {
   Countdown,
+  RecordingClock,
   DoneOverlay,
   InstrumentPicker,
   LatencyCard,
@@ -1000,13 +1001,7 @@ export function JamStudio({
               <LevelRing clock={studio.levelClock} />
               <Square aria-hidden className="relative h-7 w-7 fill-current" />
             </button>
-            <span
-              role="timer"
-              aria-label={t("jam.studio.recording", { time: formatTime(studio.elapsedMs) })}
-              className="font-display text-3xl font-extrabold tabular-nums text-text"
-            >
-              {formatTime(studio.elapsedMs)}
-            </span>
+            <RecordingClock elapsedMs={studio.elapsedMs} />
           </div>
         )}
 
@@ -1252,7 +1247,4 @@ function YourLaneIdentity({
   return <JamLaneIdentity instrument={instrument} sub={sub} recording={recording} />;
 }
 
-function formatTime(ms: number): string {
-  const total = Math.floor(ms / 1000);
-  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, "0")}`;
-}
+
