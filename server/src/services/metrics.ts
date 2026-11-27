@@ -143,6 +143,7 @@ import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
 import { connectionFailureCounts } from "./connections-failures.js";
 import { voiceNoteMetrics, type VoiceNoteMetrics } from "./voice-note-metrics.js";
+import { jamAudioCopyMetrics, type JamAudioCopyMetrics } from "./jam-audio-copy-metrics.js";
 import { jamVideoMetrics, type JamVideoMetrics } from "./jam-video-metrics.js";
 import { jamMetrics, type JamMetrics } from "./jam-metrics.js";
 import {
@@ -1093,6 +1094,14 @@ export interface AdminMetrics {
    */
   jamVideo: JamVideoMetrics | null;
   /**
+   * The Opus listening copy of jam stems (the runtime flag `jam_audio_copy`):
+   * how many stems have one, how many are waiting for the worker, `failed`
+   * (which belongs at zero), the queue's age and the bytes a listener saves.
+   * Read from the database, so it is the same on every replica. Null when its
+   * read failed. Field by field in `services/jam-audio-copy-metrics.ts`.
+   */
+  jamAudioCopy: JamAudioCopyMetrics | null;
+  /**
    * Does Jam work: songs and takes created, distinct recorders, first takes,
    * returning recorders, public publishes and outside takes, votes. Read from
    * the existing jam tables, so it is the same on every replica. Null when its
@@ -1384,6 +1393,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     voiceNotes,
     conversations,
     jamVideo,
+    jamAudioCopy,
     jam,
   ] = await runWithConcurrencyLimit(
     [
@@ -1493,6 +1503,10 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     }),
     () => jamVideoMetrics().catch((error: unknown) => {
       console.error("[metrics] jam video metrics failed:", error);
+      return null;
+    }),
+    () => jamAudioCopyMetrics().catch((error: unknown) => {
+      console.error("[metrics] jam audio copy metrics failed:", error);
       return null;
     }),
     () => jamMetrics().catch((error: unknown) => {
@@ -1967,6 +1981,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     voiceNotes,
     conversations,
     jamVideo,
+    jamAudioCopy,
     jam,
 
     channelDetail: {

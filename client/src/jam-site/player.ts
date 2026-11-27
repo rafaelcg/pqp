@@ -115,6 +115,9 @@ export interface PlayerOptions {
   refreshTracks?: () => Promise<readonly PublicJamTrack[] | null>;
 }
 
+/** This page only LISTENS: a stem may come from the Opus copy (falling back to the FLAC per stem). */
+const LISTEN = { listen: true } as const;
+
 export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
   let tracks = options.tracks;
   let state: PlayerState = {
@@ -194,6 +197,9 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
       id: track.id,
       inMix: true,
       audioUrl: track.audioUrl,
+      // The Opus listening copy, when the server offers one (runtime flag
+      // jam_audio_copy): this player only listens, so it asks for it.
+      audioSources: track.audioSources,
       offsetMs: track.offsetMs,
       trimStartMs: track.trimStartMs,
       trimEndMs: track.trimEndMs,
@@ -228,7 +234,7 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
     set({ phase: "loading", bytes: null });
     let wanted = stemTracks();
     const progress = trackBytes();
-    await session.syncJamStems(next, wanted, undefined, progress.report);
+    await session.syncJamStems(next, wanted, undefined, progress.report, LISTEN);
     if (disposed) return null;
     let missing = wanted.filter((track) => !next.player.stem(track.id));
     if (missing.length > 0 && options.refreshTracks) {
@@ -237,7 +243,7 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
       if (fresh && !disposed) {
         tracks = fresh;
         wanted = stemTracks();
-        await session.syncJamStems(next, wanted, undefined, progress.report);
+        await session.syncJamStems(next, wanted, undefined, progress.report, LISTEN);
         missing = wanted.filter((track) => !next.player.stem(track.id));
       }
     }

@@ -209,6 +209,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   jam_take_notices: (raw) =>
     !["false", "0", "off"].includes((raw ?? "").trim().toLowerCase()),
+  // New with the flag, so there was no old reader: this is its definition.
+  jam_audio_copy: (raw) => raw === "true",
 };
 
 const SAMPLES = [

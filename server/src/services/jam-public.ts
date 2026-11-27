@@ -59,6 +59,7 @@ import {
   reducePeaks,
   type JamSongRow,
 } from "./jam.js";
+import { jamAudioCopyEnabled } from "./jam-audio-copy.js";
 import { jamPublicMediaExpiresAt, jamPublicMediaUrl } from "./jam-public-media.js";
 import { notifyJamPublic } from "./jam-public-notify.js";
 import {
@@ -1289,6 +1290,11 @@ interface PublicTrackRow {
   peaks: number[];
   audio_key: string;
   audio_content_type: string;
+  audio_bytes: string;
+  /** The worker's Opus listening copy (null until made); offered only with `jam_audio_copy` on. */
+  audio_listen_key: string | null;
+  audio_listen_content_type: string | null;
+  audio_listen_bytes: string | null;
   video_key: string | null;
   video_content_type: string | null;
   video_bytes: string | null;
@@ -1331,6 +1337,44 @@ function publicVideoSources(
     });
   }
   return sources.filter((source) => source.url !== "");
+}
+
+/**
+ * The files a public listener may play a stem from, best first: the Opus
+ * listening copy once its type is set (the job's last write) and the runtime
+ * flag `jam_audio_copy` is on, then the original. Undefined (the field is left
+ * out of the read) otherwise, so the flag off reads byte for byte as before.
+ * Same rule as `audioSourcesOf` in `jam.ts`, with the public media URL.
+ */
+function publicAudioSources(
+  track: Pick<
+    PublicTrackRow,
+    | "audio_key"
+    | "audio_content_type"
+    | "audio_bytes"
+    | "audio_listen_key"
+    | "audio_listen_content_type"
+    | "audio_listen_bytes"
+  >,
+  nowMs: number,
+): Array<{ url: string; contentType: string; codec?: string; bytes: number }> | undefined {
+  if (!jamAudioCopyEnabled() || !track.audio_listen_key || !track.audio_listen_content_type) {
+    return undefined;
+  }
+  const copy = jamPublicMediaUrl(track.audio_listen_key, nowMs);
+  const original = jamPublicMediaUrl(track.audio_key, nowMs);
+  if (copy === "" || original === "") {
+    return undefined;
+  }
+  return [
+    {
+      url: copy,
+      contentType: track.audio_listen_content_type,
+      codec: "opus",
+      bytes: track.audio_listen_bytes === null ? 0 : Number(track.audio_listen_bytes),
+    },
+    { url: original, contentType: track.audio_content_type, bytes: Number(track.audio_bytes) },
+  ];
 }
 
 /**
@@ -1382,6 +1426,8 @@ export async function getPublicJam(songId: string): Promise<PublicJamSongDetail 
   const tracks = await getPool().query<PublicTrackRow>(
     `SELECT t.id, t.instrument, t.label, t.offset_ms, t.trim_start_ms, t.trim_end_ms,
             t.duration_ms, t.gain, t.peaks, t.audio_key, t.audio_content_type,
+            t.audio_bytes::text AS audio_bytes, t.audio_listen_key, t.audio_listen_content_type,
+            t.audio_listen_bytes::text AS audio_listen_bytes,
             t.video_key, t.video_content_type, t.video_bytes::text AS video_bytes,
             t.video_mp4_key, t.video_mp4_content_type, t.video_mp4_bytes::text AS video_mp4_bytes,
             ${publicVideoSql("t")} AS video_public,
@@ -1398,6 +1444,7 @@ export async function getPublicJam(songId: string): Promise<PublicJamSongDetail 
     tracks: tracks.rows.map((track): PublicJamTrack => {
       const videoSources = track.video_public ? publicVideoSources(track, nowMs) : [];
       const best = videoSources[0] ?? null;
+      const audioSources = publicAudioSources(track, nowMs);
       return {
       id: track.id,
       instrument: instrumentOf(track.instrument),
@@ -1411,6 +1458,7 @@ export async function getPublicJam(songId: string): Promise<PublicJamSongDetail 
       peaks: track.peaks,
       audioUrl: jamPublicMediaUrl(track.audio_key, nowMs),
       audioContentType: track.audio_content_type,
+      ...(audioSources ? { audioSources } : {}),
       videoUrl: best ? best.url : null,
       videoContentType: best ? best.contentType : null,
       videoSources,

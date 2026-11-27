@@ -50,6 +50,7 @@ import { sweepClientPlatforms } from "./services/client-platforms.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
 import { sweepEmptyJamSongs, sweepJamMedia } from "./services/jam.js";
+import { enqueueMissingJamAudioCopies } from "./services/jam-audio-copy.js";
 import { enqueueMissingJamVideoTranscodes } from "./services/jam-video-transcode.js";
 import { sweepJamPublic } from "./services/jam-public.js";
 import { processJamPublicScans, sweepJamPublicQuarantine } from "./services/jam-public-scan.js";
@@ -458,6 +459,13 @@ export function startColdJobs(): ColdJobs {
     // at most (`BACKFILL_QUEUE_CAP`): rows only, claimed by a worker with ffmpeg.
     every(JAM_MEDIA_SWEEP_INTERVAL_MS, "jam-video-backfill", async () => {
       await enqueueMissingJamVideoTranscodes();
+    }),
+    // The Opus listening copy of stems recorded before it existed, behind the
+    // runtime flag `jam_audio_copy` (off: the pass does nothing), a few a minute
+    // and never more than ten waiting (`backfillPerPass`, `BACKFILL_QUEUE_CAP`):
+    // rows only, claimed by a worker whose ffmpeg has libopus.
+    every(JAM_MEDIA_SWEEP_INTERVAL_MS, "jam-audio-copy-backfill", async () => {
+      await enqueueMissingJamAudioCopies();
     }),
     every(JAM_PUBLIC_SCAN_INTERVAL_MS, "jam-public-scan", processJamPublicScansJob),
     every(ATTACHMENT_SWEEP_INTERVAL_MS, "jam-public-quarantine", sweepJamPublicQuarantine),

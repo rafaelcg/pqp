@@ -51,6 +51,10 @@ vi.mock("./services/jam-video-transcode.js", () => ({
   enqueueMissingJamVideoTranscodes: vi.fn(async () => 0),
 }));
 
+vi.mock("./services/jam-audio-copy.js", () => ({
+  enqueueMissingJamAudioCopies: vi.fn(async () => 0),
+}));
+
 vi.mock("./services/jam-public.js", () => ({
   sweepJamPublic: vi.fn(async () => ({ orphans: 0, playMarks: 0 })),
 }));
@@ -211,6 +215,7 @@ import { sweepClientPlatforms } from "./services/client-platforms.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
 import { sweepEmptyJamSongs, sweepJamMedia } from "./services/jam.js";
+import { enqueueMissingJamAudioCopies } from "./services/jam-audio-copy.js";
 import { enqueueMissingJamVideoTranscodes } from "./services/jam-video-transcode.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
@@ -335,12 +340,13 @@ describe("cold jobs", () => {
     // Locadora's account saves sweep (daily, below); 38 with the Baú+
     // payments sweep (a minute, asserted below); 39 with the jam media sweep
     // (a minute, asserted below); 40 with the jam video backfill (a minute,
-    // asserted below); 42 with the public jams' scans (10 s) and their
-    // quarantine sweep (hourly), both asserted below.
+    // asserted below); 41 with the jam audio copy backfill (a minute, asserted
+    // below); 43 with the public jams' scans (10 s) and their quarantine sweep
+    // (hourly), both asserted below.
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(42);
+    expect(jobs.count).toBe(43);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -386,6 +392,9 @@ describe("cold jobs", () => {
     // The MP4 copy backfill for camera videos recorded before it existed:
     // its own job, so a failing media sweep cannot stop it.
     expect(enqueueMissingJamVideoTranscodes).toHaveBeenCalledTimes(4);
+    // The Opus listening copy's backfill: a minute, like the video's (it does
+    // nothing while the flag jam_audio_copy is off, which is not this test's business).
+    expect(enqueueMissingJamAudioCopies).toHaveBeenCalledTimes(4);
     // Public jams: the orphan and play-mark sweep rides the jam media job.
     expect(sweepJamPublic).toHaveBeenCalledTimes(4);
     // Their scans: every 10 s, no boot run, so twenty-four in four minutes.

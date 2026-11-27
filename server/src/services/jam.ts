@@ -23,6 +23,7 @@ import {
   type JamJoinMode,
   type JamSongSummary,
   type JamTrack,
+  type JamAudioSource,
   type JamVideoSource,
   type JamUploadKind,
   type JamUploadTicket,
@@ -44,6 +45,7 @@ import {
   presignPut,
 } from "../lib/s3.js";
 import { attachmentUrlTtlSeconds } from "./attachments.js";
+import { enqueueJamAudioCopy, jamAudioCopyEnabled } from "./jam-audio-copy.js";
 import { publicTrackSql, publicVideoSql } from "./jam-public-sql.js";
 import { enqueueJamVideoTranscode } from "./jam-video-transcode.js";
 
@@ -134,6 +136,14 @@ export interface JamTrackRow {
   audio_key: string;
   audio_content_type: string;
   audio_bytes: string;
+  /**
+   * The worker's Opus listening copy of the stem (null until it is made; the
+   * type is set last and is what a read checks). Offered only to listeners and
+   * only with the runtime flag `jam_audio_copy` on: see `audioSourcesOf`.
+   */
+  audio_listen_key: string | null;
+  audio_listen_content_type: string | null;
+  audio_listen_bytes: string | null;
   video_key: string | null;
   video_content_type: string | null;
   video_bytes: string | null;
@@ -464,9 +474,36 @@ function videoSourcesOf(row: JamTrackRow, ttl: number): JamVideoSource[] {
   return sources;
 }
 
-function mapTrack(row: TrackJoinRow): JamTrack {
+/**
+ * The files a LISTENER may play the stem from, best first: the Opus copy, then
+ * the original. Undefined (the key is absent from the read) unless the copy is
+ * confirmed AND the flag is on, so with the flag off a read is byte for byte
+ * what it was. The channel's own read never asks: the studio records against,
+ * and exports from, `audioUrl`.
+ */
+function audioSourcesOf(row: JamTrackRow, ttl: number): JamAudioSource[] | undefined {
+  if (!jamAudioCopyEnabled() || !row.audio_listen_key || !row.audio_listen_content_type) {
+    return undefined;
+  }
+  return [
+    {
+      url: signedUrl(row.audio_listen_key, ttl),
+      contentType: row.audio_listen_content_type,
+      codec: "opus",
+      bytes: row.audio_listen_bytes === null ? 0 : Number(row.audio_listen_bytes),
+    },
+    {
+      url: signedUrl(row.audio_key, ttl),
+      contentType: row.audio_content_type,
+      bytes: Number(row.audio_bytes),
+    },
+  ].filter((source) => source.url !== "");
+}
+
+function mapTrack(row: TrackJoinRow, options: { listening?: boolean } = {}): JamTrack {
   const ttl = attachmentUrlTtlSeconds();
   const videoSources = videoSourcesOf(row, ttl);
+  const audioSources = options.listening ? audioSourcesOf(row, ttl) : undefined;
   // `videoUrl` stays the one best file for a client that reads no list: the
   // copy when there is one, the recorded file otherwise (null for no video).
   const best = videoSources[0] ?? null;
@@ -483,6 +520,7 @@ function mapTrack(row: TrackJoinRow): JamTrack {
     audioUrl: signedUrl(row.audio_key, ttl),
     audioContentType: row.audio_content_type,
     audioBytes: Number(row.audio_bytes),
+    ...(audioSources && audioSources.length > 1 ? { audioSources } : {}),
     videoUrl: best ? best.url : null,
     videoContentType: best ? best.contentType : row.video_content_type,
     videoBytes: best ? best.bytes : row.video_bytes === null ? null : Number(row.video_bytes),
@@ -523,7 +561,7 @@ export async function listJamTracks(
       ORDER BY t.created_at, t.id`,
     [songId],
   );
-  return result.rows.map(mapTrack);
+  return result.rows.map((row) => mapTrack(row));
 }
 
 /**
@@ -561,6 +599,8 @@ export async function listJamTracksPublicView(
             video_mp4_content_type: null,
             video_mp4_bytes: null,
           },
+      // A listener of the public view: offered the Opus copy when there is one.
+      { listening: true },
     ),
   );
 }
@@ -1448,6 +1488,9 @@ export async function addJamTrack(
     if (video) {
       await enqueueJamVideoTranscode(client, trackId);
     }
+    // The Opus listening copy of the stem, flag on and a FLAC original only: the
+    // same row-and-NOTIFY, so a track is never committed without its job.
+    await enqueueJamAudioCopy(client, trackId, audio.content_type);
     await client.query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [song.id]);
     await client.query("COMMIT");
   } catch (error) {
@@ -1745,8 +1788,9 @@ export async function sweepJamMedia(): Promise<number> {
     audio_key: string;
     video_key: string | null;
     video_mp4_key: string | null;
+    audio_listen_key: string | null;
   }>(
-    `SELECT id, audio_key, video_key, video_mp4_key FROM jam_tracks
+    `SELECT id, audio_key, video_key, video_mp4_key, audio_listen_key FROM jam_tracks
       WHERE deleted_at IS NOT NULL AND media_purged_at IS NULL
         AND deleted_at < NOW() - INTERVAL '${PURGE_GRACE}'
       ORDER BY deleted_at LIMIT ${SWEEP_BATCH}`,
@@ -1763,6 +1807,11 @@ export async function sweepJamMedia(): Promise<number> {
       // like the recording, when a scan quarantined it).
       if (row.video_mp4_key && !(await isQuarantinedKey(row.video_mp4_key))) {
         await deleteObject(row.video_mp4_key);
+      }
+      // The Opus listening copy of the stem, named on the row since before it
+      // was PUT: a copy deletes with its track, made or half made.
+      if (row.audio_listen_key) {
+        await deleteObject(row.audio_listen_key);
       }
     } catch (error) {
       console.error(

@@ -358,6 +358,48 @@ Read against Cloudflare's documentation (2026-11-14), and no further than it goe
 The Worker has one effect that is not about scanning: it closes the known limit
 above, because the encrypted token hides the origin server's id.
 
+### The listening copy (`jam_audio_copy`)
+
+Public playback used to download every stem as FLAC before the first sound: a
+three minute, five stem song is about 54 MB. Behind the runtime flag
+`jam_audio_copy` (global, default off, `docs/FEATURE_FLAGS.md`) the worker makes an
+Opus copy of each FLAC stem and the public reads offer it to listeners. Design,
+measurements and rollout: `docs/JAM_ENGINE.md` §"The listening copy".
+
+- **What a public read says.** `GET /api/public/jams/:songId` adds
+  `audioSources` to a track whose copy is confirmed: `[ { url, contentType:
+  "audio/ogg", codec: "opus", bytes }, { url, contentType: "audio/flac", bytes } ]`,
+  the copy first and the original last, both public media URLs
+  (see the edge seam above: the copy's key is under the same `jam/` prefix, ends in
+  `.listen.ogg`, and passes the Worker's allowlist). `audioUrl` is still the
+  original. The key is **absent** (not empty) with the flag off, for a track with no
+  copy yet, and for a failed one, so an older client and the flag off read what they
+  always read. The in-app public view (`GET /api/jam-songs/:songId` for somebody who
+  is not in the channel) carries the same list; a member of the channel reads the
+  whole song with no list, and the studio never uses one.
+- **Privacy and consent are unchanged.** The copy is derived from the very bytes of
+  the public stem and is offered only where the stem is: the same `publicTrackSql`
+  decides, so an unpublish, a withdrawn consent, a removed part, a block or a
+  deleted account takes the copy out of the very next read exactly as it takes the
+  original. A URL already handed out lives its own expiry (at most an hour), the
+  bound above. Audio, copy included, is not scanned (see "What is and is not
+  scanned").
+- **Cleanup.** The copy's key is reserved on the track's row before the object is
+  uploaded, so the purge sweep and the channel, server and account deletes
+  (`jam-keys.ts`) remove it with the track, made or half made; a copy that finishes
+  after its track was deleted deletes itself. Nothing is quarantined: only video
+  and covers are scanned.
+- **What the phones would need.** `ios/` and `android/` do not read `audioSources`
+  and keep playing `audioUrl`, which is correct and unchanged. To use the copy,
+  Android reads `audioSources`, prefers an entry with `codec: "opus"`, and falls
+  back to `audioUrl` on any decode or HTTP failure (ExoPlayer and MediaCodec play
+  Ogg Opus); iOS has no dependable Ogg Opus decoder before recent releases
+  (`AVAudioFile` reads Opus in CAF, not Ogg), so it needs either a second copy in
+  CAF or an Opus decoder in the app, which is why this change leaves it alone. Both
+  must keep the stem's placement numbers exactly as they are: the copy is
+  sample-aligned with the original (the worker verifies every copy's length), so
+  nothing in `offsetMs`, the trims or `gain` changes.
+
 ## In the app
 
 All of it hides behind `GET /api/jam-public/config` (`enabled`, `publishing`,

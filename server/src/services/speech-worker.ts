@@ -12,11 +12,13 @@ import { readContainerDuration, type ContainerInfo } from "../speech/container-d
 import { collapseLoops } from "../speech/metrics.js";
 import { selectSttProvider } from "../speech/select.js";
 import { isFfmpegAvailable, transcodeToAac } from "../speech/transcode.js";
+import { isJamAudioCopyAvailable } from "../speech/audio-copy.js";
 import { isJamTranscodeAvailable } from "../speech/video-transcode.js";
 import type { SttResult } from "../speech/types.js";
 import { broadcastToChannel } from "../ws/chat.js";
 import { isTranscriptionOnFor } from "./attachments.js";
 import { runCommunityHomeCaptionsJob } from "./community-home-captions-worker.js";
+import { jamAudioCopyEnabled, runJamAudioCopyJob } from "./jam-audio-copy.js";
 import { runJamVideoJob } from "./jam-video-transcode.js";
 import {
   claimSpeechJobs,
@@ -460,6 +462,7 @@ async function runJob(job: SpeechJob): Promise<void> {
     else if (job.kind === "voice_transcode") await runTranscodeJob(job);
     else if (job.kind === "community_home_captions") await runCommunityHomeCaptionsJob(job);
     else if (job.kind === "jam_video_transcode") await runJamVideoJob(job);
+    else if (job.kind === "jam_audio_copy") await runJamAudioCopyJob(job);
   } catch (error) {
     // Anything unexpected (the database, storage) is a retry, never a crash.
     const message = error instanceof Error ? error.message : String(error);
@@ -483,13 +486,15 @@ async function runJob(job: SpeechJob): Promise<void> {
 
 /**
  * The kinds this process can run. Transcoding and Baú video subtitles need
- * ffmpeg, a Jam video copy needs ffmpeg with libx264; nothing claims what it
- * cannot do.
+ * ffmpeg, a Jam video copy needs ffmpeg with libx264, a Jam audio copy needs
+ * ffmpeg with libopus AND the runtime flag `jam_audio_copy` (off, the kind is
+ * not claimed and its rows wait untouched); nothing claims what it cannot do.
  */
 export async function runnableSpeechJobKinds(): Promise<SpeechJobKind[]> {
   const kinds: SpeechJobKind[] = ["voice_note"];
   if (await isFfmpegAvailable()) kinds.push("voice_transcode", "community_home_captions");
   if (await isJamTranscodeAvailable()) kinds.push("jam_video_transcode");
+  if (jamAudioCopyEnabled() && (await isJamAudioCopyAvailable())) kinds.push("jam_audio_copy");
   return kinds;
 }
 
@@ -506,9 +511,19 @@ let captionsInFlight: Promise<void> | null = null;
  * a time, which is also the whole of the backfill's rate limit.
  */
 let jamVideoInFlight: Promise<void> | null = null;
+/**
+ * The Jam stem being copied to Opus on this process, if any: its own lane and
+ * one at a time, so a backlog of stems is worked off in series, never beside the
+ * camera videos' x264 passes or the voice notes.
+ */
+let jamAudioInFlight: Promise<void> | null = null;
 
 /** The kinds that run in a lane of their own and never in the voice notes' batch. */
-const LANE_KINDS: readonly SpeechJobKind[] = ["community_home_captions", "jam_video_transcode"];
+const LANE_KINDS: readonly SpeechJobKind[] = [
+  "community_home_captions",
+  "jam_video_transcode",
+  "jam_audio_copy",
+];
 
 /**
  * One tick: claim what is due and run it. Skipped without storage (there are
@@ -547,6 +562,18 @@ export async function runSpeechJobsTick(): Promise<number> {
       });
     }
   }
+  if (kinds.includes("jam_audio_copy") && !jamAudioInFlight) {
+    const [job] = await claimSpeechJobs(["jam_audio_copy"], 1).catch((error: unknown) => {
+      console.error("[speech] jam audio copy claim failed:", error instanceof Error ? error.message : error);
+      return [];
+    });
+    if (job) {
+      lanes += 1;
+      jamAudioInFlight = runJob(job).finally(() => {
+        jamAudioInFlight = null;
+      });
+    }
+  }
   await Promise.all(jobs.map((job) => runJob(job)));
   return jobs.length + lanes;
 }
@@ -559,6 +586,11 @@ export async function waitForCaptionsJobForTests(): Promise<void> {
 /** Tests only: wait for the Jam video job this process started, if any. */
 export async function waitForJamVideoJobForTests(): Promise<void> {
   await jamVideoInFlight;
+}
+
+/** Tests only: wait for the Jam audio copy job this process started, if any. */
+export async function waitForJamAudioCopyJobForTests(): Promise<void> {
+  await jamAudioInFlight;
 }
 
 /** Started by `jobs.ts`: 1 s while busy, backing off to 30 s, woken by the enqueue's NOTIFY. */

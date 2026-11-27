@@ -33,7 +33,12 @@ export type SpeechJobKind =
    * The MP4 copy of a Jam track's camera video, for iOS and Safari; keyed by
    * `track_id`. See `jam-video-transcode.ts`.
    */
-  | "jam_video_transcode";
+  | "jam_video_transcode"
+  /**
+   * The Opus listening copy of a Jam stem, behind the runtime flag
+   * `jam_audio_copy`; keyed by `track_id`. See `jam-audio-copy.ts`.
+   */
+  | "jam_audio_copy";
 
 /** Postgres LISTEN channel the enqueue NOTIFYs and the poller listens on. */
 export const SPEECH_JOBS_CHANNEL = "pqp_speech_job_due";
@@ -60,6 +65,12 @@ export const CAPTIONS_JOB_LEASE_SECONDS = 1_800;
  * only ever runs out under a worker that died.
  */
 export const JAM_TRANSCODE_JOB_LEASE_SECONDS = 1_800;
+/**
+ * A Jam stem's listening copy: a download (at most 5 minutes, up to 32 MiB), one
+ * Opus pass (`LISTEN_COPY_TIMEOUT_MS`, 3 minutes) and an upload of a few MB.
+ * Like the video's, each step bounds itself and this sits above their sum.
+ */
+export const JAM_AUDIO_COPY_JOB_LEASE_SECONDS = 900;
 /** Claims per job before it is given up on. */
 export const SPEECH_JOB_MAX_ATTEMPTS = 3;
 const RETRY_BASE_SECONDS = 30;
@@ -70,7 +81,7 @@ export interface SpeechJob {
   attachment_id: string | null;
   /** Set for `community_home_captions` only. */
   post_id: string | null;
-  /** Set for `jam_video_transcode` only. */
+  /** Set for `jam_video_transcode` and `jam_audio_copy` only. */
   track_id: string | null;
   attempts: number;
   language_hint: string | null;
@@ -186,6 +197,7 @@ export async function claimSpeechJobs(
             lease_expires_at = NOW() + make_interval(secs => CASE
               WHEN j.kind = 'community_home_captions' THEN $5::double precision
               WHEN j.kind = 'jam_video_transcode' THEN $6::double precision
+              WHEN j.kind = 'jam_audio_copy' THEN $7::double precision
               ELSE $4::double precision END),
             attempts = j.attempts + 1
        FROM due
@@ -199,6 +211,7 @@ export async function claimSpeechJobs(
       SPEECH_JOB_LEASE_SECONDS,
       CAPTIONS_JOB_LEASE_SECONDS,
       JAM_TRANSCODE_JOB_LEASE_SECONDS,
+      JAM_AUDIO_COPY_JOB_LEASE_SECONDS,
     ],
   );
   return claimed.rows;

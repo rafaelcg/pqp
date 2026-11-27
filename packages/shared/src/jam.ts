@@ -744,6 +744,27 @@ export const jamVideoSourceSchema = z.object({
 export type JamVideoSource = z.infer<typeof jamVideoSourceSchema>;
 
 /**
+ * One file a track's AUDIO can be LISTENED to as, best first. Only ever a
+ * LISTENING copy: a smaller lossy rendition of the recorded FLAC (Opus in Ogg,
+ * `codec: "opus"`, made by the worker, `docs/JAM_ENGINE.md` "The listening
+ * copy"). The studio never reads this list: it records against, and exports
+ * from, `audioUrl`, the original, which is also the LAST entry of any list.
+ *
+ * Absent from a read, never an empty list, unless a copy exists AND the
+ * runtime flag `jam_audio_copy` is on, so a client that knows nothing of it
+ * and a server with the flag off read exactly what they always read.
+ */
+export const jamAudioSourceSchema = z.object({
+  url: z.string(),
+  /** Bare, without `;codecs=`: `audio/ogg` for the copy, the original's own type last. */
+  contentType: z.string(),
+  /** What is inside, when the type alone does not say: `opus` for the copy, absent for the original. */
+  codec: z.string().optional(),
+  bytes: z.number().int().nonnegative(),
+});
+export type JamAudioSource = z.infer<typeof jamAudioSourceSchema>;
+
+/**
  * One track, shared by every viewer. `audioUrl` and `videoUrl` are presigned
  * GETs minted when the track was read, valid until `mediaExpiresAt` (the
  * deployment's `ATTACHMENT_URL_TTL_SECONDS`, 12 h by default); a client whose
@@ -765,6 +786,15 @@ export const jamTrackSchema = z.object({
   audioUrl: z.string(),
   audioContentType: z.string(),
   audioBytes: z.number().int().nonnegative(),
+  /**
+   * The files a LISTENER may play this track's audio from, best first: the
+   * Opus listening copy (when one is made and `jam_audio_copy` is on), then the
+   * original. Present only on the reads that serve listeners (the public site
+   * and the in-app public view), never on a channel's own read, and absent when
+   * there is no copy: read it as `audioSources ?? []` and fall back to
+   * `audioUrl`. See `jamAudioSourceSchema`.
+   */
+  audioSources: z.array(jamAudioSourceSchema).optional(),
   /**
    * Null when the track has no video. THE BEST FILE FOR EVERY PLAYER: the
    * H.264 + AAC MP4 copy (`jamVideoSourceSchema`) once the worker made one,
