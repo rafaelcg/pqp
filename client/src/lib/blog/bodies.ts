@@ -24,6 +24,20 @@ const BODIES: Record<
   string,
   Record<BlogLocale, BodyLoader> & { es?: BodyLoader }
 > = {
+  "jam-musica-uma-parte-por-vez": {
+    "pt-BR": () =>
+      import("@/content/blog/jam-musica-uma-parte-por-vez.pt-BR.md?raw").then(
+        (m) => m.default,
+      ),
+    en: () =>
+      import("@/content/blog/jam-musica-uma-parte-por-vez.en.md?raw").then(
+        (m) => m.default,
+      ),
+    es: () =>
+      import("@/content/blog/jam-musica-uma-parte-por-vez.es.md?raw").then(
+        (m) => m.default,
+      ),
+  },
   "mensagens-de-voz-encaminhar-e-emoji": {
     "pt-BR": () =>
       import("@/content/blog/mensagens-de-voz-encaminhar-e-emoji.pt-BR.md?raw").then(

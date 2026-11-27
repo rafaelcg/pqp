@@ -112,6 +112,23 @@ export function postSummary(post: BlogPost, reader: BlogReadLocale): string {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "jam-musica-uma-parte-por-vez",
+    // Placeholder: the coordinator sets the real day when this merges (the day
+    // the `jam_announcement` flag goes on).
+    date: "2026-11-30",
+    title: {
+      "pt-BR": "Jam: a música que cada um grava a sua parte",
+      en: "Jam: songs recorded one part at a time",
+      es: "Jam: canciones grabadas una parte a la vez",
+    },
+    summary: {
+      "pt-BR":
+        "Alguém grava uma ideia, a galera grava por cima, e a música toca como uma banda em jam.pqp.gg. Pra ouvir não precisa de conta, e quem começou escolhe o que entra na mistura.",
+      en: "Somebody records an idea, others record on top, and the song plays as one band at jam.pqp.gg. No account needed to listen, and whoever started it picks what goes in the mix.",
+      es: "Alguien graba una idea, los demás graban encima y la canción suena como una banda en jam.pqp.gg. Para escuchar no necesitas cuenta, y quien empezó elige qué entra en la mezcla.",
+    },
+  },
+  {
     slug: "mensagens-de-voz-encaminhar-e-emoji",
     date: "2026-10-16",
     title: {
