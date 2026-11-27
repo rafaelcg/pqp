@@ -95,11 +95,11 @@ function PlayButton({ song, size, label }: { song: PublicJamSong; size: "card" |
         navigateTo(path, { state: unlocked ? { autoplay: true } : null });
       }}
       className={cn(
-        "relative z-10 grid shrink-0 place-items-center rounded-full transition-[transform,background-color] duration-[var(--duration-fast)] motion-reduce:transition-none",
+        "relative z-10 shrink-0 rounded-full transition-[transform,background-color] duration-[var(--duration-fast)] motion-reduce:transition-none",
         focusRing,
         size === "hero"
-          ? "h-16 gap-3 bg-accent px-6 text-base font-bold text-on-accent hover:scale-105 motion-reduce:hover:scale-100"
-          : "h-11 w-11 bg-surface-2 text-text ring-1 ring-inset ring-border hover:bg-accent hover:text-on-accent hover:ring-transparent",
+          ? "flex h-16 items-center justify-center gap-3 whitespace-nowrap bg-accent px-6 text-base font-bold text-on-accent hover:scale-105 motion-reduce:hover:scale-100"
+          : "grid h-11 w-11 place-items-center bg-surface-2 text-text ring-1 ring-inset ring-border hover:bg-accent hover:text-on-accent hover:ring-transparent",
       )}
     >
       <Play className={size === "hero" ? "h-6 w-6" : "h-4 w-4"} fill="currentColor" aria-hidden />
