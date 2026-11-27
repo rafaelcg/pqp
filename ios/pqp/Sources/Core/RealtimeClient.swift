@@ -246,6 +246,11 @@ enum RealtimeEvent: Sendable {
     /// sent to whoever joined the jam channel. Applied by id, idempotently: a
     /// change reaches the writer's own socket too.
     case jam(JamFrame)
+    /// `jam-public-notice` (the starter's live nudge that an outside take
+    /// arrived) or `jam-take-decision` (the sender's: the starter accepted or
+    /// declined it). Sent to ONE account, on every socket it holds, so they are
+    /// not tied to a channel the way `jam` is.
+    case jamPublic(JamPublicFrame)
     /// One of the six activity frames (`channel-app`, `app-session`, `app-state`,
     /// `app-event`, `app-ended`, `app-error`; docs/APPS.md "Sessions"). Only sent
     /// for a server whose `apps` flag is on, so a server without the feature
@@ -1331,6 +1336,14 @@ actor RealtimeClient {
         // has no field for. A frame this build cannot read is dropped.
         if JamFrame.types.contains(probe.type) {
             if let frame = JamFrame.parse(data) { continuation?.yield(.jam(frame)) }
+            return
+        }
+
+        // The two take-notice frames, before `Envelope`: both carry `kind` or
+        // `decision` words the shared envelope has no field for. A frame this
+        // build cannot read is dropped.
+        if JamPublicFrame.types.contains(probe.type) {
+            if let frame = JamPublicFrame.parse(data) { continuation?.yield(.jamPublic(frame)) }
             return
         }
 

@@ -46,6 +46,9 @@ enum PushPresentation {
         case .jamSong:
             // A jam wall is not a chat a banner could sit over.
             return true
+        case .publicJam, .jamLinkUnsupported:
+            // Same: a song is not a chat a banner could sit over.
+            return true
         case .invite, .server, .bau, .bauPost, .none:
             return true
         }

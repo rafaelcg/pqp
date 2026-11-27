@@ -1087,6 +1087,9 @@ final class ChatModel {
              .forumPostUpsert, .forumPostRemoved, .forumConfigUpdate,
              // A jam's frames belong to the jam wall and the open song.
              .jam,
+             // The take notices concern the account, and the session's
+             // `JamPublicStore` reads them.
+             .jamPublic,
              // An activity's frames belong to the activity store and the open pane.
              .apps:
             break

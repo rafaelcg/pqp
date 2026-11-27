@@ -43,6 +43,20 @@ enum DeepLinkTarget: Equatable, Sendable {
     /// in `client/src/lib/app-route.ts`, `DeepLinkTarget.JamSong` on Android).
     /// The jam channel's wall opens with the song on top of it.
     case jamSong(serverId: String, channelId: String, songId: String)
+    /// A jam song named by its id alone, `/app/jam/<songId>`: what the take
+    /// notice push opens (`sendJamTakePush` in `server/src/services/push.ts`) and
+    /// the web's route for a PUBLIC jam (`parsePublicJamPath`). The path carries
+    /// no server and no channel, so the shell asks the API where the song lives
+    /// (`GET /api/jam-songs/:id` answers its channel and server) and lands it as
+    /// a `jamSong`; a song this account cannot read in a channel (a public jam
+    /// of somebody else's, which the phone has no view for) ends in a sentence.
+    /// `/app/jam/new` and `/app/jam/mine` are web screens and are not this.
+    case publicJam(songId: String)
+    /// A jam link the app cannot open: not an id (`/app/jam/not-a-uuid`), the
+    /// bare `/app/jam`, or the web's own screens (`/app/jam/new`, `/mine`). It is
+    /// not a destination, but it is not silence either: the shell says so with the
+    /// "Can't open that link" alert.
+    case jamLinkUnsupported
 }
 
 /// Turns links and notification paths into `DeepLinkTarget`s, and nothing else.
@@ -106,6 +120,15 @@ enum DeepLink {
             let postId = segments[3]
             guard !serverId.isEmpty, !postId.isEmpty else { return nil }
             return .bauPost(serverId: serverId.lowercased(), postId: postId.lowercased())
+
+        case 1 where segments[0] == "jam":
+            return .jamLinkUnsupported
+
+        case 2 where segments[0] == "jam":
+            // Only a real id is a song: `new` and `mine` are the web's own
+            // screens, and anything else is not a song.
+            let songId = segments[1].lowercased()
+            return isUuid(songId) ? .publicJam(songId: songId) : .jamLinkUnsupported
 
         case 6 where segments[0] == "server" && segments[2] == "channel" && segments[4] == "post":
             let serverId = segments[1]
@@ -196,6 +219,14 @@ enum DeepLink {
 
     private static func decode(_ segment: String) -> String? {
         segment.removingPercentEncoding ?? segment
+    }
+
+    /// The shape `parsePublicJamPath` accepts (`client/src/lib/jam-public-links.ts`).
+    static func isUuid(_ text: String) -> Bool {
+        text.range(
+            of: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 
     private static func isUsableCode(_ code: String) -> Bool {

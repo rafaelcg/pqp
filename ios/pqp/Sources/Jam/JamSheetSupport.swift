@@ -15,6 +15,9 @@ struct JamNoticeBar: View {
     let text: String
     var tone: Tone = .problem
     var identifier: String
+    /// Inside a card or a row: a rounded outline instead of the sheet edge's
+    /// bottom line (which a rounded container would clip).
+    var framed = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -31,7 +34,15 @@ struct JamNoticeBar: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(Palette.surfaceRaised)
-        .overlay(alignment: .bottom) { Rectangle().fill(tone == .problem ? Palette.danger : Palette.border).frame(height: 1) }
+        .overlay(alignment: .bottom) {
+            if !framed { Rectangle().fill(tone == .problem ? Palette.danger : Palette.border).frame(height: 1) }
+        }
+        .overlay {
+            if framed {
+                RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
+                    .strokeBorder(tone == .problem ? Palette.danger : Palette.border, lineWidth: 1)
+            }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.updatesFrequently)
         .accessibilityIdentifier(identifier)
@@ -45,6 +56,17 @@ extension View {
             guard let now, !now.isEmpty else { return }
             AccessibilityNotification.Announcement(now).post()
         }
+    }
+
+    /// `jamAnnounce` for a line that is CREATED when it has something to say (a
+    /// refusal that appears, a status that comes up): `onChange` never fires for
+    /// the value a view starts with, so it is said once as it appears too.
+    func jamAnnounceNow(_ text: String) -> some View {
+        onAppear {
+            guard !text.isEmpty else { return }
+            AccessibilityNotification.Announcement(text).post()
+        }
+        .jamAnnounce(text)
     }
 
     /// A sheet that holds unsaved work cannot be swiped away, and the attempt is

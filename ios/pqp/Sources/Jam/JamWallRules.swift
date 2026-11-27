@@ -429,6 +429,30 @@ enum JamSongLinkMessage {
         String(localized: "This song is not available. It may have been deleted, or it is in a server you are not in.")
     }
 
+    /// The song is a public jam this phone has no screen for: one it has no
+    /// channel for (a standalone public jam, or another server's). It exists and
+    /// it opens on the web, so the sentence says that instead of "not available".
+    static var publicOnWeb: String {
+        String(localized: "This is a public jam, and public jams open on the web for now. Open it at pqp.gg.")
+    }
+
+    /// A song the server answered with a shape this build cannot read: a public
+    /// jam with no channel (`channelId` null) is the case, and it is "not for the
+    /// phone", never "try again".
+    static func isUnreadable(_ error: Error) -> Bool {
+        if case .decoding = error as? APIError { return true }
+        return false
+    }
+
+    /// The title of the alert for a public jam that opens on the web.
+    static var publicOnWebTitle: String { String(localized: "This jam opens on the site") }
+
+    /// A jam link the app cannot open at all: malformed, or one of the web's own
+    /// screens (`/app/jam/new`, `/app/jam/mine`).
+    static var linkUnsupported: String {
+        String(localized: "That jam link cannot be opened in the app.")
+    }
+
     /// The read itself failed: offline, or the server had a bad moment.
     static var failed: String {
         String(localized: "Could not open that song. Try again in a moment.")
@@ -446,6 +470,19 @@ enum JamSongLinkMessage {
 
     static func forFailure(_ error: Error) -> String {
         isUnavailable(error) ? unavailable : failed
+    }
+}
+
+/// Opening a song from the wall that a link brought us to is a SECOND push, set
+/// while the wall's own push may still be sliding in, and UIKit drops a push
+/// that starts during another. So the song is pushed once the stack is idle, and
+/// when it is still not on top after that transition it is pushed once more.
+/// Never more: a song the person closed on purpose must not be pushed again.
+enum JamSongOpenRule {
+    static let retries = 1
+
+    static func shouldRetry(appeared: Bool, attempts: Int) -> Bool {
+        !appeared && attempts < retries
     }
 }
 

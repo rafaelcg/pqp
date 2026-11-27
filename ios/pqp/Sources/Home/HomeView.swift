@@ -29,6 +29,10 @@ struct HomeView: View {
     @State private var restoredChannel: RestoredChannel?
     @State private var openedConversation: DmSummary?
     @State private var hasAttemptedRestore = false
+    /// The public page a card or an alert sends the person to, in the in-app browser.
+    @State private var webPage: JamWebPage?
+    /// Per song a card names: it opens on the web for this account.
+    @State private var cardOpensOnWeb: [String: Bool] = [:]
 
     /// Server and channel as ONE value.
     ///
@@ -86,6 +90,7 @@ struct HomeView: View {
             } else {
                 NavigationStack {
                     HubView(model: model, openedConversation: $openedConversation)
+                        .safeAreaInset(edge: .top, spacing: 0) { noticeCard }
                         .navigationDestination(item: $restoredChannel) { restored in
                             channelList(restored)
                         }
@@ -97,18 +102,21 @@ struct HomeView: View {
         // it shows on the hub and on every tab; a screen pushed on top covers it
         // and it is there when the person comes back.
         .overlay(alignment: .top) {
-            if let friend = model.acceptedFriend {
-                FriendAcceptedCard(
-                    friend: friend,
-                    onSayHi: { Task { await sayHi(to: friend) } },
-                    onDismiss: { model.acceptedFriend = nil }
-                )
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            VStack(spacing: 8) {
+                if let friend = model.acceptedFriend {
+                    FriendAcceptedCard(
+                        friend: friend,
+                        onSayHi: { Task { await sayHi(to: friend) } },
+                        onDismiss: { model.acceptedFriend = nil }
+                    )
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                }
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
         }
         .animation(reduceMotion ? nil : Motion.standard, value: model.acceptedFriend?.id)
+
         .task {
             pickLandingTab()
             await model.load(session: session)
@@ -180,19 +188,73 @@ struct HomeView: View {
         // person tapped something expecting to end up somewhere, and silence
         // would read as the app being broken. The server's sentence, verbatim.
         .alert(
-            "Can't open that link",
+            session.linkTitle ?? String(localized: "Can't open that link"),
             isPresented: Binding(
                 get: {
                     LinkAlertRules.isPresented(
                         linkError: session.linkError, firstRunIsUp: session.firstRun != nil
                     )
                 },
-                set: { if !$0 { session.linkError = nil } }
+                set: { if !$0 { session.clearLinkError() } }
             )
         ) {
-            Button("OK", role: .cancel) { session.linkError = nil }
+            if let page = session.linkWebURL {
+                Button("Open on the site") {
+                    webPage = JamWebPage(url: page)
+                    session.clearLinkError()
+                }
+            }
+            Button("OK", role: .cancel) { session.clearLinkError() }
         } message: {
             Text(session.linkError ?? "")
+        }
+        .sheet(item: $webPage) { page in
+            SafariView(url: page.url).ignoresSafeArea()
+        }
+    }
+
+    /// A part somebody sent to a song of ours, or the starter's answer to one of
+    /// ours (`JamTakeNoticeCard`): the durable item, one at a time, IN THE FLOW at
+    /// the top of the hub, below the navigation bar, so it covers no control at any
+    /// type size. Its button opens the song, or, for a song this account has no
+    /// channel for, the song's public page.
+    @ViewBuilder
+    private var noticeCard: some View {
+        let queue = JamNoticeQueue.of(session.jamPublic.cards)
+        if let notice = queue.card, !session.jamPublic.cardsAreHeld {
+            let web = cardOpensOnWeb[notice.songId] == true
+            JamTakeNoticeCard(
+                queue: queue,
+                opensOnSite: web,
+                onOpen: { notice in
+                    if web, let url = JamPublicBase.songURL(songId: notice.songId, tagged: false) {
+                        // The site IS where this song opens, so the card has done its job.
+                        session.jamPublic.ack(notice.id)
+                        webPage = JamWebPage(url: url)
+                    } else {
+                        // Not spent here: the song spends it when it opens, so a link that
+                        // fails to land leaves the card to tap again.
+                        session.requestNavigation(.publicJam(songId: notice.songId))
+                    }
+                },
+                onDismiss: { notice in session.jamPublic.ack(notice.id) }
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Palette.ink)
+            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            .task(id: notice.songId) { await probeCardPlace(songId: notice.songId) }
+        }
+    }
+
+    /// Whether the song a card names opens on the web for this account (no channel
+    /// of its own to land in), so its button says so BEFORE it is tapped.
+    private func probeCardPlace(songId: String) async {
+        guard cardOpensOnWeb[songId] == nil else { return }
+        switch await locatePublicJam(songId: songId) {
+        case .place, .unavailable: cardOpensOnWeb[songId] = false
+        case .publicOnWeb: cardOpensOnWeb[songId] = true
+        case .failed: break
         }
     }
 
@@ -203,6 +265,7 @@ struct HomeView: View {
         TabView(selection: $tab) {
             NavigationStack {
                 ConversasView(model: model, openedConversation: $openedConversation)
+                    .safeAreaInset(edge: .top, spacing: 0) { noticeCard }
             }
             .tabItem {
                 Label("Chats", systemImage: "bubble.left.and.bubble.right.fill")
@@ -212,6 +275,7 @@ struct HomeView: View {
 
             NavigationStack {
                 HubView(model: model, openedConversation: $openedConversation, layout: .servers)
+                    .safeAreaInset(edge: .top, spacing: 0) { noticeCard }
                     .navigationDestination(item: $restoredChannel) { restored in
                         channelList(restored)
                     }
@@ -278,6 +342,10 @@ struct HomeView: View {
         // conversation.
         switch request {
         case .invite, .conversation: break
+        // A jam link goes back to the hub only once it is KNOWN to land
+        // (`commitJamPlace`): one that fails leaves the person where they were,
+        // inside the song they were in, not on the hub.
+        case .jamSong, .publicJam, .jamLinkUnsupported: break
         default:
             if restoredChannel != nil {
                 restoredChannel = nil
@@ -316,6 +384,18 @@ struct HomeView: View {
 
         case .jamSong(let serverId, let channelId, let songId):
             if await openJamSong(request, serverId: serverId, channelId: channelId, songId: songId) {
+                superseded = true
+                return
+            }
+
+        case .publicJam(let songId):
+            if await openPublicJam(request, songId: songId) {
+                superseded = true
+                return
+            }
+
+        case .jamLinkUnsupported:
+            if await reportLinkFailure(JamSongLinkMessage.linkUnsupported, for: request) {
                 superseded = true
                 return
             }
@@ -415,23 +495,103 @@ struct HomeView: View {
         guard session.navigationRequest == request else { return true }
         guard let jam = channels.first(where: { $0.id == channelId && $0.isJam }) else {
             // The channel is not there for this account: land on the server so
-            // the tap still goes somewhere, and say why the song did not open.
-            tab = .servidores
-            restoredChannel = RestoredChannel(server: server, channel: nil)
+            // the tap still goes somewhere (unless something is open already, which
+            // stays), and say why the song did not open.
+            if restoredChannel == nil {
+                tab = .servidores
+                restoredChannel = RestoredChannel(server: server, channel: nil)
+            }
             return await reportLinkFailure(JamSongLinkMessage.unavailable, for: request)
         }
+        return await commitJamPlace(request, server: server, jam: jam, songId: songId)
+    }
+
+    /// The place a jam link names, now known to exist: back to the hub if
+    /// something is open (a `navigationDestination(item:)` pushes only on nil to a
+    /// value), then the server's list with the wall on top and the song on it.
+    /// Answers "superseded" like `openJamSong`.
+    private func commitJamPlace(
+        _ request: DeepLinkTarget, server: Server, jam: Channel, songId: String
+    ) async -> Bool {
         tab = .servidores
+        if restoredChannel != nil {
+            restoredChannel = nil
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, session.navigationRequest == request else { return true }
+        }
         restoredChannel = RestoredChannel(server: server, channel: jam, jamSongId: songId)
         return false
+    }
+
+    /// Where a song named only by its id lives for this account.
+    private enum PublicJamPlace {
+        case place(Server, Channel)
+        /// A public jam the phone has no channel for (a standalone one, or another
+        /// server's): it opens on the web.
+        case publicOnWeb
+        case unavailable
+        case failed
+    }
+
+    private func locatePublicJam(songId: String) async -> PublicJamPlace {
+        let detail: JamSongDetail
+        do {
+            detail = try await session.api.jamSong(id: songId)
+        } catch {
+            if JamSongLinkMessage.isUnavailable(error) || JamSongLinkMessage.isUnreadable(error) {
+                return await session.api.isPublicJam(id: songId) ? .publicOnWeb : .unavailable
+            }
+            return .failed
+        }
+        let song = detail.song
+        guard let server = await resolveServer(song.serverId) else {
+            return await session.api.isPublicJam(id: songId) ? .publicOnWeb : .unavailable
+        }
+        guard let channels = try? await session.api.channels(serverId: server.id) else { return .failed }
+        guard let jam = channels.first(where: { $0.id == song.channelId && $0.isJam }) else {
+            return await session.api.isPublicJam(id: songId) ? .publicOnWeb : .unavailable
+        }
+        return .place(server, jam)
+    }
+
+    /// `/app/jam/<songId>`, the take notice push and the web's address of a
+    /// public jam. It names no server and no channel, so the API says where the
+    /// song lives and it lands as the link of a channel song does. What the phone
+    /// cannot open ends in an alert, and the sentence says WHICH it is: a public
+    /// jam opens on the site ("Abrir no site" is in the alert), anything else is
+    /// "not available". A failure never moves the person: they stay where they
+    /// were, inside the song they were in. Everything goes through
+    /// `reportLinkFailure` (`NavigationSettle`, `LinkAlertRules`).
+    private func openPublicJam(_ request: DeepLinkTarget, songId: String) async -> Bool {
+        let found = await locatePublicJam(songId: songId)
+        guard session.navigationRequest == request else { return true }
+        switch found {
+        case .place(let server, let jam):
+            return await commitJamPlace(request, server: server, jam: jam, songId: songId)
+        case .publicOnWeb:
+            return await reportLinkFailure(
+                JamSongLinkMessage.publicOnWeb, for: request,
+                title: JamSongLinkMessage.publicOnWebTitle,
+                webURL: JamPublicBase.songURL(songId: songId, tagged: false)
+            )
+        case .unavailable:
+            return await reportLinkFailure(JamSongLinkMessage.unavailable, for: request)
+        case .failed:
+            return await reportLinkFailure(JamSongLinkMessage.failed, for: request)
+        }
     }
 
     /// Says why a link did not land, once the stack has stopped moving (see
     /// `NavigationSettle`: an alert raised mid-push drops the push). Answers
     /// "superseded" the same way `openJamSong` does, so a stale link neither
     /// speaks over a newer one nor marks it handled.
-    private func reportLinkFailure(_ message: String, for request: DeepLinkTarget) async -> Bool {
+    private func reportLinkFailure(
+        _ message: String, for request: DeepLinkTarget, title: String? = nil, webURL: URL? = nil
+    ) async -> Bool {
         await NavigationSettle.untilIdle()
         guard !Task.isCancelled, session.navigationRequest == request else { return true }
+        session.linkTitle = title
+        session.linkWebURL = webURL
         session.linkError = message
         return false
     }
@@ -2256,4 +2416,11 @@ struct ConnectionPill: View {
         .background(Capsule().fill(Palette.surface))
         .animation(Motion.standard, value: status)
     }
+}
+
+
+/// A page to show in the in-app browser.
+struct JamWebPage: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
 }
