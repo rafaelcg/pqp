@@ -121,7 +121,7 @@ function Card({ song, skippable }: { song: PublicJamSong; skippable: boolean }) 
       </div>
       <div className="mt-3 min-w-0">
         <div className="flex items-start gap-2.5">
-          <SongCover title={song.title} coverUrl={song.coverUrl} className="mt-0.5 h-9 w-9" />
+          <SongCover song={song} className="mt-0.5 h-9 w-9" />
           <h3 className="line-clamp-2 min-w-0 flex-1 text-base font-bold leading-snug">
             <Link
               href={path}
@@ -174,7 +174,7 @@ function Hero({ song, status }: { song: PublicJamSong | null; status: "loading" 
       </div>
       <div className="min-w-0">
         <div className="flex items-center gap-3">
-          <SongCover title={song.title} coverUrl={song.coverUrl} className="h-12 w-12" />
+          <SongCover song={song} className="h-12 w-12" />
           <p className="text-sm font-semibold text-text-secondary">{jt("home.featured")}</p>
         </div>
         <h2 className="mt-2 break-words font-display text-[clamp(2.5rem,7vw,4.25rem)] font-extrabold leading-[0.98] tracking-[-0.025em]">

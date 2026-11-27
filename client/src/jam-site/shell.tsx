@@ -64,8 +64,11 @@ function AccountLink() {
         >
           {initial || <UserIcon className="h-4 w-4" />}
         </span>
-        {/* On a phone there is no room for the words: the note says what the initial opens. */}
-        <Music2Icon className="h-4 w-4 shrink-0 text-text-secondary sm:hidden" aria-hidden />
+        {/* On a phone the short word says what the initial opens ("Músicas"): a bare note read as an unlabelled icon (launch screenshots, problem 7). Under 360 px there is no room for it, and the note stays, named by the link's own label. */}
+        <Music2Icon className="h-4 w-4 shrink-0 text-text-secondary min-[360px]:hidden" aria-hidden />
+        <span className="max-w-[6rem] truncate text-[13px] font-semibold text-text-secondary max-[359px]:hidden sm:hidden" data-jam-account-short="">
+          {jt("nav.accountShort")}
+        </span>
         {/* The door is named for what is behind it: the account chip opens "Tuas músicas" in the app (round 3, N-3). The name is in the title and on the initial. */}
         <span className="max-w-[9rem] truncate max-sm:hidden" data-jam-account-label="">
           {jt("nav.account")}

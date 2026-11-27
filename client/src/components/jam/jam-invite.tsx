@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { bandOrder } from "./jam-art";
 import { JamCoverPhoto, useJamCover } from "./jam-cover";
 import { formatList, useNeedLabel } from "./jam-need";
+import { JamGeneratedCover } from "@/lib/jam-generated-cover";
 
 /**
  * "Chama a galera": what a person is offered right after they publish a song or
@@ -130,11 +131,7 @@ function SongLine({ subject, kind, needs }: { subject: JamInviteSubject; kind: J
         {cover.src !== null && cover.status !== "failed" ? (
           <JamCoverPhoto cover={cover} eager />
         ) : (
-          <span className="absolute inset-0 flex flex-col justify-center gap-[3px] p-[7px]">
-            {(band.length > 0 ? band : (["guitar"] as JamInstrument[])).slice(0, 5).map((instrument) => (
-              <span key={instrument} className={`h-[9px] flex-none rounded-full ${JAM_INSTRUMENT_LOOK[instrument].fill}`} />
-            ))}
-          </span>
+          <JamGeneratedCover songId={subject.id} instruments={band} />
         )}
       </span>
       <span className="min-w-0">

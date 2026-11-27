@@ -709,6 +709,34 @@ test.describe("a visitor the app says is signed in", () => {
     expect(url.searchParams.get("instrument")).toBe("bass");
   });
 
+  test("on a phone the door to the songs has a word beside the initial, and the header still fits (problem 7)", async ({ page }) => {
+    await mockApi(page);
+    await appRoute(page);
+    const hint = signedIn("Rafa");
+    await page.addInitScript(({ key, raw }) => localStorage.setItem(key, raw), hint);
+    for (const width of [390, 360]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/jam");
+      await expect(page.locator("[data-jam-account]")).toBeVisible();
+      // the accessible name never depended on the picture
+      await expect(page.locator("[data-jam-account]")).toHaveAttribute("aria-label", "Tuas músicas");
+      await expect(page.locator("[data-jam-account-short]")).toBeVisible();
+      await expect(page.locator("[data-jam-account-short]")).toHaveText("Músicas");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+      // nothing in the header is cut off by the right edge
+      const right = await page.locator("header button").last().evaluate((node) => node.getBoundingClientRect().right);
+      expect(right).toBeLessThanOrEqual(width);
+      const label = await page.locator("[data-jam-account-short]").evaluate((node) => ({ clipped: node.scrollWidth > node.clientWidth }));
+      expect(label.clipped).toBe(false);
+    }
+    // below 360 px the word steps aside for the note, which the link's own name still labels
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-account-short]")).toBeHidden();
+    await expect(page.locator("[data-jam-account]")).toHaveAttribute("aria-label", "Tuas músicas");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+  });
+
   test("start, like and report go straight on as well", async ({ page }) => {
     await mockApi(page);
     await appRoute(page);
@@ -1080,6 +1108,59 @@ test.describe("when the flag is off", () => {
     await page.goto(`/jam/m/${SONG_A}`);
     await expect(page.locator("[data-jam-soon]")).toBeVisible();
     expect(calls.detail).toEqual([]);
+  });
+
+  /** The flag is flipped on while a tab is open on the holding page (the answer is cached for 60 s on purpose). */
+  async function flippable(page: Page) {
+    const state = { enabled: false, asked: 0, fresh: 0 };
+    await mockApi(page, { enabled: false });
+    await page.unroute("**/api/public/jams/config");
+    await page.route("**/api/public/jams/config", async (route) => {
+      state.asked += 1;
+      await route.fulfill({ json: { enabled: state.enabled }, headers: { "cache-control": "public, max-age=60" } });
+    });
+    return state;
+  }
+
+  test("a tab left on the holding page opens by itself when it gets focus after the flag went on", async ({ page }) => {
+    const state = await flippable(page);
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-soon]")).toBeVisible();
+    const before = state.asked;
+    state.enabled = true;
+    // The tab comes back into view (a real switch fires both events).
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page.locator("[data-jam-soon]")).toHaveCount(0);
+    await expect(page.locator("[data-jam-card]").first()).toBeVisible();
+    expect(state.asked).toBeGreaterThan(before);
+  });
+
+  test("with no focus at all it asks again after the answer's own cache window, and not before", async ({ page }) => {
+    await page.clock.install();
+    const state = await flippable(page);
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-soon]")).toBeVisible();
+    const first = state.asked;
+    state.enabled = true;
+    await page.clock.fastForward(30_000);
+    expect(state.asked).toBe(first);
+    await page.clock.fastForward(36_000);
+    await expect(page.locator("[data-jam-card]").first()).toBeVisible();
+    expect(state.asked).toBeGreaterThan(first);
+  });
+
+  test("a site that is on never goes back to the holding page under somebody who is listening", async ({ page }) => {
+    await page.clock.install();
+    const state = await flippable(page);
+    state.enabled = true;
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-card]").first()).toBeVisible();
+    const asked = state.asked;
+    state.enabled = false;
+    await page.clock.fastForward(200_000);
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page.locator("[data-jam-soon]")).toHaveCount(0);
+    expect(state.asked).toBe(asked);
   });
 });
 

@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
+import { reserveCornerSpace } from "@/lib/corner-space";
 import { cn } from "@/lib/utils";
 
 /**
@@ -13,6 +14,10 @@ import { cn } from "@/lib/utils";
  * next to a control (`layout="inline"`). A pop in (rise + fade) on mount and
  * a short fade out on close so the corner never blinks. Escape closes. Reduced
  * motion keeps the cards and drops the movement.
+ *
+ * On a phone a corner card never covers what is under it: it asks the shell to
+ * stop above it (`lib/corner-space.ts`), so the page it floats over is shorter
+ * for as long as it is up and nothing is hidden behind it.
  *
  * `open` false starts the exit; the card unmounts itself when the animation
  * ends, so a parent can flip the flag and forget. A `hero` (image, live
@@ -36,6 +41,7 @@ export function CornerCard({
   layout = "corner",
   elevated = false,
   dismissOnEscape = true,
+  phoneHero = true,
   dataAttribute,
 }: {
   open: boolean;
@@ -69,6 +75,12 @@ export function CornerCard({
    * is the only card in the product the person cannot get back on their own.
    */
   dismissOnEscape?: boolean;
+  /**
+   * Draw the hero on a phone. A phone's card is the whole width and it now takes its height from the
+   * page (it never floats over it), so a tall hero is a card that eats the screen: pass false to leave
+   * it to the desktop, where the card is a corner.
+   */
+  phoneHero?: boolean;
   /** A `data-*` hook for tests, e.g. `data-corner-card="qg"`. */
   dataAttribute?: string;
 }) {
@@ -91,6 +103,15 @@ export function CornerCard({
     }, EXIT_MS);
     return () => clearTimeout(timer);
   }, [open, mounted]);
+
+  // A phone's corner card is what the page stops above (`lib/corner-space.ts`).
+  const shell = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!mounted || layout !== "corner" || !shell.current) {
+      return;
+    }
+    return reserveCornerSpace(shell.current);
+  }, [mounted, layout]);
 
   useEffect(() => {
     if (!open || !dismissOnEscape) {
@@ -121,14 +142,28 @@ export function CornerCard({
         hero
           ? "absolute right-2 top-2 z-10 bg-ink/70 text-paper backdrop-blur-sm hover:bg-ink hover:text-paper"
           : "-mr-1 -mt-1 text-paper-muted hover:bg-ink-3 hover:text-paper",
+        hero && !phoneHero && "max-sm:hidden",
       )}
     >
       <X className="h-3.5 w-3.5" aria-hidden />
     </button>
   );
+  // With the hero left to the desktop, a phone's close button sits in the title row instead.
+  const phoneClose =
+    hero && !phoneHero ? (
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label={dismissLabel}
+        className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-paper-muted outline-none hover:bg-ink-3 hover:text-paper focus-visible:ring-2 focus-visible:ring-signal/60 sm:hidden"
+      >
+        <X className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    ) : null;
 
   return (
     <aside
+      ref={shell}
       role={tone === "status" ? "status" : undefined}
       aria-label={label}
       data-corner-card={dataAttribute ?? ""}
@@ -148,7 +183,7 @@ export function CornerCard({
             aria-hidden
             // On a phone the card is the whole width of the screen, so a
             // 10rem hero is most of what the person sees; cap it there.
-            className="relative max-h-28 overflow-hidden bg-ink-1 sm:max-h-none"
+            className={cn("relative max-h-28 overflow-hidden bg-ink-1 sm:max-h-none", !phoneHero && "max-sm:hidden")}
           >
             {hero}
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-2 to-transparent" />
@@ -156,7 +191,7 @@ export function CornerCard({
         )}
         {hero && closeButton}
         <div className="p-4">
-          {(title || !hero) && (
+          {(title || !hero || phoneClose) && (
             <div className="flex items-start gap-2">
               {title && (
                 <h2 className="min-w-0 flex-1 font-display text-sm font-bold tracking-tight text-paper">
@@ -164,6 +199,7 @@ export function CornerCard({
                 </h2>
               )}
               {!hero && closeButton}
+              {phoneClose}
             </div>
           )}
           {body && (

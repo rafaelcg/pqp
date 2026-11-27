@@ -84,8 +84,8 @@ describe("the header chip", () => {
 
   it("calls a guess a guess, with no 'measured' wording and no dot", () => {
     const el = chip("estimate", "low");
-    // Plain words (round 3, m1): no "ms" on the chip, and a guess is never called measured.
-    expect(el.textContent).toBe("Headphone delay: the browser guessed");
+    // Plain words (round 3, m1): no "ms" on the chip, and a guess is never called measured, and it is not slang that reads as an error ("the browser guessed", "o navegador chutou") either.
+    expect(el.textContent).toBe("Headphone delay: estimated");
     expect(el.textContent).not.toMatch(/measured|\bms\b/i);
     expect(el.querySelector(".bg-accent")).toBeNull();
   });

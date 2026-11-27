@@ -1,4 +1,4 @@
-import type { JamInstrument, JamSongSummary } from "@pqp/shared";
+import type { JamSongSummary } from "@pqp/shared";
 import { Loader2, Pause, Play } from "lucide-react";
 import { useCallback, useEffect, useState, type MouseEvent } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
@@ -17,6 +17,7 @@ import { UserText } from "./user-text";
 import { bandOrder } from "./jam-art";
 import { JamCoverPhoto, useJamCover, type JamCoverState } from "./jam-cover";
 import { useNeedLabel } from "./jam-need";
+import { JamGeneratedCover } from "@/lib/jam-generated-cover";
 
 /**
  * A Jam song pasted into chat, drawn as one quiet row under the message: its
@@ -61,25 +62,15 @@ function useCardClock(engine: JamEngine | null): { seconds: number; durationMs: 
 }
 
 /**
- * The song's picture at card size: the cover its owner chose, else the band as flat lanes (one
- * per instrument in its colour, a dashed one for each part still missing). Flat on purpose: the
- * wall's art has a soft light in it, and a chat row has no use for one.
+ * The song's picture at card size: the cover its owner chose, else the generated one (flat shapes in
+ * the colours of its band, the same picture on every surface: `lib/jam-generated-cover.tsx`). What a
+ * song still asks for is said by the dashed dots and the words beside it, not by the picture.
  */
-function CardPicture({ song, cover, missing }: { song: JamSongSummary; cover: JamCoverState; missing: readonly JamInstrument[] }) {
+function CardPicture({ song, cover }: { song: JamSongSummary; cover: JamCoverState }) {
   if (cover.src !== null && cover.status !== "failed") {
     return <JamCoverPhoto cover={cover} eager />;
   }
-  const present = bandOrder(song.instruments);
-  return (
-    <span aria-hidden="true" data-jam-card-band="" className="absolute inset-0 flex flex-col justify-center gap-[3px] bg-surface-2 p-[7px]">
-      {present.slice(0, 5).map((instrument) => (
-        <span key={instrument} className={cn("min-h-[5px] flex-1 rounded-full", JAM_INSTRUMENT_LOOK[instrument].fill)} />
-      ))}
-      {missing.slice(0, 5 - Math.min(present.length, 5)).map((instrument) => (
-        <span key={`missing-${instrument}`} className={cn("min-h-[5px] flex-1 rounded-full border border-dashed border-current", JAM_INSTRUMENT_LOOK[instrument].ink)} />
-      ))}
-    </span>
-  );
+  return <JamGeneratedCover songId={song.id} instruments={song.instruments} />;
 }
 
 export function JamLinkCardView({ song, href, onOpen }: { song: JamSongSummary; href: string; onOpen: (event: MouseEvent<HTMLAnchorElement>) => void }) {
@@ -111,7 +102,7 @@ export function JamLinkCardView({ song, href, onOpen }: { song: JamSongSummary; 
       )}
     >
       <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-[var(--radius-control)] @max-[20rem]/jamcard:h-12 @max-[20rem]/jamcard:w-12">
-        <CardPicture song={song} cover={cover} missing={missing} />
+        <CardPicture song={song} cover={cover} />
       </div>
       <div className="flex min-w-0 flex-1 flex-col">
         <a

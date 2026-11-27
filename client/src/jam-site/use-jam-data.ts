@@ -19,6 +19,20 @@ export function featuredOptions(): FeaturedOptions {
 
 export type ConfigState = "loading" | "on" | "off" | "error";
 
+/**
+ * How long after an answer of "not yet" (or of an error) the site asks again while the tab is open: a little more
+ * than the answer's own 60-second cache (`GET /api/public/jams/config`, `max-age=60`), so the ask lands on a
+ * fresh copy and not on the one that said "off".
+ */
+export const CONFIG_RECHECK_MS = 65_000;
+
+/**
+ * Whether the site is open, as the API says. It asks on arrival, and while the answer is "off" or an error it asks
+ * AGAIN: when the tab comes back into view or gets focus, and every `CONFIG_RECHECK_MS` while it is visible. So a
+ * flag flipped on shows up in a tab that was left open, with no reload, and nobody is stuck on "A jam ainda não
+ * abriu". A re-check is silent (the page stays as it is until the answer changes) and never runs while the site
+ * is on: the home does not go to a holding page under somebody who is listening.
+ */
 export function useJamConfig(): { state: ConfigState; retry: () => void } {
   const [state, setState] = useState<ConfigState>("loading");
   const [attempt, setAttempt] = useState(0);
@@ -35,6 +49,36 @@ export function useJamConfig(): { state: ConfigState; retry: () => void } {
     );
     return () => controller.abort();
   }, [attempt]);
+
+  const waiting = state === "off" || state === "error";
+  useEffect(() => {
+    if (!waiting) return;
+    let controller: AbortController | null = null;
+    const check = () => {
+      if (document.visibilityState === "hidden") return;
+      controller?.abort();
+      const mine = new AbortController();
+      controller = mine;
+      fetchJamConfig(mine.signal, { fresh: true }).then(
+        (config) => {
+          if (config.enabled) setState("on");
+          else setState((before) => (before === "error" ? "off" : before));
+        },
+        () => {
+          // Still no answer: the page keeps what it said, and the timer asks again.
+        },
+      );
+    };
+    const timer = window.setInterval(check, CONFIG_RECHECK_MS);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+      controller?.abort();
+    };
+  }, [waiting]);
   return { state, retry: () => setAttempt((n) => n + 1) };
 }
 

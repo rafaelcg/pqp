@@ -12042,6 +12042,9 @@ function MainAppContent({
         Boolean(canManageRoles && selectedServerId),
       shortcuts:
         wantsShortcutsHint &&
+        // A keyboard hint is for a window big enough to have a keyboard beside it: not a phone, and not a
+        // narrow desktop window either (launch screenshots, problem 8: "Aperta Cmd + /" at 390 px).
+        voiceCleanDesktopViewport &&
         shortcutsQuietReady &&
         !campaignsYield &&
         attachedFeatureHint === null,

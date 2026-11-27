@@ -18,6 +18,7 @@ import {
   type SwitcherSources,
 } from "@/lib/quick-switcher";
 import { cn } from "@/lib/utils";
+import { JamGeneratedCover } from "@/lib/jam-generated-cover";
 
 const IS_MAC =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent);
@@ -459,7 +460,7 @@ function SongThumb({ song }: { song: SwitcherSong }) {
       {cover.src !== null && cover.status !== "failed" ? (
         <JamCoverPhoto cover={cover} eager />
       ) : (
-        <JamGlyph className="absolute inset-1.5 h-5 w-5" />
+        <JamGeneratedCover songId={song.id} />
       )}
     </span>
   );

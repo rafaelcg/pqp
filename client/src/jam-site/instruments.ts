@@ -88,13 +88,14 @@ export const INSTRUMENT_LOOK: Record<Instrument, InstrumentLook> = {
 };
 
 /**
- * The instrument's colour as a line on the page behind it: pulled toward the
- * text colour (`--jam-ink-mix`, 80% on dark and 54% on light, set in
- * `jam-site.css`) so a pale yellow stays visible on a light page. For SVG
+ * The instrument's colour as text or a line on the page behind it
+ * (`--jam-ink-<instrument>`, set in `jam-site.css`): the colour pulled toward
+ * the text colour on the dark page, and the deep end of the same hue on the
+ * light one, so a pale yellow stays readable (WCAG AA) on both. For text, SVG
  * fills and borders that cannot take a utility class.
  */
 export function inkMix(instrument: Instrument): string {
-  return `color-mix(in oklab, var(${INSTRUMENT_LOOK[instrument].token}) var(--jam-ink-mix, 80%), var(--color-text))`;
+  return `var(--jam-ink-${instrument}, color-mix(in oklab, var(${INSTRUMENT_LOOK[instrument].token}) 80%, var(--color-text)))`;
 }
 
 export function isInstrument(value: string): value is Instrument {

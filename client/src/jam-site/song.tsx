@@ -191,7 +191,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
       {fromApp && <FromAppNotice body={appRecord ? jt("fromApp.record") : jt("fromApp.body")} />}
 
       <div className="mt-4 flex items-center gap-4 sm:gap-5">
-        <SongCover title={song.title} coverUrl={song.coverUrl} className="h-16 w-16 sm:h-24 sm:w-24" />
+        <SongCover song={song} className="h-16 w-16 sm:h-24 sm:w-24" />
         <div className="min-w-0 flex-1">
         {song.origin && (
           <p className="flex items-center gap-2 text-[15px] font-bold text-text-secondary" data-jam-origin-line="">
