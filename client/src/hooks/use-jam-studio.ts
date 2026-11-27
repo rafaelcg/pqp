@@ -292,6 +292,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
         live.player.stop();
         setEngine(live);
         setPhase((before) => (before === "boot" ? "setup" : before));
+        // Never `listen`: the studio records against the originals (FLAC), so a song that was being
+        // heard from the Opus listening copies is put back on them here (`syncJamStems`), and
+        // `startRecording` below waits for that before the take starts.
         void syncJamStems(live, backingRef.current);
         detach = live.onDevicesChanged((status) => {
           setLatency(status);
