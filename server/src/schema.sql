@@ -1107,6 +1107,8 @@ CREATE INDEX IF NOT EXISTS idx_voice_note_listens_listened
 --   community_home_captions  subtitles of a Baú video, keyed by post_id (below)
 --   jam_video_transcode      the MP4 copy of a Jam camera video, keyed by
 --                            track_id (in the jam block)
+--   jam_audio_copy           the Opus listening copy of a Jam stem, keyed by
+--                            track_id (in the jam block)
 --
 -- Enqueued in the same transaction as the message that carries the note
 -- (`services/speech-jobs.ts`), or by the lazy request route, so a crash
@@ -7720,6 +7722,20 @@ ALTER TABLE jam_tracks ADD COLUMN IF NOT EXISTS video_mp4_key TEXT;
 ALTER TABLE jam_tracks ADD COLUMN IF NOT EXISTS video_mp4_content_type TEXT;
 ALTER TABLE jam_tracks ADD COLUMN IF NOT EXISTS video_mp4_bytes BIGINT;
 
+-- The OPUS LISTENING COPY of a stem (`speech_jobs` kind `jam_audio_copy`,
+-- services/jam-audio-copy.ts). The recorded FLAC stays the source of truth: the
+-- studio records against it and every export is made from it. The copy is only
+-- ever offered to LISTENERS (the public site and the in-app public view), and
+-- only while the runtime flag `jam_audio_copy` is on. Same shape as the MP4
+-- copy above: RESERVE (`audio_listen_key`, written before the PUT so every
+-- delete that reads keys removes a half-made object too), UPLOAD, CONFIRM
+-- (`audio_listen_content_type`, written last, is all a read looks at). All
+-- three NULL is every track that exists today and one the worker has not
+-- reached: the read then offers the original alone, exactly as before.
+ALTER TABLE jam_tracks ADD COLUMN IF NOT EXISTS audio_listen_key TEXT;
+ALTER TABLE jam_tracks ADD COLUMN IF NOT EXISTS audio_listen_content_type TEXT;
+ALTER TABLE jam_tracks ADD COLUMN IF NOT EXISTS audio_listen_bytes BIGINT;
+
 -- The worker's job for it is a `speech_jobs` row keyed by the TRACK, the same
 -- shape the Baú's captions job took for a post: the column and the kind are
 -- added here, after `jam_tracks` exists, because speech_jobs is created long
@@ -7734,12 +7750,12 @@ BEGIN
     SELECT 1 FROM pg_constraint
      WHERE conrelid = 'speech_jobs'::regclass
        AND conname = 'speech_jobs_kind_check'
-       AND pg_get_constraintdef(oid) LIKE '%jam_video_transcode%'
+       AND pg_get_constraintdef(oid) LIKE '%jam_audio_copy%'
   ) THEN
     ALTER TABLE speech_jobs DROP CONSTRAINT IF EXISTS speech_jobs_kind_check;
     ALTER TABLE speech_jobs ADD CONSTRAINT speech_jobs_kind_check CHECK (
       kind IN ('voice_note', 'voice_transcode', 'party_question', 'community_home_captions',
-               'jam_video_transcode')
+               'jam_video_transcode', 'jam_audio_copy')
     );
   END IF;
   IF NOT EXISTS (
@@ -7769,6 +7785,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_speech_jobs_kind_track
 CREATE INDEX IF NOT EXISTS idx_jam_tracks_video_pending
   ON jam_tracks (created_at DESC)
   WHERE video_key IS NOT NULL AND video_mp4_content_type IS NULL AND deleted_at IS NULL;
+
+-- The audio copy's backfill walk (`enqueueMissingJamAudioCopies`): live lossless
+-- tracks with no copy, newest first, in the order of a keyset cursor
+-- ((created_at, id) < cursor), so a pass reads only its own few rows. Small by construction (a track leaves it
+-- the moment its copy is confirmed or its job settles without one), so the scan
+-- that finds nothing to queue touches few rows however many tracks exist.
+CREATE INDEX IF NOT EXISTS idx_jam_tracks_audio_copy_pending
+  ON jam_tracks (created_at DESC, id DESC)
+  WHERE audio_content_type = 'audio/flac' AND audio_listen_content_type IS NULL
+    AND deleted_at IS NULL;
 
 -- Every track of a song, deleted or not: the cascade's key read and the
 -- ON DELETE CASCADE from jam_songs (the partial index below cannot answer
@@ -7989,6 +8015,11 @@ CREATE TABLE IF NOT EXISTS jam_public_tracks (
 );
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_song ON jam_public_tracks (song_id);
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_author ON jam_public_tracks (author_id);
+-- The audio copy's backfill walks the tracks of public songs first, newest published
+-- first, in the order of a keyset cursor (`enqueueMissingJamAudioCopies`).
+CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_backfill
+  ON jam_public_tracks (created_at DESC, track_id DESC)
+  WHERE removed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_recorded
   ON jam_public_tracks (author_id, created_at) WHERE origin = 'recorded';
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_video_pending

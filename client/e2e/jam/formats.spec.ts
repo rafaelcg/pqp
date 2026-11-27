@@ -24,6 +24,7 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { listenCopyArgs } from "../../../server/src/speech/audio-copy";
 import { encodeFlac } from "../../src/lib/jam/flac";
 import { encodeWav } from "../../src/lib/jam/pcm";
 import { pulseTrain, sweep } from "../../src/lib/jam/signals";
@@ -69,6 +70,13 @@ function makeFiles(): Candidate[] {
       out.push({ name: `${name} ${sr}`, file, sourceRate: sr, lossless });
     };
     ff("flac (ffmpeg)", "flac", ["-c:a", "flac"], true);
+    {
+      // THE LISTENING COPY, made with the worker's own command line (`listenCopyArgs`: Opus 64k
+      // in Ogg, no trim, no pad) from our own FLAC, which is what the worker reads.
+      const file = path.join(DIR, `listening-copy-${sr}.ogg`);
+      execFileSync("ffmpeg", listenCopyArgs(ours, file, { channels: 1, maxSeconds: 60 }));
+      out.push({ name: `listening copy (worker) ${sr}`, file, sourceRate: sr, lossless: false });
+    }
     if (sr === 48000) {
       ff("opus/ogg 128k", "ogg", ["-c:a", "libopus", "-b:a", "128k"]);
       ff("opus/webm 128k", "webm", ["-c:a", "libopus", "-b:a", "128k"]);
@@ -150,6 +158,20 @@ test.describe("upload format round trip", () => {
     expect(ours.error).toBeUndefined();
     expect(Math.abs(ours.shiftSamples)).toBeLessThan(0.05);
     expect(ours.lengthDelta).toBe(0);
+    // The listening copy must land where the FLAC does, in this browser's own decoder: a
+    // millisecond is the engine's whole budget (and the worker checks the length of every copy).
+    for (const name of ["listening copy (worker) 48000", "listening copy (worker) 44100"]) {
+      const copy = rows.find((r) => (r as { name: string }).name === name) as {
+        shiftSamples: number;
+        lengthDelta: number;
+        spreadSamples: number;
+        error?: string;
+      };
+      expect(copy.error, name).toBeUndefined();
+      expect(Math.abs(copy.shiftSamples), name).toBeLessThan(2);
+      expect(copy.spreadSamples, name).toBeLessThan(4);
+      expect(Math.abs(copy.lengthDelta), name).toBeLessThanOrEqual(1);
+    }
   });
 
   test("bytes per minute of plucked strings, per format (Node, once)", async ({ browserName }) => {

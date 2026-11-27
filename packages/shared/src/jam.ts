@@ -744,6 +744,27 @@ export const jamVideoSourceSchema = z.object({
 export type JamVideoSource = z.infer<typeof jamVideoSourceSchema>;
 
 /**
+ * One file a track's AUDIO can be LISTENED to as, best first. Only ever a
+ * LISTENING copy: a smaller lossy rendition of the recorded FLAC (Opus in Ogg,
+ * `codec: "opus"`, made by the worker, `docs/JAM_ENGINE.md` "The listening
+ * copy"). The studio never reads this list: it records against, and exports
+ * from, `audioUrl`, the original, which is also the LAST entry of any list.
+ *
+ * Absent from a read, never an empty list, unless a copy exists AND the
+ * runtime flag `jam_audio_copy` is on, so a client that knows nothing of it
+ * and a server with the flag off read exactly what they always read.
+ */
+export const jamAudioSourceSchema = z.object({
+  url: z.string(),
+  /** Bare, without `;codecs=`: `audio/ogg` for the copy, the original's own type last. */
+  contentType: z.string(),
+  /** What is inside, when the type alone does not say: `opus` for the copy, absent for the original. */
+  codec: z.string().optional(),
+  bytes: z.number().int().nonnegative(),
+});
+export type JamAudioSource = z.infer<typeof jamAudioSourceSchema>;
+
+/**
  * One track, shared by every viewer. `audioUrl` and `videoUrl` are presigned
  * GETs minted when the track was read, valid until `mediaExpiresAt` (the
  * deployment's `ATTACHMENT_URL_TTL_SECONDS`, 12 h by default); a client whose
@@ -800,11 +821,30 @@ export const jamTrackSchema = z.object({
 });
 export type JamTrack = z.infer<typeof jamTrackSchema>;
 
+/**
+ * A track as the reads that serve LISTENERS send it: `jamTrackSchema` plus the
+ * files its audio may be played from, best first. The Opus listening copy (when
+ * one is made and the runtime flag `jam_audio_copy` is on), then the original.
+ * Present only on the reads that serve listeners (the public site and the in-app
+ * public view), never on a channel's own read, and absent when there is no copy:
+ * read it as `audioSources ?? []` and fall back to `audioUrl`. See
+ * `jamAudioSourceSchema`.
+ *
+ * A SEPARATE schema on purpose: `jamTrackSchema` is the contract the phones read
+ * field by field (`JamContractTest`), and a phone that does not use a copy has no
+ * reason to carry the field. An unknown key is skipped by their decoders, so they
+ * keep playing `audioUrl`.
+ */
+export const jamListenTrackSchema = jamTrackSchema.extend({
+  audioSources: z.array(jamAudioSourceSchema).optional(),
+});
+export type JamListenTrack = z.infer<typeof jamListenTrackSchema>;
+
 /** `GET /api/jam-songs/:songId`: the deep link and the song view. */
 export const jamSongDetailResponseSchema = z.object({
   song: jamSongSummarySchema,
   /** Live tracks, oldest first: the order they were added is the stable one. */
-  tracks: z.array(jamTrackSchema),
+  tracks: z.array(jamListenTrackSchema),
   viewer: jamSongViewerSchema,
 });
 export type JamSongDetailResponse = z.infer<typeof jamSongDetailResponseSchema>;

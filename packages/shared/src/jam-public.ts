@@ -6,6 +6,7 @@ import {
   jamJoinModeSchema,
   jamSongSummarySchema,
   jamTrackSchema,
+  jamAudioSourceSchema,
   jamVideoSourceSchema,
   JAM_PAGE_MAX,
 } from "./jam.js";
@@ -391,6 +392,14 @@ export const publicJamTrackSchema = z.object({
   peaks: z.array(z.number()),
   audioUrl: z.string(),
   audioContentType: z.string(),
+  /**
+   * The Opus listening copy first, the original last, as `JamListenTrack.audioSources`:
+   * present only when a copy is made AND the runtime flag `jam_audio_copy` is
+   * on, absent otherwise (so the flag off reads byte for byte as before). A
+   * player decodes the first one it can and falls back down the list, and the
+   * last entry is always `audioUrl`.
+   */
+  audioSources: z.array(jamAudioSourceSchema).optional(),
   /**
    * Null unless this part's video is public. The best file for every player,
    * as `JamTrack.videoUrl`: the worker's H.264 MP4 copy once it exists, the

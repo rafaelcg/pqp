@@ -2,6 +2,12 @@ import type { JamTrack } from "@pqp/shared";
 import { JamEngine } from "@/lib/jam";
 import { forgetJamPlayer, followJamPlayer } from "@/lib/jam-now-playing";
 import { inPool } from "@/lib/jam-pool";
+import {
+  noteListenCopyFailure,
+  planListenSources,
+  type ListenTrack,
+  type Rendition,
+} from "@/lib/jam-listen-copy";
 
 /** Stems downloaded and decoded at once: a song of many takes loads in waves, not in a burst. */
 const STEM_LOADS_AT_ONCE = 4;
@@ -97,7 +103,8 @@ export async function releaseJamEngine(): Promise<void> {
 export type StemTrack = Pick<
   JamTrack,
   "id" | "inMix" | "audioUrl" | "offsetMs" | "trimStartMs" | "trimEndMs" | "gain"
->;
+> &
+  Pick<ListenTrack, "audioSources">;
 
 /** The numbers a stem was loaded with, to tell "same stem" from "moved". */
 function stemKey(track: StemTrack): string {
@@ -112,7 +119,8 @@ function stemKey(track: StemTrack): string {
  */
 interface Book {
   desired: Map<string, string>;
-  installed: Map<string, { key: string; url: string }>;
+  /** `rendition` is which file the decoded buffer came from: the Opus listening copy or the original. */
+  installed: Map<string, { key: string; url: string; rendition: Rendition }>;
   loading: Map<string, { key: string; done: Promise<boolean> }>;
 }
 
@@ -131,6 +139,24 @@ export type StemStatus = "loading" | "ready" | "error";
 
 /** The stem id the studio gives the take being recorded or reviewed. */
 export const TAKE_STEM_ID = "take";
+
+export interface SyncOptions {
+  /**
+   * LISTENING, not recording: a track that offers a smaller Opus listening copy
+   * (`audioSources`, `lib/jam-listen-copy.ts`) is loaded from it, falling back to
+   * the original per stem when the copy is missing or will not decode. Off by
+   * default, so the studio, which records against the original and exports from
+   * it, and every caller that does not ask, load the original exactly as before.
+   * A stem the engine already holds from the copy is replaced by the original
+   * when a later sync does NOT ask (the studio opening over a song being heard).
+   */
+  listen?: boolean;
+}
+
+/** The copy is as good as the original for ears; for everything else a stem wants the original. */
+function acceptable(rendition: Rendition, listen: boolean): boolean {
+  return listen || rendition === "original";
+}
 
 /**
  * Make the engine's stems exactly the in-mix tracks: load the ones it lacks,
@@ -152,8 +178,10 @@ export async function syncJamStems(
    * with no listener the loads read their body whole, as the studio's do.
    */
   onProgress?: (trackId: string, loaded: number, total: number | null) => void,
+  options: SyncOptions = {},
 ): Promise<void> {
   const book = bookOf(engine);
+  const listen = options.listen === true;
   const wanted = tracks.filter((track) => track.inMix);
   book.desired = new Map(wanted.map((track) => [track.id, stemKey(track)]));
 
@@ -164,6 +192,38 @@ export async function syncJamStems(
     }
   }
 
+  /**
+   * One stem, from the first file of its plan that loads: the copy when asked
+   * and offered, then the original. A copy that fails never fails the stem; the
+   * original's failure does, as it always did.
+   */
+  async function loadOne(track: StemTrack): Promise<Rendition> {
+    const plan = planListenSources(track, { listen });
+    for (const [index, source] of plan.entries()) {
+      try {
+        await engine.player.loadStem(
+          track.id,
+          source.url,
+          {
+            offsetMs: track.offsetMs,
+            trimStartMs: track.trimStartMs,
+            trimEndMs: track.trimEndMs,
+            gain: track.gain,
+          },
+          onProgress ? { onProgress: (loaded, total) => onProgress(track.id, loaded, total) } : undefined,
+        );
+        return source.rendition;
+      } catch (error) {
+        if (source.rendition === "copy" && index < plan.length - 1) {
+          noteListenCopyFailure(error);
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error("jam: no source to load");
+  }
+
   async function settle(track: StemTrack): Promise<void> {
     const key = stemKey(track);
     const url = track.audioUrl.split("?")[0] ?? track.audioUrl;
@@ -172,7 +232,12 @@ export async function syncJamStems(
         return; // a newer sync owns this track now
       }
       const installed = book.installed.get(track.id);
-      if (installed && installed.key === key && engine.player.stem(track.id)) {
+      if (
+        installed &&
+        installed.key === key &&
+        acceptable(installed.rendition, listen) &&
+        engine.player.stem(track.id)
+      ) {
         onStatus?.(track.id, "ready");
         return;
       }
@@ -181,32 +246,26 @@ export async function syncJamStems(
         await running.done;
         continue; // look again: what it installed may not be what is wanted
       }
-      if (installed && installed.url === url && engine.player.stem(track.id)) {
+      if (
+        installed &&
+        installed.url === url &&
+        acceptable(installed.rendition, listen) &&
+        engine.player.stem(track.id)
+      ) {
         // Same audio, moved: rewrite the timing, nothing is decoded again.
         engine.player.updateStem(track.id, {
           offsetMs: track.offsetMs,
           trimStartMs: track.trimStartMs,
           trimEndMs: track.trimEndMs,
         });
-        book.installed.set(track.id, { key, url });
+        book.installed.set(track.id, { key, url, rendition: installed.rendition });
         onStatus?.(track.id, "ready");
         return;
       }
       onStatus?.(track.id, "loading");
-      const done = engine.player
-        .loadStem(
-          track.id,
-          track.audioUrl,
-          {
-            offsetMs: track.offsetMs,
-            trimStartMs: track.trimStartMs,
-            trimEndMs: track.trimEndMs,
-            gain: track.gain,
-          },
-          onProgress ? { onProgress: (loaded, total) => onProgress(track.id, loaded, total) } : undefined,
-        )
-        .then(() => {
-          book.installed.set(track.id, { key, url });
+      const done = loadOne(track)
+        .then((rendition) => {
+          book.installed.set(track.id, { key, url, rendition });
           return true;
         })
         .catch(() => false)

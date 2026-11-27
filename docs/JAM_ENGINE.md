@@ -195,7 +195,7 @@ so a lossy choice is a per-browser bet that has to be re-measured on every
 browser update and on the native apps. FLAC costs about three times Opus. If
 size becomes the problem, the path is: keep FLAC as the uploaded source of
 truth and have the server make an Opus copy for streaming, with its priming
-handled server-side.
+handled server-side. That is now built: see "The listening copy" below.
 
 The encoder is hand-written (`flac.ts`, about 400 lines) because no browser
 encodes FLAC (WebCodecs offers Opus and AAC) and the libFLAC ports are 300 kB
@@ -260,6 +260,230 @@ the search window to spare, and the alignment carries a `reason` (`short`,
 `no-window`, `no-match`, `weak`, `decode-failed`) so a fallback explains itself
 in the e2e output. It did not reproduce under CPU load on a laptop (6 of 6
 passed), which fits: it is phase, not load.
+
+## The listening copy (Opus), for the public site and the in-app public view
+
+Public playback downloaded every stem as FLAC before the first sound. Our own
+FLAC is 3.1 to 4.5 MB per stem-minute (2.4 Mbps for five stems, more than Fast 3G
+carries), so a three minute, five stem song is about 54 MB: 44 s on a good 4G link
+and 4.5 minutes on Fast 3G. This section is the fix, the evidence for it, and what
+it does not do. It is behind the runtime flag `jam_audio_copy` (global, default off,
+`docs/FEATURE_FLAGS.md`).
+
+### What it is
+
+A worker-made **Opus copy of each FLAC stem, 64 kbps per channel, in Ogg**, offered
+to LISTENERS only. The FLAC stays the source of truth: the studio records against
+it (`syncJamStems` without `listen`), and every export is made from it. The copy is
+derived, one per track, written beside the original (`<id>.listen.ogg`), never
+replaces it, and is deleted with it.
+
+- **Job and storage**: the MP4 copy's pattern (`docs/JAM.md` §"The MP4 copy of a
+  camera video"): `speech_jobs` kind `jam_audio_copy` keyed by `track_id`, claimed by
+  a process whose ffmpeg has libopus (the `worker` image) and only with the flag on,
+  one at a time in a lane of its own, reserve key, upload, confirm type last, nothing
+  between BEGIN and COMMIT touches the network. Code: `server/src/services/jam-audio-copy.ts`
+  (job, enqueue, backfill), `server/src/speech/audio-copy.ts` (ffmpeg and the checks),
+  `server/src/services/jam-audio-copy-metrics.ts` (`jamAudioCopy` on the metrics).
+- **Only lossless originals** (`audio/flac`, what the web recorder sends). A phone's
+  AAC, Opus or MP3 is already at most 1.4 MB per minute, and decoders disagree about
+  the delay of those formats (WebKit moved an MP3 by 12 ms, above), so an ffmpeg-made
+  copy could land where the browser's own decode of the original does not.
+- **The contract**: `audioSources` lives on `jamListenTrackSchema` (`jamTrackSchema`
+  plus the list), which `jamSongDetailResponseSchema` and the public track use, and
+  NOT on `jamTrackSchema`, the shape the phones check field by field
+  (`JamContractTest`): a phone that does not use a copy has no reason to carry the
+  field, and its decoder skips the unknown key.
+- **The backfill is bounded reads, never a ranking of the backlog**, and it is for
+  history: a track recorded from now on queues its own job in its insert. Three
+  `LIMIT`ed, index-backed reads a pass: a catch-up of public tracks published since
+  the last pass (keyset over `idx_jam_public_tracks_backfill`, so a song made public
+  while the walks are partway down their backlog is not left behind), then a public
+  walk and a rest walk over `idx_jam_tracks_audio_copy_pending`, which is partial on
+  "no copy yet" so a finished stem leaves it. Each walk's cursor only moves down, a
+  row is looked at once, a walk that reaches its end stays done (restarting after six
+  hours, or when the flag blinks off and on), and a cursor moves only after its batch
+  was enqueued, so a failed read or INSERT repeats the same stems. On 400,000 tracks
+  a pass reads a handful of index entries (0.05 to 0.2 ms); a finished catalogue's
+  walk covers only what failed (3,000 leftover rows: 4 to 8 ms, once).
+- **The client chooses from data**, with no rebuild: a track with `audioSources`
+  (copy first, original last) loads from the copy; without it, from the FLAC. See
+  `client/src/lib/jam-listen-copy.ts`, `syncJamStems(..., { listen: true })` in
+  `client/src/lib/jam-session.ts`, and `client/src/jam-site/player.ts`.
+
+### Alignment: the encoder's delay is declared, compensated and checked
+
+The engine places a stem by milliseconds and trims in sample frames against a
+decoded `AudioBuffer`, so a copy that starts one encoder look-ahead late (6.5 ms for
+libopus) or ends a frame short puts one part of a song out of step with the others.
+Three things keep it exact:
+
+1. **The delay is declared in the file.** The `OpusHead` packet carries `pre-skip`
+   (312 samples at 48 kHz) and every decoder drops exactly that many samples; the
+   Ogg muxer states the END through the last page's granule position. Nothing in our
+   command line trims, pads or shifts (no `-ss`, `apad`, `shortest`, `atrim`).
+2. **Every copy is checked before it is offered.** The job reads the FLAC's STREAMINFO
+   and the copy's `OpusHead` and last granule position and refuses a copy whose
+   decoded length differs from the original's by more than one millisecond, or whose
+   channel count changed (`copyLengthProblem`). ffmpeg is exact to the sample at 48
+   kHz and to one sample after resampling 44.1, 32 and 22.05 kHz (measured), so the
+   tolerance has two orders of magnitude of room and is still far under the 312
+   samples an undeclared delay would add. A refusal is a `failed` job, logged as
+   `jamAudioCopy.failed ... reason=length-mismatch`, counted, and the stem plays from
+   its FLAC.
+3. **Measured in the decoders that will play it**, with a click track (decaying noise
+   bursts at positions on no frame boundary, one INSIDE the pre-skip, at 48 kHz and
+   44.1 kHz), three stems mixed from the FLACs and from the copies, the onsets of the
+   two mixes compared (centroid of each burst):
+
+| Decoder | Worst onset error, copy minus FLAC | Decoded length |
+|---|---|---|
+| ffmpeg (`speech/audio-copy.test.ts`, in CI with ffmpeg) | 1.5 samples (0.03 ms) | equal to the sample |
+| Chromium 151 `decodeAudioData` | 2.1 samples (0.044 ms) | equal |
+| Firefox 153 `decodeAudioData` | 1.5 samples (0.031 ms) | equal |
+| WebKit 26.5 (Playwright, macOS) `decodeAudioData` | 2.1 samples (0.044 ms) | equal |
+
+   The test has a control: the same comparison on a mix shifted by 312 samples fails
+   by about 312. `client/e2e/jam/formats.spec.ts` also measures the worker's own copy
+   (its real command line) with the engine rig's sweep pulses in Chromium: 0 samples
+   shift and 0 length change at 48 kHz and at 44.1 kHz.
+
+**Not measured, and why it matters**: real iOS Safari and Safari before 18 (Ogg Opus
+support is recent there), Android Chrome, real music. The client therefore asks the
+browser first (`canPlayType('audio/ogg; codecs="opus"')`, an empty answer means the
+FLAC with no wasted bytes), and falls back to the FLAC per stem on a 404 or on a
+decode error, which also stops that page trying copies again. A phone or browser
+that cannot decode the copy costs one failed download at most, never a silent song.
+
+### Bitrate: 64 kbps per channel, by measurement
+
+Stems are summed, so artefacts add. Five synthetic stems (bass, a distorted guitar
+with strong harmonics, keys with tremolo, drums with broadband hats and a snare,
+a vocal with vibrato and breath), each with a -58 dBFS noise floor like a recorded
+take, 60 s, mixed from the decoded copies and compared with the mix of the originals
+(`ffmpeg -c:a libopus -vbr on -application audio -compression_level 10`):
+
+| Opus per stem | MB per stem-minute | 5-stem mix: peak vs original (0.934) | Mix 1/3-octave envelope error | Tonal stems' SNR | Mix SNR* |
+|---|---|---|---|---|---|
+| 32 kbps | 0.30 | **1.448 (clips)** | 1.18 dB | 21 to 31 dB | 14.2 dB |
+| 48 kbps | 0.43 | 1.007 (touches full scale) | 0.92 dB | 24 to 33 dB | 16.7 dB |
+| **64 kbps (chosen)** | **0.55** | **0.928** | **0.75 dB** | **26 to 35 dB** | **17.7 dB** |
+| 96 kbps | 0.80 | 0.907 | 0.54 dB | 28 to 38 dB | 18.8 dB |
+| 128 kbps | 1.04 | 0.902 | 0.43 dB | 29 to 39 dB | 19.2 dB |
+
+\* Waveform SNR of the mix, dominated by the noise-like parts (the noise floor, the
+hats, the snare), which a perceptual codec reproduces by envelope and not by
+waveform on purpose; the drums' own SNR is 7 dB at 64 kbps and sounds like drums.
+The envelope error is the number that speaks for those parts. No listening test was
+possible; these are measurements, not a verdict.
+
+64 kbps is the lowest rate at which the sum of five decoded stems did not overshoot
+the sum of the originals (32 and 48 kbps overshoot and would clip at the output),
+and its spectral envelope stays within 0.75 dB; 96 kbps buys 0.2 dB more for 45 %
+more bytes on a link where bytes are the whole problem. The bitrate is one constant
+(`LISTEN_COPY_BITRATE_PER_CHANNEL`); changing it needs a new copy of every track, so
+decide it before the backfill, not after.
+
+### What it buys: time to first sound, measured
+
+Local rig (2026-11-27): the built jam site, a real API and worker process, MinIO,
+headless Chromium throttled through CDP, pressing play on a public song and timing
+the press to the transport playing. Fast 3G is 1.6 Mbps down with 150 ms latency
+(the launch test's profile), good 4G is 9 Mbps with 60 ms. The audio is
+synthesised with numpy (no downloaded music), 48 kHz mono, encoded to FLAC by the
+product's own encoder (`client/src/lib/jam/flac.ts`), with a -58 dBFS noise floor,
+broadband hats and a snare, so it is on the heavy side of real stems.
+
+| Song | Network | Flag off: first sound, bytes | Flag on: first sound, bytes | Faster |
+|---|---|---|---|---|
+| "Roda de sábado": 10 parts of 28 s, 17.2 MB of FLAC | Fast 3G | 82.4 s, 16.4 MB | **12.7 s, 2.5 MB** | 6.5x |
+| | good 4G | 14.8 s, 16.4 MB | **2.5 s, 2.5 MB** | 6.0x |
+| "Canção longa": 5 stems of 3 min, 55.5 MB of FLAC | Fast 3G | 264.9 s (4 min 25 s), 52.9 MB | **40.0 s, 7.9 MB** | 6.6x |
+| | good 4G | 47.3 s, 52.9 MB | **7.4 s, 7.9 MB** | 6.4x |
+
+Bytes are the transferred audio, from CDP's `encodedDataLength`. Copy over
+original, over all 15 stems the worker made: 10.8 MB against 72.7 MB, 14.9 %. The
+launch test's 91 s for the ten parts is the first row's 82 s here, in a different
+harness. The first sound after the flag goes on is **bytes over bandwidth**: the
+copies are a sixth of the size and the time follows. Also checked in the same rig:
+with two copies broken on purpose (one deleted, one overwritten with bytes that are
+not audio) the song still played, 12.6 s on 4G, two of its ten stems fetched as FLAC
+after the copy failed; and with the flag turned off again from the dashboard route
+the next read had no `audioSources` and the page fetched ten FLACs, 14.8 s, 16.4 MB,
+the baseline to the digit.
+
+**The target is not met on the slowest link for a real song**: 40 s to the first
+sound of a three minute, five stem song on Fast 3G, against 265 s. It is a 6.6x
+improvement and makes the song playable on a phone link, not instant. Getting under
+10 s there needs the first sound to come before the last byte; see below.
+
+Storage: the copies add about 15 % to what the stems already take in the bucket.
+Worker cost: about 1 s of ffmpeg per three minute stem on this laptop (Opus encodes
+at well over 100 times real time), one stem at a time.
+
+### What it does not do, and what was left out on purpose
+
+- **No progressive start.** The engine holds a stem as ONE `AudioBuffer`, decoded
+  from the whole file (`JamPlayer.decode`, `addStem`), and has no way to extend a
+  stem's buffer under a running transport: `addStem` replaces the slot and
+  `restartIfPlaying` re-anchors every source with a 60 ms lead, an audible gap. So
+  "begin when enough of every stem is buffered" cannot be done without changing
+  `lib/jam/player.ts`, and the alignment guarantee above is about whole files. It
+  is not impossible, and the evidence is worth keeping: on 2026-11, Chromium 151,
+  Firefox 153 and WebKit 26.5 all decoded an Ogg Opus copy cut at 60 % of its bytes
+  (a prefix of the decoded samples), so a partial download can be played. What a
+  follow-up needs is an engine call that swaps a stem's buffer for a longer one at a
+  frame, on the same source timing (start the new source at the frame where the old
+  one is, stop the old one on the same frame: identical samples, so sample-exact),
+  and a loader that decodes the first N seconds of every stem together. That is an
+  engine change with its own sample-accuracy tests, in the file this change left
+  alone. At 64 kbps five stems are 0.3 Mbps, a fifth of what Fast 3G carries, so the
+  tail would arrive faster than it plays.
+- **No mono preview mix** (scoped, not built). A server-made mono mix of the public
+  tracks, played by an `<audio>` element while the stems download, would give a first
+  sound in about 2 to 3 s on Fast 3G. It needs a second implementation of placement
+  on the server (`offsetMs`, the trims and `gain` in ffmpeg, pinned by a test that
+  renders both), a job per SONG rather than per track, and an invalidation rule: the
+  public set changes whenever a take is accepted, hidden, removed or its consent is
+  withdrawn, and a derived file that still contains a withdrawn take is a privacy
+  hole, so a read would offer the preview only when it was built from exactly the
+  current public track set. The partial-decode route above reaches the same first
+  sound with none of that, which is why it is the recommended next step.
+- **Channel and studio reads are unchanged.** A member of the channel reads the
+  whole song with no `audioSources`, and the studio never asks for one. The in-app
+  public view's server read carries the list; the client side of that one door is
+  `useJamPlayback` passing `{ listen: true }` to `syncJamStems`, which lives in
+  `client/src/hooks/use-jam-playback.ts`, outside the files this change was allowed
+  to touch, so it is the one line left for the next change.
+- **Phones.** `ios/` and `android/` ignore `audioSources` and keep playing
+  `audioUrl`: correct and unchanged. Android can prefer an `opus` entry and fall back
+  to `audioUrl`; iOS needs a second copy in CAF or an Opus decoder, see
+  `docs/JAM_PUBLIC.md`.
+
+### Rolling it out
+
+1. Merge. This is `restarts-api` (a schema change, a new job kind, a changed read)
+   and needs a **worker image** deploy (`<sha>-worker`): the API image has no ffmpeg
+   and never makes a copy. Deploy the API first, then the worker, so the kind exists
+   before anything can claim it. Nothing changes for anybody: the flag is off.
+2. Confirm the worker can do it: its boot log has no `libopus` complaint and
+   `GET /api/admin/metrics` → `jamAudioCopy` is present with `enabled: false`.
+3. Turn it on: controles → interruptores → `jam_audio_copy`, or `PUT
+   /api/admin/flags { key: "jam_audio_copy", enabled: true }`. Do it when no big
+   watch party is live (the worker's one lane is small, but be conservative).
+4. Watch `jamAudioCopy`: `waiting` falls by about five a minute (the default rate,
+   `JAM_AUDIO_COPY_BACKFILL_PER_MINUTE`; the first stems done are the public songs'),
+   `withCopy` rises, `failed` stays 0, `queue.oldestQueuedSeconds` stays small,
+   `bytes.copy / bytes.original` is about 0.17. Each failure is also logged
+   `jamAudioCopy.failed trackId=... reason=...`.
+5. Open a public song on jam.pqp.gg with the network panel open: the stems are
+   `.listen.ogg`, and it plays. Do the same in Safari.
+6. To stop the backfill: set the flag off (everything stops: no enqueue, no claim,
+   no offer); to pause only the backfill and keep new tracks queueing, set
+   `JAM_AUDIO_COPY_BACKFILL_PER_MINUTE=0` on the worker. Copies already made stay in
+   the bucket; turning the flag on again does not make them twice.
+7. If the bitrate is to change, decide it before step 3: it needs a new copy of every
+   track.
 
 ## Per-browser caveats
 

@@ -45,7 +45,9 @@ CMD ["node", "server/dist/index.js"]
 # the same application plus ffmpeg, for the voice note AAC transcode
 # (server/src/speech/transcode.ts) and the MP4 copy of a Jam camera video
 # (server/src/speech/video-transcode.ts, which needs the package's libx264 and
-# checks for it at boot). Only the worker runs those jobs, so only the
+# checks for it at boot), and the Opus listening copy of a Jam stem
+# (server/src/speech/audio-copy.ts, libopus, checked at boot too; Alpine's
+# ffmpeg 8.1.3 has it, verified 2026-11). Only the worker runs those jobs, so only the
 # worker pays for ffmpeg: about 131 MB uncompressed, 49 MB compressed, on
 # linux/amd64 (node:22-alpine, 2026-10; node:24-alpine ships the same Alpine
 # 3.24 and the same ffmpeg 8.1.3, checked 2026-11). A process without ffmpeg

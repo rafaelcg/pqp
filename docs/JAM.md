@@ -369,6 +369,23 @@ zero) beside the original, and a track read offers it first.
   logs `jamVideo.transcode.failed trackId=... attempt=... next=... reason=...`
   and a success `jamVideo.transcode.done`.
 
+### The Opus listening copy of a stem
+
+A second derived file, for the stems this time and for listening only: the worker
+makes a 64 kbps Opus copy (Ogg) of every FLAC stem, behind the runtime flag
+`jam_audio_copy` (default off), and the reads that serve listeners (the public site,
+the in-app public view) offer it as `audioSources`, the copy first and the FLAC last.
+It follows the MP4 copy's pattern line for line, as a `speech_jobs` row of kind
+`jam_audio_copy` keyed by `track_id` (queued with the track and by the rate limited
+`jam-audio-copy-backfill`, claimed one at a time by a worker whose ffmpeg has libopus
+and only with the flag on), with `jam_tracks.audio_listen_key`,
+`audio_listen_content_type` and `audio_listen_bytes` (reserve, upload, confirm),
+deleted with the track (`jam-keys.ts`, the sweep), and counted as `jamAudioCopy` on
+`GET /api/admin/metrics`. The FLAC stays the source of truth: the studio records
+against it and every export is made from it. Everything about it (why Opus, why 64
+kbps, how the encoder's delay is kept out of the alignment, the measurements, what
+is left out and the rollout): `docs/JAM_ENGINE.md` §"The listening copy".
+
 ## Text a stranger types (title, artist, label)
 
 `jamTitleSchema`, `jamArtistSchema` and `jamLabelSchema` (`packages/shared/src/jam.ts`)

@@ -1280,6 +1280,20 @@ export const FEATURE_FLAGS = {
     // GLOBAL like `jam_public`: a standalone public jam has no server.
     perServer: false,
   },
+  jam_audio_copy: {
+    description:
+      "Cópia de escuta das partes da Jam: o worker faz uma cópia Opus (64 kbps) de cada parte gravada em FLAC, e quem só ouve (jam.pqp.gg e a jam pública dentro do app) baixa a cópia, uns 5 a 6 vezes menor, no lugar do FLAC. O FLAC original continua sendo a fonte: o estúdio grava em cima dele e qualquer exportação sai dele. Sem cópia pronta, ou se ela falhar, a parte toca do FLAC como sempre. Ligar também começa a fazer as cópias das partes que já existem, devagar (poucas por minuto). Desligado, nada é enfileirado, o worker não pega trabalho e nenhuma leitura oferece a cópia: o comportamento de antes, byte por byte. As cópias já feitas ficam guardadas.",
+    env: "JAM_AUDIO_COPY",
+    parseEnv: exactTrue,
+    // Off: it adds a job kind, an object per track and a second file a
+    // listener may decode, and it ships dark until the worker image carrying
+    // ffmpeg's libopus is deployed and the first copies have been checked
+    // (docs/JAM_ENGINE.md, "The listening copy"). Only `true` turns it on.
+    codeDefault: false,
+    // GLOBAL like `jam_public`: a standalone public jam has no server, and the
+    // public site's visitor has none either.
+    perServer: false,
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

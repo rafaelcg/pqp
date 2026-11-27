@@ -1129,6 +1129,59 @@ Pinned by `server/src/api/jam-take-notices.test.ts` (the flag as a row, both
 states) and `server/src/ws/jam-take-notices-cluster.test.ts` (two instances on the
 Postgres bus, off crossing the bus).
 
+## `jam_audio_copy` (global, default off, restarts nothing)
+
+The Opus listening copy of jam stems (`docs/JAM_ENGINE.md` §"The listening copy"):
+the worker makes a 64 kbps Opus copy of every FLAC stem, and the places that only
+LISTEN (the public site, jam.pqp.gg, and the in-app public view) download it
+instead of the FLAC, about a sixth of the bytes. Behind `JAM_AUDIO_COPY` (only
+`true` turns it on), born as a flag. **Global**, like `jam_public`: a public jam
+belongs to no server.
+
+- **Off is today's behaviour, byte for byte.** Nothing is enqueued when a track is
+  added, the backfill does nothing, `runnableSpeechJobKinds` leaves the kind out
+  (so even with libopus a worker never claims it and its rows wait untouched), and
+  no read carries `audioSources`: not for a copy that exists, not for anyone. The
+  flag is the only off switch; there is no second one to forget.
+- **On** does four things. A new FLAC stem queues its copy in the transaction that
+  inserts it (a lossy original queues none). The one-minute `jam-audio-copy-backfill`
+  job queues the stems that exist already, newest first and the tracks of public
+  songs first, at most `JAM_AUDIO_COPY_BACKFILL_PER_MINUTE` a pass (default 5; `0`
+  pauses the backfill and leaves new tracks queueing) and never more than ten
+  waiting or running. A worker whose ffmpeg has libopus claims one at a time, in a
+  lane of its own. And a read that serves listeners (`GET /api/public/jams/:id`,
+  and `GET /api/jam-songs/:id` for somebody who is not in the channel) adds
+  `audioSources` to a track whose copy is confirmed: the copy first, the original
+  last.
+- **The client needs no rebuild.** It chooses from the data
+  (`client/src/lib/jam-listen-copy.ts`): with no `audioSources` it loads the FLAC as
+  always. Open tabs pick the flip up on their next song read (the public song read
+  is cached 30 s at the edge).
+- **Never blocks playback.** A copy that is missing, failed, still queued, 404s or
+  will not decode falls back to the FLAC per stem; a decode failure also stops the
+  rest of that page trying copies. The studio never asks for a copy: it records
+  against, and exports from, the FLAC.
+- **Turning it off stops everything within one flag TTL** (10 s, or at once over
+  the cluster bus): the next read has no copies, the next claim skips the kind, a
+  job claimed a moment before the flip is dropped at its first step (one already
+  encoding finishes, and its copy is simply not offered), and the backfill's pass is a
+  no-op. Copies already made stay in the bucket and on their rows (deleted with
+  their track), so turning it on again does not make them twice. To pause only the
+  backfill, set `JAM_AUDIO_COPY_BACKFILL_PER_MINUTE=0` on the worker (restarts it).
+- **Watch** `jamAudioCopy` on `GET /api/admin/metrics`: `failed` belongs at 0 (every
+  one also logged `jamAudioCopy.failed` with its reason; the stem still plays from
+  its FLAC), `queue.oldestQueuedSeconds` climbing with `enabled: true` means no
+  worker with libopus is claiming, `waiting` is the backfill's progress, and
+  `bytes` is the saving over the stems that have a copy.
+
+Turn it on from controles → interruptores, or `PUT /api/admin/flags
+{ key: "jam_audio_copy", enabled: true }`, and only after the worker image that
+carries ffmpeg's libopus is deployed (the API image never makes a copy). Rollout
+steps: `docs/JAM_ENGINE.md` §"Rolling it out". Pinned by
+`server/src/api/jam-audio-copy.test.ts` (the flag as a row, both states, on a real
+Postgres), `server/src/speech/audio-copy.test.ts` (real ffmpeg) and the old-reader
+table in `server/src/lib/flags.test.ts`.
+
 ## `apps` (per server)
 
 The apps platform: small interactive things (Locadora, a game room) that a person
