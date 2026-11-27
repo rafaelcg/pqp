@@ -97,18 +97,35 @@ struct HomeView: View {
         // it shows on the hub and on every tab; a screen pushed on top covers it
         // and it is there when the person comes back.
         .overlay(alignment: .top) {
-            if let friend = model.acceptedFriend {
-                FriendAcceptedCard(
-                    friend: friend,
-                    onSayHi: { Task { await sayHi(to: friend) } },
-                    onDismiss: { model.acceptedFriend = nil }
-                )
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            VStack(spacing: 8) {
+                if let friend = model.acceptedFriend {
+                    FriendAcceptedCard(
+                        friend: friend,
+                        onSayHi: { Task { await sayHi(to: friend) } },
+                        onDismiss: { model.acceptedFriend = nil }
+                    )
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                }
+                // A part somebody sent to a song of ours, or the starter's answer
+                // to one of ours (`JamTakeNoticeCard`): the durable item, one at a time.
+                let queue = JamNoticeQueue.of(session.jamPublic.cards)
+                if queue.card != nil, !session.jamPublic.cardsAreHeld {
+                    JamTakeNoticeCard(
+                        queue: queue,
+                        onOpen: { notice in
+                            session.jamPublic.ack(notice.id)
+                            session.requestNavigation(.publicJam(songId: notice.songId))
+                        },
+                        onDismiss: { notice in session.jamPublic.ack(notice.id) }
+                    )
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                }
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
         }
         .animation(reduceMotion ? nil : Motion.standard, value: model.acceptedFriend?.id)
+        .animation(reduceMotion ? nil : Motion.standard, value: session.jamPublic.cards.first?.id)
         .task {
             pickLandingTab()
             await model.load(session: session)
@@ -320,6 +337,12 @@ struct HomeView: View {
                 return
             }
 
+        case .publicJam(let songId):
+            if await openPublicJam(request, songId: songId) {
+                superseded = true
+                return
+            }
+
         case .forumPost(let serverId, let forumId, let postId):
             guard let server = await resolveServer(serverId) else { return }
             tab = .servidores
@@ -401,10 +424,11 @@ struct HomeView: View {
     /// touching the screen and answers true ("superseded"), so it does not
     /// mark the newer request handled either.
     private func openJamSong(
-        _ request: DeepLinkTarget, serverId: String, channelId: String, songId: String
+        _ request: DeepLinkTarget, serverId: String, channelId: String, songId: String,
+        unavailable: () async -> String = { JamSongLinkMessage.unavailable }
     ) async -> Bool {
         guard let server = await resolveServer(serverId) else {
-            return await reportLinkFailure(JamSongLinkMessage.unavailable, for: request)
+            return await reportLinkFailure(await unavailable(), for: request)
         }
         let channels: [Channel]
         do {
@@ -418,11 +442,48 @@ struct HomeView: View {
             // the tap still goes somewhere, and say why the song did not open.
             tab = .servidores
             restoredChannel = RestoredChannel(server: server, channel: nil)
-            return await reportLinkFailure(JamSongLinkMessage.unavailable, for: request)
+            return await reportLinkFailure(await unavailable(), for: request)
         }
         tab = .servidores
         restoredChannel = RestoredChannel(server: server, channel: jam, jamSongId: songId)
         return false
+    }
+
+    /// `/app/jam/<songId>`, the take notice push and the web's address of a
+    /// public jam. It names no server and no channel, so the API says where the
+    /// song lives and it lands as the link of a channel song does (same wall,
+    /// same failure rules, same alert over the screen it ends on).
+    ///
+    /// What the phone cannot open is a public jam it has no channel for (a
+    /// standalone one, or somebody else's server). That ends in the usual alert,
+    /// and the sentence says WHICH it is: a song that exists and is public opens
+    /// on the web, anything else is "not available". Nothing is ever left
+    /// mid-transition or over onboarding, because every failure goes through
+    /// `reportLinkFailure` (`NavigationSettle`, `LinkAlertRules`).
+    private func openPublicJam(_ request: DeepLinkTarget, songId: String) async -> Bool {
+        let detail: JamSongDetail
+        do {
+            detail = try await session.api.jamSong(id: songId)
+        } catch {
+            guard session.navigationRequest == request else { return true }
+            if JamSongLinkMessage.isUnavailable(error) || JamSongLinkMessage.isUnreadable(error) {
+                return await reportLinkFailure(await publicJamMessage(songId), for: request)
+            }
+            return await reportLinkFailure(JamSongLinkMessage.failed, for: request)
+        }
+        guard session.navigationRequest == request else { return true }
+        return await openJamSong(
+            request, serverId: detail.song.serverId, channelId: detail.song.channelId, songId: songId,
+            unavailable: { await publicJamMessage(songId) }
+        )
+    }
+
+    /// Why a song id could not be landed: it is public (opens on the web) or it
+    /// is not available to this account.
+    private func publicJamMessage(_ songId: String) async -> String {
+        await session.api.isPublicJam(id: songId)
+            ? JamSongLinkMessage.publicOnWeb
+            : JamSongLinkMessage.unavailable
     }
 
     /// Says why a link did not land, once the stack has stopped moving (see

@@ -228,6 +228,10 @@ final class SessionStore {
     /// seated in. Fed from the socket for the whole session; see `AppsStore`.
     /// Inert on a server whose `apps` flag is off.
     let apps = AppsStore()
+    /// What is waiting for this account on public jams: the starter's inbox of
+    /// outside takes and the take notices. Fed from the socket for the whole
+    /// session; see `JamPublicStore`. Inert while public jam is off.
+    let jamPublic = JamPublicStore()
     /// Stories being posted in the background: the composer hands a story over
     /// and closes, so the post has to outlive the screen that started it.
     let storyPosts: StoryPostQueue
@@ -252,6 +256,7 @@ final class SessionStore {
         api = client
         realtime = RealtimeClient(tokenProvider: provider)
         storyPosts = StoryPostQueue(backend: LiveStoryPostBackend(api: client))
+        jamPublic.attach(api: client)
         // ONE door for a dead session: any authenticated call that is refused
         // with a 401 lands in `handleSessionExpired`, so no screen has to
         // notice for itself (it used to be every screen, which is how a dead
@@ -933,8 +938,10 @@ final class SessionStore {
         eventHandlers.removeValue(forKey: Self.cacheHandlerKey)
         eventHandlers.removeValue(forKey: Self.occupancyHandlerKey)
         eventHandlers.removeValue(forKey: Self.appsHandlerKey)
+        eventHandlers.removeValue(forKey: Self.jamPublicHandlerKey)
         voiceOccupancy.clear()
         apps.clear()
+        jamPublic.clear()
         storyPosts.clear()
         blocked.clear()
         StoryPreloader.shared.reset()
@@ -1048,6 +1055,9 @@ final class SessionStore {
     /// The activity frames arrive for every channel the account can view, not
     /// only the open one, so they land in the session's store.
     private static let appsHandlerKey = "apps"
+    /// The take notices (`jam-public-notice`, `jam-take-decision`) concern the
+    /// account, not the screen on top, so they land in the session's store.
+    private static let jamPublicHandlerKey = "jam-public"
 
     /// The two frames about the account itself, handled here (not in a screen)
     /// because the screen they concern may not be the one on top, or on screen.
@@ -1077,6 +1087,15 @@ final class SessionStore {
         apps.attach { [weak self] in self?.currentUser?.id }
         eventHandlers[Self.appsHandlerKey] = { [apps] event in
             apps.apply(event)
+        }
+        eventHandlers[Self.jamPublicHandlerKey] = { [jamPublic] event in
+            switch event {
+            case .jamPublic(let frame): jamPublic.apply(frame)
+            // The first `.ready` is the boot read; every later one is a socket
+            // that came back, and frames sent while it was down are gone.
+            case .ready: jamPublic.reconnected()
+            default: break
+            }
         }
         let stream = await realtime.events()
         await realtime.onStatusChange { [weak self] status in

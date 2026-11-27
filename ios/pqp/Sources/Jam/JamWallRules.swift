@@ -429,6 +429,21 @@ enum JamSongLinkMessage {
         String(localized: "This song is not available. It may have been deleted, or it is in a server you are not in.")
     }
 
+    /// The song is a public jam this phone has no screen for: one it has no
+    /// channel for (a standalone public jam, or another server's). It exists and
+    /// it opens on the web, so the sentence says that instead of "not available".
+    static var publicOnWeb: String {
+        String(localized: "This is a public jam, and public jams open on the web for now. Open it at pqp.gg.")
+    }
+
+    /// A song the server answered with a shape this build cannot read: a public
+    /// jam with no channel (`channelId` null) is the case, and it is "not for the
+    /// phone", never "try again".
+    static func isUnreadable(_ error: Error) -> Bool {
+        if case .decoding = error as? APIError { return true }
+        return false
+    }
+
     /// The read itself failed: offline, or the server had a bad moment.
     static var failed: String {
         String(localized: "Could not open that song. Try again in a moment.")

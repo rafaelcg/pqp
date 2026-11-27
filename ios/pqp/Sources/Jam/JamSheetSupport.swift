@@ -47,6 +47,17 @@ extension View {
         }
     }
 
+    /// `jamAnnounce` for a line that is CREATED when it has something to say (a
+    /// refusal that appears, a status that comes up): `onChange` never fires for
+    /// the value a view starts with, so it is said once as it appears too.
+    func jamAnnounceNow(_ text: String) -> some View {
+        onAppear {
+            guard !text.isEmpty else { return }
+            AccessibilityNotification.Announcement(text).post()
+        }
+        .jamAnnounce(text)
+    }
+
     /// A sheet that holds unsaved work cannot be swiped away, and the attempt is
     /// answered (with the discard question) instead of being ignored.
     ///

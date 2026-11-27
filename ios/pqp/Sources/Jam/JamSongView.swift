@@ -85,13 +85,20 @@ struct JamSongView: View {
             model.callActive = callActive
             await model.start(session: session)
         }
+        // Asked again every time a song opens, even when something is held: a push
+        // that brought the person here may have beaten the first read.
+        .task { await session.jamPublic.refresh() }
         .onChange(of: callActive) { _, now in model.callActive = now }
         // The flag is flipped per server with no deploy: back in the foreground, an
         // open song asks again whether it may still be edited.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.refreshConfig() } }
         }
-        .onDisappear { model.stop() }
+        .onAppear { session.jamPublic.songOpened(model.song.id) }
+        .onDisappear {
+            model.stop()
+            session.jamPublic.songClosed(model.song.id)
+        }
         .sensoryFeedback(.impact(weight: .medium), trigger: model.isPlaying)
     }
 
@@ -113,6 +120,8 @@ struct JamSongView: View {
         case .ready:
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    // The parts people outside sent come FIRST, above the stage.
+                    JamRequestsView(model: model)
                     JamStageView(model: model)
                     header
                     if let progress = model.loading { loadingRow(progress) }
@@ -150,7 +159,7 @@ struct JamSongView: View {
                     .font(JamFont.text(14))
                     .foregroundStyle(Palette.paperMuted)
                     .accessibilityLabel(Text(verbatim: JamBidi.clean(headerLine)))
-                JamInstrumentChips(song: model.song, tracks: model.tracks)
+                JamInstrumentChips(song: model.song, tracks: model.settledTracks)
             }
             Spacer(minLength: 0)
             if model.canEditSong {
@@ -222,8 +231,30 @@ struct JamSongView: View {
                     } label: {
                         Label("Copy link", systemImage: "link")
                     }
-                    ShareLink(item: songLink) {
-                        Label("Share link", systemImage: "square.and.arrow.up")
+                    if let publicLink = model.publicShareLink {
+                        // A song a stranger can open: the message asks for what is
+                        // still missing, and the link is its public page.
+                        // ONE string, the message and then the link, the way the web
+                        // composes it for WhatsApp: every app inserts it as it is, where a
+                        // separate message beside a URL is dropped by some of them.
+                        ShareLink(
+                            item: JamShare.shareItem(text: model.shareText, link: publicLink),
+                            subject: Text(verbatim: JamBidi.clean(model.song.title))
+                        ) {
+                            Label("Share the song", systemImage: "person.2.wave.2")
+                        }
+                        .accessibilityIdentifier("jam.song.sharePublic")
+                        Button {
+                            UIPasteboard.general.string = publicLink.absoluteString
+                            Haptics.selection()
+                        } label: {
+                            Label("Copy public link", systemImage: "globe")
+                        }
+                        .accessibilityIdentifier("jam.song.copyPublic")
+                    } else {
+                        ShareLink(item: songLink) {
+                            Label("Share link", systemImage: "square.and.arrow.up")
+                        }
                     }
                 }
                 if model.canEditSong {
@@ -287,7 +318,7 @@ struct JamSongView: View {
                     model.say(Self.reasonText(reason))
                 } label: {
                     Label("Add my part", systemImage: "mic.slash")
-                        .labelStyle(JamCompactLabelStyle(iconOnly: typeSize.isAccessibilitySize))
+                        .labelStyle(JamCompactLabelStyle(iconOnly: typeSize >= .xxLarge))
                         .lineLimit(1)
                         .font(JamFont.text(13, .semibold))
                         .foregroundStyle(Palette.paperMuted)
@@ -307,7 +338,7 @@ struct JamSongView: View {
                     studio = JamStudioRoute(draft: nil)
                 } label: {
                     Label(model.tracks.isEmpty ? "Record the first part" : "Add my part", systemImage: "mic.fill")
-                        .labelStyle(JamCompactLabelStyle(iconOnly: typeSize.isAccessibilitySize))
+                        .labelStyle(JamCompactLabelStyle(iconOnly: typeSize >= .xxLarge))
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .font(JamFont.text(14, .bold))
@@ -489,7 +520,7 @@ struct FlowLayout: Layout {
 }
 
 
-/// At accessibility text sizes the transport has no room for the words: the
+/// From xxLarge up (in pt-BR "Gravar minha parte" is cut mid-word at xxLarge) the transport has no room for the words: the
 /// icon alone stays (the button keeps its spoken label).
 struct JamCompactLabelStyle: LabelStyle {
     let iconOnly: Bool

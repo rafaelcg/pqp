@@ -24,6 +24,9 @@ struct JamTileView: View {
     let preview: JamPreview?
     let poster: UIImage?
     let isFresh: Bool
+    /// Parts from outside waiting for THIS account's answer on this song (the
+    /// starter's inbox): a marker so the starter finds the song that is asking.
+    var waiting: Int = 0
 
     @State private var drawn = false
     /// A cover is on screen (`JamCoverImage` says so once it has loaded).
@@ -60,6 +63,7 @@ struct JamTileView: View {
         .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous))
         .overlay(border)
         .overlay(alignment: .topTrailing) { freshBadge }
+        .overlay(alignment: .topLeading) { waitingBadge }
         .contentShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
@@ -209,6 +213,21 @@ struct JamTileView: View {
         }
     }
 
+    @ViewBuilder
+    private var waitingBadge: some View {
+        if waiting > 0 {
+            Text("\(waiting) waiting")
+                .font(JamFont.text(11, .heavy))
+                .lineLimit(1)
+                .foregroundStyle(Palette.inkDeep)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(Capsule().fill(Palette.signal))
+                .padding(10)
+                .accessibilityIdentifier("jam.tile.waiting")
+        }
+    }
+
     private var accessibilityLabel: Text {
         // read in logical order by VoiceOver: no isolate characters, only the
         // explicit controls dropped
@@ -216,6 +235,8 @@ struct JamTileView: View {
         let artist = JamBidi.clean(song.artist ?? "")
         if !artist.isEmpty { text = text + Text(verbatim: ", \(artist)") }
         if !whoText.isEmpty { text = text + Text(verbatim: ", \(JamBidi.clean(whoText))") }
-        return text + Text(verbatim: ", \(need.text)")
+        text = text + Text(verbatim: ", \(need.text)")
+        if waiting > 0 { text = text + Text(verbatim: ", ") + Text("\(waiting) parts waiting for your answer") }
+        return text
     }
 }

@@ -28,6 +28,8 @@ struct JamWallView: View {
     /// the id afterwards.
     @State private var tookInitialSong = false
     @State private var studio: JamStudioRoute?
+    /// "N partes esperando" across several songs: which one to open.
+    @State private var pickingWaitingSong = false
     /// The first render staggers its tiles in; after that a tile that arrives
     /// uses the transition instead.
     @State private var hasEntered = false
@@ -61,6 +63,14 @@ struct JamWallView: View {
         .navigationTitle(model.channel.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Palette.ink, for: .navigationBar)
+        .searchable(text: $model.searchText, prompt: Text("Search songs"))
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .onChange(of: model.searchText) { _, now in
+            if now.count > JamSongSearch.maxLength { model.searchText = String(now.prefix(JamSongSearch.maxLength)) }
+        }
+        // Typing cancels the last search; it asks once the words have settled.
+        .task(id: model.searchText) { await model.runSearch() }
         .navigationDestination(item: $openedSong) { route in
             JamSongView(
                 song: route.song, channel: model.channel, server: model.server,
@@ -92,7 +102,26 @@ struct JamWallView: View {
                 }
             }
         }
+        .sheet(isPresented: $pickingWaitingSong) {
+            JamWaitingSongsSheet(
+                rows: waitingRows,
+                onOpen: { song in
+                    pickingWaitingSong = false
+                    // The sheet is closing: the song opens after it has left.
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(350))
+                        openedSong = JamSongRoute(song: song)
+                    }
+                }
+            )
+        }
         .task { await model.start(session: session) }
+        // A card never covers the wall (its own row and pills say the same thing).
+        .onAppear { session.jamPublic.songOpened("wall:\(model.channel.id)") }
+        .onDisappear { session.jamPublic.songClosed("wall:\(model.channel.id)") }
+        // The starter's inbox is read again whenever the wall opens: what a push
+        // brought them here for may have beaten the first read.
+        .task { await session.jamPublic.refresh() }
         // A song link. Its own task so the wall's load is never held up by it,
         // and so a slow song read cannot leave the wall blank. Not keyed on the
         // id: the parent clears the id the moment the link is taken, and a
@@ -179,6 +208,25 @@ struct JamWallView: View {
     private var wall: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                waitingRow
+                if model.search != .idle {
+                    searchResults
+                } else {
+                    browse
+                }
+            }
+            .padding(.top, 6)
+            .padding(.bottom, 28)
+        }
+        .refreshable { await model.refresh() }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
+        .onAppear { hasEntered = true }
+    }
+
+    /// The filters and the mosaic, with the end of the pages.
+    @ViewBuilder
+    private var browse: some View {
+        VStack(alignment: .leading, spacing: 14) {
                 filters
                 let songs = model.visibleSongs
                 if songs.isEmpty {
@@ -201,13 +249,61 @@ struct JamWallView: View {
                     }
                     .buttonStyle(.plain)
                 }
-            }
-            .padding(.top, 6)
-            .padding(.bottom, 28)
         }
-        .refreshable { await model.refresh() }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
-        .onAppear { hasEntered = true }
+    }
+
+    // MARK: Search results
+
+    /// The songs the server found for the words: a plain list, one row each,
+    /// never the mosaic (a result is something to open, not to browse).
+    @ViewBuilder
+    private var searchResults: some View {
+        switch model.search {
+        case .idle:
+            EmptyView()
+        case .searching:
+            ProgressView().tint(Palette.signal).frame(maxWidth: .infinity).padding(.top, 40)
+        case .results(let words, let songs):
+            if songs.isEmpty {
+                VStack(spacing: 8) {
+                    Text("No song found")
+                        .font(JamFont.title(18))
+                        .foregroundStyle(Palette.paper)
+                    Text("Nothing in this jam matches \"\(words)\", by title or artist.")
+                        .font(Typography.callout)
+                        .foregroundStyle(Palette.paperMuted)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.top, 50)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("jam.search.empty")
+            } else {
+                VStack(spacing: 0) {
+                    Text("\(songs.count) songs")
+                        .font(Typography.label)
+                        .tracking(1.2)
+                        .foregroundStyle(Palette.paperMuted)
+                        .textCase(.uppercase)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, Metrics.hPadding)
+                        .padding(.bottom, 6)
+                        .accessibilityAddTraits(.isHeader)
+                    ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+                        if index > 0 { Rectangle().fill(Palette.border).frame(height: 1).padding(.horizontal, Metrics.hPadding) }
+                        Button {
+                            Haptics.selection()
+                            openedSong = JamSongRoute(song: song)
+                        } label: {
+                            JamSearchRow(song: song)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("jam.search.result")
+                    }
+                }
+            }
+        }
     }
 
     // MARK: The mosaic, in lazy bands
@@ -252,6 +348,69 @@ struct JamWallView: View {
                     alignment: .topLeading
                 )
             }
+        }
+    }
+
+    // MARK: Parts waiting for the starter
+
+    /// What waits for this account on THIS wall's songs (the inbox is account
+    /// wide: the other jams' and standalone songs are not this wall's to open).
+    private var waitingOnWall: [JamPublicInboxItem] {
+        JamWaiting.onWall(session.jamPublic.inbox, songIds: Set(model.state.songs.map(\.id)))
+    }
+
+    private var waitingCounts: [String: Int] { JamWaiting.counts(in: waitingOnWall) }
+
+    private var waitingRows: [JamWaitingRow] {
+        let counts = waitingCounts
+        return model.state.songs.compactMap { song in
+            counts[song.id].map { JamWaitingRow(song: song, count: $0) }
+        }
+    }
+
+    /// "N partes esperando tua resposta": the quiet row above the wall. With every
+    /// waiting part on ONE song its button opens that song, where they are the
+    /// first thing on the page; across several it asks which.
+    @ViewBuilder
+    private var waitingRow: some View {
+        let total = waitingOnWall.count
+        if total > 0 {
+            HStack(spacing: 12) {
+                Text("\(total) parts waiting for your answer")
+                    .font(JamFont.text(14, .semibold))
+                    .foregroundStyle(Palette.paper)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    Haptics.selection()
+                    let rows = waitingRows
+                    if rows.count == 1, let only = rows.first {
+                        openedSong = JamSongRoute(song: only.song)
+                    } else {
+                        pickingWaitingSong = true
+                    }
+                } label: {
+                    Text("See")
+                        .font(JamFont.text(14, .bold))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .foregroundStyle(Palette.inkDeep)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 44)
+                        .background(Capsule().fill(Palette.signal))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("jam.waiting.see")
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, 8)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous).fill(Palette.surface))
+            .overlay(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous).strokeBorder(Palette.border, lineWidth: 1))
+            .padding(.horizontal, Metrics.hPadding)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("jam.waiting")
         }
     }
 
@@ -335,7 +494,8 @@ struct JamWallView: View {
             JamTileView(
                 song: song, size: size, preview: preview,
                 poster: preview?.posterTrackId.flatMap { JamPosterCache.shared.cached(trackId: $0) },
-                isFresh: model.state.fresh.contains(song.id)
+                isFresh: model.state.fresh.contains(song.id),
+                waiting: waitingCounts[song.id] ?? 0
             )
         }
         .buttonStyle(JamTilePressStyle(reduceMotion: reduceMotion))
@@ -533,5 +693,133 @@ struct JamRecordOnComputerSheet: View {
         .background(Palette.surface.ignoresSafeArea())
         .presentationDetents([.height(420), .medium])
         .presentationDragIndicator(.hidden)
+    }
+}
+
+
+// MARK: - Which song is asking
+
+struct JamWaitingRow: Identifiable, Equatable {
+    let song: JamSongSummary
+    let count: Int
+    var id: String { song.id }
+}
+
+/// The wall's row across more than one song: each song with parts waiting,
+/// one tap to open it (the web's `JamInboxDialog`).
+struct JamWaitingSongsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let rows: [JamWaitingRow]
+    let onOpen: (JamSongSummary) -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Hearing and deciding happens in the song itself, with the band playing, so each row opens it.")
+                        .font(JamFont.text(13))
+                        .foregroundStyle(Palette.paperMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(spacing: 0) {
+                        ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                            if index > 0 { Rectangle().fill(Palette.border).frame(height: 1) }
+                            Button { onOpen(row.song) } label: {
+                                HStack(spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(verbatim: JamBidi.clean(row.song.title))
+                                            .font(JamFont.text(15, .bold))
+                                            .foregroundStyle(Palette.paper)
+                                            .multilineTextAlignment(.leading)
+                                        Text("\(row.count) waiting")
+                                            .font(JamFont.text(13, .semibold))
+                                            .foregroundStyle(Palette.paperMuted)
+                                    }
+                                    Spacer(minLength: 0)
+                                    Image(systemName: "chevron.right")
+                                        .font(JamFont.text(13, .bold))
+                                        .foregroundStyle(Palette.paperMuted)
+                                        .accessibilityHidden(true)
+                                }
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 56)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(Text(verbatim: JamBidi.clean(row.song.title)))
+                            .accessibilityValue(Text("\(row.count) parts waiting for your answer"))
+                            .accessibilityIdentifier("jam.waiting.song")
+                        }
+                    }
+                    .background(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous).fill(Palette.surfaceRaised))
+                }
+                .padding(Metrics.hPadding)
+            }
+            .background(Palette.ink.ignoresSafeArea())
+            .navigationTitle("Parts waiting for you")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+
+// MARK: - A found song
+
+/// One result: the title, who is on it and what it needs, the way a tile says
+/// them, on a row. One accessibility element that says all three.
+struct JamSearchRow: View {
+    let song: JamSongSummary
+
+    private var who: String {
+        JamWho.line(song: song, contributors: song.contributors.map { $0.compactMap(\.name) })
+    }
+
+    private var subtitle: String {
+        var parts: [String] = []
+        let artist = JamBidi.isolateOpt(song.artist)
+        if !artist.isEmpty { parts.append(artist) }
+        if !who.isEmpty { parts.append(who) }
+        return parts.joined(separator: " \u{00B7} ")
+    }
+
+    var body: some View {
+        let need = JamNeed.of(song)
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: JamBidi.clean(song.title))
+                    .font(JamFont.text(16, .bold))
+                    .foregroundStyle(Palette.paper)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !subtitle.isEmpty {
+                    Text(verbatim: subtitle)
+                        .font(JamFont.text(13, .semibold))
+                        .foregroundStyle(Palette.paperMuted)
+                        .lineLimit(2)
+                }
+                Text(verbatim: need.text)
+                    .font(JamFont.text(12, .bold))
+                    .foregroundStyle(need.isCallout ? Palette.signal : Palette.paperSubtle)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(JamFont.text(13, .bold))
+                .foregroundStyle(Palette.paperMuted)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, Metrics.hPadding)
+        .frame(minHeight: 64)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: JamBidi.clean([song.title, subtitle, need.text].filter { !$0.isEmpty }.joined(separator: ", "))))
+        .accessibilityHint(Text("Opens the song"))
+        .accessibilityAddTraits(.isButton)
     }
 }

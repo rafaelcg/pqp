@@ -56,6 +56,9 @@ final class JamWallModel {
 
     private(set) var state = JamWallState()
     var filter: JamWallFilter = .all
+    /// What is typed in the search field. The server matches (`JamSongSearch`).
+    var searchText = ""
+    private(set) var search: JamSearchState = .idle
     private(set) var config: JamConfig = .off
     private(set) var phase: Phase = .loading
     private(set) var isRefreshing = false
@@ -191,10 +194,31 @@ final class JamWallModel {
         seen.markSeen(channelId: channel.id, at: newest)
     }
 
+    // MARK: - Search
+
+    /// Run from a task keyed on `searchText`, so typing cancels the last one.
+    /// Nothing is asked until the words are long enough and have been still for
+    /// a moment; the last answer stays on screen while the next words settle; a
+    /// failed read is an empty list, never an error over the wall.
+    func runSearch() async {
+        guard let words = JamSongSearch.words(searchText) else {
+            search = .idle
+            return
+        }
+        try? await Task.sleep(for: JamSongSearch.settle)
+        guard !Task.isCancelled, let session else { return }
+        if case .results = search {} else { search = .searching(words: words) }
+        let songs = (try? await session.api.searchJamSongs(channelId: channel.id, words: words)) ?? []
+        // The words moved on while the answer was out: it is for words that are not these.
+        guard !Task.isCancelled, JamSongSearch.words(searchText) == words else { return }
+        search = .results(words: words, songs: songs)
+    }
+
     // MARK: - Live frames
 
     func apply(_ event: RealtimeEvent) {
         guard case .jam(let frame) = event else { return }
+        applyToSearch(frame)
         if isReading { bufferedFrames.append(frame) }
         let before = state
         if state.apply(frame, channelId: channel.id), before != state {
@@ -202,6 +226,21 @@ final class JamWallModel {
             markSeen()
         }
         if case .songDeleted(_, let songId) = frame { previews.removeValue(forKey: songId) }
+    }
+
+    /// A song deleted or edited while its row is on screen in the results.
+    private func applyToSearch(_ frame: JamFrame) {
+        guard case .results(let words, var songs) = search else { return }
+        switch frame {
+        case .songDeleted(_, let id):
+            songs.removeAll { $0.id == id }
+        case .songUpdated(_, let song), .trackAdded(_, let song, _), .trackUpdated(_, let song, _), .trackDeleted(_, let song, _):
+            guard let index = songs.firstIndex(where: { $0.id == song.id }) else { return }
+            songs[index] = song
+        default:
+            return
+        }
+        search = .results(words: words, songs: songs)
     }
 
     func clearFresh(_ id: String) { state.clearFresh(id) }

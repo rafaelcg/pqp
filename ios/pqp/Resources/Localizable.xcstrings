@@ -18095,6 +18095,494 @@
           }
         }
       }
+    },
+    "A %@ part arrived in \"%@\"." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chegou uma parte de %@ em \"%@\"."
+          }
+        }
+      }
+    },
+    "%lld parts are waiting for your answer in \"%@\" (%@)." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld partes esperando tua resposta em \"%@\" (%@)."
+          }
+        }
+      }
+    },
+    "Your %@ part is in \"%@\"." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tua parte de %@ entrou em \"%@\"."
+          }
+        }
+      }
+    },
+    "%lld of your parts are in \"%@\"." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld partes tuas entraram em \"%@\"."
+          }
+        }
+      }
+    },
+    "Your %@ part in \"%@\" did not make it in." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tua parte de %@ em \"%@\" não entrou."
+          }
+        }
+      }
+    },
+    "%lld of your parts in \"%@\" did not make it in." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld partes tuas em \"%@\" não entraram."
+          }
+        }
+      }
+    },
+    "another instrument" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "outro instrumento"
+          }
+        }
+      }
+    },
+    "See and answer" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver e responder"
+          }
+        }
+      }
+    },
+    "Open the song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver a música"
+          }
+        }
+      }
+    },
+    "%lld more after this one." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mais %lld esperando depois dessa."
+          }
+        }
+      }
+    },
+    "%lld parts waiting for your answer" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld part waiting for your answer"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld parts waiting for your answer"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld parte esperando tua resposta"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld partes esperando tua resposta"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld waiting" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld waiting"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld waiting"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld esperando"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld esperando"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "People outside sent these parts. They only join the mix when you accept." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Visitantes mandaram essas partes. Elas só entram na mix quando tu aceitar."
+          }
+        }
+      }
+    },
+    "Listen with the band" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvir com a banda"
+          }
+        }
+      }
+    },
+    "Accept %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aceitar %@"
+          }
+        }
+      }
+    },
+    "Decline %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recusar %@"
+          }
+        }
+      }
+    },
+    "Decline this request?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recusar esse pedido?"
+          }
+        }
+      }
+    },
+    "The recording is deleted. It never joined the song." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A gravação é apagada. Ela nunca entrou na música."
+          }
+        }
+      }
+    },
+    "%@: the %@ part is in the song. It already shows for anyone who opens it, on the site and in the app." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: a parte de %2$@ entrou na música. Já aparece pra quem abre ela, no site e no app."
+          }
+        }
+      }
+    },
+    "Back in the queue. %@'s %@ part is still waiting for your answer." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltou pra fila. A parte de %2$@ de %1$@ continua esperando tua resposta."
+          }
+        }
+      }
+    },
+    "Part declined. %@'s %@ part stays out of the song, and %@ is told." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parte recusada. A parte de %2$@ de %1$@ não entra na música, e %3$@ recebe o aviso."
+          }
+        }
+      }
+    },
+    "See" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver"
+          }
+        }
+      }
+    },
+    "Hearing and deciding happens in the song itself, with the band playing, so each row opens it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvir e decidir acontece na própria música, com a banda tocando. Cada linha abre ela."
+          }
+        }
+      }
+    },
+    "Parts waiting for you" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Partes esperando tua resposta"
+          }
+        }
+      }
+    },
+    "This is a public jam, and public jams open on the web for now. Open it at pqp.gg." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa é uma jam pública, e por enquanto as jams públicas abrem na web. Abre em pqp.gg."
+          }
+        }
+      }
+    },
+    "jam.share.text.needsOne" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: it needs %2$@. Record your part:"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: falta %2$@ nessa. Grava a tua parte:"
+          }
+        }
+      }
+    },
+    "jam.share.text.needsMany" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: it needs %2$@. Record your part:"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: faltam %2$@ nessa. Grava a tua parte:"
+          }
+        }
+      }
+    },
+    "jam.share.text.open" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: a jam open to anyone. Come record a part:"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: jam aberta pra quem quiser. Entra e grava a tua parte:"
+          }
+        }
+      }
+    },
+    "jam.share.text.listen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: give this jam a listen:"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: dá uma ouvida nessa jam:"
+          }
+        }
+      }
+    },
+    "jam.share.textSent.needsOne" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: I sent my %3$@ part, it joins once whoever started the jam accepts it. It still needs %2$@. Record yours:"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: mandei a minha parte de %3$@, ela entra quando quem começou aceitar. Ainda falta %2$@. Grava a tua parte:"
+          }
+        }
+      }
+    },
+    "jam.share.textSent.needsMany" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: I sent my %3$@ part, it joins once whoever started the jam accepts it. It still needs %2$@. Record yours:"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: mandei a minha parte de %3$@, ela entra quando quem começou aceitar. Ainda faltam %2$@. Grava a tua parte:"
+          }
+        }
+      }
+    },
+    "jam.share.textSent.open" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: I sent my %3$@ part, it joins once whoever started the jam accepts it. A jam open to anyone, come record yours:"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: mandei a minha parte de %3$@, ela entra quando quem começou aceitar. Jam aberta pra quem quiser, entra e grava a tua parte:"
+          }
+        }
+      }
+    },
+    "jam.share.textSent.listen" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: I sent my %3$@ part, it joins once whoever started the jam accepts it. Give the jam a listen:"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: mandei a minha parte de %3$@, ela entra quando quem começou aceitar. Dá uma ouvida nessa jam:"
+          }
+        }
+      }
+    },
+    "Copy public link" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copiar link público"
+          }
+        }
+      }
+    },
+    "Share the song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compartilhar a música"
+          }
+        }
+      }
+    },
+    "No song found" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma música achada"
+          }
+        }
+      }
+    },
+    "Nothing in this jam matches \"%@\", by title or artist." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada nessa jam combina com \"%@\", no título ou no artista."
+          }
+        }
+      }
+    },
+    "Search songs" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscar músicas"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

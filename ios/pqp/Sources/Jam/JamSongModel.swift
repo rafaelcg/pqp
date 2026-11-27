@@ -93,7 +93,70 @@ final class JamSongModel {
 
     var active: [JamTrack] { JamMixRules.activeTracks(tracks, auditioning: auditioning) }
     var stack: [JamTrack] { JamMixRules.stack(tracks, auditioning: auditioning) }
-    var otherTakes: [JamTrack] { JamMixRules.otherTakes(tracks, auditioning: auditioning) }
+    /// Competing takes waiting for a vote. A part from outside that waits for the
+    /// starter is a QUESTION, not a take to vote on: it is in `requestTracks`.
+    var otherTakes: [JamTrack] {
+        let waiting = pendingTrackIds
+        return JamMixRules.otherTakes(tracks, auditioning: auditioning).filter { !waiting.contains($0.id) }
+    }
+
+    // MARK: - Sharing
+
+    /// Where the song stands as a public jam (`GET /api/jam-songs/:id/public`),
+    /// nil until read, when never published, and when the read failed.
+    private(set) var publicationStatus: String?
+
+    /// Only a song a stranger can open is shared with the public message and
+    /// link; every other song keeps the channel permalink it always had.
+    var publicShareLink: URL? {
+        guard session?.jamPublic.enabled == true, JamShare.isShareable(publicationStatus: publicationStatus) else { return nil }
+        return JamShare.publicLink(songId: song.id)
+    }
+
+    /// "falta baixo nessa. Grava a tua parte:", and what the sender has already
+    /// sent that waits for the starter (it is not asked for again).
+    var shareText: String {
+        JamShare.text(
+            song: song,
+            pending: JamShare.pending(tracks: tracks, viewerId: viewerId, isStarter: viewer.isAuthor)
+        )
+    }
+
+    func loadPublication() async {
+        guard let session else { return }
+        publicationStatus = await session.api.jamPublicationStatus(songId: song.id)
+    }
+
+    // MARK: - Parts waiting for the starter
+
+    /// The outside takes of THIS song waiting for this account's answer. The
+    /// inbox is the state (`GET /api/jam-public/inbox`, held by the session), so
+    /// the song reads the same list the wall's marker and the card read.
+    var pendingTrackIds: Set<String> {
+        Set(JamWaiting.tracks(in: session?.jamPublic.inbox ?? [], songId: song.id).map(\.id))
+    }
+
+    /// The waiting parts, as the detail holds them (it carries their media for
+    /// the audition), in the band's order. Empty for anybody but the starter.
+    var requestTracks: [JamTrack] {
+        let waiting = pendingTrackIds
+        return JamMixRules.ordered(tracks.filter { waiting.contains($0.id) && !$0.inMix })
+    }
+
+    /// What the song's chips and band name: the tracks that are part of it. A
+    /// waiting part is not a lane, a chip or an instrument until it is accepted.
+    var settledTracks: [JamTrack] {
+        let waiting = pendingTrackIds
+        return tracks.filter { !waiting.contains($0.id) || $0.inMix }
+    }
+
+    /// What the starter's last answer did, said where they gave it.
+    private(set) var answer: JamAnswer?
+    /// The part an answer is in flight for: its two buttons are off.
+    private(set) var requestBusy: String?
+    /// A refused answer, said next to the buttons it came from (never only in the
+    /// song's passing banner).
+    private(set) var requestError: String?
     var timeline: (originMs: Double, durationMs: Double) { JamMixRules.timeline(of: active) }
     var durationMs: Double { timeline.durationMs }
 
@@ -184,6 +247,7 @@ final class JamSongModel {
         await load()
         config = await configAnswer
         guard mine == lifecycle else { return }
+        Task { await loadPublication() }
         await syncEngine()
     }
 
@@ -651,6 +715,87 @@ final class JamSongModel {
 
     // MARK: - Server actions
 
+    /// "Ouvir com a banda": the waiting part plays in place of the same
+    /// instrument with the rest of the band, on this phone only, and the song
+    /// starts if it was stopped. Again, and it is the band as it was.
+    func hear(_ request: JamTrack) async {
+        if isAuditioned(request) {
+            auditioning.removeValue(forKey: request.instrument)
+            await syncEngine()
+            return
+        }
+        auditioning[request.instrument] = request.id
+        await syncEngine()
+        if !isPlaying { play() }
+    }
+
+    /// Aceitar: the part goes into the mix (`PATCH inMix: true`), the public sees
+    /// it now, and the sender is told. Undo is offered for a few seconds.
+    func accept(_ request: JamTrack) async {
+        guard let session, requestBusy == nil else { return }
+        requestBusy = request.id
+        requestError = nil
+        defer { requestBusy = nil }
+        do {
+            let reply = try await session.api.updateJamTrack(id: request.id, patch: .init(inMix: true))
+            if auditioning[request.instrument] == request.id { auditioning.removeValue(forKey: request.instrument) }
+            let effect = state.apply(.trackUpdated(channelId: channel.id, song: reply.song, track: reply.track))
+            session.jamPublic.dropInboxTake(trackId: request.id)
+            answer = JamAnswer(kind: .accepted, trackId: request.id, instrument: request.instrument, name: request.authorName)
+            // The part is part of the song now: heard from the next play, with the band.
+            if effect == .reloadStems { await syncEngine() }
+        } catch {
+            requestError = Self.message(for: error)
+            session.jamPublic.waitingMayHaveChanged()
+        }
+    }
+
+    /// Recusar, after the person confirmed: the recording is deleted (the API has
+    /// no way to bring it back) and the sender is told. No undo.
+    func decline(_ request: JamTrack) async {
+        guard let session, requestBusy == nil else { return }
+        requestBusy = request.id
+        requestError = nil
+        defer { requestBusy = nil }
+        do {
+            try await session.api.deleteJamTrack(id: request.id)
+            if auditioning[request.instrument] == request.id { auditioning.removeValue(forKey: request.instrument) }
+            var next = state
+            let effect = next.apply(.trackDeleted(channelId: channel.id, song: state.song, trackId: request.id))
+            state = next
+            files.removeValue(forKey: request.id)
+            session.jamPublic.dropInboxTake(trackId: request.id)
+            answer = JamAnswer(kind: .refused, trackId: request.id, instrument: request.instrument, name: request.authorName)
+            if effect == .reloadStems { await syncEngine() }
+        } catch {
+            requestError = Self.message(for: error)
+            session.jamPublic.waitingMayHaveChanged()
+        }
+    }
+
+    /// Desfazer, after Aceitar: the same take is taken out of the mix again and
+    /// goes back to the queue. The sender's "entrou" item goes with it (the
+    /// server voids it), and the inbox is read again because it is what lists a
+    /// waiting part.
+    func undoAccept(_ previous: JamAnswer) async {
+        guard let session, requestBusy == nil, previous.kind == .accepted else { return }
+        requestBusy = previous.trackId
+        requestError = nil
+        defer { requestBusy = nil }
+        do {
+            let reply = try await session.api.updateJamTrack(id: previous.trackId, patch: .init(inMix: false))
+            let effect = state.apply(.trackUpdated(channelId: channel.id, song: reply.song, track: reply.track))
+            answer = JamAnswer(kind: .undone, trackId: previous.trackId, instrument: previous.instrument, name: previous.name)
+            session.jamPublic.waitingMayHaveChanged()
+            if effect == .reloadStems { await syncEngine() }
+        } catch {
+            requestError = Self.message(for: error)
+        }
+    }
+
+    func clearAnswer() { answer = nil }
+    func clearRequestError() { requestError = nil }
+
     func vote(_ track: JamTrack) async {
         guard let session, !busyVotes.contains(track.id) else { return }
         busyVotes.insert(track.id)
@@ -734,6 +879,7 @@ final class JamSongModel {
         // tell "something changed it meanwhile" even when it changed back (A, B, A).
         if case .trackUpdated(_, _, let changed) = frame { trackRevisions[changed.id, default: 0] += 1 }
         if case .songUpdated(_, let changed) = frame, changed.id == song.id { songFrameRevision += 1 }
+        noteWaitingMayHaveChanged(by: frame)
         var next = state
         var effect = next.apply(frame, auditioned: Set(auditioning.values))
         guard next != state else { return }
@@ -757,6 +903,23 @@ final class JamSongModel {
         if state.wasDeleted {
             pause()
             notice = String(localized: "This song was deleted.")
+        }
+    }
+
+    /// A take of this song arrived out of the mix, or left: the inbox (the state
+    /// the requests block reads) is read again, for the starter or a moderator
+    /// only, since nobody else has an inbox.
+    private func noteWaitingMayHaveChanged(by frame: JamFrame) {
+        guard viewer.isAuthor || viewer.canModerate else { return }
+        switch frame {
+        case .trackAdded(_, let changed, let track), .trackUpdated(_, let changed, let track):
+            if changed.id == song.id, !track.inMix || pendingTrackIds.contains(track.id) {
+                session?.jamPublic.waitingMayHaveChanged()
+            }
+        case .trackDeleted(_, let changed, let id):
+            if changed.id == song.id, pendingTrackIds.contains(id) { session?.jamPublic.waitingMayHaveChanged() }
+        default:
+            break
         }
     }
 
