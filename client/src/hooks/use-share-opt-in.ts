@@ -1,0 +1,72 @@
+import { useEffect, useState } from "react";
+import { useLgUp } from "@/hooks/use-lg-up";
+import { isWatchPartyChannelType } from "@/lib/watch-party-channels";
+import { sharePopoutApplies } from "@/lib/share-view-mode";
+import { useSharePopout, useSharePopoutKnown } from "@/lib/share-popout-flag";
+
+/**
+ * Turns opt-in watching on for the call when the share popout applies to it
+ * (issue 1736): the `share_popout` answer for the call's server, a window at
+ * least `lg` wide, and a room that is not a watch party.
+ *
+ * Also returns the call's channel name, latched the same way, for the popout's
+ * badge.
+ *
+ * The call's channel type comes from `channels`, which only holds the SELECTED
+ * server's channels, so walking off to another server would lose it. The last
+ * type seen for the call's channel is kept instead, because a channel does not
+ * change type during a call.
+ */
+export function useShareOptInSync(
+  voice: { setShareOptIn: (on: boolean, settled?: boolean) => void },
+  input: {
+    callChannelId: string | null;
+    /** The call's server, `null` for a DM call. */
+    callServerId: string | null;
+    channels: readonly { id: string; type: string; name?: string }[];
+  },
+): { applies: boolean; channelName: string | null } {
+  const [known, setKnown] = useState<{
+    channelId: string;
+    watchParty: boolean;
+    name: string | null;
+  } | null>(null);
+  const { callChannelId, channels } = input;
+  const listed = callChannelId
+    ? channels.find((channel) => channel.id === callChannelId)
+    : undefined;
+  const seen =
+    listed && callChannelId
+      ? {
+          channelId: callChannelId,
+          watchParty: isWatchPartyChannelType(listed.type),
+          name: listed.name ?? null,
+        }
+      : null;
+  // Latched in state, adjusted during render (React's "storing information
+  // from previous renders"), not in a ref written while rendering.
+  if (
+    seen &&
+    (known?.channelId !== seen.channelId ||
+      known.watchParty !== seen.watchParty ||
+      known.name !== seen.name)
+  ) {
+    setKnown(seen);
+  }
+  const current = seen ?? known;
+  const latched =
+    current !== null && current.channelId === callChannelId ? current : null;
+  const watchParty = latched?.watchParty ?? false;
+  const flagOn = useSharePopout(input.callServerId);
+  const wide = useLgUp();
+  const applies =
+    callChannelId !== null &&
+    sharePopoutApplies({ flagOn, wide, isWatchPartyChannel: watchParty });
+  // Settled once the call's server has an answer: until then "off" only means
+  // "not asked yet", and the call must not take it as the person's answer.
+  const answered = useSharePopoutKnown(input.callServerId);
+  useEffect(() => {
+    voice.setShareOptIn(applies, answered);
+  }, [voice, applies, answered]);
+  return { applies, channelName: latched?.name ?? null };
+}

@@ -1456,6 +1456,176 @@ describe("screen share audio", () => {
     expect(voice.getState().audibleScreenPeerIds).toContain("p2");
   });
 
+  describe("opt-in watching (share_popout)", () => {
+    it("holds every share that arrives, our own excluded, and plays none of it", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2", "p3"]));
+      const state = voice.getState();
+      expect(state.dismissedSharePeerIds).toEqual(["p2", "p3"]);
+      expect(state.shareInvitePeerIds).toEqual(["p2", "p3"]);
+      expect(state.audibleScreenPeerIds).toEqual([]);
+    });
+
+    it("lets a share in with Assistir, with its sound and the focus", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2", "p3"]));
+      voice.watchShare("p2");
+      const state = voice.getState();
+      expect(state.dismissedSharePeerIds).toEqual(["p3"]);
+      expect(state.shareInvitePeerIds).toEqual(["p3"]);
+      expect(state.focusedScreenPeerId).toBe("p2");
+      expect(state.audibleScreenPeerIds).toEqual(["p2"]);
+    });
+
+    it("leaves a share already on screen alone when opt-in turns on mid-call", async () => {
+      const { voice } = await connectedMesh();
+      // The call's answer was a settled "off"; the operator flips it later.
+      voice.setShareOptIn(false, true);
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2", "p3"]));
+      expect(voice.getState().dismissedSharePeerIds).toEqual(["p3"]);
+      expect(voice.getState().audibleScreenPeerIds).toEqual(["p2"]);
+    });
+
+    it("holds the shares already up when the answer lands after the welcome", async () => {
+      const { voice } = await connectedMesh();
+      // Not asked yet: the app says off, unsettled, and the roster lands.
+      voice.setShareOptIn(false, false);
+      voice.handleSignaling(rosterWithShare(["p2", "p3"]));
+      expect(voice.getState().dismissedSharePeerIds).toEqual([]);
+      // The person chose one before the answer arrived; that choice stands.
+      voice.watchShare("p2");
+      voice.setShareOptIn(true, true);
+      const state = voice.getState();
+      expect(state.dismissedSharePeerIds).toEqual(["p3"]);
+      expect(state.shareInvitePeerIds).toEqual(["p3"]);
+      expect(state.audibleScreenPeerIds).toEqual(["p2"]);
+    });
+
+    it("holds the shares already up on the first answer of each call", async () => {
+      const { voice } = await connectedMesh();
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.setShareOptIn(true, true);
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+      // A later answer is not a first answer: nothing is pulled again.
+      voice.watchShare("p2");
+      voice.setShareOptIn(false, true);
+      voice.setShareOptIn(true, true);
+      expect(voice.getState().dismissedSharePeerIds).toEqual([]);
+    });
+
+    it("does not hold a share again on the next roster once it is watched", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.watchShare("p2");
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      expect(voice.getState().dismissedSharePeerIds).toEqual([]);
+    });
+
+    it("turning opt-in off gives back what it held and keeps what was declined", async () => {
+      const { voice } = await connectedMesh();
+      // Declined before opt-in existed: the person's own choice.
+      voice.handleSignaling(rosterWithShare(["p3"]));
+      voice.dismissShare("p3");
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2", "p3"]));
+      // Both are "Assistir": p2 held by opt-in, p3 the earlier decline,
+      // offered so the popout has a way back to it.
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2", "p3"]);
+      voice.setShareOptIn(false);
+      const state = voice.getState();
+      expect(state.dismissedSharePeerIds).toEqual(["p3"]);
+      expect(state.shareInvitePeerIds).toEqual([]);
+      expect(state.audibleScreenPeerIds).toEqual(["p2"]);
+    });
+
+    it("stopping a watched share under opt-in sends it back to Assistir", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.watchShare("p2");
+      voice.dismissShare("p2");
+      const state = voice.getState();
+      expect(state.dismissedSharePeerIds).toEqual(["p2"]);
+      expect(state.shareInvitePeerIds).toEqual(["p2"]);
+      expect(state.audibleScreenPeerIds).toEqual([]);
+    });
+
+    it("keeps a share closed under opt-in declined when opt-in turns off", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2", "p3"]));
+      voice.watchShare("p2");
+      voice.watchShare("p3");
+      // Closed in the popout: back to Assistir while opt-in is on...
+      voice.dismissShare("p2");
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+      // ...and still declined, not playing, once the window narrows.
+      voice.setShareOptIn(false);
+      const state = voice.getState();
+      expect(state.dismissedSharePeerIds).toEqual(["p2"]);
+      expect(state.shareInvitePeerIds).toEqual([]);
+      expect(state.audibleScreenPeerIds).toEqual(["p3"]);
+    });
+
+    it("offers a share declined before opt-in applied as Assistir, still declined after", async () => {
+      const { voice } = await connectedMesh();
+      // Declined in the old stage (narrow window, or the flag off).
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.dismissShare("p2");
+      voice.setShareOptIn(true);
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+      // Watchable again from the chip...
+      voice.watchShare("p2");
+      expect(voice.getState().dismissedSharePeerIds).toEqual([]);
+      // ...and a decline that was never undone stays one when opt-in stops.
+      voice.dismissShare("p2");
+      voice.setShareOptIn(false);
+      expect(voice.getState().dismissedSharePeerIds).toEqual(["p2"]);
+      expect(voice.getState().shareInvitePeerIds).toEqual([]);
+    });
+
+    it("keeps a held share declined once the person closes it", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.dismissShare("p2");
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+      voice.setShareOptIn(false);
+      expect(voice.getState().dismissedSharePeerIds).toEqual(["p2"]);
+    });
+
+    it("forgets a held share when it stops, so the next one asks again", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      voice.handleSignaling(rosterWithShare([]));
+      expect(voice.getState().shareInvitePeerIds).toEqual([]);
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      expect(voice.getState().shareInvitePeerIds).toEqual(["p2"]);
+    });
+
+    it("focusing a share never makes a held one audible", async () => {
+      const { voice } = await connectedMesh();
+      voice.setShareOptIn(true);
+      voice.handleSignaling(rosterWithShare(["p2", "p3"]));
+      voice.watchShare("p2");
+      voice.focusScreenShare("p2");
+      expect(voice.getState().audibleScreenPeerIds).toEqual(["p2"]);
+    });
+
+    it("changes nothing with opt-in off", async () => {
+      const { voice } = await connectedMesh();
+      voice.handleSignaling(rosterWithShare(["p2"]));
+      expect(voice.getState().dismissedSharePeerIds).toEqual([]);
+      expect(voice.getState().shareInvitePeerIds).toEqual([]);
+    });
+  });
+
   it("moves a share's sound without touching the presenter's voice", async () => {
     // The request, from the QG on 4 Sep 2026: "a separacao das faixas de audio
     // entre a live do amigo e a voz do amigo". Both sinks used to read the same

@@ -162,6 +162,7 @@ const voiceState = (overrides: Partial<VoiceState> = {}): VoiceState =>
     cameraPeerIds: [],
     focusedScreenPeerId: null,
     dismissedSharePeerIds: [],
+    shareInvitePeerIds: [],
     audibleScreenPeerIds: [],
     localScreenStream: null,
     isSharingScreenAudio: false,

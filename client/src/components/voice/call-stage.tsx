@@ -270,6 +270,7 @@ import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { shouldShowMusicPip, useMusicPipSpent } from "@/lib/music-pip";
 import { STAGE_LAYER, callControlsLayer } from "@/lib/stage-layers";
 import { Button } from "@/components/ui/button";
+import { ShareInviteChips } from "@/components/voice/share-invite-chips";
 import {
   useVoiceNotice,
   VoiceNoticeBar,
@@ -814,6 +815,18 @@ export interface CallStageProps {
   composerHidden?: boolean;
   /** The video pane is put away: the controls stay in the composer. */
   stageHidden?: boolean;
+  /**
+   * The share popout owns the call's pictures (`share_popout`, issue 1736):
+   * the stage behaves as if nobody published, stays folded into the
+   * composer's dock, and the chat keeps the whole pane.
+   */
+  picturesInPopout?: boolean;
+  /**
+   * The theater (`share_popout`, issue 1736): the stage was maximized from
+   * the popout. It is drawn expanded whatever this channel's own collapse
+   * says, and collapsing it goes back to the popout instead.
+   */
+  onMinimizeToPopout?: () => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -940,6 +953,8 @@ export function CallStage({
   roomListOnScreen = false,
   composerHidden = false,
   stageHidden = false,
+  picturesInPopout = false,
+  onMinimizeToPopout,
   onStopScreenShare,
   onFocusScreenShare,
   inputMode = "voice-activity",
@@ -975,7 +990,7 @@ export function CallStage({
     voiceState.peerId,
     voiceState.localScreenStream !== null,
   );
-  const hasVideo = hasWatchableVideo({
+  const hasVideo = !picturesInPopout && hasWatchableVideo({
     localCameraOn:
       voiceState.isCameraOn || voiceState.localCameraStream !== null,
     remoteHasCamera: voiceState.remotePeers.some(
@@ -1031,11 +1046,20 @@ export function CallStage({
       declinedNames={declinedNames}
       playOutgoingRingtone={playOutgoingRingtone}
       hasVideo={hasVideo}
-      userCollapsed={userCollapsed}
+      userCollapsed={onMinimizeToPopout ? false : userCollapsed}
       onSetCollapsed={(next) => {
+        if (onMinimizeToPopout) {
+          // Collapsing the theater is minimizing it: back to the popout, and
+          // this channel's own remembered collapse is left as it was.
+          if (next) {
+            onMinimizeToPopout();
+          }
+          return;
+        }
         setUserCollapsed(next);
         rememberStageCollapsed(channelId, next);
       }}
+      onMinimizeToPopout={onMinimizeToPopout}
       onLeave={onLeave}
       onToggleMute={onToggleMute}
       onDismissMicFallbackNotice={onDismissMicFallbackNotice}
@@ -1095,6 +1119,7 @@ function ActiveCall({
   hasVideo,
   userCollapsed,
   onSetCollapsed,
+  onMinimizeToPopout,
   onLeave,
   onToggleMute,
   onDismissMicFallbackNotice,
@@ -1149,6 +1174,7 @@ function ActiveCall({
   hasVideo: boolean;
   userCollapsed: boolean;
   onSetCollapsed: (collapsed: boolean) => void;
+  onMinimizeToPopout?: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
   onDismissMicFallbackNotice: () => void;
@@ -1447,6 +1473,9 @@ function ActiveCall({
     const active = voiceState.dismissedSharePeerIds.includes(tile.peerId);
     return {
       active,
+      // Held by opt-in watching rather than declined: the tile asks
+      // "Assistir" instead of saying the person stopped watching.
+      invite: voiceState.shareInvitePeerIds.includes(tile.peerId),
       onToggle: () =>
         active ? onWatchShare(tile.peerId) : onDismissShare(tile.peerId),
     };
@@ -2258,6 +2287,19 @@ function ActiveCall({
               className="ml-2 shrink-0 tabular-nums text-text-tertiary"
             />
           </p>
+          {onWatchShare && (
+            <ShareInviteChips
+              invites={screenTiles
+                .filter((tile) =>
+                  voiceState.shareInvitePeerIds.includes(tile.peerId),
+                )
+                .map((tile) => ({
+                  peerId: tile.peerId,
+                  presenterName: tile.presenterName,
+                }))}
+              onWatch={onWatchShare}
+            />
+          )}
           {/* With a picture on the stage the strip carries the full queue
               above its row (lower and allow included), so not this one too. */}
           {!(dockComposer && chromeExpanded) && (
@@ -3271,6 +3313,19 @@ function ActiveCall({
               startedAt={startedAt}
               className="rounded bg-black/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
             />
+          )}
+          {/* The theater's way back to the popout (`share_popout`). */}
+          {onMinimizeToPopout && (
+            <button
+              type="button"
+              data-testid="stage-minimize-to-popout"
+              aria-label={t("voice.popout.minimize")}
+              title={t("voice.popout.minimize")}
+              className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full bg-black/60 text-paper-muted hover:bg-black/80 hover:text-paper"
+              onClick={onMinimizeToPopout}
+            >
+              <Minimize2 aria-hidden="true" className="h-4 w-4" />
+            </button>
           )}
           {/* The way back from the landscape takeover, and the way into it
               again. Only on a phone held sideways with a share on. */}
@@ -4554,6 +4609,22 @@ function cameraLabel(
  * the alternative is a grid where seven faces are cropped and one is not. The
  * two kinds keep separate answers; see `lib/video-fit.ts` for why.
  */
+/**
+ * Where a tile's control row (name, volume, menu) sits from the tile's bottom.
+ *
+ * Two things can be under the picture's bottom edge: the black band of a
+ * letterboxed picture (`insetBottom`, from `useVideoInsets`) and the floating
+ * control bar (`--tile-row-lift`, its height from the stage's bottom). The
+ * row has to clear whichever reaches higher, so it is their MAXIMUM, not
+ * their sum. The sum put the row in the middle of a share whenever both were
+ * there: a tall stage, a 16:9 picture centred with bands, and the bar
+ * floating over the bottom band (the share popout's theater made it obvious).
+ * Never above the tile's top edge, as before.
+ */
+export function tileRowBottom(insetBottom: number): string {
+  return `min(calc(max(${insetBottom}px, var(--tile-row-lift, 0px)) + 8px), calc(100% - 2.25rem))`;
+}
+
 function TileOverlay({
   isFullscreen = false,
   onToggleFullscreen,
@@ -4646,7 +4717,7 @@ function TileOverlay({
         // Lifted over a floating bar, but never past the picture's own top:
         // with pictures stacked on a sideways phone the lift is taller than
         // the top picture, and its row went up under the page header.
-        bottom: `min(calc(${(insets?.bottom ?? 0) + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem))`,
+        bottom: tileRowBottom(insets?.bottom ?? 0),
       }}
     >
       <div className="flex min-w-0 items-center gap-1.5">
@@ -5634,7 +5705,7 @@ export function ScreenTileFrame({
    * talking about is not on their stage. Silently falling back to faces would
    * leave them to rediscover their own decision.
    */
-  dismissed?: { active: boolean; onToggle: () => void };
+  dismissed?: { active: boolean; invite?: boolean; onToggle: () => void };
   className?: string;
   /** Party/presenter title for the watch player's lock-screen metadata. */
   mediaTitle?: string;
@@ -5723,7 +5794,9 @@ export function ScreenTileFrame({
       >
         <div className="text-center">
           <p className="text-sm text-paper-muted">
-            {t("voice.share.dismissed", { name: tile.presenterName })}
+            {dismissed.invite
+              ? t("voice.share.invite", { name: tile.presenterName })
+              : t("voice.share.dismissed", { name: tile.presenterName })}
           </p>
           <Button
             variant="secondary"
@@ -5731,7 +5804,9 @@ export function ScreenTileFrame({
             className="mt-2"
             onClick={dismissed.onToggle}
           >
-            {t("voice.share.watchAgain")}
+            {dismissed.invite
+              ? t("voice.share.inviteWatch")
+              : t("voice.share.watchAgain")}
           </Button>
         </div>
       </div>
@@ -5926,7 +6001,7 @@ export function ScreenTileFrame({
           style={{
             left: insets.left + 8,
             right: insets.right + 8,
-            bottom: `min(calc(${insets.bottom + 8}px + var(--tile-row-lift, 0px)), calc(100% - 2.25rem))`,
+            bottom: tileRowBottom(insets.bottom),
           }}
         >
           <div className="flex min-w-0 items-center gap-1.5">

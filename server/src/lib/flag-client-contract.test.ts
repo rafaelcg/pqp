@@ -83,6 +83,7 @@ describe("GET /api/share/config against the client that reads it", () => {
         "shareHighMotionGuard",
         "shareGameCaptureHint",
         "shareFastStartQuality",
+        "sharePopout",
         "linuxDesktopSystemAudio",
         "macDesktopSystemAudio",
       ]),
@@ -324,6 +325,27 @@ describe("share_fast_start_quality, every link from the switch to the session", 
     expect(session).toContain("requestShareQualityBeforeSubscribe");
     expect(session).toMatch(/trigger === "room" && shareFastStartQualityActive\(\)/);
     expect(session).toMatch(/shareFastStartQualityActive\(\) &&\s*\(hlsSource === null/);
+  });
+});
+
+describe("share_popout, from the switch to the store React reads", () => {
+  // The popout decides what a component draws, so the answer has to reach a
+  // store the UI subscribes to. Served and fetched but never recorded would
+  // pass the shape checks above and leave every call on the old layout.
+  const read = (file: string) => readFileSync(path.join(clientSrc, file), "utf8");
+
+  it("is registered per server and served under the field the client reads", () => {
+    const def = FEATURE_FLAGS.share_popout;
+    expect(def.perServer).toBe(true);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/share/config (sharePopout)");
+    expect(Object.keys(shareConfigForServer(null))).toContain("sharePopout");
+  });
+
+  it("the share config's answer is handed to the popout store", () => {
+    expect(read("lib/share-guard-flag.ts")).toMatch(
+      /recordSharePopout\(\s*serverId,\s*config\.sharePopout === true/,
+    );
   });
 });
 

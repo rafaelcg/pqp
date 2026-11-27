@@ -109,6 +109,7 @@ function stateFor(overrides: Partial<VoiceState>): VoiceState {
     cameraPeerIds: [],
     focusedScreenPeerId: null,
     dismissedSharePeerIds: [],
+    shareInvitePeerIds: [],
     dismissedCameraPeerIds: [],
     audibleScreenPeerIds: [],
     localScreenStream: null,

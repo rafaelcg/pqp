@@ -299,6 +299,9 @@ import {
   setAppsViewer,
 } from "@/lib/apps/app-sessions-store";
 import { CallDockOutlet, CallDockProvider } from "@/components/voice/call-dock";
+import { useShareOptInSync } from "@/hooks/use-share-opt-in";
+import { SharePopout } from "@/components/voice/share-popout";
+import { dispatchShareView, useShareViewMode } from "@/lib/share-view-store";
 import {
   canOfferWatchPartyCreate,
   isWatchPartyChannelType,
@@ -3411,6 +3414,66 @@ function MainAppContent({
       prefetchShareGuardFlag(voiceServerIdRef.current);
     }
   }, [voiceSeatChannelId]);
+  // Opt-in watching for the share popout (issue 1736): with `share_popout`
+  // on for the call's server, a wide window and an ordinary voice room, a new
+  // share waits for "Assistir" instead of arriving on screen. Read from the
+  // share config the effect above prefetches; until it answers, it is off.
+  // The ref is read during render on purpose: every voice event re-renders
+  // this component, and the ref is set before the join that starts the call.
+  const sharePopoutCall = useShareOptInSync(voice, {
+    callChannelId: voiceSeatChannelId,
+    callServerId: voiceServerIdRef.current,
+    channels,
+  });
+  const focusShareFromPopout = useCallback(
+    (peerId: string) => voice.focusScreenShare(peerId),
+    [voice],
+  );
+  const dismissShareFromPopout = useCallback(
+    (peerId: string) => voice.dismissShare(peerId),
+    [voice],
+  );
+  const watchShareFromStage = useCallback(
+    (peerId: string) => voice.watchShare(peerId),
+    [voice],
+  );
+  // The popout's mode (`lib/share-view-store.ts`). In `theater`, in the call's
+  // own channel, the stage takes the conversation area and the chat is put
+  // away; "show chat" brings it back beside the picture for this theater only.
+  const shareViewMode = useShareViewMode();
+  const [theaterChat, setTheaterChat] = useState(false);
+  useEffect(() => {
+    if (shareViewMode !== "theater") {
+      setTheaterChat(false);
+    }
+  }, [shareViewMode]);
+  const minimizeTheater = useCallback(
+    () => dispatchShareView({ type: "minimize" }),
+    [],
+  );
+  useEffect(() => {
+    if (shareViewMode !== "theater") {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return;
+      }
+      // Escape belongs to whatever else is open first: a field being typed
+      // in, a dialog, or fullscreen (which the browser leaves on its own).
+      const active = document.activeElement as HTMLElement | null;
+      if (
+        document.fullscreenElement ||
+        document.querySelector('[role="dialog"]') ||
+        active?.closest("input, textarea, select, [contenteditable='true']")
+      ) {
+        return;
+      }
+      dispatchShareView({ type: "escape" });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shareViewMode]);
   /**
    * A conversation whose call was started "with video": the camera should come
    * on as soon as that join is connected. A ref plus an effect rather than an
@@ -9080,7 +9143,12 @@ function MainAppContent({
      */
     watchOnly = false,
   ) {
-    voiceServerIdRef.current = null;
+    // A DM call has no server: every per-server switch reads the global
+    // answer. Saying so through `noteCallServer` (not only the ref) also clears
+    // the server the share fast start would otherwise keep from the last
+    // server call, and asks the share config before the join, which is where
+    // the share popout (`share_popout`) learns whether this call uses it.
+    noteCallServer(null);
     pendingVideoCallRef.current = withVideo ? channelId : null;
     void selectConversation(channelId);
     refreshIceServers();
@@ -11725,6 +11793,10 @@ function MainAppContent({
       (voiceState.voiceChannelId === selectedChannelId ||
         voiceState.voiceChannelId === activeConversation?.channelId),
   );
+  // The share popout maximized into the call's own conversation area.
+  const theaterActive =
+    sharePopoutCall.applies && shareViewMode === "theater" && viewingThisCall;
+  const picturesInPopout = sharePopoutCall.applies && !theaterActive;
   const musicInComposer =
     voiceState.status === "connected" && viewingThisCall;
   // The two things the apps launcher offers as shortcuts rather than apps: the
@@ -13082,8 +13154,25 @@ function MainAppContent({
         shape={stageShape}
         kind={splitKind}
         phoneChatFloor={partyPhoneLayout}
-        preference={callSplit}
-        onPreferenceChange={handleCallSplitChange}
+        // The theater puts the chat away without touching the stored
+        // preference: it is the popout's state, not a layout the person chose,
+        // and minimizing must find their own split exactly where it was.
+        preference={
+          theaterActive
+            ? { ...callSplit, collapsed: theaterChat ? "none" : "chat" }
+            : callSplit
+        }
+        onPreferenceChange={
+          theaterActive
+            ? (next, persist) => {
+                setTheaterChat(next.collapsed === "none");
+                handleCallSplitChange(
+                  { ...next, collapsed: callSplit.collapsed },
+                  persist,
+                );
+              }
+            : handleCallSplitChange
+        }
         onSplitStateChange={handleSplitState}
         // No header while the stage is folded into the composer's strip:
         // the header exists to sit between a stage and the transcript, and
@@ -13316,6 +13405,8 @@ function MainAppContent({
         user && (
           <VoiceChannelStage
             fill={splitState.active}
+            picturesInPopout={picturesInPopout}
+            onMinimizeToPopout={theaterActive ? minimizeTheater : undefined}
             onShapeChange={handleStageShape}
             // Section 10 of docs/plans/WATCH_PARTY_SETUP_UX.md: in a channel
             // with a party on it, the party bar is the only bar. Mute, the
@@ -13429,8 +13520,16 @@ function MainAppContent({
       {activeConversation && user && (
         <DmCallStage
           fill={splitState.active}
+          picturesInPopout={picturesInPopout}
+          onMinimizeToPopout={theaterActive ? minimizeTheater : undefined}
           onShapeChange={handleStageShape}
           conversation={activeConversation}
+          // Only with the popout: a DM call's tiles never had a dismiss
+          // control, and the flag off must leave them exactly as they were.
+          onDismissShare={
+            sharePopoutCall.applies ? dismissShareFromPopout : undefined
+          }
+          onWatchShare={sharePopoutCall.applies ? watchShareFromStage : undefined}
           currentUser={{
             id: user.id,
             displayName: user.displayName,
@@ -15690,6 +15789,36 @@ function MainAppContent({
         onFailed={() => setAppError(t("listingNudge.failed"))}
       />
 
+      {/* THE SHARE POPOUT (issue 1736): one picture from the call, over the
+          conversation area, in every channel. Mounted here, once, so walking
+          to another channel never unbinds its video. */}
+      {user && (
+        <SharePopout
+          voiceState={voiceState}
+          enabled={sharePopoutCall.applies}
+          call={
+            voiceState.voiceChannelId
+              ? {
+                  name:
+                    voiceChannel?.name ??
+                    sharePopoutCall.channelName ??
+                    (voiceConversation
+                      ? conversationTitle(voiceConversation.participants)
+                      : t("voice.channelFallback")),
+                  serverName: voiceConversation
+                    ? null
+                    : (servers.find(
+                        (one) => one.id === voiceServerIdRef.current,
+                      )?.name ?? null),
+                }
+              : null
+          }
+          viewingCallChannel={viewingThisCall}
+          onGoToCall={() => void openVoiceChannel()}
+          onFocusShare={focusShareFromPopout}
+          onDismissShare={dismissShareFromPopout}
+        />
+      )}
       {/* The dock the watch surface falls back to whenever no channel pane is
           holding it. An empty anchor: the surface's own box is `fixed`, so
           this contributes nothing to the layout. */}

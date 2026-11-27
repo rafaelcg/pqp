@@ -42,6 +42,7 @@ import {
   isCameraAtCap,
   isScreenShareAtCap,
   nextScreenShareFocus,
+  sharesArrivingUnwatched,
   type MeshRoomLink,
 } from "@/lib/screen-share-roster";
 import {
@@ -720,6 +721,14 @@ export interface VoiceState {
    * saving gets wired in.
    */
   dismissedSharePeerIds: string[];
+  /**
+   * Shares waiting for "Assistir": a subset of `dismissedSharePeerIds` that
+   * opt-in watching held back (`share_popout`, issue 1736), as opposed to
+   * shares this person declined. Same peer ids, in roster order. Empty with
+   * opt-in off. The UI asks "{name} está transmitindo · Assistir" of these and
+   * "Tu parou de assistir" of the rest.
+   */
+  shareInvitePeerIds: string[];
   /**
    * Cameras this viewer hid from their own stage, by peer id. The same deal
    * as `dismissedSharePeerIds`: the tile stays and says so, nothing about the
@@ -1483,6 +1492,33 @@ const SCREEN_PUBLISH_RECONCILE_MS = 1_500;
 const SCREEN_PUBLISH_MISS_CONFIRM = 2;
 
 export function createVoiceController(transport: RealtimeTransport) {
+  /**
+   * Opt-in watching for `share_popout` (issue 1736): set by the app from the
+   * call's flag and the window width (`sharePopoutApplies`). On, a share
+   * arrives dismissed and waits for "Assistir". Off is the old behaviour,
+   * every share watched on arrival.
+   */
+  let shareOptIn = false;
+  /** Shares opt-in dismissed, as opposed to ones the person declined. */
+  const optInDismissed = new Set<string>();
+  /**
+   * Shares the person stopped watching while opt-in was on. Shown as
+   * "Assistir" like the held ones, because the popout draws no stage tile to
+   * undo a decline from, but they are the person's own choice: turning opt-in
+   * off leaves them declined instead of giving them back.
+   */
+  const closedUnderOptIn = new Set<string>();
+  /**
+   * Whether this call has had a KNOWN answer for opt-in yet. The answer rides
+   * on a share config request that can land after the call's welcome; until
+   * it does the app says "off, not settled", and shares already up are let
+   * in. The first settled "on" then holds them, so a slow request never
+   * decides for the person. Later changes (the operator flipping the flag, a
+   * window narrowed and widened) never pull a share off the screen.
+   */
+  let optInSettled = false;
+  /** Shares this person pressed "Assistir" on (or watched again) this call. */
+  const watchedByChoice = new Set<string>();
   let manager: ReturnType<typeof createPeerConnectionManager> | null = null;
   let sfu: LiveKitSession | null = null;
   /**
@@ -2139,6 +2175,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     uplinkBps: null,
     focusedScreenPeerId: null,
     dismissedSharePeerIds: [],
+    shareInvitePeerIds: [],
     dismissedCameraPeerIds: [],
     audibleScreenPeerIds: [],
     localScreenStream: null,
@@ -4668,6 +4705,70 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /**
+   * Shares the person declined before opt-in applied (in the old stage, with
+   * a narrow window or the flag off) become "Assistir" too. The popout draws
+   * no stage tile to undo a decline from, so without this such a share could
+   * not be watched again. They stay the person's decline: tracked with the
+   * ones closed under opt-in, so turning opt-in off leaves them declined.
+   */
+  function offerDeclinedShares() {
+    let offered = false;
+    for (const id of state.dismissedSharePeerIds) {
+      if (!optInDismissed.has(id) && !closedUnderOptIn.has(id)) {
+        closedUnderOptIn.add(id);
+        offered = true;
+      }
+    }
+    if (offered) {
+      syncShareInvites();
+      emit();
+    }
+  }
+
+  /**
+   * The call's first settled "on" (see `optInSettled`): every share up right
+   * now that this person did not choose goes back to waiting for "Assistir".
+   */
+  function holdUnchosenShares() {
+    let held = false;
+    for (const id of state.screenSharePeerIds) {
+      if (
+        id === state.peerId ||
+        watchedByChoice.has(id) ||
+        state.dismissedSharePeerIds.includes(id)
+      ) {
+        continue;
+      }
+      state.dismissedSharePeerIds = [...state.dismissedSharePeerIds, id];
+      optInDismissed.add(id);
+      held = true;
+    }
+    if (!held) {
+      return;
+    }
+    syncShareInvites();
+    state.audibleScreenPeerIds = audibleScreenPeerIds(
+      state.screenSharePeerIds.filter(
+        (id) => !state.dismissedSharePeerIds.includes(id),
+      ),
+      state.focusedScreenPeerId,
+    );
+    emit();
+  }
+
+  /**
+   * Mirror the shares waiting for "Assistir" (held by opt-in, or closed by
+   * the person while it was on) into the state the UI reads, in roster order.
+   */
+  function syncShareInvites() {
+    state.shareInvitePeerIds = shareOptIn
+      ? state.screenSharePeerIds.filter(
+          (id) => optInDismissed.has(id) || closedUnderOptIn.has(id),
+        )
+      : state.screenSharePeerIds.filter((id) => optInDismissed.has(id));
+  }
+
+  /**
    * Rebuild who is sharing, who is focused, and whose audio plays from a
    * roster snapshot. Stop and disconnect both show up as a missing id, so
    * they share the same fallback.
@@ -4681,16 +4782,37 @@ export function createVoiceController(transport: RealtimeTransport) {
       nextIds,
       state.focusedScreenPeerId,
     );
+    const arriving = shareOptIn
+      ? sharesArrivingUnwatched(state.screenSharePeerIds, nextIds, state.peerId)
+      : [];
     state.screenSharePeerIds = nextIds;
     state.focusedScreenPeerId = focused;
     // A dismissal only lasts as long as the share it was about.
     state.dismissedSharePeerIds = state.dismissedSharePeerIds.filter((id) =>
       nextIds.includes(id),
     );
+    for (const set of [optInDismissed, closedUnderOptIn]) {
+      for (const id of [...set]) {
+        if (!nextIds.includes(id)) {
+          set.delete(id);
+        }
+      }
+    }
+    // Opt-in watching (`share_popout`): a share arrives as "Assistir", with no
+    // picture bound, so on an SFU `remote-video-delivery.ts` never asks for
+    // its video. Remembered apart from a person's own dismissals so turning
+    // opt-in off gives back exactly what it took and nothing they declined.
+    for (const id of arriving) {
+      if (!state.dismissedSharePeerIds.includes(id)) {
+        state.dismissedSharePeerIds = [...state.dismissedSharePeerIds, id];
+        optInDismissed.add(id);
+      }
+    }
     state.audibleScreenPeerIds = audibleScreenPeerIds(
       nextIds.filter((id) => !state.dismissedSharePeerIds.includes(id)),
       focused,
     );
+    syncShareInvites();
   }
 
   /** Who has a camera on, from a roster snapshot. */
@@ -5493,6 +5615,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     dismissedMicFallbackKey = null;
     unregisterSoundboard?.();
     unregisterSoundboard = null;
+    optInDismissed.clear();
+    closedUnderOptIn.clear();
+    watchedByChoice.clear();
+    optInSettled = false;
     state = {
       status: "idle",
       peerId: null,
@@ -5547,6 +5673,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     uplinkBps: null,
       focusedScreenPeerId: null,
       dismissedSharePeerIds: [],
+      shareInvitePeerIds: [],
       dismissedCameraPeerIds: [],
       audibleScreenPeerIds: [],
       localScreenStream: null,
@@ -6745,6 +6872,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       // share ids would otherwise leak into the welcome diff and look like
       // newcomers. Empty previous is the locked "join into live shares" rule.
       state.screenSharePeerIds = [];
+      optInDismissed.clear();
+      closedUnderOptIn.clear();
+      watchedByChoice.clear();
+      optInSettled = false;
+      state.shareInvitePeerIds = [];
       state.liveStream = null;
       state.cameraPeerIds = [];
       state.dismissedCameraPeerIds = [];
@@ -7975,19 +8107,84 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       state.focusedScreenPeerId = peerId;
+      // Only shares this person watches may be heard: focusing one must not
+      // make a declined share, or one opt-in is holding, audible again.
       state.audibleScreenPeerIds = audibleScreenPeerIds(
-        state.screenSharePeerIds,
+        state.screenSharePeerIds.filter(
+          (id) => !state.dismissedSharePeerIds.includes(id),
+        ),
         peerId,
       );
       emit();
     },
 
-    /** Stop watching one share: no picture, no sound, tile kept as a way back. */
+    /**
+     * Opt-in watching (`share_popout`). On, shares that arrive from now on
+     * wait for "Assistir"; the ones already on screen stay. Off gives back
+     * every share opt-in held, and keeps the ones the person declined.
+     */
+    setShareOptIn(on: boolean, settled = true) {
+      const firstAnswer = settled && !optInSettled;
+      if (settled) {
+        optInSettled = true;
+      }
+      if (shareOptIn === on && !(on && firstAnswer)) {
+        return;
+      }
+      shareOptIn = on;
+      if (on) {
+        offerDeclinedShares();
+        if (firstAnswer) {
+          holdUnchosenShares();
+        }
+        return;
+      }
+      // What the person closed stays declined; only what opt-in held returns.
+      const hadClosed = closedUnderOptIn.size > 0;
+      closedUnderOptIn.clear();
+      if (optInDismissed.size === 0) {
+        if (hadClosed) {
+          syncShareInvites();
+          emit();
+        }
+        return;
+      }
+      state.dismissedSharePeerIds = state.dismissedSharePeerIds.filter(
+        (id) => !optInDismissed.has(id),
+      );
+      optInDismissed.clear();
+      syncShareInvites();
+      state.audibleScreenPeerIds = audibleScreenPeerIds(
+        state.screenSharePeerIds.filter(
+          (id) => !state.dismissedSharePeerIds.includes(id),
+        ),
+        state.focusedScreenPeerId,
+      );
+      emit();
+    },
+
+    /**
+     * Stop watching one share: no picture, no sound, tile kept as a way back.
+     *
+     * With opt-in on (`share_popout`) the way back is the "Assistir" chip, not
+     * a tile, because the popout draws no stage: the share shows as waiting
+     * for "Assistir" (`closedUnderOptIn`). It is still the person's decline,
+     * so turning opt-in off leaves it declined rather than playing again.
+     */
     dismissShare(peerId: string) {
+      watchedByChoice.delete(peerId);
+      if (shareOptIn && state.screenSharePeerIds.includes(peerId)) {
+        // Declining a share opt-in was holding makes it the person's choice.
+        optInDismissed.delete(peerId);
+        closedUnderOptIn.add(peerId);
+      }
       if (state.dismissedSharePeerIds.includes(peerId)) {
+        syncShareInvites();
+        emit();
         return;
       }
       state.dismissedSharePeerIds = [...state.dismissedSharePeerIds, peerId];
+      syncShareInvites();
       state.audibleScreenPeerIds = audibleScreenPeerIds(
         state.screenSharePeerIds.filter(
           (id) => !state.dismissedSharePeerIds.includes(id),
@@ -8017,14 +8214,25 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
     },
 
-    /** Undo that. */
+    /**
+     * Undo that, or press "Assistir" on a share opt-in held. With opt-in on,
+     * the share just chosen also takes the focus, so it is the one heard when
+     * three or more are watched: the person asked for this one.
+     */
     watchShare(peerId: string) {
+      watchedByChoice.add(peerId);
+      optInDismissed.delete(peerId);
+      closedUnderOptIn.delete(peerId);
       if (!state.dismissedSharePeerIds.includes(peerId)) {
         return;
       }
       state.dismissedSharePeerIds = state.dismissedSharePeerIds.filter(
         (id) => id !== peerId,
       );
+      if (shareOptIn) {
+        state.focusedScreenPeerId = peerId;
+      }
+      syncShareInvites();
       state.audibleScreenPeerIds = audibleScreenPeerIds(
         state.screenSharePeerIds.filter(
           (id) => !state.dismissedSharePeerIds.includes(id),

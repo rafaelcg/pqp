@@ -451,6 +451,18 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/share/config (shareFastStartQuality)",
   },
+  share_popout: {
+    description:
+      "Transmissão de tela em popout dentro do app: o chat fica com o painel inteiro, uma transmissão flutua num canto (arrasta, muda de tamanho, segue entre canais) e só ocupa a área da conversa quando a pessoa maximiza. Transmissão nova chega como \"Assistir\", sem baixar vídeo até o clique. Só web e desktop.",
+    env: "SHARE_POPOUT",
+    parseEnv: exactTrue,
+    // Off: it changes where every call's picture is drawn. One server first.
+    codeDefault: false,
+    // Read by `GET /api/share/config` with the call's server, like the other
+    // share switches: a DM call asks with none and gets the global answer.
+    perServer: true,
+    clientVia: "GET /api/share/config (sharePopout)",
+  },
   share_game_capture_hint: {
     description:
       "Aviso de jogo em tela cheia exclusiva: no app desktop do Windows, se o compartilhamento chega preto, sem quadros ou cai sozinho enquanto o Windows diz que um jogo ocupa a tela, quem compartilha vê como trocar pra tela cheia em janela.",

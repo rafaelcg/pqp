@@ -79,6 +79,7 @@ const idle: VoiceState = {
   cameraPeerIds: [],
   focusedScreenPeerId: null,
   dismissedSharePeerIds: [],
+  shareInvitePeerIds: [],
   audibleScreenPeerIds: [],
   localScreenStream: null,
   isSharingScreenAudio: false,
