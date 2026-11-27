@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   list: vi.fn(),
   openById: vi.fn(),
   openNew: vi.fn(),
+  inbox: vi.fn(),
 }));
 
 vi.mock("@/lib/jam-public-nav", () => ({
@@ -17,13 +18,14 @@ vi.mock("@/lib/jam-public-api", () => ({
   fetchJamPublicMe: api.me,
   fetchPublicJams: api.list,
   fetchJamPublicConsents: vi.fn().mockResolvedValue({ pending: [] }),
-  fetchJamPublicInbox: vi.fn().mockResolvedValue({ takes: [] }),
+  fetchJamPublicInbox: api.inbox,
   fetchJamTakeNotices: vi.fn().mockResolvedValue({ notices: [] }),
   ackJamTakeNotice: vi.fn().mockResolvedValue({ ok: true }),
   answerJamConsent: vi.fn(),
 }));
 
 const store = await import("./jam-public-store");
+const framesModule = await import("./jam-frames");
 const { FEATURED_WINDOW } = await import("./jam-featured");
 
 type Mode = "open" | "wanted" | "closed";
@@ -40,6 +42,8 @@ beforeEach(() => {
   api.list.mockReset();
   api.openById.mockReset();
   api.openNew.mockReset();
+  api.inbox.mockReset();
+  api.inbox.mockResolvedValue({ takes: [] });
   store.resetJamPublic();
 });
 
@@ -144,5 +148,94 @@ describe("the door with no song beside it", () => {
     await first;
     expect(api.openById).toHaveBeenCalledTimes(1);
     expect(api.openById).toHaveBeenCalledWith("second");
+  });
+});
+
+describe("the starter's own songs, live", () => {
+  const dispatchJamFrame = (frame: unknown) => framesModule.dispatchJamFrame(frame as never);
+
+  const trackFrame = (type: "jam-track-added" | "jam-track-updated" | "jam-track-deleted", authorId: string | null) =>
+    ({ type, channelId: "c1", song: { id: "s1", authorId }, track: { id: "t1", songId: "s1" }, trackId: "t1" }) as unknown;
+
+  async function enabled(viewer: string | null) {
+    api.me.mockResolvedValue({ enabled: true, publishing: "open", uploads: true });
+    store.resetJamPublic(viewer);
+    await store.loadJamPublicMe({ force: true });
+    await vi.waitFor(() => expect(api.inbox).toHaveBeenCalledTimes(1));
+    api.inbox.mockClear();
+  }
+
+  it("a burst of frames for a song the viewer started is one read of the inbox, a while after the first", async () => {
+    await enabled("alice");
+    vi.useFakeTimers();
+    try {
+      dispatchJamFrame(trackFrame("jam-track-added", "alice"));
+      dispatchJamFrame(trackFrame("jam-track-added", "alice"));
+      dispatchJamFrame(trackFrame("jam-track-updated", "alice"));
+      dispatchJamFrame(trackFrame("jam-track-deleted", "alice"));
+      expect(api.inbox).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.inbox).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("frames for somebody else's song, or with nobody signed in, read nothing", async () => {
+    await enabled("alice");
+    vi.useFakeTimers();
+    try {
+      dispatchJamFrame(trackFrame("jam-track-added", "bob"));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.inbox).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+    await enabled(null);
+    vi.useFakeTimers();
+    try {
+      dispatchJamFrame(trackFrame("jam-track-added", null));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.inbox).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a change that lands while a read is out queues exactly one more, never two at once", async () => {
+    await enabled("alice");
+    let release: (value: { takes: [] }) => void = () => undefined;
+    api.inbox.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    vi.useFakeTimers();
+    try {
+      dispatchJamFrame(trackFrame("jam-track-added", "alice"));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(api.inbox).toHaveBeenCalledTimes(1); // out, and not answered yet
+      dispatchJamFrame(trackFrame("jam-track-added", "alice"));
+      dispatchJamFrame(trackFrame("jam-track-added", "alice"));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(api.inbox).toHaveBeenCalledTimes(1); // still one in flight
+      release({ takes: [] });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(api.inbox).toHaveBeenCalledTimes(2); // the queued one, once
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(api.inbox).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the starter's inbox shows a part the moment its frame lands: the strip never trails the song", async () => {
+    await enabled("alice");
+    const take = { songId: "s1", songTitle: "Lua", track: { id: "t9" } };
+    api.inbox.mockResolvedValue({ takes: [take] });
+    vi.useFakeTimers();
+    try {
+      dispatchJamFrame(trackFrame("jam-track-added", "alice"));
+      await vi.advanceTimersByTimeAsync(1000);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(store.getJamPublicWaiting().inbox).toEqual([take]);
   });
 });

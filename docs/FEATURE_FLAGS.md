@@ -1120,8 +1120,9 @@ or refused. A burst on one song is one item with a count. Behind
   `jam-public-notice` of kind `take` is sent to the starter either** (the frame
   is the live half of the item, and an online starter used to get the toast the
   card replaces; off now means no card, no toast and no push, with no half-state).
-  The strip then catches up with the inbox at the next read (boot, a reconnect,
-  opening the song, any other frame), not at the moment the take arrives. What it
+  The strip does not trail the song: the web re-reads the inbox when a frame says
+  a song the viewer started changed (`jam-public-store.ts`, debounced, one read in
+  flight and at most one queued). What it
   does NOT touch: the "N partes esperando tua
   resposta" block on the song, the wall's row and tile pill and the Communities row
   (they read the inbox), and the `needs` rule (a pending take no longer fills what

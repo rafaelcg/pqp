@@ -487,9 +487,12 @@ frame, a push; no email and no broadcast push).
   the web used to draw its old toast from it when there was no item, which is what
   "off" left behind). The persistent markers below and the `needs` rule are not
   behind it, and neither is the inbox, so with the flag off the waiting strip and the
-  song's block still list every waiting part; they just learn of a new one at the next
-  read (boot, reconnect, opening the song, any other frame) instead of the moment it
-  arrives. The `admitted: true` frame auto-accept sends is not a request notice and
+  song's block still list every waiting part, and they do not need the notice to stay
+  live: the web re-reads the inbox when a `jam-track-added` / `-updated` / `-deleted`
+  frame (or a `jam-song-deleted` for a song in its inbox) arrives for a song the
+  viewer started (`scheduleWaitingRead` in `client/src/lib/jam-public-store.ts`,
+  debounced 400 ms, one read in flight and at most one queued behind it). Any client
+  that applies jam frames should do the same: the frame is the signal, the inbox is the state. The `admitted: true` frame auto-accept sends is not a request notice and
   is not behind this flag (it is behind the block rule below).
 
 ### A block and the notices

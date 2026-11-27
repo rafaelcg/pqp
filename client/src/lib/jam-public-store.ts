@@ -1,4 +1,5 @@
 import type {
+  JamFrame,
   JamPublicConsent,
   JamPublicConsentRequest,
   JamPublicInboxItem,
@@ -8,6 +9,7 @@ import type {
 } from "@pqp/shared";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { onConfigRefresh } from "@/lib/config-refresh";
+import { subscribeJamFrames } from "@/lib/jam-frames";
 import {
   ackJamTakeNotice,
   answerJamConsent,
@@ -89,13 +91,27 @@ function status(error: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
-/** Empty everything held: another account is looking now. */
-export function resetJamPublic(): void {
+/** The account the store holds for (`setJamViewer` passes it): the frames of the songs it started are its own. */
+let viewerId: string | null = null;
+
+/**
+ * Empty everything held: another account is looking now. `forViewer` is who: the
+ * store reads the waiting lists again when a frame says a song THEY started
+ * changed (see `scheduleWaitingRead`).
+ */
+export function resetJamPublic(forViewer: string | null = null): void {
   epoch += 1;
   me = UNKNOWN;
   waiting = NOTHING;
   meLoad = null;
   waitingLoad = null;
+  viewerId = forViewer;
+  if (rereadTimer !== null) {
+    clearTimeout(rereadTimer);
+    rereadTimer = null;
+  }
+  rereadRunning = false;
+  rereadQueued = false;
   emit();
 }
 
@@ -306,6 +322,75 @@ export function subscribeJamPublicNotices(listener: (notice: JamPublicNotice) =>
     noticeListeners.delete(listener);
   };
 }
+
+// ---- the starter's own songs, live ---------------------------------------------
+
+/** A burst of frames (several parts, one answer after another) is one read. */
+const REREAD_DEBOUNCE_MS = 400;
+let rereadTimer: ReturnType<typeof setTimeout> | null = null;
+let rereadRunning = false;
+let rereadQueued = false;
+
+/**
+ * Read the waiting lists again soon: debounced, one read in flight, and a change that lands
+ * while it runs queues exactly one more (the read that was out may predate it). The strip, the
+ * tile pill and the song's block read the inbox, and a part that waits no longer announces itself
+ * through a notice when the switch is off or the sender is blocked, so the starter's own song
+ * frames are what keep them from trailing the song.
+ */
+function scheduleWaitingRead(): void {
+  if (!me.enabled || rereadTimer !== null) {
+    return;
+  }
+  if (rereadRunning) {
+    rereadQueued = true;
+    return;
+  }
+  rereadTimer = setTimeout(() => {
+    rereadTimer = null;
+    void runWaitingRead();
+  }, REREAD_DEBOUNCE_MS);
+}
+
+async function runWaitingRead(): Promise<void> {
+  const mine = epoch;
+  rereadRunning = true;
+  try {
+    // A read already out may have started before the change: let it land, then read once more.
+    if (waitingLoad) {
+      await waitingLoad.catch(() => undefined);
+    }
+    if (mine === epoch) {
+      await loadJamPublicWaiting().catch(() => undefined);
+    }
+  } finally {
+    if (mine === epoch) {
+      rereadRunning = false;
+      if (rereadQueued) {
+        rereadQueued = false;
+        scheduleWaitingRead();
+      }
+    }
+  }
+}
+
+subscribeJamFrames((frame: JamFrame) => {
+  if (!me.enabled || viewerId === null) {
+    return;
+  }
+  if (frame.type === "jam-song-deleted") {
+    if (waiting.inbox.some((one) => one.songId === frame.songId)) {
+      scheduleWaitingRead();
+    }
+    return;
+  }
+  if (
+    (frame.type === "jam-track-added" || frame.type === "jam-track-updated" || frame.type === "jam-track-deleted") &&
+    frame.song.authorId === viewerId
+  ) {
+    scheduleWaitingRead();
+  }
+});
 
 /** The socket came back: frames sent while it was down are gone, so read again. */
 export function jamPublicReconnected(): void {

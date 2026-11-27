@@ -273,7 +273,7 @@ export function setJamViewer(userId: string | null): void {
     return;
   }
   viewer = userId;
-  resetJamPublic();
+  resetJamPublic(userId);
   resetJamStoreForTests();
   queueMicrotask(emit);
 }
