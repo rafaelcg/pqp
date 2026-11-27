@@ -52,4 +52,15 @@ describe("room for a phone's corner card", () => {
     expect(rule).toMatch(/html\[data-app-shell\]\[data-corner-space\] #root/);
     expect(rule).toMatch(/calc\(100dvh - var\(--pqp-corner-space, 0px\)\)/);
   });
+
+  it("a keyboard hint is for a window with room for a keyboard: the shortcuts card needs the sm breakpoint too", () => {
+    const app = readFileSync(path.resolve(process.cwd(), "src/App.tsx"), "utf8");
+    const gate = app.slice(app.indexOf("      shortcuts:\n        wantsShortcutsHint &&"), app.indexOf("attachedFeatureHint === null,"));
+    expect(gate).toContain("voiceCleanDesktopViewport &&");
+  });
+
+  it("the Jam card leaves its picture to the desktop, so a phone's card is a short one", () => {
+    const hint = readFileSync(path.resolve(process.cwd(), "src/components/layout/jam-announcement-hint.tsx"), "utf8");
+    expect(hint).toContain("phoneHero={false}");
+  });
 });
