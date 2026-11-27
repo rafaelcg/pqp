@@ -1116,8 +1116,13 @@ or refused. A burst on one song is one item with a count. Behind
   and blocks. It answers the launch test's N1; leaving it dark would ship the
   bug it fixes.
 - **Off:** nothing is written to `jam_take_notices`, no decision frame, no push,
-  `GET /api/jam-public/notices` answers `{ notices: [] }`, and an online starter
-  gets the old toast again. What it does NOT touch: the "N partes esperando tua
+  `GET /api/jam-public/notices` answers `{ notices: [] }`, and **no live
+  `jam-public-notice` of kind `take` is sent to the starter either** (the frame
+  is the live half of the item, and an online starter used to get the toast the
+  card replaces; off now means no card, no toast and no push, with no half-state).
+  The strip then catches up with the inbox at the next read (boot, a reconnect,
+  opening the song, any other frame), not at the moment the take arrives. What it
+  does NOT touch: the "N partes esperando tua
   resposta" block on the song, the wall's row and tile pill and the Communities row
   (they read the inbox), and the `needs` rule (a pending take no longer fills what
   a song asks for), which are not notices.
@@ -1126,8 +1131,10 @@ or refused. A burst on one song is one item with a count. Behind
   or controles → interruptores.
 
 Pinned by `server/src/api/jam-take-notices.test.ts` (the flag as a row, both
-states) and `server/src/ws/jam-take-notices-cluster.test.ts` (two instances on the
-Postgres bus, off crossing the bus).
+states), `server/src/ws/jam-take-notices-cluster.test.ts` (two instances on the
+Postgres bus, off crossing the bus) and `server/src/api/jam-frame-coherence.test.ts`
+(two real API processes and real sockets: with the flag off no notice frame reaches
+the starter on either machine, on again it does).
 
 ## `jam_audio_copy` (global, default off, restarts nothing)
 

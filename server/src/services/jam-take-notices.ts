@@ -6,6 +6,7 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { isEnabled } from "../lib/flags.js";
+import { notBlockedSql } from "./blocks.js";
 import { notifyJamTakeDecision } from "./jam-public-notify.js";
 import { pushJamTake } from "./push.js";
 
@@ -106,7 +107,11 @@ function sortedInstruments(list: readonly string[]): JamInstrument[] {
   return [...new Set(list.map(known))].sort((a, b) => rank(a) - rank(b));
 }
 
-async function recipientBlockedActor(recipientId: string, actorId: string): Promise<boolean> {
+/**
+ * One direction, `notBlockedSql`'s rule (blocks.ts): the recipient blocked the actor. Whose feed
+ * something may enter, and nothing more.
+ */
+export async function recipientBlockedActor(recipientId: string, actorId: string): Promise<boolean> {
   const result = await getPool().query(
     `SELECT 1 FROM user_blocks WHERE user_id = $1 AND blocked_user_id = $2`,
     [recipientId, actorId],
@@ -227,7 +232,15 @@ async function upsertNotice(input: NoticeInput): Promise<{ id: string; count: nu
   }
 }
 
-/** An outside take arrived on a song: the durable item (and the push) for its starter. */
+/**
+ * An outside take arrived on a song: the durable item (and the push) for its starter.
+ *
+ * True when the item was written, which is also the ONLY case the live frame
+ * (`jam-public-notice` kind `take`) may follow: the frame is the live half of the same notice,
+ * so it is silent exactly where the item is (flag off, the starter blocked the sender, the
+ * starter is the sender, a failed write). A take that is not announced still waits in the
+ * starter's inbox, which is state and not a nudge (docs/JAM_PUBLIC.md, "A block and the notices").
+ */
 export async function recordTakeForStarter(input: {
   starterId: string;
   takerId: string;
@@ -236,8 +249,8 @@ export async function recordTakeForStarter(input: {
   instrument: JamInstrument;
   serverId: string | null;
   channelId: string | null;
-}): Promise<void> {
-  await upsertNotice({
+}): Promise<boolean> {
+  const written = await upsertNotice({
     recipientId: input.starterId,
     actorId: input.takerId,
     kind: "take",
@@ -247,6 +260,7 @@ export async function recordTakeForStarter(input: {
     serverId: input.serverId,
     channelId: input.channelId,
   });
+  return written !== null;
 }
 
 /** What a decision needs to know about the take it answers, read BEFORE the decision changes it. */
@@ -365,6 +379,8 @@ export async function listJamTakeNotices(userId: string): Promise<JamTakeNotices
            JOIN jam_public_tracks pt ON pt.track_id = t.id
           WHERE t.song_id = n.song_id AND pt.outside AND NOT t.in_mix
             AND t.deleted_at IS NULL AND pt.removed_at IS NULL
+            -- A part from somebody the starter blocked waits in the inbox but is not a nudge.
+            AND ${notBlockedSql("n.user_id", "t.author_id")}
        ) live ON n.kind = 'take'
        LEFT JOIN LATERAL (
          -- An 'accepted' item says "your part is in": true only while one still is. The sender may
@@ -418,7 +434,8 @@ export async function listJamTakeNotices(userId: string): Promise<JamTakeNotices
             AND NOT EXISTS (
               SELECT 1 FROM jam_tracks t JOIN jam_public_tracks pt ON pt.track_id = t.id
                WHERE t.song_id = n.song_id AND pt.outside AND NOT t.in_mix
-                 AND t.deleted_at IS NULL AND pt.removed_at IS NULL)`,
+                 AND t.deleted_at IS NULL AND pt.removed_at IS NULL
+                 AND ${notBlockedSql("n.user_id", "t.author_id")})`,
         [settled],
       )
       .catch(() => undefined);

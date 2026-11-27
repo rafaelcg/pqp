@@ -47,6 +47,7 @@ import {
   jamPublicNewAccountReviewOn,
 } from "../lib/jam-public-config.js";
 import { isStorageConfigured } from "../lib/s3.js";
+import { notBlockedSql } from "./blocks.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { isContentScanConfigured } from "./content-scan.js";
 import {
@@ -719,7 +720,7 @@ export async function noteJamTrackAdded(input: {
         const instrument = await instrumentOfTrack(trackId);
         // The durable item first: the frame below makes the starter's app read
         // it, so it has to be there when it asks.
-        await recordTakeForStarter({
+        const itemWritten = await recordTakeForStarter({
           starterId: song.author_id,
           takerId: userId,
           songId: song.id,
@@ -728,13 +729,18 @@ export async function noteJamTrackAdded(input: {
           serverId: song.server_id,
           channelId: song.channel_id,
         });
-        notifyJamPublic(song.author_id, {
-          kind: "take",
-          songId: song.id,
-          title: song.title,
-          trackId,
-          instrument,
-        });
+        // The frame is the live half of the item: no item (the notices are off, or the starter
+        // blocked this person), no frame. The take is in the starter's inbox either way, which
+        // is what the waiting strip and the song's block read.
+        if (itemWritten) {
+          notifyJamPublic(song.author_id, {
+            kind: "take",
+            songId: song.id,
+            title: song.title,
+            trackId,
+            instrument,
+          });
+        }
       }
     }
   } catch (error) {
@@ -846,6 +852,7 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
       sender_id: string;
       instrument: string;
       late: boolean;
+      starter_blocked_sender: boolean;
     }>(
       `WITH due AS (
          SELECT pt.track_id
@@ -900,7 +907,10 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
               mt.author_id AS sender_id, mt.instrument,
               -- Well after it was sent: the sender is told it went in. A take
               -- admitted inside its own request needs no card (they are looking at it).
-              (mt.created_at < NOW() - INTERVAL '30 seconds') AS late
+              (mt.created_at < NOW() - INTERVAL '30 seconds') AS late,
+              -- The starter blocked the sender: the take goes in all the same (their standing
+              -- yes), but it is not a nudge to them (blocks.ts, notBlockedSql).
+              NOT ${notBlockedSql("s.author_id", "mt.author_id")} AS starter_blocked_sender
          FROM mixed m
          JOIN jam_songs s ON s.id = m.song_id
          JOIN jam_tracks mt ON mt.id = m.track_id`,
@@ -909,7 +919,7 @@ export async function admitAutoAcceptedTakes(scope: { songId?: string } = {}): P
     const late: TakeDecisionTarget[] = [];
     for (const row of result.rows) {
       counters.takesAutoAdmitted += 1;
-      if (row.author_id) {
+      if (row.author_id && !row.starter_blocked_sender) {
         notifyJamPublic(row.author_id, {
           kind: "take",
           songId: row.song_id,

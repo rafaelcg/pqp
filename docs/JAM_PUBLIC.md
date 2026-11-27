@@ -471,7 +471,7 @@ frame, a push; no email and no broadcast push).
   native apps do not parse that path: their tap opens the app (see the PR).
 - **Never told:** the person who recorded it; a recipient who blocked the other
   (one direction, `notBlockedSql`'s rule). The take still waits in the starter's
-  inbox either way.
+  inbox either way. See "A block and the notices" below for what that covers.
 - **Two machines:** a take lands on exactly one (that is its HTTP request), so the
   frame is sent once and crosses the bus; the row upsert is the push CLAIM
   (`pushed_at`, at most one push per item per 30 minutes, decided inside the one
@@ -481,9 +481,87 @@ frame, a push; no email and no broadcast push).
   into the take's request: the take was stored first, a notice that fails is a nudge
   not given (`takeNotices.failed`).
 - **The flag** `jam_take_notices` (global, default ON, `JAM_TAKE_NOTICES=false` is the
-  environment off; it is strictly additive). Off writes nothing, sends nothing new,
-  and `GET /notices` answers an empty list; the old toast comes back for an online
-  starter. The persistent markers below and the `needs` rule are not behind it.
+  environment off; it is strictly additive). Off is off all the way: no item, no
+  decision frame, no push, `GET /notices` answers an empty list, and **no live
+  `jam-public-notice` of kind `take` either** (the frame is the live half of the item;
+  the web used to draw its old toast from it when there was no item, which is what
+  "off" left behind). The persistent markers below and the `needs` rule are not
+  behind it, and neither is the inbox, so with the flag off the waiting strip and the
+  song's block still list every waiting part; they just learn of a new one at the next
+  read (boot, reconnect, opening the song, any other frame) instead of the moment it
+  arrives. The `admitted: true` frame auto-accept sends is not a request notice and
+  is not behind this flag (it is behind the block rule below).
+
+### A block and the notices
+
+Rule: **a block silences the nudge, never the state.** The same split `blocks.ts`
+makes for messages: "someone you blocked still sees your messages in a shared
+server, blocking is not a way to hide from people", and what the block does is
+decide "whose feed it may enter" (`notBlockedSql`, one direction). A shared
+server's history is deliberately not filtered, because the person has to be able
+to see and act on what is there; the client collapses it and nothing pings. Here:
+
+| Surface | Starter blocked the sender |
+|---|---|
+| Durable `take` item, its count and instruments | none written; and a part from a blocked person is not counted in an item somebody else's part opened, so an item whose only waiting parts are from blocked people is spent |
+| Live `jam-public-notice` (`take`), and the auto-accept `admitted: true` one | not sent (it is the live half of the item) |
+| Push | not sent |
+| The inbox (`GET /api/jam-public/inbox`), the waiting strip, the tile pill, the song's "N partes esperando" block, `pendingTakes` | **listed.** It is the starter's worklist: the part is also readable in the song's own track list, so hiding it here would hide nothing and only remove the one-tap Aceitar / Recusar. These read state, which is why a blocked part counts there and not in a card |
+| Accept and Refuse | work as for any part; the answer to the sender (`accepted` / `refused`) is the sender's own feed and is not stopped by the starter's block |
+
+A blocked sender is not told they are blocked: nothing about their side changes.
+Pinned by `jam-take-notices.test.ts` (three cases) and `jam-frame-coherence.test.ts`
+(two processes, the starter's socket on the other machine from the take).
+
+### A frame is a read
+
+Rule: **every frame that carries a song summary carries the one the same viewer's
+read would return at that moment, and every frame that carries a track carries a
+track that read has.** One function builds the summary for a read and for a frame,
+`getJamSongSummary` (channel view; `getJamSongSummaryPublicView` is for the non-member
+and has no frames), and a frame is built after the write it describes has fully
+landed, not before.
+
+The bug this rule was written for: `jam-track-added` carried `result.song`, read
+inside `addJamTrack`, but a take's PUBLIC row (the `outside` flag the summary needs
+to leave a waiting take out of `instruments` and `missingInstruments`) is written
+afterwards by `noteJamTrackAdded`. At that moment an outside take still looked like
+a member of the band, so every client that applied the frame (web, iOS, Android) drew
+the song as filled ("pronta", the wrong "falta ...", an extra instrument icon, an
+extra row in "Faixas") until the wall was read again, while every read said the
+opposite. Now the route reads the summary and the track after `noteJamTrackAdded`
+returns (which also settles an auto-accept that put the take in the mix inside that
+call), for the frame and for the sender's own answer, retries included. Every other
+frame (`jam-track-updated`, `jam-track-deleted`, `jam-song-updated`, the admission
+announcer) already read the summary after its own commit and needed nothing;
+`jam-song-created` is never sent for a song with no track, `jam-song-deleted` and
+`jam-track-votes` carry no summary.
+
+**Is a waiting outside take broadcast to the channel as a track?** Yes, and it is
+decided by the reads, not by the frame. Evidence: a member of the channel reads the
+whole song (`seesWholeSong`): `GET /api/jam-songs/:id` returns every live track
+through `listJamTracks`, the waiting take with `inMix: false` among them, and the
+list's `trackCount` counts it; the public view (`listJamTracksPublicView`, only
+in-mix public tracks plus the viewer's own) is for people who are not in the channel,
+and they receive no channel frames at all (`join-channel` is refused). A waiting
+take is, for the room, what a member's own second take of an instrument already is:
+a lane that is not in the mix yet. So the frame to a member adds exactly what that
+member's read has, and to the stranger nothing: sending it to "the starter and the
+sender only" would leave every other member's wall one take behind their own next
+read. If that should ever change (a take nobody has accepted, or an operator has not
+reviewed, being invisible to the room), the change is in `listJamTracks`, the
+channel summary and the frames together, never in the frames alone. Note for that
+decision: today a member can read, with its signed URL, a stranger's take that is
+still waiting for the starter or for review.
+
+Pinned by `server/src/api/jam-frame-coherence.test.ts`: two real API processes on
+`CLUSTER_BUS=postgres` and `VOICE_REGISTRY=postgres`, real sockets for the starter
+(on one machine) and another member (on the other) and one for an outsider, and for
+every frame each viewer receives, that viewer's own read (the song's detail and the
+channel's list) compared field for field, for an in-mix take, a waiting outside
+take, an accept, an undone accept, a refusal, and a song edit with a take waiting.
+It fails on the old code with exactly the reported `instruments: ["guitar","bass"]`.
+It also checks the sender's answer against the sender's own read.
 
 **2. Where a starter finds it without a notice.** "N partes esperando tua
 resposta" is now an accent block at the top of the song, above the stage, with the

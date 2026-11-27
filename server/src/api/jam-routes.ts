@@ -280,6 +280,20 @@ async function summaryForCaller(
   return publicView;
 }
 
+/**
+ * The channel's summary of a song that was live a moment ago, read after a write
+ * the summary depends on has landed (a track's public row). It is the function
+ * every read calls (`getJamSongSummary`); a song a delete got to first is a 404,
+ * like the add that raced it.
+ */
+async function summaryAfterPublicRow(songId: string): Promise<JamSongSummary> {
+  const summary = await getJamSongSummary(songId);
+  if (!summary) {
+    throw new HttpError(404, JAM_NOT_FOUND);
+  }
+  return summary;
+}
+
 /** Vote or take a vote back, and announce it when the count moved. */
 async function vote(
   trackId: string,
@@ -545,7 +559,12 @@ export function registerJamRoutes(router: Router): void {
       }
       return {
         track: result.track,
-        song: await summaryForCaller(access, song, user.id, result.song),
+        song: await summaryForCaller(
+          access,
+          song,
+          user.id,
+          published ? await summaryAfterPublicRow(song.id) : result.song,
+        ),
       };
     }
     if (published) {
@@ -557,15 +576,24 @@ export function registerJamRoutes(router: Router): void {
         publicConsent: request.publicConsent,
       });
     }
+    // The summary the room and the sender are handed is read AFTER the track's
+    // public row is written. `result.song` was read before it, when an outside
+    // take still looked like a part of the band: the summary leaves a waiting
+    // outside take out of `instruments` and `missingInstruments`, and only the
+    // public row says "outside". Same function the reads call, read after the
+    // same write, so a frame and the next read cannot disagree.
+    // The track too: auto-accept may have put it in the mix inside that same call.
+    const summary = published ? await summaryAfterPublicRow(song.id) : result.song;
+    const track = (published ? await getJamTrack(result.track.id) : null) ?? result.track;
     announceIn(song.channel_id, (channelId) => ({
       type: "jam-track-added",
       channelId,
-      song: result.song,
-      track: result.track,
+      song: summary,
+      track,
     }));
     return new Created({
-      track: result.track,
-      song: await summaryForCaller(access, song, user.id, result.song),
+      track,
+      song: await summaryForCaller(access, song, user.id, summary),
     });
   });
 
