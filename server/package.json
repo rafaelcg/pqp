@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
-    "@clerk/backend": "^1.23.3",
+    "@clerk/backend": "^3.29.0",
     "@pqp/shared": "workspace:*",
     "dotenv": "^18.0.10",
     "livekit-server-sdk": "^2.20.1",
