@@ -1133,7 +1133,7 @@ Postgres bus, off crossing the bus).
 
 The Opus listening copy of jam stems (`docs/JAM_ENGINE.md` §"The listening copy"):
 the worker makes a 64 kbps Opus copy of every FLAC stem, and the places that only
-LISTEN (the public site, jam.pqp.gg, and the in-app public view) download it
+LISTEN (the public site, jam.pqp.gg, the in-app public view and a conversation's Jam card) download it
 instead of the FLAC, about a sixth of the bytes. Behind `JAM_AUDIO_COPY` (only
 `true` turns it on), born as a flag. **Global**, like `jam_public`: a public jam
 belongs to no server.

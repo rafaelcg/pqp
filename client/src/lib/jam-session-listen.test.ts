@@ -126,6 +126,38 @@ describe("syncJamStems and the Opus listening copy", () => {
     expect(stems.get("a")).toBe("https://media.test/a.flac?s=1");
   });
 
+  it("loads the original for the tracks named in `originals` while listening, and the copy for the rest", async () => {
+    const { engine, loadStem } = fakeEngine();
+    await syncJamStems(engine, [track("mine"), track("theirs")], undefined, undefined, {
+      listen: true,
+      originals: new Set(["mine"]),
+    });
+    expect(urls(loadStem).sort()).toEqual([
+      "https://media.test/mine.flac?s=1",
+      "https://media.test/theirs.listen.ogg?s=1",
+    ]);
+  });
+
+  it("a stem heard from its copy is replaced by the original when a later listening sync names it in `originals`", async () => {
+    const { engine, loadStem, stems } = fakeEngine();
+    await syncJamStems(engine, [track("mine"), track("theirs")], undefined, undefined, { listen: true });
+    expect(stems.get("mine")).toContain(".listen.");
+    await syncJamStems(engine, [track("mine"), track("theirs")], undefined, undefined, {
+      listen: true,
+      originals: new Set(["mine"]),
+    });
+    expect(stems.get("mine")).toBe("https://media.test/mine.flac?s=1");
+    expect(stems.get("theirs")).toContain(".listen.");
+    // Only the named stem was fetched again.
+    expect(loadStem).toHaveBeenCalledTimes(3);
+  });
+
+  it("`originals` without `listen` changes nothing: every stem is the original", async () => {
+    const { engine, loadStem } = fakeEngine();
+    await syncJamStems(engine, [track("a"), track("b")], undefined, undefined, { originals: new Set(["a"]) });
+    expect(urls(loadStem).sort()).toEqual(["https://media.test/a.flac?s=1", "https://media.test/b.flac?s=1"]);
+  });
+
   it("a stem moved on the timeline is not decoded again, whichever file it came from", async () => {
     const { engine, loadStem } = fakeEngine();
     await syncJamStems(engine, [track("a")], undefined, undefined, { listen: true });

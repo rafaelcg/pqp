@@ -151,6 +151,14 @@ export interface SyncOptions {
    * when a later sync does NOT ask (the studio opening over a song being heard).
    */
   listen?: boolean;
+  /**
+   * Tracks that are always loaded from the original even when listening: the
+   * viewer's own parts, which the song panel lets them adjust (gain, offset,
+   * trim) and audition against the band, and which is what the person is
+   * working on. A stem the engine already holds from the copy is replaced by
+   * the original on the next sync that names it here. Ignored without `listen`.
+   */
+  originals?: ReadonlySet<string>;
 }
 
 /** The copy is as good as the original for ears; for everything else a stem wants the original. */
@@ -182,6 +190,8 @@ export async function syncJamStems(
 ): Promise<void> {
   const book = bookOf(engine);
   const listen = options.listen === true;
+  /** Whether THIS track may be heard from its copy: listening, and not one the caller wants whole. */
+  const listenFor = (trackId: string): boolean => listen && !options.originals?.has(trackId);
   const wanted = tracks.filter((track) => track.inMix);
   book.desired = new Map(wanted.map((track) => [track.id, stemKey(track)]));
 
@@ -198,7 +208,7 @@ export async function syncJamStems(
    * original's failure does, as it always did.
    */
   async function loadOne(track: StemTrack): Promise<Rendition> {
-    const plan = planListenSources(track, { listen });
+    const plan = planListenSources(track, { listen: listenFor(track.id) });
     for (const [index, source] of plan.entries()) {
       try {
         await engine.player.loadStem(
@@ -235,7 +245,7 @@ export async function syncJamStems(
       if (
         installed &&
         installed.key === key &&
-        acceptable(installed.rendition, listen) &&
+        acceptable(installed.rendition, listenFor(track.id)) &&
         engine.player.stem(track.id)
       ) {
         onStatus?.(track.id, "ready");
@@ -249,7 +259,7 @@ export async function syncJamStems(
       if (
         installed &&
         installed.url === url &&
-        acceptable(installed.rendition, listen) &&
+        acceptable(installed.rendition, listenFor(track.id)) &&
         engine.player.stem(track.id)
       ) {
         // Same audio, moved: rewrite the timing, nothing is decoded again.
