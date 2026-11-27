@@ -215,6 +215,7 @@ import {
  * | GET    /api/jam-public/consents               |                              | `JamPublicConsentsResponse` (pending for me) |
  * | GET    /api/jam-public/inbox                  |                              | `JamPublicInboxResponse` (the starter's outside takes) |
  * | GET    /api/jam-public/mine                   |                              | `JamPublicMineResponse` |
+ * | GET    /api/jam-public/my-parts               |                              | `JamPublicMyPartsResponse` (the parts the caller sent to other people's public songs, and how each was answered) |
  * | GET    /api/jam-songs/:songId/public          |                              | `JamPublicationResponse` (`publication: null` if never published) |
  * | PUT    /api/jam-songs/:songId/public          | `publishJamSongSchema`       | `JamPublicationResponse`; the starter only |
  * | PATCH  /api/jam-songs/:songId/public          | `updateJamPublicationSchema` | `JamPublicationResponse`; the starter only |
@@ -721,6 +722,43 @@ export const jamPublicMineResponseSchema = z.object({
   ),
 });
 export type JamPublicMineResponse = z.infer<typeof jamPublicMineResponseSchema>;
+
+/**
+ * `GET /api/jam-public/my-parts`: the parts the caller sent to OTHER people's
+ * public songs, newest first (at most 100), each with where it stands. With
+ * `/mine` (the songs they started) this is "Tuas músicas" (round 3, N-3): a
+ * returning person's one place to see what became of what they made.
+ *
+ *   waiting   sent, and the song's starter has not answered
+ *   in        the starter put it in the mix
+ *   refused   the starter declined it (kept for thirty days, so the person
+ *             can learn it without having been online that moment)
+ *
+ * A part the person deleted, or an operator removed, or a song that is gone
+ * or no longer public, is not listed.
+ */
+export const JAM_PUBLIC_PART_STATES = ["waiting", "in", "refused"] as const;
+export type JamPublicPartState = (typeof JAM_PUBLIC_PART_STATES)[number];
+
+export const jamPublicMyPartSchema = z.object({
+  trackId: uuid,
+  songId: uuid,
+  title: z.string(),
+  instrument: jamInstrumentSchema.catch("other"),
+  state: z.enum(JAM_PUBLIC_PART_STATES).catch("waiting"),
+  /** The starter's display name, for "esperando @fulano". Null when the account is gone. */
+  startedBy: z.string().nullable(),
+  /** When it was sent. */
+  sentAt: z.string(),
+  /** When it was answered (accepted or refused); null while it waits. Only refusals have it today. */
+  answeredAt: z.string().nullable().default(null),
+});
+export type JamPublicMyPart = z.infer<typeof jamPublicMyPartSchema>;
+
+export const jamPublicMyPartsResponseSchema = z.object({
+  parts: z.array(jamPublicMyPartSchema),
+});
+export type JamPublicMyPartsResponse = z.infer<typeof jamPublicMyPartsResponseSchema>;
 
 // -------------------------------------------------------------- frames
 

@@ -351,9 +351,10 @@ export async function listJamTakeNotices(userId: string): Promise<JamTakeNotices
     updated_at: Date;
     pending: number | null;
     live_instruments: string[] | null;
+    still_in: boolean | null;
   }>(
     `SELECT n.id, n.kind, n.song_id, s.title, n.instruments, n.count, n.created_at, n.updated_at,
-            live.pending, live.instruments AS live_instruments
+            live.pending, live.instruments AS live_instruments, mine.still_in
        FROM jam_take_notices n
        JOIN jam_songs s ON s.id = n.song_id AND s.deleted_at IS NULL
        LEFT JOIN LATERAL (
@@ -365,6 +366,17 @@ export async function listJamTakeNotices(userId: string): Promise<JamTakeNotices
           WHERE t.song_id = n.song_id AND pt.outside AND NOT t.in_mix
             AND t.deleted_at IS NULL AND pt.removed_at IS NULL
        ) live ON n.kind = 'take'
+       LEFT JOIN LATERAL (
+         -- An 'accepted' item says "your part is in": true only while one still is. The sender may
+         -- delete their own accepted part (or the starter take it back out of the mix) and the
+         -- item must go with it, not announce a part that no longer exists (round 3, N-5).
+         SELECT EXISTS (
+           SELECT 1 FROM jam_tracks t
+            WHERE t.song_id = n.song_id AND t.author_id = n.user_id
+              AND t.in_mix AND t.deleted_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM jam_public_tracks pt WHERE pt.track_id = t.id AND pt.removed_at IS NOT NULL)
+         ) AS still_in
+       ) mine ON n.kind = 'accepted'
       WHERE n.user_id = $1 AND n.acked_at IS NULL
       ORDER BY n.updated_at DESC
       LIMIT 50`,
@@ -372,10 +384,15 @@ export async function listJamTakeNotices(userId: string): Promise<JamTakeNotices
   );
   const notices: JamTakeNotice[] = [];
   const settled: string[] = [];
+  const voided: string[] = [];
   for (const row of result.rows) {
     const take = row.kind === "take";
     if (take && (row.pending ?? 0) === 0) {
       settled.push(row.id);
+      continue;
+    }
+    if (row.kind === "accepted" && row.still_in !== true) {
+      voided.push(row.id);
       continue;
     }
     const count = take ? row.pending! : row.count;
@@ -404,6 +421,12 @@ export async function listJamTakeNotices(userId: string): Promise<JamTakeNotices
                  AND t.deleted_at IS NULL AND pt.removed_at IS NULL)`,
         [settled],
       )
+      .catch(() => undefined);
+  }
+  if (voided.length > 0) {
+    // The part the item announced is gone: spend the item, so it is not read again.
+    await getPool()
+      .query(`UPDATE jam_take_notices SET acked_at = NOW() WHERE id = ANY($1::uuid[]) AND kind = 'accepted' AND acked_at IS NULL`, [voided])
       .catch(() => undefined);
   }
   return { notices };

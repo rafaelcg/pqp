@@ -1,5 +1,6 @@
 import { XIcon as X } from "./icons";
 import { useEffect, useRef, type ReactNode } from "react";
+import { coverPage } from "./cover";
 import { jt } from "@/lib/i18n/jam-site";
 import { cn } from "./util";
 
@@ -61,6 +62,8 @@ export function Sheet({
   nonce?: number;
 }) {
   const ref = useRef<HTMLDialogElement | null>(null);
+  // An open sheet covers the page: whatever is playing under it pauses (`cover.ts`).
+  useEffect(() => (open ? coverPage() : undefined), [open]);
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;

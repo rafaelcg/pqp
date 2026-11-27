@@ -5,7 +5,7 @@ import ptApp from "../locales/pt-BR/translation.json";
 import enSite from "../locales/jam-site/en.json";
 import esSite from "../locales/jam-site/es.json";
 import ptSite from "../locales/jam-site/pt-BR.json";
-import { jamMissingAfter, jamShareKind, jamShareText, type JamShareKind, type JamShareWords } from "./jam-share-text";
+import { jamPendingOf, jamShareKind, jamShareText, jamStillNeeds, type JamShareKind, type JamShareWords } from "./jam-share-text";
 
 type Catalogue = Record<string, string>;
 
@@ -24,17 +24,19 @@ function wordsFor(name: string): JamShareWords {
   const { cat, prefix, names, locale } = CATALOGUES[name]!;
   return {
     say: (kind, vars) => {
-      const key = kind === "needs" ? `${prefix}needs_${vars.count === 1 ? "one" : "other"}` : `${prefix}${kind}`;
+      // The sender's own message, when a part of theirs waits for the starter, lives beside the plain one (app only).
+      const base = vars.pending ? prefix.replace("text.", "textSent.") : prefix;
+      const key = kind === "needs" ? `${base}needs_${vars.count === 1 ? "one" : "other"}` : `${base}${kind}`;
       const sentence = cat[key];
       if (sentence === undefined) throw new Error(`missing ${key}`);
-      return sentence.replace("{title}", vars.title).replace("{list}", vars.list);
+      return sentence.replace("{title}", vars.title).replace("{list}", vars.list).replace("{mine}", vars.mine);
     },
     name: (instrument) => names[instrument]!,
     list: (list) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(list),
   };
 }
 
-const song = (over: Partial<{ joinMode: "open" | "wanted" | "closed"; needs: string[] }> = {}) => ({
+const song = (over: Partial<{ joinMode: "open" | "wanted" | "closed"; needs: string[]; pending: string[] }> = {}) => ({
   title: "Maré baixa",
   joinMode: "wanted" as const,
   needs: ["bass"],
@@ -128,17 +130,83 @@ describe("the share copy", () => {
   });
 });
 
-describe("jamMissingAfter", () => {
+describe("a message from somebody whose part waits for the starter (round 3, N-2)", () => {
+  const sent = (over: Partial<{ joinMode: "open" | "wanted" | "closed"; needs: string[]; pending: string[] }> = {}) =>
+    song({ pending: ["drums"], needs: ["vocals"], ...over });
+
+  it("says the part waits, and asks only for what is still missing", () => {
+    expect(jamShareText(sent(), wordsFor("app pt-BR"))).toBe(
+      "Maré baixa: mandei a minha parte de bateria, ela entra quando quem começou aceitar. Ainda falta voz. Grava a tua parte:",
+    );
+    expect(jamShareText(sent({ needs: ["vocals", "bass"] }), wordsFor("app pt-BR"))).toContain("Ainda faltam voz e baixo.");
+    expect(jamShareText(sent(), wordsFor("app en"))).toBe(
+      "Maré baixa: I sent my drums part, it joins once whoever started the jam accepts it. It still needs vocals. Record yours:",
+    );
+    expect(jamShareText(sent(), wordsFor("app es"))).toBe(
+      "Maré baixa: mandé mi parte de batería, entra cuando quien empezó la jam la acepte. Todavía falta voz. Graba la tuya:",
+    );
+  });
+
+  it("with nothing else missing it invites listening, and an open jam still welcomes a part", () => {
+    expect(jamShareText(sent({ needs: [] }), wordsFor("app pt-BR"))).toContain("Dá uma ouvida nessa jam:");
+    expect(jamShareText(sent({ joinMode: "open", needs: [] }), wordsFor("app pt-BR"))).toContain("Jam aberta pra quem quiser");
+  });
+
+  it("is the plain message when nothing of theirs waits", () => {
+    expect(jamShareText(song({ pending: [] }), wordsFor("app pt-BR"))).toBe(jamShareText(song(), wordsFor("app pt-BR")));
+  });
+
+  it("every language has all four sentences, with no em dash and no voce", () => {
+    for (const [name, { cat, locale }] of Object.entries(CATALOGUES)) {
+      if (!name.startsWith("app")) continue;
+      for (const key of ["needs_one", "needs_other", "open", "listen"]) {
+        const text = cat[`jam.invite.textSent.${key}`];
+        expect(text, `${name} ${key}`).toBeTruthy();
+        expect(text, key).toContain("{mine}");
+        expect(text, key).not.toMatch(/[—–]/);
+        if (locale === "pt-BR") expect(text, key).not.toMatch(/\b(voc[eê]s?|seu|seus|sua|suas)\b/i);
+      }
+    }
+  });
+});
+
+describe("jamPendingOf: one rule for a public view and a channel's own song (Farol, PR 1778)", () => {
+  const tracks = [
+    { authorId: "me", inMix: false, instrument: "drums" },
+    { authorId: "me", inMix: true, instrument: "bass" },
+    { authorId: "other", inMix: false, instrument: "vocals" },
+    { authorId: "me", inMix: false, instrument: "drums" },
+  ];
+  it("is what I recorded that is not in the mix, once per instrument, nothing of anybody else's", () => {
+    expect(jamPendingOf(tracks, "me", false)).toEqual(["drums"]);
+  });
+  it("is empty for the starter (their out-of-mix takes are their own choice) and for nobody signed in", () => {
+    expect(jamPendingOf(tracks, "me", true)).toEqual([]);
+    expect(jamPendingOf(tracks, null, false)).toEqual([]);
+  });
+  it("changes nothing for a channel song's second take of an instrument already in the band", () => {
+    // my drums wait, but drums are in the band already: the share asks for what is still missing either way
+    const song = { joinMode: "wanted" as const, wantedInstruments: ["drums", "vocals"], instruments: ["drums"] };
+    expect(jamStillNeeds(song, jamPendingOf(tracks, "me", false))).toEqual(["vocals"]);
+    expect(jamStillNeeds(song, [])).toEqual(["vocals"]);
+  });
+});
+
+describe("jamStillNeeds", () => {
   const wanted = { joinMode: "wanted" as const, wantedInstruments: ["bass", "drums", "vocals"], instruments: ["vocals"] };
 
   it("is what the song asks for that is not in it yet", () => {
-    expect(jamMissingAfter(wanted, null)).toEqual(["bass", "drums"]);
+    expect(jamStillNeeds(wanted)).toEqual(["bass", "drums"]);
   });
-  it("leaves out the part the person just sent: they cannot ask their friends for it", () => {
-    expect(jamMissingAfter(wanted, "drums")).toEqual(["bass"]);
+  it("leaves out the part the person sent that waits: they cannot ask their friends for it", () => {
+    expect(jamStillNeeds(wanted, ["drums"])).toEqual(["bass"]);
   });
   it("is empty for an open or a closed song", () => {
-    expect(jamMissingAfter({ ...wanted, joinMode: "open" }, null)).toEqual([]);
-    expect(jamMissingAfter({ ...wanted, joinMode: "closed" }, null)).toEqual([]);
+    expect(jamStillNeeds({ ...wanted, joinMode: "open" })).toEqual([]);
+    expect(jamStillNeeds({ ...wanted, joinMode: "closed" })).toEqual([]);
+  });
+  it("is the server's rule: the public site's `needs` is the same list for a reader with nothing waiting", () => {
+    // The server fills `needs` as `wanted_instruments` minus the instruments present in the mix.
+    expect(jamStillNeeds({ joinMode: "wanted", wantedInstruments: ["drums", "vocals"], instruments: [] })).toEqual(["drums", "vocals"]);
   });
 });

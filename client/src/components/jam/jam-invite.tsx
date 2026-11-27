@@ -14,7 +14,7 @@ import {
   type JamShareTarget,
 } from "@/lib/jam-share-link";
 import { canShareNatively, copyShareLink, shareNatively } from "@/lib/jam-share-run";
-import { jamMissingAfter, jamShareKind, jamShareText, type JamShareKind } from "@/lib/jam-share-text";
+import { jamShareKind, jamShareText, jamStillNeeds, type JamShareKind } from "@/lib/jam-share-text";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
 import { bandOrder } from "./jam-art";
@@ -47,6 +47,11 @@ export interface JamInviteSubject {
   joinMode: "open" | "wanted" | "closed";
   wantedInstruments: readonly JamInstrument[];
   instruments: readonly JamInstrument[];
+  /**
+   * What the person sent that waits for the song's starter. The message says so and does not ask their
+   * friends for it (`jamStillNeeds`, `lib/jam-share-text.ts`).
+   */
+  pending?: readonly JamInstrument[];
 }
 
 export type JamInviteSurface = "created" | "sent" | "song";
@@ -54,16 +59,23 @@ export type JamInviteSurface = "created" | "sent" | "song";
 const NETWORK_LABEL: Record<JamShareNetwork, string> = { whatsapp: "WhatsApp", x: "X", telegram: "Telegram" };
 
 /** The song's share message and link, from what the song is missing. */
-export function useJamInviteMessage(subject: JamInviteSubject, justSent: JamInstrument | null) {
+export function useJamInviteMessage(subject: JamInviteSubject) {
   const { t, locale } = useTranslation();
   const url = useMemo(() => jamPublicSongLink(subject.id), [subject.id]);
-  const needs = jamMissingAfter(subject, justSent);
+  const pending = subject.pending ?? [];
+  const needs = jamStillNeeds(subject, pending);
   const kind = jamShareKind({ joinMode: subject.joinMode, needs });
   const title = bidiClean(subject.title);
   const text = jamShareText(
-    { title, joinMode: subject.joinMode, needs },
+    { title, joinMode: subject.joinMode, needs, pending },
     {
-      say: (which, vars) => t(`jam.invite.text.${which}` as MessageKey, vars),
+      say: (which, vars) =>
+        t(`jam.invite.${vars.pending ? "textSent" : "text"}.${which}` as MessageKey, {
+          title: vars.title,
+          list: vars.list,
+          count: vars.count,
+          mine: vars.mine,
+        }),
       name: (instrument) =>
         t(JAM_INSTRUMENT_LOOK[instrument as JamInstrument].nameKey as MessageKey).toLocaleLowerCase(locale),
       list: (names) => formatList(names, locale),
@@ -137,21 +149,18 @@ function SongLine({ subject, kind, needs }: { subject: JamInviteSubject; kind: J
 
 export function JamInviteCard({
   subject,
-  justSent = null,
   surface,
   className,
   heading = true,
 }: {
   subject: JamInviteSubject;
-  /** The instrument the person just recorded: they cannot ask their friends for it. */
-  justSent?: JamInstrument | null;
   surface: JamInviteSurface;
   className?: string;
   /** Draw the card's own title (a dialog already has one). */
   heading?: boolean;
 }) {
   const { t } = useTranslation();
-  const { url, text, title, kind, needs } = useJamInviteMessage(subject, justSent);
+  const { url, text, title, kind, needs } = useJamInviteMessage(subject);
   const native = canShareNatively();
   const { state, tap, copy, share } = useShareActions(url, text, title, surface, kind);
 
@@ -274,7 +283,6 @@ export function useJamInviteButton(subject: JamInviteSubject | null) {
   const [open, setOpen] = useState(false);
   const message = useJamInviteMessage(
     subject ?? { id: "", title: "", joinMode: "closed", wantedInstruments: [], instruments: [] },
-    null,
   );
   const onPress = useCallback(async () => {
     if (!subject) {

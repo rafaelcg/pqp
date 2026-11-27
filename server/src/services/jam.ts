@@ -1649,7 +1649,16 @@ export async function updateJamTrack(
  */
 export async function deleteJamTrack(
   track: JamTrackRow,
-  options: { dropEmptySong?: boolean } = {},
+  options: {
+    dropEmptySong?: boolean;
+    /**
+     * The song's starter is declining an outside take that still waits. The refusal is written
+     * in THIS transaction, with the delete: "Tuas músicas" reads `declined_at` to show a deleted
+     * take as refused, so a delete that committed without it would leave the sender with nothing
+     * to read (and nothing could write it afterwards: the take is gone).
+     */
+    declined?: boolean;
+  } = {},
 ): Promise<{ song: JamSongSummary | null; songDeleted: boolean } | null> {
   const client = await getPool().connect();
   let songDeleted = false;
@@ -1663,6 +1672,16 @@ export async function deleteJamTrack(
     if ((result.rowCount ?? 0) === 0) {
       await client.query("ROLLBACK");
       return null;
+    }
+    if (options.declined) {
+      // Re-checked inside the transaction: only a take that is still out of the mix was refused.
+      await client.query(
+        `UPDATE jam_public_tracks pt SET declined_at = NOW()
+           FROM jam_tracks t
+          WHERE pt.track_id = $1 AND t.id = pt.track_id AND pt.outside AND NOT t.in_mix
+            AND pt.declined_at IS NULL`,
+        [track.id],
+      );
     }
     if (options.dropEmptySong) {
       const left = await client.query(

@@ -6,6 +6,8 @@ import {
   type JamPublicInboxResponse,
   type JamPublicLikeResponse,
   type JamPublicMeConfig,
+  type JamPublicMineResponse,
+  type JamPublicMyPartsResponse,
   type JamPublicReportResponse,
   type JamTakeNoticesResponse,
   type JamPublicSongCreated,
@@ -75,6 +77,12 @@ export const fetchJamPublicConsents = () =>
   apiFetch<JamPublicConsentsResponse>("/api/jam-public/consents");
 
 export const fetchJamPublicInbox = () => apiFetch<JamPublicInboxResponse>("/api/jam-public/inbox");
+
+/** "Tuas músicas", first half: the public songs I started, newest first. */
+export const fetchJamPublicMine = () => apiFetch<JamPublicMineResponse>("/api/jam-public/mine");
+
+/** "Tuas músicas", second half: the parts I sent to other people's songs, and how each was answered. */
+export const fetchJamPublicMyParts = () => apiFetch<JamPublicMyPartsResponse>("/api/jam-public/my-parts");
 
 /** The open take notices: parts waiting for this account's answer, and the starter's answers to its own. */
 export const fetchJamTakeNotices = () => apiFetch<JamTakeNoticesResponse>("/api/jam-public/notices");

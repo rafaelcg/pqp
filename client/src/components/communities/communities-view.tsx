@@ -9,7 +9,7 @@ import { ApiError, fetchCommunities, joinCommunity } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { jamSiteHomeUrl } from "@/lib/jam-public-links";
 import { JamInboxDialog } from "@/components/jam/jam-public-waiting";
-import { openPublicJamById } from "@/lib/jam-public-nav";
+import { openMyJams, openPublicJamById } from "@/lib/jam-public-nav";
 import { canRecordOnFeatured, useJamPublicMe, useJamPublicTop, useJamPublicWaiting } from "@/lib/jam-public-store";
 import { cn } from "@/lib/utils";
 import { CommunityCard, CommunityCardSkeleton } from "./community-card";
@@ -560,6 +560,9 @@ function JamDoor({
         )}
         <Button variant={songId ? "ghost" : "secondary"} data-jam-door-start="" onClick={onStart}>
           {t("communities.jam.start")}
+        </Button>
+        <Button variant="ghost" data-jam-door-mine="" onClick={openMyJams}>
+          {t("jam.mine.door")}
         </Button>
         {!emptyCatalogue && (
           <a

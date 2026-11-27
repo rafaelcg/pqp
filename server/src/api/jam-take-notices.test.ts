@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  jamPublicMyPartsResponseSchema,
   jamPublicSongCreatedSchema,
   jamTakeNoticesResponseSchema,
   jamUploadTicketSchema,
@@ -78,6 +79,7 @@ const { resetFeatureFlagsForTests, setGlobalFlag, startFeatureFlags } = await im
 const { resetJamPublicCountersForTests } = await import("../services/jam-public.js");
 const { takeJamPublicNoticesForTests, takeJamTakeDecisionsForTests } = await import("../services/jam-public-notify.js");
 const { jamTakeNoticeCounters } = await import("../services/jam-take-notices.js");
+const { deleteJamTrack, getJamTrackRow } = await import("../services/jam.js");
 
 // ------------------------------------------------------------ fake storage
 
@@ -405,6 +407,116 @@ describeDb("telling the starter about takes", () => {
     expect(await notices(taker)).toHaveLength(2);
     expect((await call(taker, "POST", "/api/jam-public/notices/ack", { id: item.id })).status).toBe(200);
     expect(await notices(taker)).toHaveLength(1);
+  });
+
+  it("an accepted item goes when its part does: the sender deletes it, or the starter takes it back out (round 3, N-5)", async () => {
+    const song = await startSong();
+    const bass = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    const drums = await addTrack(taker, song, "drums", { publicConsent: "yes" });
+    for (const one of [bass, drums]) {
+      expect((await call(starter, "PATCH", `/api/jam-tracks/${one.body.track.id}`, { inMix: true })).status).toBe(200);
+    }
+    await vi.waitFor(async () => expect((await notices(taker)).map((one) => one.kind)).toEqual(["accepted"]));
+    expect((await notices(taker))[0]).toMatchObject({ songId: song, instruments: ["bass", "drums"], count: 2 });
+
+    // One of the two parts goes: the other is still in, so the item stands.
+    expect((await call(taker, "DELETE", `/api/jam-tracks/${bass.body.track.id}`)).status).toBe(204);
+    expect((await notices(taker)).map((one) => one.kind)).toEqual(["accepted"]);
+
+    // The last one is taken back out of the mix by the starter (an undo of "Aceitar"): nothing is in any more.
+    expect((await call(starter, "PATCH", `/api/jam-tracks/${drums.body.track.id}`, { inMix: false })).status).toBe(200);
+    expect(await notices(taker)).toEqual([]);
+
+    // And it stays spent: accepting again is a new answer with a new item.
+    expect((await call(starter, "PATCH", `/api/jam-tracks/${drums.body.track.id}`, { inMix: true })).status).toBe(200);
+    await vi.waitFor(async () => expect((await notices(taker)).map((one) => one.kind)).toEqual(["accepted"]));
+
+    // A deleted take is also gone for a person whose item was never read.
+    expect((await call(taker, "DELETE", `/api/jam-tracks/${drums.body.track.id}`)).status).toBe(204);
+    expect(await notices(taker)).toEqual([]);
+  });
+
+  it("my parts: what I sent to other people's songs, and how each was answered (round 3, N-3)", async () => {
+    const parts = async (as: Actor) => {
+      const reply = await call(as, "GET", "/api/jam-public/my-parts");
+      expect(reply.status, JSON.stringify(reply.body)).toBe(200);
+      return jamPublicMyPartsResponseSchema.parse(reply.body).parts;
+    };
+    const song = await startSong();
+    expect(await parts(taker)).toEqual([]);
+    const bass = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    const drums = await addTrack(taker, song, "drums", { publicConsent: "yes" });
+    // A second bass: another version of the same instrument, which the sender will delete themselves.
+    const vocals = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    expect([bass.status, drums.status, vocals.status]).toEqual([201, 201, 201]);
+
+    // Every one waits, with the song's title and who started it.
+    const waiting = await parts(taker);
+    expect(waiting.map((one) => [one.instrument, one.state]).sort()).toEqual([
+      ["bass", "waiting"],
+      ["bass", "waiting"],
+      ["drums", "waiting"],
+    ]);
+    expect(waiting[0]).toMatchObject({ songId: song, title: "Aberta", startedBy: "Starter", answeredAt: null });
+
+    // Accepted is "in"; declined is "refused" (and stays listed, with when); the sender's own delete is neither, it is gone.
+    expect((await call(starter, "PATCH", `/api/jam-tracks/${bass.body.track.id}`, { inMix: true })).status).toBe(200);
+    expect((await call(starter, "DELETE", `/api/jam-tracks/${drums.body.track.id}`)).status).toBe(204);
+    expect((await call(taker, "DELETE", `/api/jam-tracks/${vocals.body.track.id}`)).status).toBe(204);
+    const answered = await parts(taker);
+    expect(answered.map((one) => [one.instrument, one.state]).sort()).toEqual([
+      ["bass", "in"],
+      ["drums", "refused"],
+    ]);
+    expect(answered.find((one) => one.instrument === "drums")!.answeredAt).not.toBeNull();
+
+    // The refusal is remembered with the notices off too: a notice is a nudge, this is a record.
+    await noticesFlag(false);
+    expect((await parts(taker)).map((one) => one.state).sort()).toEqual(["in", "refused"]);
+    await noticesFlag(true);
+
+    // Only mine: the starter and a stranger see none of them, and a refusal ages out after thirty days.
+    expect(await parts(starter)).toEqual([]);
+    expect(await parts(other)).toEqual([]);
+    await getPool().query(`UPDATE jam_public_tracks SET declined_at = NOW() - INTERVAL '31 days' WHERE track_id = $1`, [drums.body.track.id]);
+    expect((await parts(taker)).map((one) => one.state)).toEqual(["in"]);
+
+    // A song that stopped being public takes its parts off the list.
+    await getPool().query(`UPDATE jam_public_songs SET unpublished_at = NOW() WHERE song_id = $1`, [song]);
+    expect(await parts(taker)).toEqual([]);
+  });
+
+  it("the refusal is written in the same transaction as the delete, so it cannot be lost on its own (Farol, PR 1778)", async () => {
+    const declinedAt = async (trackId: string) =>
+      (await getPool().query<{ declined_at: Date | null }>(`SELECT declined_at FROM jam_public_tracks WHERE track_id = $1`, [trackId])).rows[0]!
+        .declined_at;
+    const song = await startSong();
+    const bass = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    const drums = await addTrack(taker, song, "drums", { publicConsent: "yes" });
+    const guitar = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+
+    // Through the route: the stamp is there the moment the delete answers, nothing detached to wait for.
+    expect((await call(starter, "DELETE", `/api/jam-tracks/${bass.body.track.id}`)).status).toBe(204);
+    expect(await declinedAt(bass.body.track.id)).not.toBeNull();
+
+    // Through the service: a delete that finds nothing to delete (already gone) rolls back and stamps nothing.
+    const row = (await getJamTrackRow(drums.body.track.id))!;
+    expect(await deleteJamTrack(row, { declined: true })).not.toBeNull();
+    const stamped = await declinedAt(drums.body.track.id);
+    expect(stamped).not.toBeNull();
+    expect(await deleteJamTrack(row, { declined: true })).toBeNull();
+    expect(await declinedAt(drums.body.track.id)).toEqual(stamped);
+
+    // A take that went into the mix before the delete landed was not refused, it was removed: no stamp.
+    expect((await call(starter, "PATCH", `/api/jam-tracks/${guitar.body.track.id}`, { inMix: true })).status).toBe(200);
+    const inMix = (await getJamTrackRow(guitar.body.track.id))!;
+    expect(await deleteJamTrack({ ...inMix, in_mix: false }, { declined: true })).not.toBeNull();
+    expect(await declinedAt(guitar.body.track.id)).toBeNull();
+
+    // The sender's own delete is never a refusal.
+    const own = await addTrack(taker, song, "drums", { publicConsent: "yes" });
+    expect((await call(taker, "DELETE", `/api/jam-tracks/${own.body.track.id}`)).status).toBe(204);
+    expect(await declinedAt(own.body.track.id)).toBeNull();
   });
 
   it("a starter who blocked the recorder is not told (the take still waits in the inbox)", async () => {

@@ -17,9 +17,10 @@ import {
 } from "@/lib/jam-api";
 import type { BandLane } from "@/lib/jam-clip";
 import { bandFitsBelowStage, readBandOpen, writeBandOpen } from "@/lib/jam-band-pref";
+import { holdJamSong } from "@/lib/jam-hint-context";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cannotRecordReason, pickInstrument } from "@/lib/jam-record";
-import { dropInboxTake } from "@/lib/jam-public-store";
+import { dropInboxTake, refreshJamPublicWaiting } from "@/lib/jam-public-store";
 import { notePublicPlay } from "@/lib/jam-public-api";
 import { oneAtATime, switchTakeIn } from "@/lib/jam-mix";
 import {
@@ -43,6 +44,7 @@ import { useJamCover, type JamCoverState } from "./jam-cover";
 import { JamEditSheet } from "./jam-edit-sheet";
 import { JamSharePicker } from "./jam-share-picker";
 import { useJamPublicPanel } from "./jam-public-panel";
+import { JamAnswerNotice, type JamAnswer } from "./jam-answer-notice";
 import { JamPublicRequests } from "./jam-public-parts";
 import { JamLaneFrame, JamLaneIdentity, JAM_BAND_BOX } from "./jam-lane-frame";
 import { JamStage } from "./jam-stage";
@@ -175,6 +177,9 @@ export function JamSongPanel({
     }
   }, [playNonce]);
 
+  // A song is open: the app's notices keep off its transport (`lib/jam-notice-placement.ts`).
+  useEffect(() => holdJamSong(), []);
+
   // Opening a song puts the keyboard in it: focus lands on the song's name, so
   // Tab goes through the song and Escape closes it. (Not stolen back later: this
   // runs once per song.)
@@ -210,6 +215,24 @@ export function JamSongPanel({
   const [requestBusy, setRequestBusy] = useState<string | null>(null);
   /** The delete being confirmed is the starter declining an outside request. */
   const [declining, setDeclining] = useState(false);
+  /** What the starter's last answer did, said where they gave it (`jam-answer-notice.tsx`). */
+  const [answered, setAnswered] = useState<JamAnswer | null>(null);
+  /** "Desfazer" after Aceitar: the part goes back to the queue (the same take, taken out of the mix again). */
+  function undoAccept(answer: JamAnswer) {
+    setRequestBusy(answer.trackId);
+    void serial(() =>
+      guard(async () => {
+        const reply = await updateJamTrack(answer.trackId, { inMix: false });
+        writeFrame({ type: "jam-track-updated", channelId, song: reply.song, track: reply.track });
+        // The undo happened: say so first. The reads below only bring the lists up to date (the inbox is what
+        // lists a waiting part, and the sender's "entrou" item goes with the part, round 3, N-5) and are a
+        // best effort with their own retry, so a failed one cannot make a done undo look undone.
+        setAnswered({ ...answer, kind: "undone" });
+        refreshJamPublicWaiting();
+        pub.refreshPublication();
+      }),
+    ).finally(() => setRequestBusy(null));
+  }
   const first = pickInstrument(song, addable, mine);
   const missingSlots =
     need.kind === "missing" ? need.instruments.filter((instrument) => !tracks.some((one) => one.instrument === instrument)) : [];
@@ -506,6 +529,7 @@ export function JamSongPanel({
                 dropInboxTake(track.id);
                 if (playback.audition === track.id) playback.setAudition(null);
                 pub.refreshPublication();
+                setAnswered({ kind: "accepted", trackId: track.id, instrument: track.instrument, name: track.authorName ?? null });
               }),
             ).finally(() => setRequestBusy(null));
           }}
@@ -514,6 +538,15 @@ export function JamSongPanel({
             setPendingDelete(track);
           }}
         />
+        {answered && (
+          <JamAnswerNotice
+            key={`${answered.trackId}:${answered.kind}`}
+            answer={answered}
+            busy={requestBusy !== null}
+            onUndo={() => undoAccept(answered)}
+            onDismiss={() => setAnswered(null)}
+          />
+        )}
         {isEmpty ? (
           <div
             data-jam-empty-song=""
@@ -813,6 +846,7 @@ export function JamSongPanel({
         }}
         onConfirm={() => {
           const track = pendingDelete;
+          const wasDecline = declining;
           setPendingDelete(null);
           setDeclining(false);
           if (!track) return;
@@ -820,6 +854,14 @@ export function JamSongPanel({
           void guard(async () => {
             await deleteJamTrack(track.id);
             dropInboxTake(track.id);
+            // A part of mine that went in may have an "entrou" notice waiting: the server voids it with
+            // the part (round 3, N-5), and the read is what takes it off this screen too.
+            if (viewerId !== null && track.authorId === viewerId) {
+              refreshJamPublicWaiting();
+            }
+            if (wasDecline) {
+              setAnswered({ kind: "refused", trackId: track.id, instrument: track.instrument, name: track.authorName ?? null });
+            }
             // When it was the song's last take the server took the song with it (if nobody
             // added one meanwhile): the reads below are what say which it was, so a take that
             // arrived in between is never taken for a deleted song.

@@ -1,4 +1,4 @@
-import { MoonIcon as Moon, SunIcon as Sun, UserIcon, XIcon } from "./icons";
+import { MoonIcon as Moon, Music2Icon, SunIcon as Sun, UserIcon, XIcon } from "./icons";
 import { useEffect, useState, type ReactNode } from "react";
 import { jamLanguage, jt } from "@/lib/i18n/jam-site";
 import { useAsk } from "./auth-sheet";
@@ -41,7 +41,8 @@ export function ThemeToggle() {
 
 /**
  * Where "Entrar" was. A visitor the app says is signed in (`session.ts`) gets
- * their first name and an initial, linking to the app; everybody else gets
+ * their initial and "Tuas músicas", linking to that list in the app (the songs they
+ * started and the parts they sent, each with its answer: round 3, N-3); everybody else gets
  * "Entrar". Both are drawn at every width: at 390 px "Entrar" used to be hidden
  * altogether (finding m10), which left a signed-out phone with no way to sign in.
  */
@@ -51,7 +52,7 @@ function AccountLink() {
     const initial = signedIn.name ? (Array.from(signedIn.name)[0] ?? "").toLocaleUpperCase() : "";
     return (
       <a
-        href={appHref("/app")}
+        href={appHref("/app?jam=mine")}
         aria-label={jt("nav.account")}
         title={signedIn.name ? `${signedIn.name} · ${jt("nav.account")}` : jt("nav.account")}
         data-jam-account=""
@@ -63,7 +64,12 @@ function AccountLink() {
         >
           {initial || <UserIcon className="h-4 w-4" />}
         </span>
-        {signedIn.name && <span className="max-w-[9rem] truncate max-sm:hidden">{signedIn.name}</span>}
+        {/* On a phone there is no room for the words: the note says what the initial opens. */}
+        <Music2Icon className="h-4 w-4 shrink-0 text-text-secondary sm:hidden" aria-hidden />
+        {/* The door is named for what is behind it: the account chip opens "Tuas músicas" in the app (round 3, N-3). The name is in the title and on the initial. */}
+        <span className="max-w-[9rem] truncate max-sm:hidden" data-jam-account-label="">
+          {jt("nav.account")}
+        </span>
       </a>
     );
   }
