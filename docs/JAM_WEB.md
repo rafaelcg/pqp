@@ -255,7 +255,10 @@ otherwise. Finishing and deleting the song are in the header's menu.
 
 **One sound at a time.** The engine is shared, so opening the studio stops
 whatever the song panel was playing (`use-jam-studio.ts`, at boot) and the
-panel's autoplay never starts under the studio. The studio has its own play and
+panel's autoplay never starts under the studio. (And opening a song never plays
+it at all: `JamSongPanel`'s `autoplay` is false unless the wall's round play
+button asked, a take just posted lands on a paused song, and a play on a public
+song is counted only when a person started it. `docs/JAM_SITE.md` "Playing".) The studio has its own play and
 pause for the band before recording and for the take after.
 
 ## Mixing: one take per instrument
