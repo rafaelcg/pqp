@@ -112,6 +112,10 @@ export function resetJamPublic(forViewer: string | null = null): void {
   }
   rereadRunning = false;
   rereadQueued = false;
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
   emit();
 }
 
@@ -196,7 +200,12 @@ const WAITING_RETRY_MS = [3000, 10000, 30000] as const;
  * times, 3, 10 and 30 seconds later, one retry in flight at a time.
  */
 export function refreshJamPublicWaiting(attempt = 0): void {
-  void loadJamPublicWaiting()
+  void refreshWithRetries(attempt);
+}
+
+/** The same, as a promise for the one caller that has to know when the read it asked for is over. */
+function refreshWithRetries(attempt: number): Promise<void> {
+  return loadJamPublicWaiting()
     .catch(() => undefined)
     .then(() => {
       if (!waitingStale || attempt >= WAITING_RETRY_MS.length || retryTimer !== null) {
@@ -361,7 +370,9 @@ async function runWaitingRead(): Promise<void> {
       await waitingLoad.catch(() => undefined);
     }
     if (mine === epoch) {
-      await loadJamPublicWaiting().catch(() => undefined);
+      // The store's own best-effort refresh: a read that fails is tried again 3, 10 and 30 seconds
+      // later, so a transient error does not consume the only nudge this frame gave.
+      await refreshWithRetries(0);
     }
   } finally {
     if (mine === epoch) {
@@ -374,20 +385,39 @@ async function runWaitingRead(): Promise<void> {
   }
 }
 
-subscribeJamFrames((frame: JamFrame) => {
-  if (!me.enabled || viewerId === null) {
-    return;
-  }
+/** A read of the waiting lists is out (anybody's), so a change that lands now may be missed by it. */
+const readOut = (): boolean => waitingLoad !== null || rereadRunning;
+
+/**
+ * Whether a frame can change the starter's inbox. The client holds no "this song is public" flag (a
+ * summary has none), so the question is whether the take is, or was, a request: an outside take is
+ * another person's take that is not in the mix, or one the inbox already lists (its accept, undo or
+ * refusal). The ordinary in-mix takes of a private channel song cost nothing. While a read is out,
+ * any frame of the starter's own song about another person's part (and any song deletion) counts,
+ * because the read may have begun before it and must not be the last word.
+ */
+function mayChangeInbox(frame: JamFrame): boolean {
   if (frame.type === "jam-song-deleted") {
-    if (waiting.inbox.some((one) => one.songId === frame.songId)) {
-      scheduleWaitingRead();
-    }
-    return;
+    return readOut() || waiting.inbox.some((one) => one.songId === frame.songId);
   }
-  if (
-    (frame.type === "jam-track-added" || frame.type === "jam-track-updated" || frame.type === "jam-track-deleted") &&
-    frame.song.authorId === viewerId
-  ) {
+  if (frame.type !== "jam-track-added" && frame.type !== "jam-track-updated" && frame.type !== "jam-track-deleted") {
+    return false;
+  }
+  if (frame.song.authorId !== viewerId) {
+    return false;
+  }
+  const listed = (trackId: string) =>
+    waiting.inbox.some((one) => one.track.id === trackId || one.songId === frame.song.id);
+  if (frame.type === "jam-track-deleted") {
+    return readOut() || listed(frame.trackId);
+  }
+  const { track } = frame;
+  const fromSomeoneElse = track.authorId !== viewerId;
+  return (fromSomeoneElse && (!track.inMix || readOut())) || listed(track.id);
+}
+
+subscribeJamFrames((frame: JamFrame) => {
+  if (me.enabled && viewerId !== null && mayChangeInbox(frame)) {
     scheduleWaitingRead();
   }
 });

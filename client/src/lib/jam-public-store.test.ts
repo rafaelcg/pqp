@@ -154,8 +154,19 @@ describe("the door with no song beside it", () => {
 describe("the starter's own songs, live", () => {
   const dispatchJamFrame = (frame: unknown) => framesModule.dispatchJamFrame(frame as never);
 
-  const trackFrame = (type: "jam-track-added" | "jam-track-updated" | "jam-track-deleted", authorId: string | null) =>
-    ({ type, channelId: "c1", song: { id: "s1", authorId }, track: { id: "t1", songId: "s1" }, trackId: "t1" }) as unknown;
+  /** By default the take is somebody else's and waits (an outside take, or a member's later take). */
+  const trackFrame = (
+    type: "jam-track-added" | "jam-track-updated" | "jam-track-deleted",
+    authorId: string | null,
+    track: { authorId?: string; inMix?: boolean; id?: string } = {},
+  ) =>
+    ({
+      type,
+      channelId: "c1",
+      song: { id: "s1", authorId },
+      track: { id: track.id ?? "t1", songId: "s1", authorId: track.authorId ?? "carol", inMix: track.inMix ?? false },
+      trackId: track.id ?? "t1",
+    }) as unknown;
 
   async function enabled(viewer: string | null) {
     api.me.mockResolvedValue({ enabled: true, publishing: "open", uploads: true });
@@ -237,5 +248,76 @@ describe("the starter's own songs, live", () => {
       vi.useRealTimers();
     }
     expect(store.getJamPublicWaiting().inbox).toEqual([take]);
+  });
+
+  it("the ordinary in-mix takes of a song nobody sends outside takes to cost nothing; a waiting part and a listed one do", async () => {
+    await enabled("alice");
+    vi.useFakeTimers();
+    try {
+      // A member's take that went straight into the mix (a private channel song's ordinary take), the starter's own, and a deletion nothing lists.
+      dispatchJamFrame(trackFrame("jam-track-added", "alice", { authorId: "bob", inMix: true }));
+      dispatchJamFrame(trackFrame("jam-track-added", "alice", { authorId: "alice", inMix: true }));
+      dispatchJamFrame(trackFrame("jam-track-deleted", "alice", { id: "t7" }));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.inbox).not.toHaveBeenCalled();
+      // Somebody else's part that waits is a request.
+      dispatchJamFrame(trackFrame("jam-track-added", "alice", { authorId: "bob", inMix: false }));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.inbox).toHaveBeenCalledTimes(1);
+      // Its acceptance (now in the mix) is still about a take the inbox lists.
+      api.inbox.mockResolvedValue({ takes: [{ songId: "s1", songTitle: "Lua", track: { id: "t1" } }] });
+      dispatchJamFrame(trackFrame("jam-track-added", "alice", { authorId: "bob", inMix: false }));
+      await vi.advanceTimersByTimeAsync(1000);
+      api.inbox.mockClear();
+      dispatchJamFrame(trackFrame("jam-track-updated", "alice", { authorId: "bob", inMix: true, id: "t1" }));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.inbox).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a read that fails after an own-song frame is tried again 3 seconds later, not dropped", async () => {
+    await enabled("alice");
+    const take = { songId: "s1", songTitle: "Lua", track: { id: "t9" } };
+    api.inbox.mockRejectedValueOnce(new Error("network")).mockResolvedValue({ takes: [take] });
+    vi.useFakeTimers();
+    try {
+      dispatchJamFrame(trackFrame("jam-track-added", "alice"));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(api.inbox).toHaveBeenCalledTimes(1);
+      expect(store.getJamPublicWaiting().inbox).toEqual([]);
+      expect(store.jamPublicWaitingStaleForTests()).toBe(true);
+      await vi.advanceTimersByTimeAsync(3500);
+      expect(api.inbox).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(store.getJamPublicWaiting().inbox).toEqual([take]);
+    expect(store.jamPublicWaitingStaleForTests()).toBe(false);
+  });
+
+  it("a song deleted while the inbox is still loading is not lost: one more read follows the one that was out", async () => {
+    api.me.mockResolvedValue({ enabled: true, publishing: "open", uploads: true });
+    store.resetJamPublic("alice");
+    // The first read of the inbox is slow and will answer with the song that is about to be deleted.
+    const stale = { songId: "s1", songTitle: "Lua", track: { id: "t1" } };
+    let release: (value: { takes: unknown[] }) => void = () => undefined;
+    api.inbox.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    await store.loadJamPublicMe({ force: true });
+    await vi.waitFor(() => expect(api.inbox).toHaveBeenCalledTimes(1));
+    vi.useFakeTimers();
+    try {
+      // Nothing is listed yet, so only the read being out makes this deletion matter.
+      dispatchJamFrame({ type: "jam-song-deleted", channelId: "c1", songId: "s1" });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(api.inbox).toHaveBeenCalledTimes(1);
+      release({ takes: [stale] });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(api.inbox).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(store.getJamPublicWaiting().inbox).toEqual([]);
   });
 });
