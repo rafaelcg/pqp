@@ -52,6 +52,12 @@ final class JamPublicStore {
     /// succeeded in full (the inbox AND the notices), so a transient failure
     /// cannot consume the only frame.
     @ObservationIgnored private var pendingTake: JamPublicNoticeFrame?
+    /// Reads are numbered as they START. A frame is stamped with how many had
+    /// started when it arrived, and only a read that started AFTER that number may
+    /// judge it: a read already in flight when the frame came was produced before
+    /// the thing the frame is about, and its lists may not hold the song yet.
+    @ObservationIgnored private var readsStarted = 0
+    @ObservationIgnored private var pendingAfterRead = 0
 
     /// The cards a person is shown, newest first: the server's items, with the
     /// local one (if any) in front, since it is the moment that just happened.
@@ -92,6 +98,8 @@ final class JamPublicStore {
     private func readOnce() async {
         guard let api else { return }
         let mine = epoch
+        readsStarted += 1
+        let readNumber = readsStarted
         if !enabled || !loaded || configStale {
             guard let config = await api.jamPublicConfig() else { return }
             guard mine == epoch else { return }
@@ -116,7 +124,10 @@ final class JamPublicStore {
         if let noticeAnswer { notices = noticeAnswer.notices }
         settleLiveTake()
         // Both lists are fresh: now the live frame can be judged against them.
-        if inboxAnswer != nil, noticeAnswer != nil, let frame = pendingTake {
+        // Only a read that STARTED after the frame came may consume it, and only a
+        // whole one (both lists): a read that was out when the frame arrived leaves
+        // it for the read queued behind it (`readAgain`).
+        if inboxAnswer != nil, noticeAnswer != nil, let frame = pendingTake, readNumber > pendingAfterRead {
             pendingTake = nil
             noteLiveTake(frame)
         }
@@ -142,7 +153,10 @@ final class JamPublicStore {
             Task { await refresh() }
         case .notice(let notice):
             // Kept until a read that succeeded in full has seen it (`readOnce`).
-            if notice.kind == .take, !notice.admitted { pendingTake = notice }
+            if notice.kind == .take, !notice.admitted {
+                pendingTake = notice
+                pendingAfterRead = readsStarted
+            }
             Task { await refresh() }
         }
     }

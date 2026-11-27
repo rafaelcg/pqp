@@ -41,6 +41,35 @@ final class JamPublicFollowupTests: XCTestCase {
         XCTAssertEqual(store.liveTake?.songId, "s1", "the next read that succeeded in full remembered the frame")
     }
 
+    /// A read that was already out when the frame arrived was produced BEFORE it:
+    /// its lists may not hold the song. It must not consume the frame; the read
+    /// queued behind it, started after, does.
+    func testAReadThatWasOutBeforeTheFrameCannotConsumeIt() async throws {
+        let log = LockedBox<[Sent]>([])
+        let inbox = LockedBox(inboxJSON([]))
+        let inboxCalls = LockedBox(0)
+        let base = publicRoute(log: log, inbox: inbox)
+        let store = store { request in
+            if request.url?.path == "/api/jam-public/inbox" {
+                inboxCalls.value += 1
+                // The first read is held: its answer (the lists as they were) lands late.
+                let stale = inbox.value
+                return (inboxCalls.value == 1 ? 0.5 : 0, 200, Data(stale.utf8))
+            }
+            return base(request)
+        }
+        let inFlight = Task { await store.refresh() }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(inboxCalls.value, 1, "the first read is out")
+        // The take arrives and is in the inbox now; the read that is out will not say so.
+        inbox.value = inboxJSON([("t1", "bass")])
+        store.apply(.notice(JamPublicNoticeFrame(kind: .take, songId: "s1", title: "Lua cheia", admitted: false, instrument: .bass)))
+        await inFlight.value
+        try await waitUntil { store.liveTake != nil }
+        XCTAssertEqual(store.liveTake?.songId, "s1", "the read queued after the frame judged it")
+        XCTAssertGreaterThanOrEqual(inboxCalls.value, 2)
+    }
+
     func testTheFlagIsAskedAgainAfterAReconnectAndOffClearsWhatWasHeld() async throws {
         let log = LockedBox<[Sent]>([])
         let enabled = LockedBox(true)
