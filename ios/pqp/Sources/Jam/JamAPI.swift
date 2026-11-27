@@ -65,12 +65,36 @@ extension APIClient {
         try await post("/api/jam-songs/\(songId)/tracks", body: body)
     }
 
-    struct JamTrackPatch: Encodable, Sendable {
-        var inMix: Bool?
+    /// `PATCH /api/jam-tracks/:id`: only the fields in the body change. The
+    /// take's author owns `offsetMs`, the trims and `gain`; the song's author or
+    /// a moderator owns `inMix` (`JamTrackPatchBody`).
+    func updateJamTrack(id: String, patch: JamTrackPatchBody) async throws -> JamTrackWithSong {
+        try await self.patch("/api/jam-tracks/\(id)", body: patch)
     }
 
-    func updateJamTrack(id: String, patch: JamTrackPatch) async throws -> JamTrackWithSong {
-        try await self.patch("/api/jam-tracks/\(id)", body: patch)
+    /// `PATCH /api/jam-songs/:id`: the title and the artist (the song's author
+    /// or a moderator, flag on). `artist: null` is an original.
+    func updateJamSong(id: String, patch: JamSongPatch) async throws -> JamSongSummary {
+        let answer: JamSongAnswer = try await self.patch("/api/jam-songs/\(id)", body: patch)
+        return answer.song
+    }
+
+    /// Step 3 of a cover: claim an upload of kind `cover` as the song's picture
+    /// (`PUT /api/jam-songs/:id/cover`). Steps 1 and 2 are `createJamUpload`
+    /// with `JamUploadRequest.cover` and `JamStorageUpload.put`.
+    func setJamCover(songId: String, uploadId: String) async throws -> JamSongSummary {
+        struct Body: Encodable { let uploadId: String }
+        let answer: JamSongAnswer = try await send(
+            path: "/api/jam-songs/\(songId)/cover", method: "PUT", body: Body(uploadId: uploadId)
+        )
+        return answer.song
+    }
+
+    /// Take the picture off a song. Not gated by the flag on the server (a
+    /// picture somebody should not see stays removable while jam is paused).
+    func removeJamCover(songId: String) async throws -> JamSongSummary {
+        let answer: JamSongAnswer = try await delete("/api/jam-songs/\(songId)/cover")
+        return answer.song
     }
 
     func deleteJamTrack(id: String) async throws {
@@ -86,6 +110,11 @@ extension APIClient {
         }
         return try await delete(path)
     }
+}
+
+/// `{ song }`, the answer of an edit and of both cover routes.
+struct JamSongAnswer: Decodable, Sendable {
+    let song: JamSongSummary
 }
 
 struct JamTrackWithSong: Decodable, Sendable {
@@ -126,6 +155,12 @@ struct JamUploadRequest: Encodable, Equatable, Sendable {
 
     static func audio(contentType: String, byteSize: Int) -> JamUploadRequest {
         JamUploadRequest(kind: "audio", contentType: contentType, byteSize: byteSize)
+    }
+
+    /// A song's cover: the song's author or a moderator, flag on. The type and
+    /// length are signed into the URL like a take's.
+    static func cover(contentType: String, byteSize: Int) -> JamUploadRequest {
+        JamUploadRequest(kind: "cover", contentType: contentType, byteSize: byteSize)
     }
 }
 

@@ -62,7 +62,9 @@ final class JamEngine {
     }
 
     private struct Voice {
-        let stem: Stem
+        /// Where it sits. `place` changes it in place; the file and its player
+        /// are the same ones.
+        var stem: Stem
         let player = AVAudioPlayerNode()
         let eq = AVAudioUnitEQ(numberOfBands: 1)
         let file: AVAudioFile
@@ -134,6 +136,39 @@ final class JamEngine {
         order = stems.map(\.id).filter { voices[$0] != nil }
         recompute()
         return failures
+    }
+
+    /// Whether the engine already holds exactly these stems, files and places
+    /// included. A reload that would change nothing can then be skipped, so an
+    /// echo of a change this phone already made does not restart the song.
+    func holds(_ stems: [Stem]) -> Bool {
+        stems.count == voices.count && stems.allSatisfy { voices[$0.id]?.stem == $0 }
+    }
+
+    /// Move a stem in time or change its trims WITHOUT reopening its file or
+    /// rebuilding its player: the adjuster's drag calls this many times a
+    /// second. Only the numbers change (`JamAlignment` reads them when the
+    /// stem is next scheduled), so a playing song is heard moved after the
+    /// caller restarts it at the same moment of the SONG, which is what the
+    /// `originMs` that this recomputes is for (the earliest heard sample may
+    /// have moved). False when there is no such stem or its file is another.
+    @discardableResult
+    func place(_ stem: Stem) -> Bool {
+        place([stem]) == 1
+    }
+
+    /// The same for several stems at once, recomputing the mix's origin and length
+    /// ONCE (a drag does this many times a second, with every stem of the song).
+    /// Answers how many were placed.
+    @discardableResult
+    func place(_ stems: [Stem]) -> Int {
+        var placed = 0
+        for stem in stems where voices[stem.id]?.stem.url == stem.url {
+            voices[stem.id]?.stem = stem
+            placed += 1
+        }
+        if placed > 0 { recompute() }
+        return placed
     }
 
     private func detach(_ id: String) {

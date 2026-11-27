@@ -11,6 +11,7 @@ struct JamSongView: View {
     @Environment(CallModel.self) private var call
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var model: JamSongModel
@@ -18,6 +19,7 @@ struct JamSongView: View {
     @State private var confirmingDeleteSong = false
     @State private var trackToDelete: JamTrack?
     @State private var scrubbing = false
+    @State private var editing = false
     let zoomSpace: Namespace.ID
     let wall: JamWallModel?
 
@@ -51,6 +53,17 @@ struct JamSongView: View {
                 Task { await model.resumeAfterRecording() }
             }
         }
+        .sheet(isPresented: $editing) {
+            JamEditSongSheet(song: model)
+        }
+        .sheet(
+            item: Binding(
+                get: { model.adjustingTrack },
+                set: { if $0 == nil { model.endAdjust() } }
+            )
+        ) { track in
+            JamAdjustSheet(song: model, track: track)
+        }
         .confirmationDialog("Delete this song?", isPresented: $confirmingDeleteSong, titleVisibility: .visible) {
             Button("Delete song", role: .destructive) {
                 Task { if await model.deleteSong() { dismiss() } }
@@ -73,6 +86,11 @@ struct JamSongView: View {
             await model.start(session: session)
         }
         .onChange(of: callActive) { _, now in model.callActive = now }
+        // The flag is flipped per server with no deploy: back in the foreground, an
+        // open song asks again whether it may still be edited.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.refreshConfig() } }
+        }
         .onDisappear { model.stop() }
         .sensoryFeedback(.impact(weight: .medium), trigger: model.isPlaying)
     }
@@ -134,7 +152,27 @@ struct JamSongView: View {
                     .accessibilityLabel(Text(verbatim: JamBidi.clean(headerLine)))
                 JamInstrumentChips(song: model.song, tracks: model.tracks)
             }
+            Spacer(minLength: 0)
+            if model.canEditSong {
+                Button {
+                    Haptics.selection()
+                    editing = true
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(JamFont.text(16, .semibold))
+                        .foregroundStyle(Palette.paper)
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(Palette.surfaceRaised))
+                        .overlay(Circle().strokeBorder(Palette.border, lineWidth: 1))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(JamTilePressStyle(reduceMotion: reduceMotion))
+                .accessibilityLabel(Text("Edit song"))
+                .accessibilityIdentifier("jam.song.edit")
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.8).combined(with: .opacity))
+            }
         }
+        .animation(.jam(reduceMotion: reduceMotion), value: model.canEditSong)
         .padding(.horizontal, Metrics.hPadding)
         .accessibilityElement(children: .contain)
     }
@@ -186,6 +224,12 @@ struct JamSongView: View {
                     }
                     ShareLink(item: songLink) {
                         Label("Share link", systemImage: "square.and.arrow.up")
+                    }
+                }
+                if model.canEditSong {
+                    Divider()
+                    Button { editing = true } label: {
+                        Label("Edit song", systemImage: "pencil")
                     }
                 }
                 if model.canDeleteSong {

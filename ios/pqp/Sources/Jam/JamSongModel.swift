@@ -153,6 +153,12 @@ final class JamSongModel {
 
     var canSetMix: Bool { JamPermissions.canSetMix(viewer) }
     var canDeleteSong: Bool { JamPermissions.canDeleteSong(viewer) }
+    /// The song's author or a moderator, with the flag on for this server.
+    var canEditSong: Bool { JamPermissions.canEditSong(viewer, enabled: config.enabled) }
+    /// A take's own timing and volume are its author's alone.
+    func canAdjust(_ track: JamTrack) -> Bool {
+        JamPermissions.canAdjustTrack(track, viewerId: viewerId, enabled: config.enabled)
+    }
     func canDelete(_ track: JamTrack) -> Bool {
         JamPermissions.canDeleteTrack(track, viewer: viewer, viewerId: viewerId)
     }
@@ -187,6 +193,15 @@ final class JamSongModel {
         guard started else { return }
         lifecycle += 1
         syncGeneration += 1
+        previewTask?.cancel()
+        previewTask = nil
+        previews = [:]
+        adjustingId = nil
+        // A take that was put on only to be adjusted does not stay on after the screen.
+        if let adjusted = auditionedForAdjust, auditioning[adjusted.instrument] == adjusted.id {
+            auditioning.removeValue(forKey: adjusted.instrument)
+        }
+        auditionedForAdjust = nil
         pauseInternal(keepSession: false)
         ticker?.cancel()
         video.stop()
@@ -242,7 +257,10 @@ final class JamSongModel {
         guard started else { return }
         syncGeneration += 1
         let generation = syncGeneration
-        let wanted = active
+        // What plays is the track as stored, or as the person adjusting it is
+        // hearing it right now (`previews`): a reload while an adjustment is
+        // open must not undo what they are listening to.
+        let wanted = active.map(effective)
         video.load(wanted)
         let missing = wanted.filter { files[$0.id] == nil }
         downloadFailed = false
@@ -273,7 +291,18 @@ final class JamSongModel {
         let wasPlaying = isPlaying
         let songTime = engine.originMs + engine.positionMs
         let hadStems = engine.durationMs > 0
-        let stems = JamMixRules.stems(wanted, files: files)
+        // Read again NOW: while the stems downloaded a person may have moved a
+        // take (a preview), or a frame may have changed the mix. The stems come
+        // from what plays at this moment, not from what played when the sync began.
+        let current = active.map(effective)
+        video.load(current)
+        let stems = JamMixRules.stems(current, files: files)
+        if hadStems, !stems.isEmpty, missing.isEmpty, engine.holds(stems) {
+            // Nothing the engine plays changed (the echo of a change this phone
+            // made itself, a vote that moved a count): the song is not restarted.
+            applyMix()
+            return
+        }
         let failures = engine.load(stems)
         unplayable = Set(failures.keys)
         applyMix()
@@ -285,14 +314,202 @@ final class JamSongModel {
         if wasPlaying { startPlayback(from: engine.positionMs) } else { video.park(atSongMs: engine.originMs + engine.positionMs) }
     }
 
-    private func applyMix() {
-        for track in active {
+    private func applyMix(only id: String? = nil) {
+        for track in active where id == nil || track.id == id {
             engine.setMix(
-                JamEngine.Mix(gain: track.gain, volume: volume(track.id), muted: false),
+                JamEngine.Mix(gain: effective(track).gain, volume: volume(track.id), muted: false),
                 for: track.id
             )
             engine.setAudible(isAudible(track), for: track.id)
         }
+    }
+
+    // MARK: - Adjusting a take
+
+    /// The take being adjusted, while its sheet is open.
+    private(set) var adjustingId: String?
+    /// The take being adjusted, as stored (nil once it is deleted, which closes
+    /// the sheet that is bound to it).
+    var adjustingTrack: JamTrack? { adjustingId.flatMap { id in tracks.first { $0.id == id } } }
+    /// What each adjusted take sounds like right now, before anything is saved.
+    /// Local to this phone, like a mute: only "Save" tells the server.
+    @ObservationIgnored private var previews: [String: JamTrackPlacement] = [:]
+    /// The take was out of the mix, so opening the adjuster put it on to be
+    /// heard (`audition`); closing takes it off again.
+    @ObservationIgnored private var auditionedForAdjust: JamTrack?
+    @ObservationIgnored private var previewTask: Task<Void, Never>?
+    /// How many `jam-song-updated` frames of this song have arrived (see `applySongEdit`).
+    @ObservationIgnored private var songFrameRevision = 0
+    /// How many updates of each take have arrived as frames (see `saveAdjustment`).
+    @ObservationIgnored private var trackRevisions: [String: Int] = [:]
+    @ObservationIgnored private var lastPreviewApply = Date.distantPast
+    /// A preview moved the song in time and has not been heard yet.
+    @ObservationIgnored private var previewPlacementDirty = false
+    /// How often a drag may restart the song: it is rescheduled from the file
+    /// each time, which is cheap, and a finger moves faster than a restart helps.
+    static let previewInterval: TimeInterval = 0.06
+
+    /// The track as the engine should play it: its stored numbers, or the
+    /// preview of an adjustment in progress.
+    func effective(_ track: JamTrack) -> JamTrack {
+        guard let preview = previews[track.id] else { return track }
+        var heard = track
+        heard.offsetMs = preview.offsetMs
+        heard.trimStartMs = preview.trimStartMs
+        heard.trimEndMs = preview.trimEndMs
+        heard.gain = preview.gain
+        return heard
+    }
+
+    /// Open the adjuster on one of this person's takes. A take out of the mix
+    /// is put on, for this phone only, so what they change is what they hear.
+    func beginAdjust(_ track: JamTrack) {
+        guard canAdjust(track) else { return }
+        if !track.inMix, !isAuditioned(track) {
+            auditionedForAdjust = track
+            audition(track)
+        } else {
+            auditionedForAdjust = nil
+        }
+        adjustingId = track.id
+    }
+
+    /// The adjuster closed (saved, or "Back to saved"): what was previewed is
+    /// put back to what is stored, which is a no-op after a save because the
+    /// stored numbers ARE the preview by then.
+    func endAdjust() {
+        guard let id = adjustingId else { return }
+        adjustingId = nil
+        clearPreview(trackId: id)
+        if let track = auditionedForAdjust, isAuditioned(track) { audition(track) }
+        auditionedForAdjust = nil
+    }
+
+    /// Hear these edits at once: the volume now, the placement within a frame
+    /// of the drag (restarting the song at the same moment of the song, with a
+    /// trailing apply so the last position is always heard).
+    func preview(_ track: JamTrack, edits: JamClipEdits) {
+        let next = edits.placed(track)
+        let gainChanged = (previews[track.id]?.gain ?? track.gain) != next.gain
+        let moved = previews[track.id].map { $0.offsetMs != next.offsetMs || $0.trimStartMs != next.trimStartMs || $0.trimEndMs != next.trimEndMs }
+            ?? (next.offsetMs != track.offsetMs || next.trimStartMs != track.trimStartMs || next.trimEndMs != track.trimEndMs)
+        previews[track.id] = next
+        if moved { previewPlacementDirty = true }
+        // A drag of the clip changes no volume: only the edited take's mix is
+        // touched, and only when its gain moved, not every stem on every tick.
+        if gainChanged { applyMix(only: track.id) }
+        if previewPlacementDirty { flushPreviewSoon() }
+    }
+
+    /// Put a take back to its stored numbers in the engine.
+    func clearPreview(trackId: String) {
+        guard previews.removeValue(forKey: trackId) != nil else { return }
+        previewPlacementDirty = true
+        applyMix()
+        applyPreviewPlacement()
+    }
+
+    private func flushPreviewSoon() {
+        let since = Date().timeIntervalSince(lastPreviewApply)
+        if since >= Self.previewInterval {
+            applyPreviewPlacement()
+        } else if previewTask == nil {
+            previewTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.previewInterval - since))
+                guard !Task.isCancelled, let self else { return }
+                self.previewTask = nil
+                self.applyPreviewPlacement()
+            }
+        }
+    }
+
+    /// Hand the engine the previewed places and carry on from the same moment
+    /// of the SONG (the earliest heard sample may have moved, which moves the
+    /// number that "the same position" is).
+    private func applyPreviewPlacement() {
+        previewTask?.cancel()
+        previewTask = nil
+        guard started, previewPlacementDirty else { return }
+        previewPlacementDirty = false
+        lastPreviewApply = Date()
+        let wanted = active.map(effective)
+        let stems = JamMixRules.stems(wanted, files: files)
+        guard !stems.isEmpty, !engine.holds(stems) else { return }
+        let wasPlaying = isPlaying
+        let songTime = engine.originMs + engine.positionMs
+        video.load(wanted)
+        engine.place(stems)
+        let target = max(0, min(engine.durationMs, songTime - engine.originMs))
+        if wasPlaying {
+            startPlayback(from: target)
+        } else {
+            try? engine.seek(to: target)
+            video.park(atSongMs: engine.originMs + engine.positionMs)
+        }
+        seekRevision += 1
+    }
+
+    /// Send the edits. The answer is applied to the song the way its frame is,
+    /// idempotent by id, so the lane moves without waiting for the socket; the
+    /// engine already plays the saved numbers (they were the preview), so
+    /// nothing restarts. Throws what the server said.
+    func saveAdjustment(_ track: JamTrack, patch: JamTrackPatchBody) async throws {
+        guard let session else { throw APIError.transport("No session") }
+        let revision = trackRevisions[track.id, default: 0]
+        let answer = try await session.api.updateJamTrack(id: track.id, patch: patch)
+        // A track has no version number, so "is the answer older than the screen"
+        // is read from the screen: if a frame moved this take WHILE the request was
+        // out, and what it moved it to is not this answer's own numbers, a later
+        // change from another session got here first. The answer is then not laid
+        // over it (the frame is what the song holds); the preview is dropped and
+        // the engine follows the stored take.
+        let now = tracks.first { $0.id == track.id }.map(JamStoredTake.init)
+        let superseded = now != nil && trackRevisions[track.id, default: 0] != revision && now != JamStoredTake(answer.track)
+        if !superseded {
+            var next = state
+            next.apply(.trackUpdated(channelId: channel.id, song: answer.song, track: answer.track), auditioned: Set(auditioning.values))
+            state = next
+        }
+        clearPreview(trackId: track.id)
+        await syncEngine()
+    }
+
+    /// Read just before a song write is sent; hand it back to `applySongEdit`.
+    func songWriteRevision() -> Int { songFrameRevision }
+
+    /// Show a song the server answered an edit with (the title, the artist or
+    /// the cover): applied like `jam-song-updated`, which the writer's own
+    /// socket gets too.
+    func applySongEdit(_ song: JamSongSummary, sentAt revision: Int? = nil) {
+        // An answer that left the server before a newer change (another moderator,
+        // whose frame already arrived) is older than what is on screen: it does not
+        // go over it. The bump is the song's `updatedAt`, and two changes can share
+        // one (the clock has a resolution), so on a tie the order is the one this
+        // phone saw: an answer to a request sent BEFORE a song frame arrived
+        // (`sentAt` is `songWriteRevision()` when it was sent) is the older.
+        guard song.updatedAt >= state.song.updatedAt else { return }
+        if song.updatedAt == state.song.updatedAt, let revision, revision != songFrameRevision { return }
+        var next = state
+        next.apply(.songUpdated(channelId: channel.id, song: song))
+        state = next
+    }
+
+    /// The server refused an edit as not this person's to make: what they may
+    /// do on this song is read again, because it was wrong.
+    func refreshPermissions() async {
+        await load()
+    }
+
+    /// `GET /api/jam/config` again: the operator flips the flag per server with no
+    /// deploy, so a song that stays open (or comes back to the foreground) must not
+    /// keep offering what the server now refuses.
+    func refreshConfig() async {
+        guard let session else { return }
+        // A failed read is "do not know", not "off": the answer that hides the
+        // pencil is the server's, never a lost connection's.
+        let query = [URLQueryItem(name: "serverId", value: server.id)]
+        let fresh: JamConfig? = try? await session.api.get("/api/jam/config", query: query)
+        if let fresh, fresh != config { config = fresh }
     }
 
     // MARK: - Transport
@@ -513,6 +730,10 @@ final class JamSongModel {
     func apply(_ event: RealtimeEvent) {
         guard case .jam(let frame) = event, frame.channelId == channel.id else { return }
         if isReading { bufferedFrames.append(frame) }
+        // Every update of a take that arrives is counted, so a request in flight can
+        // tell "something changed it meanwhile" even when it changed back (A, B, A).
+        if case .trackUpdated(_, _, let changed) = frame { trackRevisions[changed.id, default: 0] += 1 }
+        if case .songUpdated(_, let changed) = frame, changed.id == song.id { songFrameRevision += 1 }
         var next = state
         var effect = next.apply(frame, auditioned: Set(auditioning.values))
         guard next != state else { return }
