@@ -507,6 +507,11 @@ private fun SignedInNav(
     // The take notices: a card above the screen for a part that waits for this person's answer (or "tua parte entrou"),
     // in the flow so it never covers a control, and held back while a song or the studio is open.
     val jamNotices = remember(session) { gg.pqp.app.jam.JamNoticeStore.of(session) }
+    // Coming back to the app asks for what was never answered (the flag) and reads the waiting lists again.
+    androidx.lifecycle.compose.LifecycleStartEffect(jamNotices) {
+        jamNotices.onForeground()
+        onStopOrDispose { }
+    }
     val jamNoticeState by jamNotices.state.collectAsStateWithLifecycle()
     val jamNoticeHolds by jamNotices.holds.collectAsStateWithLifecycle()
     val jamNoticeShowing = jamNoticeState.drawn(jamNoticeHolds).let { it.toast || it.card != null }

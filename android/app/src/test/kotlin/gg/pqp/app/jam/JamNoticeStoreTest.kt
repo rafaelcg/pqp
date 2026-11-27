@@ -51,6 +51,8 @@ class JamNoticeStoreTest {
 
         var config: JamPublicMeConfig = JamPublicMeConfig(enabled = true)
         var configFailure: Exception? = null
+        /** The next this-many config reads fail without an answer (no network), then it answers. */
+        var configFailures = 0
         var inbox = JamPublicInboxResponse()
         var notices = JamTakeNoticesResponse()
         var inboxFailures = 0
@@ -63,6 +65,10 @@ class JamNoticeStoreTest {
 
         override suspend fun config(): JamPublicMeConfig {
             configReads += 1
+            if (configFailures > 0) {
+                configFailures -= 1
+                throw java.io.IOException("offline")
+            }
             configFailure?.let { throw it }
             return config
         }
@@ -149,7 +155,7 @@ class JamNoticeStoreTest {
         assertFalse(storeGone.state.value.enabled)
 
         val offline = Backend().apply { configFailure = java.io.IOException("offline") }
-        val storeOffline = store(offline)
+        val storeOffline = store(offline, retryMs = emptyList())
         advanceUntilIdle()
         // Nothing is known yet, and nothing is claimed: asked again with the next nudge.
         assertFalse(storeOffline.state.value.loaded)
@@ -356,6 +362,43 @@ class JamNoticeStoreTest {
         second.connectionFlow.value = RealtimeState.Ready
         advanceUntilIdle()
         assertTrue("a reconnect reads the flag when it is still unknown", other.state.value.enabled)
+    }
+
+    @Test
+    fun `a config read that keeps failing keeps being asked, with the last wait repeating, until it answers`() = runTest {
+        val backend = Backend().apply { configFailures = 3 }
+        val store = store(backend, retryMs = listOf(1_000, 2_000))
+        runCurrent()
+        assertFalse(store.state.value.loaded)
+        // Reads: at once (fails), at 1 s (fails), at 3 s (fails, the last wait repeats), at 5 s (answers). A chain that ended
+        // after one retry would have stopped asking at the second.
+        advanceTimeBy(1_100)
+        assertEquals(2, backend.configReads)
+        assertFalse(store.state.value.loaded)
+        advanceTimeBy(2_000)
+        assertEquals(3, backend.configReads)
+        assertFalse(store.state.value.loaded)
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(4, backend.configReads)
+        assertTrue(store.state.value.enabled)
+    }
+
+    @Test
+    fun `the app coming to the front asks the flag it never got, and reads the lists again once it has`() = runTest {
+        val backend = Backend().apply { configFailures = 1 }
+        val store = store(backend, retryMs = emptyList())
+        runCurrent()
+        assertFalse(store.state.value.loaded)
+        store.onForeground()
+        advanceUntilIdle()
+        assertTrue(store.state.value.enabled)
+        val reads = backend.noticesReads
+        backend.notices = JamTakeNoticesResponse(listOf(notice("n1", "s1")))
+        store.onForeground()
+        advanceUntilIdle()
+        assertTrue(backend.noticesReads > reads)
+        assertEquals(listOf("n1"), store.state.value.notices.map { it.id })
     }
 
     @Test

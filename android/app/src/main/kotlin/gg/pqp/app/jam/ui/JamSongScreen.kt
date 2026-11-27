@@ -593,8 +593,12 @@ private fun SongBody(
     val others = ui.otherTakes.filter { it.id !in pendingIds }
     // Heard right now: the take is the one in place of the mix's AND something is playing (or about to). After the clip
     // ends, or when playback was refused, the button says "Ouvir" again.
-    val listening = remember(pending, ui.auditioning, ui.playing, ui.playPending) {
-        JamNoticeRules.listening(pending, ui.auditioning, ui.playing, ui.playPending)
+    val listening = remember(pending, ui.auditioning, ui.playing, ui.stems) {
+        JamNoticeRules.listening(pending, ui.auditioning, ui.playing) { id -> ui.stems[id] == JamStemStatus.Ready }
+    }
+    // Asked for and not decoded yet: the button says so, and a tap on it cancels. Nothing plays without that part.
+    val preparing = remember(pending, ui.auditioning, ui.listenPending) {
+        JamNoticeRules.preparing(pending, ui.auditioning, ui.listenPending)
     }
     val reduce = rememberReduceMotion()
     // The one playhead is drawn across the lanes and NOT across an open adjust editor, which has a playhead of its own on a
@@ -644,9 +648,10 @@ private fun SongBody(
                         takes = pending,
                         autoAccept = autoAccept,
                         listening = listening,
+                        preparing = preparing,
                         requests = requests,
                         onListen = { track ->
-                            if (track.id in listening) model.stopAudition(track.instrument) else model.listen(track)
+                            if (track.id in listening || track.id in preparing) model.stopAudition(track.instrument) else model.listen(track)
                         },
                         onAccept = model.requests::accept,
                         onDecline = model.requests::askDecline,

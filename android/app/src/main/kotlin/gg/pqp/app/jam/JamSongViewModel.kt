@@ -57,8 +57,11 @@ data class JamSongUi(
     val callLive: Boolean = false,
     /** The take being adjusted, with the edits not yet saved. Heard at once, sent on "Salvar". */
     val adjust: JamAdjust? = null,
-    /** A take was asked to be heard and its file is still on its way: playback is about to start (the button says so). */
-    val playPending: Boolean = false,
+    /**
+     * The takes asked to be heard whose own file is still on its way, by id: playback starts when THEY are decoded, never
+     * before (the button says "preparing" meanwhile). Kept per take, so stopping one is not stopping another.
+     */
+    val listenPending: Set<String> = emptySet(),
 ) {
     enum class Phase { Loading, Ready, Failed, Gone }
 
@@ -329,17 +332,23 @@ class JamSongViewModel(
         _ui.update { it.copy(originMs = origin, durationMs = player.durationMs.value) }
         applyLevels()
         video.park(origin + positionMs)
-        // A take the person asked to hear starts the moment the band with it is ready: the tap meant "play it", and the
-        // take's own file is still on its way when the tap lands.
-        if (playAfterLoad && _ui.value.ready) {
-            playAfterLoad = false
-            _ui.update { it.copy(playPending = false) }
-            if (!_ui.value.playing) play()
-        }
+        resolveListens()
     }
 
-    /** Set by [listen]: start playing as soon as the band with the chosen take is ready. */
-    private var playAfterLoad = false
+    /**
+     * The takes asked to be heard start the moment THEIR OWN files are decoded and the band is ready: the tap meant "play
+     * it", and starting on the old mix would play the band without the very part that was asked for (`JamListen.resolve`).
+     */
+    private fun resolveListens() {
+        val ui = _ui.value
+        if (ui.listenPending.isEmpty()) return
+        val step = JamListen.resolve(ui.listenPending, ui.stems, songReady = ui.ready, playing = ui.playing)
+        if (step.pending != ui.listenPending) _ui.update { it.copy(listenPending = step.pending) }
+        if (step.failed) notice(JamNotice.PlaybackFailed)
+        if (step.play) play()
+    }
+
+    private fun instrumentOf(trackId: String): JamInstrument? = _ui.value.state?.tracks?.firstOrNull { it.id == trackId }?.instrument
 
     private fun applyLevels() {
         val ui = _ui.value
@@ -468,8 +477,13 @@ class JamSongViewModel(
     }
 
     fun stopAudition(instrument: JamInstrument) {
-        playAfterLoad = false
-        _ui.update { it.copy(auditioning = it.auditioning - instrument, playPending = false) }
+        // Only this instrument's wish goes: another take that is still loading keeps its own.
+        _ui.update {
+            it.copy(
+                auditioning = it.auditioning - instrument,
+                listenPending = JamListen.stopped(it.listenPending, instrument, ::instrumentOf),
+            )
+        }
         syncStems()
     }
 
@@ -491,13 +505,9 @@ class JamSongViewModel(
             return
         }
         audition(track)
-        if (_ui.value.playing) return
-        if (_ui.value.ready) {
-            play()
-        } else {
-            playAfterLoad = true
-            _ui.update { it.copy(playPending = true) }
-        }
+        _ui.update { it.copy(listenPending = JamListen.wish(it.listenPending, track.id, track.instrument, ::instrumentOf)) }
+        // Decoded already (heard before, or the loader was quick): starts now. Otherwise it waits for ITS file.
+        resolveListens()
     }
 
     // --- writes ---

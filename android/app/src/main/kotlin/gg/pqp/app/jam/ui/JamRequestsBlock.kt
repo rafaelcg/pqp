@@ -72,6 +72,8 @@ fun JamRequestsBlock(
     autoAccept: Boolean,
     /** The parts being heard RIGHT NOW (playing, or about to): the label follows real playback, never a refused tap. */
     listening: Set<String>,
+    /** Parts whose own file is still being decoded after the tap: "preparing", never "heard" yet. */
+    preparing: Set<String>,
     requests: JamRequestsUi,
     onListen: (JamTrack) -> Unit,
     onAccept: (JamTrack) -> Unit,
@@ -107,6 +109,7 @@ fun JamRequestsBlock(
                 RequestRow(
                     track = track,
                     heard = track.id in listening,
+                    preparing = track.id in preparing,
                     busy = requests.busy != null,
                     failure = requests.failure?.takeIf { it.trackId == track.id },
                     onListen = { onListen(track) },
@@ -123,6 +126,7 @@ fun JamRequestsBlock(
 private fun RequestRow(
     track: JamTrack,
     heard: Boolean,
+    preparing: Boolean,
     busy: Boolean,
     failure: JamRequestFailure?,
     onListen: () -> Unit,
@@ -134,7 +138,15 @@ private fun RequestRow(
     // What a screen reader says for each button: whose part and which instrument, so three parts are not three
     // identical "Aceitar".
     val who = track.instrument.label()
-    val listenFor = stringResource(if (heard) R.string.jam_requests_stop_for else R.string.jam_requests_listen_for, who, name)
+    val listenFor = stringResource(
+        when {
+            preparing -> R.string.jam_requests_preparing_for
+            heard -> R.string.jam_requests_stop_for
+            else -> R.string.jam_requests_listen_for
+        },
+        who,
+        name,
+    )
     val acceptFor = stringResource(R.string.jam_requests_accept_for, who, name)
     val declineFor = stringResource(R.string.jam_requests_decline_for, who, name)
     // The glyph grows with the text it sits beside.
@@ -183,9 +195,21 @@ private fun RequestRow(
                 onClick = onListen,
                 modifier = Modifier.semantics { contentDescription = listenFor }.testTag("jam.request.listen.${track.id}"),
             ) {
-                Icon(if (heard) PqpIcons.Pause else PqpIcons.Play, contentDescription = null, modifier = Modifier.size(glyph))
+                if (preparing) {
+                    androidx.compose.material3.CircularProgressIndicator(Modifier.size(glyph), strokeWidth = 2.dp)
+                } else {
+                    Icon(if (heard) PqpIcons.Pause else PqpIcons.Play, contentDescription = null, modifier = Modifier.size(glyph))
+                }
                 Spacer(Modifier.width(6.dp))
-                Text(stringResource(if (heard) R.string.jam_requests_stop else R.string.jam_requests_listen))
+                Text(
+                    stringResource(
+                        when {
+                            preparing -> R.string.jam_requests_preparing
+                            heard -> R.string.jam_requests_stop
+                            else -> R.string.jam_requests_listen
+                        },
+                    ),
+                )
             }
             Button(
                 onClick = onAccept,

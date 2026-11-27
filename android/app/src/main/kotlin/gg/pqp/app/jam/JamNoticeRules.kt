@@ -38,16 +38,23 @@ object JamNoticeRules {
 
     /**
      * The waiting parts being heard RIGHT NOW, for the button's label: the take is the one in place of the mix's of its
-     * instrument AND something is playing, or is about to (its file is still on its way). After the clip ends, or when
-     * playback was refused (a call is live), nothing is "heard": the button says "Ouvir" again and never "Parar".
+     * instrument, ITS OWN file is decoded, AND something is playing. After the clip ends, or when playback was refused (a
+     * call is live), nothing is "heard": the button says "Ouvir" again and never "Parar".
      */
     fun listening(
         pending: List<JamTrack>,
         auditioning: Map<JamInstrument, String>,
         playing: Boolean,
-        playPending: Boolean,
+        stemReady: (String) -> Boolean,
     ): Set<String> =
-        if (playing || playPending) pending.filter { auditioning[it.instrument] == it.id }.mapTo(HashSet()) { it.id } else emptySet()
+        if (playing) pending.filter { auditioning[it.instrument] == it.id && stemReady(it.id) }.mapTo(HashSet()) { it.id } else emptySet()
+
+    /**
+     * The waiting parts whose file is on its way after the tap: the button says "preparing", and a tap on it cancels. The
+     * band is not played without them, so nothing here is "heard" yet.
+     */
+    fun preparing(pending: List<JamTrack>, auditioning: Map<JamInstrument, String>, listenPending: Set<String>): Set<String> =
+        pending.filter { it.id in listenPending && auditioning[it.instrument] == it.id }.mapTo(HashSet()) { it.id }
 
     /** Songs with a take waiting, in the order the inbox lists them, with how many. */
     fun songsWaiting(inbox: List<JamPublicInboxItem>): List<WaitingSong> =

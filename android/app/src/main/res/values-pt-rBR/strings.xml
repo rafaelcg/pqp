@@ -2084,4 +2084,6 @@
     <string name="jam_search_searching">Buscando</string>
     <string name="jam_search_empty">Nenhuma música com \"%1$s\". Confere a grafia ou limpa a busca.</string>
     <string name="jam_search_failed">A busca não deu certo, então isso não diz se a música existe. Confere a internet e tenta de novo.</string>
+    <string name="jam_requests_preparing">Preparando</string>
+    <string name="jam_requests_preparing_for">Preparando a parte de %1$s de %2$s, toca pra cancelar</string>
 </resources>

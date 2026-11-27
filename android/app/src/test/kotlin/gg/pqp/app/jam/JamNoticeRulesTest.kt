@@ -96,22 +96,32 @@ class JamNoticeRulesTest {
     private val drums = JamTrack(id = "t2", songId = "s1", instrument = JamInstrument.Drums)
 
     @Test
-    fun `a part is listened to only while it plays or is about to`() {
+    fun `a part is listened to only while it plays and its own file is decoded`() {
         val chosen = mapOf(JamInstrument.Bass to "t1")
-        assertEquals(setOf("t1"), JamNoticeRules.listening(listOf(bass, drums), chosen, playing = true, playPending = false))
-        assertEquals("its file is still on its way", setOf("t1"), JamNoticeRules.listening(listOf(bass, drums), chosen, playing = false, playPending = true))
+        assertEquals(setOf("t1"), JamNoticeRules.listening(listOf(bass, drums), chosen, playing = true) { true })
+        // The old mix is playing and the part's file is still on its way: the band is NOT the part that was asked for.
+        assertTrue(JamNoticeRules.listening(listOf(bass, drums), chosen, playing = true) { false }.isEmpty())
     }
 
     @Test
     fun `after the clip ends, or when playback was refused, nobody is listened to`() {
         val chosen = mapOf(JamInstrument.Bass to "t1")
-        assertTrue(JamNoticeRules.listening(listOf(bass, drums), chosen, playing = false, playPending = false).isEmpty())
+        assertTrue(JamNoticeRules.listening(listOf(bass, drums), chosen, playing = false) { true }.isEmpty())
     }
 
     @Test
     fun `only the chosen take of an instrument is listened to`() {
         val chosen = mapOf(JamInstrument.Bass to "someone-else")
-        assertTrue(JamNoticeRules.listening(listOf(bass), chosen, playing = true, playPending = false).isEmpty())
+        assertTrue(JamNoticeRules.listening(listOf(bass), chosen, playing = true) { true }.isEmpty())
+    }
+
+    @Test
+    fun `a part is preparing while its wish waits and it is still the chosen one`() {
+        val chosen = mapOf(JamInstrument.Bass to "t1", JamInstrument.Drums to "t2")
+        assertEquals(setOf("t1", "t2"), JamNoticeRules.preparing(listOf(bass, drums), chosen, setOf("t1", "t2")))
+        assertEquals(setOf("t2"), JamNoticeRules.preparing(listOf(bass, drums), chosen, setOf("t2")))
+        // Its audition was replaced by another take of the instrument: nothing is being prepared for it.
+        assertTrue(JamNoticeRules.preparing(listOf(bass), mapOf(JamInstrument.Bass to "other"), setOf("t1")).isEmpty())
     }
 
     // --- where a song's id leads ---

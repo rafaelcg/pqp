@@ -2099,4 +2099,6 @@
     <string name="jam_search_searching">Searching</string>
     <string name="jam_search_empty">No song matches \"%1$s\". Check the spelling or clear the search.</string>
     <string name="jam_search_failed">The search did not go through, so this says nothing about whether the song exists. Check your connection and try again.</string>
+    <string name="jam_requests_preparing">Preparing</string>
+    <string name="jam_requests_preparing_for">Preparing %2$s\'s %1$s part, tap to cancel</string>
 </resources>

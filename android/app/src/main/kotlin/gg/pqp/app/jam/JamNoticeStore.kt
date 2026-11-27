@@ -156,31 +156,38 @@ class JamNoticeStore(
 
     // --- reads ---
 
+    /**
+     * One read of the flag. True when the server ANSWERED (on, off, or "no such route"), false when nothing came back (no
+     * network, a 5xx): the only answer that may be asked again. When it is on, the waiting lists follow.
+     */
+    private suspend fun readMe(mine: Int): Boolean {
+        try {
+            val me = backend.config()
+            if (mine != epoch) return true
+            _state.update { if (me.enabled) it.copy(loaded = true, enabled = true) else JamNoticeState(loaded = true) }
+            if (me.enabled) loadWaiting().join()
+            return true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (mine != epoch) return true
+            // An API that predates the routes, or one with the flag off, reads as off.
+            val status = (e as? ApiException)?.status
+            if (status == 404 || status == 401 || status == 403) {
+                _state.value = JamNoticeState(loaded = true)
+                return true
+            }
+            return false
+        }
+    }
+
     /** The flag, asked once per identity; when it is on, the waiting lists follow. */
     private fun loadMe(): Job {
         meLoad?.takeIf { it.isActive }?.let { return it }
         val mine = epoch
         val run = scope.launch {
-            try {
-                val me = backend.config()
-                if (mine != epoch) return@launch
-                _state.update { if (me.enabled) it.copy(loaded = true, enabled = true) else JamNoticeState(loaded = true) }
-                if (me.enabled) loadWaiting().join()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (mine != epoch) return@launch
-                // An API that predates the routes, or one with the flag off, reads as off. A network failure keeps
-                // what was there (nothing, the first time) and is asked again with the next nudge.
-                val status = (e as? ApiException)?.status
-                if (status == 404 || status == 401 || status == 403) {
-                    _state.value = JamNoticeState(loaded = true)
-                } else {
-                    // Not an answer: asked again (3, 10 and 30 seconds), and on the next reconnect, so a transient failure
-                    // at sign-in does not leave notices off for the whole session.
-                    retryMe(0)
-                }
-            }
+            // Not an answer: keep asking, so one transient failure at sign-in never turns notices off until a restart.
+            if (!readMe(mine)) keepAskingForMe()
         }
         meLoad = run
         return run
@@ -188,15 +195,29 @@ class JamNoticeStore(
 
     private var meRetry: Job? = null
 
-    private fun retryMe(attempt: Int) {
-        if (attempt >= retryMs.size || meRetry?.isActive == true) return
+    /**
+     * Ask again after 3, 10 and 30 seconds and then every 30 seconds (the last wait repeats) until the server answers. ONE
+     * loop, and it asks through [readMe] itself, never through [loadMe]: a retry that went back through the guard of the job
+     * that is running it found itself "active" and scheduled nothing, which ended the chain after one more failure.
+     * A reconnect and the app coming to the front also ask ([onForeground]).
+     */
+    private fun keepAskingForMe() {
+        if (retryMs.isEmpty() || meRetry?.isActive == true) return
         val mine = epoch
         meRetry = scope.launch {
-            delay(retryMs[attempt])
-            if (mine != epoch || _state.value.loaded) return@launch
-            loadMe().join()
-            if (!_state.value.loaded) retryMe(attempt + 1)
+            var attempt = 0
+            while (mine == epoch && !_state.value.loaded) {
+                delay(retryMs[minOf(attempt, retryMs.lastIndex)])
+                attempt += 1
+                if (mine != epoch || _state.value.loaded) return@launch
+                if (readMe(mine)) return@launch
+            }
         }
+    }
+
+    /** The app came to the front: a flag never answered is asked now, and the waiting lists are read again. */
+    fun onForeground() {
+        if (!_state.value.loaded) loadMe() else if (_state.value.enabled) refresh()
     }
 
     /** A nudge arrived while a read was out: the answer being read may predate it, so one more read follows. */
