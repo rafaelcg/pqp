@@ -84,6 +84,18 @@ final class SessionStore {
     /// Something to tell the user about a link that did not work out — the
     /// server's own refusal sentence, verbatim. Cleared by whoever shows it.
     var linkError: String?
+    /// A title for that sentence when "Can't open that link" is not the right
+    /// one, and a page that OPENS it ("Abrir no site"): a public jam the phone
+    /// has no screen for is a web page, so the alert offers it next to OK.
+    var linkTitle: String?
+    var linkWebURL: URL?
+
+    /// Clears the alert's sentence and everything that rides with it.
+    func clearLinkError() {
+        linkError = nil
+        linkTitle = nil
+        linkWebURL = nil
+    }
 
     /// The first-run wizard while it is up, nil otherwise. Created when an
     /// account lands on the age gate or, past it, when `Onboarding.shouldRun`
@@ -910,7 +922,7 @@ final class SessionStore {
         lastError = nil
         // A link tapped by the previous account is not the next one's to follow.
         navigationRequest = nil
-        linkError = nil
+        clearLinkError()
         firstRun = nil
         arrivalCelebration = nil
         // The next account's tiles are not lit by this one's unread.

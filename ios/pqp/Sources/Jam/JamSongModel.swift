@@ -9,6 +9,12 @@ import Observation
 /// phone's alone (they are how a person listens), and never leave it. What
 /// reaches the server is a vote, the in-mix switch (author or moderator) and a
 /// delete. The engine plays `JamMixRules.activeTracks`.
+/// A refused answer, with the part it belongs to: shown on THAT part's row.
+struct JamRequestFailure: Equatable, Sendable {
+    let trackId: String
+    let message: String
+}
+
 @MainActor
 @Observable
 final class JamSongModel {
@@ -156,7 +162,7 @@ final class JamSongModel {
     private(set) var requestBusy: String?
     /// A refused answer, said next to the buttons it came from (never only in the
     /// song's passing banner).
-    private(set) var requestError: String?
+    private(set) var requestError: JamRequestFailure?
     var timeline: (originMs: Double, durationMs: Double) { JamMixRules.timeline(of: active) }
     var durationMs: Double { timeline.durationMs }
 
@@ -745,7 +751,8 @@ final class JamSongModel {
             // The part is part of the song now: heard from the next play, with the band.
             if effect == .reloadStems { await syncEngine() }
         } catch {
-            requestError = Self.message(for: error)
+            if Self.isMissing(error) { await partIsGone(request); return }
+            requestError = JamRequestFailure(trackId: request.id, message: Self.message(for: error))
             session.jamPublic.waitingMayHaveChanged()
         }
     }
@@ -768,7 +775,8 @@ final class JamSongModel {
             answer = JamAnswer(kind: .refused, trackId: request.id, instrument: request.instrument, name: request.authorName)
             if effect == .reloadStems { await syncEngine() }
         } catch {
-            requestError = Self.message(for: error)
+            if Self.isMissing(error) { await partIsGone(request); return }
+            requestError = JamRequestFailure(trackId: request.id, message: Self.message(for: error))
             session.jamPublic.waitingMayHaveChanged()
         }
     }
@@ -791,10 +799,30 @@ final class JamSongModel {
             session.jamPublic.waitingMayHaveChanged()
             if effect == .reloadStems { await syncEngine() }
         } catch {
-            requestError = Self.message(for: error)
+            if Self.isMissing(error) { await partIsGone(JamTrack(id: previous.trackId, songId: song.id, authorId: "", instrument: previous.instrument)); return }
+            requestError = JamRequestFailure(trackId: previous.trackId, message: Self.message(for: error))
             // The undo may have committed with its answer lost: ask where things stand.
             session.jamPublic.waitingMayHaveChanged()
         }
+    }
+
+    /// A part that no longer exists (a 404 on its answer): said where the block
+    /// was, and the WHOLE song read again so no ghost chip, lane or "other take"
+    /// is left behind.
+    private func partIsGone(_ request: JamTrack) async {
+        guard let session else { return }
+        answer = JamAnswer(kind: .gone, trackId: request.id, instrument: request.instrument, name: request.authorName)
+        if auditioning[request.instrument] == request.id { auditioning.removeValue(forKey: request.instrument) }
+        files.removeValue(forKey: request.id)
+        session.jamPublic.dropInboxTake(trackId: request.id)
+        session.jamPublic.waitingMayHaveChanged()
+        await load()
+        await syncEngine()
+    }
+
+    private static func isMissing(_ error: Error) -> Bool {
+        if case .notFound = error as? APIError { return true }
+        return false
     }
 
     func clearAnswer() { answer = nil }

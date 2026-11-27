@@ -85,7 +85,7 @@ enum JamNoticeText {
 /// the queue; or declined (no undo: a declined take is deleted and the API has no
 /// way to bring it back).
 struct JamAnswer: Equatable, Sendable {
-    enum Kind: Equatable, Sendable { case accepted, undone, refused }
+    enum Kind: Equatable, Sendable { case accepted, undone, refused, gone }
 
     let kind: Kind
     let trackId: String
@@ -108,6 +108,10 @@ struct JamAnswer: Equatable, Sendable {
             return String(localized: "\(person): the \(instrument) part is in the song. It already shows for anyone who opens it, on the site and in the app.")
         case .undone:
             return String(localized: "Back in the queue. \(person)'s \(instrument) part is still waiting for your answer.")
+        case .gone:
+            // A part answered after it was deleted (its sender took it back, or
+            // somebody else answered): said, and the song is read again.
+            return String(localized: "That part no longer exists.")
         case .refused:
             return String(localized: "Part declined. \(person)'s \(instrument) part stays out of the song, and \(person) is told.")
         }

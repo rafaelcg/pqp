@@ -1598,7 +1598,12 @@ keeps what is held):
   open is a public jam it has no channel for (a standalone one, or another server's):
   the sentence then says "This is a public jam, and public jams open on the web for
   now" when `GET /api/jam-public/songs/:id` confirms it is public, and "not available"
-  otherwise. **`/app/jam/*` is deliberately NOT in the apple-app-site-association
+  otherwise (the alert is titled "Essa jam abre no site" and has "Abrir no site" next
+  to OK, which opens the public page in the in-app browser). A jam link the app cannot
+  open at all (`pqp://jam/not-a-uuid`, `/jam/`, `/jam/new`, `/jam/mine`) is
+  `DeepLinkTarget.jamLinkUnsupported`, the same alert with its own sentence. A jam link
+  does not touch the stack until it is KNOWN to land (`commitJamPlace`), so one that fails
+  while the person is inside a song leaves them on that song. **`/app/jam/*` is deliberately NOT in the apple-app-site-association
   file**: the pattern would capture `/app/jam/new`, `/mine` and every public jam the app
   cannot open, and a claimed link the app then drops is worse than the web opening it
   (the song path `/app/server/*/channel/*/song/*` stays the only jam claim). The push
@@ -1615,13 +1620,21 @@ keeps what is held):
 - **The wall**: a row "N partes esperando tua resposta" with "Ver" (one song opens it,
   several ask which in a sheet) and a pill "N esperando" on each tile, both read from
   the inbox, so they stay with `jam_take_notices` off.
-- **The card** (`JamTakeNoticeCard`, over the hub): one at a time, the newest first
-  with "Mais N esperando depois dessa", no timer (it stays until it is answered, like
-  the web's), "Ver e responder" spends it and opens the song, the X spends it. HELD
-  while a jam wall or song is open (the web's "never over a transport"; the wall's back
-  button sits where the card draws), and never over the first-run wizard, which covers
-  HomeView. With the notices flag off a live `take` frame the server wrote no item for
-  is a local card that is never sent back, the old toast's place.
+- **The card** (`JamTakeNoticeCard`): one at a time, the newest first with "Mais N
+  esperando depois dessa", no timer (it stays until it is answered, like the web's), a
+  44 pt X that spends it. It sits IN THE FLOW at the top of each hub root, below the
+  navigation bar (a `safeAreaInset`), never as an overlay: an overlay covered the server
+  rail, the "+" and, in a chat, the back button and the title, and at the largest
+  type size the whole rail. Pushed screens do not show it (it is durable, and it is
+  there when the person comes back to the hub); it is also held while a jam wall or song
+  is open. The song, not the tap, spends it: "Ver e responder" only asks for the
+  song, and `JamSongView` spends the song's notices once it has been on screen
+  (a link that fails to land leaves the card to tap again). For a song this account has
+  no channel for (a sender's, a standalone jam) the button is "Abrir no site" and opens
+  the public page in the in-app browser, which also spends the card; the probe is the
+  same `locatePublicJam` a link uses. With the notices flag off a live `take` frame the
+  server wrote no item for is a local card that is never sent back, and one kept
+  until a read that succeeded in full has judged it.
 - **Not on the phone, because public jam is not**: the sender of an outside part has no
   channel for the song, so "Ver a música" on their "tua parte entrou" card ends in the
   "opens on the web" sentence; a starter of a standalone public jam (no Jam channel)
@@ -1629,13 +1642,31 @@ keeps what is held):
   (`/app/jam/mine`), the studio's after-send copy about how the sender hears back, and
   the consent card for a part of yours that went public are web only.
 
+**Opening a song after the wall's push.** A link's song is the SECOND push (the wall is
+the first) and UIKit drops a push that starts while another is sliding in, which
+showed up twice in QA as a link that left the wall with no song and no alert. The wall
+now waits for `NavigationSettle.untilIdle()` before pushing the song, waits again, and
+when `JamSongView` has not held the cards by then (it is not on top) pushes it once
+more (`JamSongOpenRule`: one retry, never more). 20 `openurl` runs after cancelling a
+search, 20 from a chat and 20 song to song inside a voice call: 60 of 60.
+
+**The starter's block, in numbers.** Past three waiting parts the block shows two and
+"Ver todas (N)" so the song stays on the first screen (a part whose answer failed is
+never folded away). A refusal is shown on the part's own row. An answer on a part that
+no longer exists (a 404) says "Essa parte não existe mais" as an answer of its own, and
+the whole song is read again so no chip, lane or "Other takes" row is left. "Recusar" asks
+by naming the part and the sender, in an alert with an explicit "Cancelar" (a
+confirmation dialog anchored to a button is a popover without one).
+
 **Share a song.** A song whose publication is `live` (`GET /api/jam-songs/:id/public`,
 read when the song opens; "do not know" is "not public") offers "Compartilhar a música"
 and "Copiar link público" in the song's menu, with the web's "chama a galera" rules
 (`JamShare`, `client/src/lib/jam-share-text.ts`): the message asks for what the song
 still misses (`jamStillNeeds`: wanted, minus in the band, minus what the SHARER sent
 that waits for the starter, which the message also says), and the link is the song's
-public page `https://jam.pqp.gg/m/<id>?ref=share`, never an `/app/...` address. The
+public page, `jam.pqp.gg/m/<id>?ref=share` on the hosted app and `<origin>/jam/m/<id>` on any
+other deployment (`JamPublicBase`, the web's `jamPublicSongLink` rule, from the app's
+configured web origin and not a host written in a screen), never an `/app/...` address. The
 share sheet gets the message and the link as ONE string, the way the web composes it
 for WhatsApp. A song that is not public keeps today's menu: "Copiar link" and "Compartilhar
 link" with the channel permalink. Not here: sharing into a chat of the same server
@@ -1644,8 +1675,16 @@ link" with the channel permalink. Not here: sharing into a chat of the same serv
 **Search.** The wall has a search field (`.searchable`): the server matches title and
 artist, accent- and case-blind (`GET /api/channels/:id/jam-songs?q=`), asked once two
 letters have stayed still for 180 ms, the answer for words that are no longer the words
-dropped, a failure an empty list; the results are a list of rows in place of the mosaic
+dropped; a failure is its OWN state (not "no song found", which says something about the jam
+that a lost connection cannot): "Não deu pra buscar agora" with "Tentar de novo", announced,
+and what was on screen stays under it. While a search is up, any song created or edited is
+asked again (debounced), so a song that newly matches appears without a keystroke. Rows
+carry the "N esperando" pill and the waiting text in their VoiceOver label, like tiles. The results are a list of rows in place of the mosaic
 (the web's palette shows 6, the wall shows a page of 25). Not here: reporting a part.
+
+**The record button** chooses its label by the width there is (`ViewThatFits`: the whole
+sentence, then "Gravar", then the icon), not by type size, so it is never cut mid-word
+at any phone width.
 
 **Not here.** Recording a camera, replacing the viewer's old take in the mix,
 trimming, comments, Spanish (the app ships en and pt-BR only).

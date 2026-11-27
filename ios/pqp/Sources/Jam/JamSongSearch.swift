@@ -35,6 +35,9 @@ enum JamSearchState: Equatable {
     /// The words are out.
     case searching(words: String)
     case results(words: String, songs: [JamSongSummary])
+    /// The server could not be reached or refused: NOT an empty result. What was
+    /// on screen before stays (`kept`), with the failure and a retry above it.
+    case failed(words: String, kept: [JamSongSummary])
 }
 
 extension APIClient {

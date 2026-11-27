@@ -106,13 +106,13 @@ final class JamShareTests: XCTestCase {
         for status in ["review", "hidden", "removed", "unpublished", nil] {
             XCTAssertFalse(JamShare.isShareable(publicationStatus: status), "\(String(describing: status)) has no public page")
         }
-        let link = JamShare.publicLink(songId: songId)
+        let link = JamShare.publicLink(songId: songId, origin: nil)
         XCTAssertEqual(link?.absoluteString, "https://jam.pqp.gg/m/\(songId)?ref=share")
         XCTAssertFalse(link?.absoluteString.contains("/app/") ?? true, "a stranger cannot open an app address")
     }
 
     func testTheShareSheetGetsTheMessageThenTheLinkAsOneString() throws {
-        let link = try XCTUnwrap(JamShare.publicLink(songId: songId))
+        let link = try XCTUnwrap(JamShare.publicLink(songId: songId, origin: nil))
         XCTAssertEqual(
             JamShare.shareItem(text: "Lua cheia: give this jam a listen:", link: link),
             "Lua cheia: give this jam a listen: https://jam.pqp.gg/m/\(songId)?ref=share"
@@ -212,11 +212,55 @@ final class JamSongSearchTests: XCTestCase {
         if case .results = model.search { XCTFail("a stale answer landed") }
     }
 
-    func testAFailedSearchIsAnEmptyListNotAnError() async {
-        let model = wall { _ in (0, 500, Data(#"{"error":"boom"}"#.utf8)) }
+    /// "Nothing matches" is a statement about the jam; a lost connection says
+    /// nothing about it, so a failed search is its own state, and what was on
+    /// screen stays under it.
+    func testAFailedSearchIsItsOwnStateNotAnEmptyResult() async {
+        let failing = LockedBox(true)
+        let body = page(["Lua cheia"])
+        let model = wall { _ in failing.value ? (0, 500, Data(#"{"error":"boom"}"#.utf8)) : (0, 200, body) }
         model.searchText = "lu"
         await model.runSearch()
-        XCTAssertEqual(model.search, .results(words: "lu", songs: []))
+        XCTAssertEqual(model.search, .failed(words: "lu", kept: []))
+        failing.value = false
+        await model.runSearch(settle: false)
+        guard case .results(_, let songs) = model.search else { return XCTFail("the retry found the song") }
+        XCTAssertEqual(songs.map(\.title), ["Lua cheia"])
+        failing.value = true
+        await model.runSearch(settle: false)
+        guard case .failed(_, let kept) = model.search else { return XCTFail("failed again") }
+        XCTAssertEqual(kept.map(\.title), ["Lua cheia"], "the previous results stay visible under the failure")
+    }
+
+    func testAnOfflineSearchIsAFailureToo() async {
+        let model = wall { _ in (0, 503, Data()) }
+        model.searchText = "lu"
+        await model.runSearch()
+        if case .results = model.search { XCTFail("a 503 is not an empty list") }
+    }
+
+    func testASongThatNewlyMatchesAppearsWithoutAKeystroke() async throws {
+        let asked = LockedBox<Int>(0)
+        let found = LockedBox(false)
+        let withSong = page(["Lua cheia"])
+        let empty = page([])
+        let model = wall { _ in
+            asked.value += 1
+            return (0, 200, found.value ? withSong : empty)
+        }
+        model.searchText = "lu"
+        await model.runSearch()
+        guard case .results(_, let none) = model.search else { return XCTFail("results") }
+        XCTAssertTrue(none.isEmpty)
+        // Somebody renames a song that was NOT in the results so it matches.
+        found.value = true
+        let song = try Coding.decoder.decode(JamSongSummary.self, from: page(["Lua cheia"]).dropFirstSong())
+        model.apply(.jam(.songUpdated(channelId: "chan-1", song: song)))
+        model.apply(.jam(.songUpdated(channelId: "chan-1", song: song)))
+        let deadline = Date().addingTimeInterval(3)
+        while model.shownSearchSongs.isEmpty, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertEqual(model.shownSearchSongs.map(\.title), ["Lua cheia"])
+        XCTAssertEqual(asked.value, 2, "two frames in a burst are one question")
     }
 
     func testClearingTheFieldIsTheWallAgain() async {
@@ -227,5 +271,16 @@ final class JamSongSearchTests: XCTestCase {
         model.searchText = ""
         await model.runSearch()
         XCTAssertEqual(model.search, .idle)
+    }
+}
+
+
+private extension Data {
+    /// The first song object of a `{"songs":[...]}` page, for a test that needs one summary.
+    func dropFirstSong() -> Data {
+        guard let object = try? JSONSerialization.jsonObject(with: self) as? [String: Any],
+              let first = (object["songs"] as? [[String: Any]])?.first,
+              let data = try? JSONSerialization.data(withJSONObject: first) else { return self }
+        return data
     }
 }

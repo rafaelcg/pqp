@@ -19,6 +19,9 @@ import SwiftUI
 /// are the first thing on the page. The X spends it without opening.
 struct JamTakeNoticeCard: View {
     let queue: JamNoticeQueue
+    /// The song opens on the site for this account (no channel of its own to land
+    /// in): the button says so, and it is what the tap does.
+    var opensOnSite = false
     let onOpen: (JamTakeNotice) -> Void
     let onDismiss: (JamTakeNotice) -> Void
 
@@ -48,7 +51,7 @@ struct JamTakeNoticeCard: View {
                         Haptics.selection()
                         onOpen(notice)
                     } label: {
-                        Text(take ? "See and answer" : "Open the song")
+                        Text(opensOnSite ? "Open on the site" : (take ? "See and answer" : "Open the song"))
                             .font(JamFont.text(14, .bold))
                             .lineLimit(1)
                             .fixedSize()

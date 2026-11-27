@@ -143,9 +143,29 @@ struct JamWallView: View {
                 await report(JamSongLinkMessage.unavailable)
                 return
             }
-            openedSong = JamSongRoute(song: detail.song)
+            await openSongOnceSettled(detail.song)
         } catch {
             await report(JamSongLinkMessage.forFailure(error))
+        }
+    }
+
+    /// The song is the SECOND push of a link (the wall is the first), and UIKit
+    /// drops a push that starts while another is still sliding in: so it waits for
+    /// the stack to be idle, and when it is still not on top after its transition
+    /// (`JamSongView` says so by holding the cards) it is pushed once more.
+    private func openSongOnceSettled(_ song: JamSongSummary) async {
+        var attempts = 0
+        while true {
+            await NavigationSettle.untilIdle()
+            guard !Task.isCancelled else { return }
+            openedSong = JamSongRoute(song: song)
+            await NavigationSettle.untilIdle()
+            guard !Task.isCancelled else { return }
+            let appeared = session.jamPublic.heldBy.contains(song.id)
+            guard JamSongOpenRule.shouldRetry(appeared: appeared, attempts: attempts) else { return }
+            attempts += 1
+            openedSong = nil
+            try? await Task.sleep(for: .milliseconds(150))
         }
     }
 
@@ -263,6 +283,13 @@ struct JamWallView: View {
             EmptyView()
         case .searching:
             ProgressView().tint(Palette.signal).frame(maxWidth: .infinity).padding(.top, 40)
+        case .failed(_, let kept):
+            // NOT "nothing matches": the search never reached the jam. What was on
+            // screen stays under the failure, and the retry is next to it.
+            VStack(spacing: 12) {
+                JamSearchFailure { Task { await model.runSearch(settle: false) } }
+                if !kept.isEmpty { resultsList(kept) }
+            }
         case .results(let words, let songs):
             if songs.isEmpty {
                 VStack(spacing: 8) {
@@ -280,28 +307,32 @@ struct JamWallView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("jam.search.empty")
             } else {
-                VStack(spacing: 0) {
-                    Text("\(songs.count) songs")
-                        .font(Typography.label)
-                        .tracking(1.2)
-                        .foregroundStyle(Palette.paperMuted)
-                        .textCase(.uppercase)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, Metrics.hPadding)
-                        .padding(.bottom, 6)
-                        .accessibilityAddTraits(.isHeader)
-                    ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
-                        if index > 0 { Rectangle().fill(Palette.border).frame(height: 1).padding(.horizontal, Metrics.hPadding) }
-                        Button {
-                            Haptics.selection()
-                            openedSong = JamSongRoute(song: song)
-                        } label: {
-                            JamSearchRow(song: song)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("jam.search.result")
-                    }
+                resultsList(songs)
+            }
+        }
+    }
+
+    private func resultsList(_ songs: [JamSongSummary]) -> some View {
+        VStack(spacing: 0) {
+            Text("\(songs.count) songs")
+                .font(Typography.label)
+                .tracking(1.2)
+                .foregroundStyle(Palette.paperMuted)
+                .textCase(.uppercase)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.bottom, 6)
+                .accessibilityAddTraits(.isHeader)
+            ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
+                if index > 0 { Rectangle().fill(Palette.border).frame(height: 1).padding(.horizontal, Metrics.hPadding) }
+                Button {
+                    Haptics.selection()
+                    openedSong = JamSongRoute(song: song)
+                } label: {
+                    JamSearchRow(song: song, waiting: waitingCounts[song.id] ?? 0)
                 }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("jam.search.result")
             }
         }
     }
@@ -774,6 +805,8 @@ struct JamWaitingSongsSheet: View {
 /// them, on a row. One accessibility element that says all three.
 struct JamSearchRow: View {
     let song: JamSongSummary
+    /// Parts waiting for this account's answer on this song, as the tile says.
+    var waiting: Int = 0
 
     private var who: String {
         JamWho.line(song: song, contributors: song.contributors.map { $0.compactMap(\.name) })
@@ -806,6 +839,16 @@ struct JamSearchRow: View {
                     .font(JamFont.text(12, .bold))
                     .foregroundStyle(need.isCallout ? Palette.signal : Palette.paperSubtle)
                     .lineLimit(2)
+                if waiting > 0 {
+                    Text("\(waiting) waiting")
+                        .font(JamFont.text(11, .heavy))
+                        .lineLimit(1)
+                        .foregroundStyle(Palette.inkDeep)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(Capsule().fill(Palette.signal))
+                        .accessibilityIdentifier("jam.search.waiting")
+                }
             }
             Spacer(minLength: 0)
             Image(systemName: "chevron.right")
@@ -818,8 +861,44 @@ struct JamSearchRow: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: JamBidi.clean([song.title, subtitle, need.text].filter { !$0.isEmpty }.joined(separator: ", "))))
+        .accessibilityLabel(Text(verbatim: JamBidi.clean([song.title, subtitle, need.text].filter { !$0.isEmpty }.joined(separator: ", "))) + (waiting > 0 ? Text(verbatim: ", ") + Text("\(waiting) parts waiting for your answer") : Text(verbatim: "")))
         .accessibilityHint(Text("Opens the song"))
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+
+// MARK: - A search that did not reach the jam
+
+/// "Could not search": said where the results are, announced to VoiceOver, with
+/// the retry beside it. Never worded as an empty result.
+struct JamSearchFailure: View {
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            JamNoticeBar(
+                text: String(localized: "Could not search right now. Check your connection and try again."),
+                tone: .problem, identifier: "jam.search.failed", framed: true
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+            .jamAnnounceNow(String(localized: "Could not search right now. Check your connection and try again."))
+            Button(action: retry) {
+                Label("Try again", systemImage: "arrow.clockwise")
+                    .font(JamFont.text(14, .bold))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .foregroundStyle(Palette.inkDeep)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 44)
+                    .background(Capsule().fill(Palette.signal))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("jam.search.retry")
+        }
+        .padding(.horizontal, Metrics.hPadding)
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

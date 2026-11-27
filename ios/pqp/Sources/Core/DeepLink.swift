@@ -52,6 +52,11 @@ enum DeepLinkTarget: Equatable, Sendable {
     /// of somebody else's, which the phone has no view for) ends in a sentence.
     /// `/app/jam/new` and `/app/jam/mine` are web screens and are not this.
     case publicJam(songId: String)
+    /// A jam link the app cannot open: not an id (`/app/jam/not-a-uuid`), the
+    /// bare `/app/jam`, or the web's own screens (`/app/jam/new`, `/mine`). It is
+    /// not a destination, but it is not silence either: the shell says so with the
+    /// "Can't open that link" alert.
+    case jamLinkUnsupported
 }
 
 /// Turns links and notification paths into `DeepLinkTarget`s, and nothing else.
@@ -116,11 +121,14 @@ enum DeepLink {
             guard !serverId.isEmpty, !postId.isEmpty else { return nil }
             return .bauPost(serverId: serverId.lowercased(), postId: postId.lowercased())
 
+        case 1 where segments[0] == "jam":
+            return .jamLinkUnsupported
+
         case 2 where segments[0] == "jam":
-            // Only a real id: `new` and `mine` are the web's own screens, and
-            // anything else is not a song.
+            // Only a real id is a song: `new` and `mine` are the web's own
+            // screens, and anything else is not a song.
             let songId = segments[1].lowercased()
-            return isUuid(songId) ? .publicJam(songId: songId) : nil
+            return isUuid(songId) ? .publicJam(songId: songId) : .jamLinkUnsupported
 
         case 6 where segments[0] == "server" && segments[2] == "channel" && segments[4] == "post":
             let serverId = segments[1]

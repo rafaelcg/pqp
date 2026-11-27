@@ -196,22 +196,62 @@ final class JamWallModel {
 
     // MARK: - Search
 
+    /// The songs the search is showing, whatever state it is in.
+    var shownSearchSongs: [JamSongSummary] {
+        switch search {
+        case .results(_, let songs), .failed(_, let songs): songs
+        case .idle, .searching: []
+        }
+    }
+
     /// Run from a task keyed on `searchText`, so typing cancels the last one.
     /// Nothing is asked until the words are long enough and have been still for
-    /// a moment; the last answer stays on screen while the next words settle; a
-    /// failed read is an empty list, never an error over the wall.
-    func runSearch() async {
+    /// a moment (`settle`; a retry and a re-ask after an edit skip it); the last
+    /// answer stays on screen while the next words settle. A read that FAILED is
+    /// its own state, `failed`, never an empty list: "nothing matches" is a
+    /// statement about the jam and a lost connection says nothing about it. What
+    /// was on screen stays under the failure.
+    func runSearch(settle: Bool = true) async {
         guard let words = JamSongSearch.words(searchText) else {
             search = .idle
             return
         }
-        try? await Task.sleep(for: JamSongSearch.settle)
+        if settle { try? await Task.sleep(for: JamSongSearch.settle) }
         guard !Task.isCancelled, let session else { return }
-        if case .results = search {} else { search = .searching(words: words) }
-        let songs = (try? await session.api.searchJamSongs(channelId: channel.id, words: words)) ?? []
+        let before = shownSearchSongs
+        switch search {
+        case .results, .failed: break
+        case .idle, .searching: search = .searching(words: words)
+        }
+        let outcome: Result<[JamSongSummary], Error>
+        do {
+            outcome = .success(try await session.api.searchJamSongs(channelId: channel.id, words: words))
+        } catch {
+            if error.isCancellation { return }
+            outcome = .failure(error)
+        }
         // The words moved on while the answer was out: it is for words that are not these.
         guard !Task.isCancelled, JamSongSearch.words(searchText) == words else { return }
-        search = .results(words: words, songs: songs)
+        switch outcome {
+        case .success(let songs): search = .results(words: words, songs: songs)
+        case .failure: search = .failed(words: words, kept: before)
+        }
+    }
+
+    /// A song changed (a new one, an edit) while a search is up: it may newly
+    /// match the words or no longer match them, and only the server knows. Asked
+    /// again once the changes have stopped coming (a burst is one question).
+    @ObservationIgnored private var searchRefresh: Task<Void, Never>?
+    static let searchRefreshDelay: Duration = .milliseconds(400)
+
+    func searchSongsChanged() {
+        guard search != .idle else { return }
+        searchRefresh?.cancel()
+        searchRefresh = Task { [weak self] in
+            try? await Task.sleep(for: Self.searchRefreshDelay)
+            guard !Task.isCancelled, let self else { return }
+            await self.runSearch(settle: false)
+        }
     }
 
     // MARK: - Live frames
@@ -230,23 +270,27 @@ final class JamWallModel {
 
     /// A song deleted or edited while its row is on screen in the results.
     private func applyToSearch(_ frame: JamFrame) {
-        guard case .results(let words, var songs) = search else { return }
+        let words: String
+        var songs: [JamSongSummary]
+        switch search {
+        case .results(let w, let held), .failed(let w, let held): words = w; songs = held
+        case .idle, .searching: return
+        }
         switch frame {
+        case .songCreated, .songUpdated:
+            // A new song, or a new title or artist, may match or stop matching:
+            // the server decides, so the words are asked again (debounced).
+            searchSongsChanged()
+            return
         case .songDeleted(_, let id):
             songs.removeAll { $0.id == id }
-        case .songUpdated(_, let song):
-            // A new title or artist may no longer match the words (or newly match
-            // them): the server decides, so the words are asked again.
-            guard songs.contains(where: { $0.id == song.id }) else { return }
-            Task { [weak self] in await self?.runSearch() }
-            return
         case .trackAdded(_, let song, _), .trackUpdated(_, let song, _), .trackDeleted(_, let song, _):
             guard let index = songs.firstIndex(where: { $0.id == song.id }) else { return }
             songs[index] = song
         default:
             return
         }
-        search = .results(words: words, songs: songs)
+        if case .failed = search { search = .failed(words: words, kept: songs) } else { search = .results(words: words, songs: songs) }
     }
 
     func clearFresh(_ id: String) { state.clearFresh(id) }

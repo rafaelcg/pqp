@@ -18583,6 +18583,76 @@
           }
         }
       }
+    },
+    "Could not search right now. Check your connection and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra buscar agora. Confere a conexão e tenta de novo."
+          }
+        }
+      }
+    },
+    "Open on the site" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir no site"
+          }
+        }
+      }
+    },
+    "This jam opens on the site" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa jam abre no site"
+          }
+        }
+      }
+    },
+    "That jam link cannot be opened in the app." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse link de jam não abre no app."
+          }
+        }
+      }
+    },
+    "That part no longer exists." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa parte não existe mais."
+          }
+        }
+      }
+    },
+    "Decline %@'s %@ part?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recusar a parte de %2$@ de %1$@?"
+          }
+        }
+      }
+    },
+    "See all (%lld)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver todas (%lld)"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

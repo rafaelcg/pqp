@@ -149,10 +149,13 @@ final class JamPublicRoutingTests: XCTestCase {
     /// `/app/jam/new` and `/app/jam/mine` are the web's own screens; anything that
     /// is not an id is not a song.
     func testOnlyARealIdIsASong() {
-        XCTAssertNil(DeepLink.target(path: "/app/jam/new"))
-        XCTAssertNil(DeepLink.target(path: "/app/jam/mine"))
-        XCTAssertNil(DeepLink.target(path: "/app/jam/not-a-uuid"))
-        XCTAssertNil(DeepLink.target(path: "/app/jam"))
+        // Not a song, but not silence either: the shell says so (`jamLinkUnsupported`).
+        XCTAssertEqual(DeepLink.target(path: "/app/jam/new"), .jamLinkUnsupported)
+        XCTAssertEqual(DeepLink.target(path: "/app/jam/mine"), .jamLinkUnsupported)
+        XCTAssertEqual(DeepLink.target(path: "/app/jam/not-a-uuid"), .jamLinkUnsupported)
+        XCTAssertEqual(DeepLink.target(path: "/app/jam"), .jamLinkUnsupported)
+        XCTAssertEqual(DeepLink.target(url: URL(string: "pqp://jam/")!), .jamLinkUnsupported)
+        XCTAssertEqual(DeepLink.target(url: URL(string: "pqp://jam/not-a-uuid")!), .jamLinkUnsupported)
         XCTAssertNil(DeepLink.target(path: "/app/jam/\(songId)/extra"))
     }
 
@@ -681,7 +684,8 @@ final class JamRequestAnswerTests: XCTestCase {
         let log = LockedBox<[Sent]>([])
         let model = try await open(log: log) { _ in (403, #"{"error":"Only the starter can do that."}"#) }
         await model.accept(try XCTUnwrap(model.requestTracks.first))
-        XCTAssertEqual(model.requestError, "Only the starter can do that.")
+        XCTAssertEqual(model.requestError?.message, "Only the starter can do that.")
+        XCTAssertEqual(model.requestError?.trackId, "t1", "on the part that failed")
         XCTAssertNil(model.answer)
         XCTAssertEqual(model.requestTracks.count, 2, "nothing was put in")
         XCTAssertNil(model.requestBusy, "and the buttons are back")

@@ -50,11 +50,11 @@ enum JamShare {
     }
 
     /// The song's public page, tagged `ref=share` so a sign-up that comes out of
-    /// it is its own row in the acquisition report (`jamPublicSongLink`):
-    /// `jam.pqp.gg/m/<id>` on the hosted instance. Never an `/app/...` address,
-    /// which a stranger cannot open.
-    static func publicLink(songId: String) -> URL? {
-        URL(string: "https://jam.pqp.gg/m/\(songId)?ref=share")
+    /// it is its own row in the acquisition report (`jamPublicSongLink`). Never an
+    /// `/app/...` address, which a stranger cannot open. The base is the app's own
+    /// (`JamPublicBase`), not a host written here.
+    static func publicLink(songId: String, origin: String? = BauShare.currentWebOrigin) -> URL? {
+        JamPublicBase.songURL(songId: songId, tagged: true, origin: origin)
     }
 
     /// Only a song a stranger can open gets the public message and link: its
@@ -105,5 +105,29 @@ extension APIClient {
         }
         let answer: Answer? = try? await get("/api/jam-songs/\(songId)/public")
         return answer?.publication?.status
+    }
+}
+
+
+/// Where a public jam lives, from the web origin this build is pointed at: the
+/// same rule as the web's `jamPublicSongLink` (`client/src/lib/jam-share-link.ts`).
+/// The hosted app (no origin, or `pqp.gg`) answers at `jam.pqp.gg/m/<id>`; any
+/// other deployment (a self-host, the local Vite server) at `<origin>/jam/m/<id>`.
+enum JamPublicBase {
+    private static let hosted = "https://jam.pqp.gg"
+
+    static func songURL(songId: String, tagged: Bool, origin: String? = BauShare.currentWebOrigin) -> URL? {
+        let base: String
+        let path: String
+        if let origin, let host = URL(string: origin)?.host?.lowercased(), host != "pqp.gg", host != "www.pqp.gg" {
+            base = origin
+            path = "/jam/m/\(songId)"
+        } else {
+            base = hosted
+            path = "/m/\(songId)"
+        }
+        guard var components = URLComponents(string: base + path) else { return nil }
+        if tagged { components.queryItems = [URLQueryItem(name: "ref", value: "share")] }
+        return components.url
     }
 }

@@ -15,6 +15,9 @@ struct JamNoticeBar: View {
     let text: String
     var tone: Tone = .problem
     var identifier: String
+    /// Inside a card or a row: a rounded outline instead of the sheet edge's
+    /// bottom line (which a rounded container would clip).
+    var framed = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -31,7 +34,15 @@ struct JamNoticeBar: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(Palette.surfaceRaised)
-        .overlay(alignment: .bottom) { Rectangle().fill(tone == .problem ? Palette.danger : Palette.border).frame(height: 1) }
+        .overlay(alignment: .bottom) {
+            if !framed { Rectangle().fill(tone == .problem ? Palette.danger : Palette.border).frame(height: 1) }
+        }
+        .overlay {
+            if framed {
+                RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
+                    .strokeBorder(tone == .problem ? Palette.danger : Palette.border, lineWidth: 1)
+            }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.updatesFrequently)
         .accessibilityIdentifier(identifier)

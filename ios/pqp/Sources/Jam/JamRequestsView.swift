@@ -15,6 +15,9 @@ struct JamRequestsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let model: JamSongModel
     @State private var declining: JamTrack?
+    /// Past three waiting parts the block shows two and "Ver todas (N)", so the
+    /// song stays on the first screen.
+    @State private var expanded = false
 
     var body: some View {
         let requests = model.requestTracks
@@ -31,11 +34,14 @@ struct JamRequestsView: View {
         .padding(.horizontal, Metrics.hPadding)
         .animation(.jam(reduceMotion: reduceMotion), value: requests.map(\.id))
         .animation(.jam(reduceMotion: reduceMotion), value: model.answer)
-        .confirmationDialog(
-            "Decline this request?",
-            isPresented: Binding(get: { declining != nil }, set: { if !$0 { declining = nil } }),
-            titleVisibility: .visible
+        // An alert, not a confirmation dialog: anchored to a button the dialog is a
+        // popover that has no Cancel, and a question that can only be left by
+        // tapping outside is not a question with two answers.
+        .alert(
+            declineTitle,
+            isPresented: Binding(get: { declining != nil }, set: { if !$0 { declining = nil } })
         ) {
+            Button("Cancel", role: .cancel) { declining = nil }
             Button("Decline", role: .destructive) {
                 if let request = declining { Task { await model.decline(request) } }
                 declining = nil
@@ -44,6 +50,17 @@ struct JamRequestsView: View {
             Text("The recording is deleted. It never joined the song.")
         }
     }
+
+    /// Names the part and who sent it, so the question cannot be about another one.
+    private var declineTitle: String {
+        guard let request = declining else { return String(localized: "Decline this request?") }
+        let person = JamBidi.clean(request.displayName)
+        return String(localized: "Decline \(person)'s \(request.instrument.name) part?")
+    }
+
+    /// The most parts the block lists before it folds the rest behind "Ver todas".
+    static let collapseAbove = 3
+    static let collapsedShows = 2
 
     private func block(_ requests: [JamTrack]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -57,19 +74,36 @@ struct JamRequestsView: View {
                 .font(JamFont.text(13))
                 .foregroundStyle(Palette.paperMuted)
                 .fixedSize(horizontal: false, vertical: true)
+            let folds = requests.count > Self.collapseAbove
+            // A part whose answer failed is never folded away.
+            let failing = model.requestError.flatMap { failure in requests.firstIndex { $0.id == failure.trackId } }
+            let open = expanded || !folds || (failing ?? 0) >= Self.collapsedShows
+            let listed = open ? requests : Array(requests.prefix(Self.collapsedShows))
             VStack(spacing: 0) {
-                ForEach(Array(requests.enumerated()), id: \.element.id) { index, request in
+                ForEach(Array(listed.enumerated()), id: \.element.id) { index, request in
                     if index > 0 { Rectangle().fill(Palette.border).frame(height: 1) }
                     row(request)
                 }
             }
             .background(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous).fill(Palette.surfaceRaised))
-            if let error = model.requestError {
-                // Next to the buttons it came from, on screen and spoken: a
-                // refused answer is never only the song's passing banner.
-                JamNoticeBar(text: error, tone: .problem, identifier: "jam.requests.error")
-                    .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
-                    .jamAnnounceNow(error)
+            if folds {
+                Button {
+                    Haptics.selection()
+                    expanded.toggle()
+                } label: {
+                    Text(open ? "Show fewer" : "See all (\(requests.count))")
+                        .font(JamFont.text(13, .bold))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .foregroundStyle(Palette.paperSubtle)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 44)
+                        .background(Capsule().fill(Palette.surface))
+                        .overlay(Capsule().strokeBorder(Palette.border, lineWidth: 1))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("jam.requests.toggle")
             }
         }
         .padding(12)
@@ -131,10 +165,15 @@ struct JamRequestsView: View {
                 .accessibilityLabel(Text("Decline \(spoken)"))
             }
             .padding(.leading, 44)
+            if let failure = model.requestError, failure.trackId == request.id {
+                // On the part that failed, on screen and spoken.
+                JamNoticeBar(text: failure.message, tone: .problem, identifier: "jam.requests.error", framed: true)
+                    .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+                    .jamAnnounceNow(failure.message)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .opacity(busy ? 0.6 : 1)
     }
 
     private enum PillStyle {
@@ -181,7 +220,7 @@ struct JamAnswerView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: answer.kind == .refused ? "xmark" : "checkmark")
+            Image(systemName: answer.kind == .refused ? "xmark" : (answer.kind == .gone ? "questionmark" : "checkmark"))
                 .font(JamFont.text(14, .bold))
                 .foregroundStyle(Palette.paperMuted)
                 .frame(width: 32, height: 32)
