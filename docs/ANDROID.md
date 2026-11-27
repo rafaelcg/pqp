@@ -4121,6 +4121,72 @@ on a small phone with a 2.0 font scale, TalkBack on the handles, the flag turned
 `jam_channels_off` mapping is unit-tested and was not driven on a device), and a non-moderator member (the local owner is
 always a moderator, so "no pencil for people who may not" is a unit test of `canEditSong`, not a screenshot).
 
+### Parts that wait for the starter, and "tua parte entrou" (take notices)
+
+The phone half of "Telling the starter" (`docs/JAM_PUBLIC.md`, `jam_take_notices`): a stranger sends a part to a song that is
+public, it waits out of the mix, and the server tells the song's starter, and tells the sender how it went. **Client only**:
+`GET /api/jam-public/config`, `/inbox`, `/notices`, `POST /notices/ack`, `GET /api/jam-songs/:id` and
+`PATCH`/`DELETE /api/jam-tracks/:id` all existed. Code: `jam/JamNotices.kt` (wire models and the two frames),
+`JamNoticeStore.kt` (the state), `JamNoticeRules.kt` (pure rules), `JamRequests.kt` (accept, undo, decline),
+`jam/ui/JamNoticeCard.kt`, `JamRequestsBlock.kt`, `JamWaitingStrip.kt`. Pinned by `JamPublicContractTest` (every field against
+the zod schemas, both frames, kinds), `WireProtocolTest` (the two frames are in its floor), `JamNoticeStoreTest`,
+`JamNoticeRulesTest`, `JamRequestsTest`, `DeepLinkTest`, `JamApiTest`.
+
+- **The push.** Its path is `/app/jam/<songId>` (no server, no channel). `DeepLink.target` reads it as
+  `DeepLinkTarget.JamPublicSong` (a UUID only: `/app/jam/mine`, `/app/jam/new` and anything else open nothing). Before this
+  the path parsed to null and the push's `tag` (`jam-take:<song>:<kind>`) fell through to `Conversation(tag)`, a conversation
+  screen on an id that is not one. The router asks the server where the song lives (`openJamSongById`, one read of
+  `GET /api/jam-songs/:id`, decoded as `JamSongPlace` because a standalone song has a null channel that `JamSongSummary` cannot
+  hold) and `JamSongOpening.of` turns it into: the wall of its channel with the song open (a server this account is in), the
+  web in a Custom Tab (`/app/jam/<id>`: a standalone public jam, or a channel of a server the account is not in, which the
+  phone has no screen for), "gone" (404, said in a line) or "failed" (nothing changes, said in a line).
+- **Frames.** `jam-public-notice` (kind `take` only is drawn: the other kinds are the public jam's takedown and review
+  notices, which the phone has no screen for) and `jam-take-decision` are nudges that read the durable lists again
+  (`JamNoticeStore`), exactly as the web: a take frame whose song has no card after the read becomes a small toast
+  (`jam_take_notices` off on the server writes no item), `admitted: true` is a toast that says it joined by itself. Reads are
+  coalesced, a read that did not fully arrive keeps the old list and is asked again 3, 10 and 30 seconds later, a socket that
+  comes back reads again, and another account signing in empties everything.
+- **The card.** One at a time, the newest, with "Mais N esperando depois dessa", in the FLOW above the screen (it moves the
+  content down, it never covers a control) and held back while a song or the studio is open (`JamNoticeStore.hold`, taken by
+  `JamScreen`). "Ver e responder" (a take) or "Ver a música" (accepted, refused) spends the item (`ack`) and opens the song; the X
+  spends it without opening.
+- **On the wall.** A row "N partes esperando tua resposta" with "Ver" (one song: opens it; several: a sheet listing them) and a
+  "N esperando" pill on the tile, from the starter's inbox, for the songs the wall holds. They read the STATE, not the notice,
+  so they stay with `jam_take_notices` off.
+- **In the song.** The block is the first thing on the page, above the stage, with the waiting parts oldest first: "Ouvir com a
+  banda" (the take heard in place of the mix's of its instrument, playing as soon as its file is ready), "Aceitar" and "Recusar"
+  (asks first: the recording is deleted). Accepting says what the public sees now and offers "Desfazer" for 8 seconds (the same
+  take goes back out of the mix, back in the queue); declining says the part was refused and the sender is told, with no undo.
+  A refused write is said directly under the part it is about and the part stays where it was. Anything that arrives or answers
+  while the list is scrolled down is brought back to the top. Rows are `FlowRow`s of whole buttons (nothing is pushed off or
+  broken mid-word from 320 dp at font scale 2.0). A waiting part is not drawn a second time under "Outras versões".
+- **The sender.** Needs nothing of their own on the phone beyond the card: "Tua parte de bateria entrou em ..." or "... não
+  entrou". The durable item and the live frame arrive wherever the part was sent from (web, another phone).
+
+**What only makes sense with a public jam on the phone, and is not here.** The phone has no public song view. So: a starter of a
+STANDALONE public jam (no channel) gets the card and the push, and "Ver e responder" opens the web, where the waiting parts are
+answered; the wall strip and pill exist for songs of a channel this account is in; a sender who is not in the song's server sees
+"Ver a música" open the web too. The consent notices (`consent`, `removed`, `unpublished`, `part-removed`, `approved`, `rejected`
+on `jam-public-notice`) and "Tuas músicas" are not drawn.
+
+**Sharing a song.** The song's menu "Compartilhar link" hands out the web's "chama a galera" message through the system share
+sheet (`JamShare`, `jamShareMessage`): it asks for the instruments the song still needs (`stillNeeds`: what it asks for, minus the
+band, minus the parts the sender sent that wait for the starter, which the message says are waiting), and the link is the song's
+PUBLIC page with `ref=share` (`jam.pqp.gg/m/<id>` on the hosted instance, `<origin>/jam/m/<id>` elsewhere), only for a song that
+really has one: `jam_public` on for the account and the song's publication `live` (read for its starter and anybody with a part in
+it). "Copiar link" copies the same link. A private channel song keeps today's behaviour (the app's own link). Not here: sending a
+song into a chat channel as a card (see the PR for what is deferred).
+
+**Verified on an emulator** (Pixel 10 Pro profile, Android 17, dev bypass, `jam_public` and `jam_channels` on, MinIO, a second
+account sending parts over the API): the card arriving live on the wall (pt-BR, 360 dp and font 1.3), the wall's strip and pill,
+"Ver e responder" opening the song with the part first, Aceitar then Desfazer, Recusar with its confirmation and the sender's
+"refused" item on the server, a refused decline with the server down (said under the part, the part kept), the sender's "entrou"
+card live on the phone, a push tap fired as the same intent on a cold start (the song opens), a missing song (the line), a
+standalone song (Chrome opens), the share sheet's text and link, 320 dp at font scale 2.0 and English. **Not verified**: a real
+push (FCM is not configured for an emulator; the tap was driven by firing the intent the push carries), TalkBack, dark mode on
+these surfaces, a phone with a notification permission or a Custom Tab with a signed-in browser, and the emulator's audio output
+was not listened to (a take was heard "with the band" by its transport and its lane, not by ear).
+
 ### Audio focus, calls and the background
 
 The rule is the voice notes' (`VoiceNotes`): a song never starts while a call

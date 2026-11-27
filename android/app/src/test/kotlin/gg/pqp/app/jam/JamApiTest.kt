@@ -123,6 +123,71 @@ class JamApiTest {
         assertEquals("""{"inMix":true}""", calls.last().body)
     }
 
+    @Test
+    fun `the notice routes are the shared ones, and an ack carries exactly the id`() = runTest {
+        answers += Answer(200, """{"enabled":true,"publishing":"open","uploads":true}""")
+        assertTrue(client().jamPublicConfig().enabled)
+        answers += Answer(200, """{"takes":[]}""")
+        client().jamPublicInbox()
+        answers += Answer(200, """{"notices":[{"id":"n1","kind":"take","songId":"s","title":"x","instruments":["bass"],"count":1,"createdAt":"","updatedAt":""}]}""")
+        assertEquals("n1", client().jamTakeNotices().notices.single().id)
+        answers += Answer(200, """{"ok":true}""")
+        client().ackJamTakeNotice("n1")
+        val calls = generateSequence { received.poll() }.toList()
+        assertEquals(
+            listOf("GET /api/jam-public/config", "GET /api/jam-public/inbox", "GET /api/jam-public/notices", "POST /api/jam-public/notices/ack"),
+            calls.map { "${it.method} ${it.path}" },
+        )
+        assertEquals("""{"id":"n1"}""", calls.last().body)
+    }
+
+    @Test
+    fun `a failed ack is an exception, so the caller decides what it costs`() = runTest {
+        answers += Answer(500, """{"error":"boom"}""")
+        try {
+            client().ackJamTakeNotice("n1")
+            fail("a refused ack read as spent")
+        } catch (e: ApiException) {
+            assertEquals(500, e.status)
+        }
+    }
+
+    @Test
+    fun `where a song lives reads a standalone public song, whose channel is null, without failing`() = runTest {
+        answers += Answer(200, """{"song":{"id":"s1","channelId":null,"serverId":null,"title":"Solta","trackCount":1},"tracks":[],"viewer":{}}""")
+        val place = client().jamSongPlace("s1")
+        assertEquals("s1", place.id)
+        assertNull(place.channelId)
+        assertNull(place.serverId)
+        answers += Answer(200, """{"song":{"id":"s2","channelId":"c","serverId":"srv","title":"Canal"},"tracks":[],"viewer":{}}""")
+        val inChannel = client().jamSongPlace("s2")
+        assertEquals("srv", inChannel.serverId)
+        assertEquals("c", inChannel.channelId)
+        assertEquals("/api/jam-songs/s1", received.take().path)
+    }
+
+    @Test
+    fun `a missing song is a 404 exception the router turns into gone`() = runTest {
+        answers += Answer(404, """{"error":"jam_not_found"}""")
+        try {
+            client().jamSongPlace("nope")
+            fail("a missing song read as a place")
+        } catch (e: ApiException) {
+            assertEquals(404, e.status)
+        }
+    }
+
+    @Test
+    fun `the publication is read for its starter and is null for everybody else`() = runTest {
+        answers += Answer(200, """{"publication":{"songId":"s","status":"live","pendingTakes":2,"autoAcceptOutside":true,"extra":1}}""")
+        val publication = client().jamPublication("s")!!
+        assertEquals("live", publication.status)
+        assertEquals(2, publication.pendingTakes)
+        assertTrue(publication.autoAcceptOutside)
+        answers += Answer(200, """{"publication":null}""")
+        assertNull(client().jamPublication("s"))
+    }
+
     private val trackAnswer =
         """{"track":{"id":"t","songId":"s","gain":0.5},"song":{"id":"s","channelId":"c","title":"x"}}"""
     private val songAnswer = """{"song":{"id":"s","channelId":"c","title":"Lithium"}}"""

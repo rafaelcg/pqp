@@ -22,6 +22,17 @@ interface JamBackend {
     suspend fun config(serverId: String): JamConfig
     suspend fun songs(channelId: String, cursor: String? = null, limit: Int = JamLimits.PAGE_SIZE): JamSongListResponse
     suspend fun song(songId: String): JamSongDetailResponse
+
+    /**
+     * The channel's songs that match [query] (title and artist, accent-blind: the server's `q`). A default so a fake that
+     * does not search need not say.
+     */
+    suspend fun searchSongs(
+        channelId: String,
+        query: String,
+        cursor: String? = null,
+        limit: Int = JamLimits.PAGE_SIZE,
+    ): JamSongListResponse = error("search is not offered by this backend")
     suspend fun vote(trackId: String, voted: Boolean): JamVoteResponse
     suspend fun setInMix(trackId: String, inMix: Boolean): JamTrackWithSong
     suspend fun deleteTrack(trackId: String)
@@ -40,6 +51,13 @@ interface JamBackend {
     suspend fun uploadCover(songId: String, jpeg: ByteArray, onProgress: (Float) -> Unit): String
     suspend fun setCover(songId: String, uploadId: String): JamSongSummary
     suspend fun removeCover(songId: String): JamSongSummary
+
+    /**
+     * The song's public state, read for its starter or a participant (null for anybody else, and while public jam is
+     * off): what the share button needs to know ("is there a public page a stranger can open"), and whether outside parts
+     * are accepted by themselves. A default so a fake that does not care need not say.
+     */
+    suspend fun publication(songId: String): JamPublication? = null
 
     /** The jam channel takes the socket's primary slot: its frames are fanned out to its viewers. */
     fun join(channelId: String)
@@ -65,6 +83,9 @@ class SessionJamBackend(private val session: SessionStore) : JamBackend {
         session.api.jamSongs(channelId, cursor, limit)
 
     override suspend fun song(songId: String) = session.api.jamSong(songId)
+
+    override suspend fun searchSongs(channelId: String, query: String, cursor: String?, limit: Int) =
+        session.api.jamSongs(channelId, cursor, limit, q = query)
     override suspend fun vote(trackId: String, voted: Boolean) =
         if (voted) session.api.voteJamTrack(trackId) else session.api.unvoteJamTrack(trackId)
 
@@ -82,6 +103,8 @@ class SessionJamBackend(private val session: SessionStore) : JamBackend {
         putJamCover(session.http, ticket.uploadUrl, jpeg, onProgress)
         return ticket.uploadId
     }
+
+    override suspend fun publication(songId: String) = session.api.jamPublication(songId)
 
     override suspend fun setCover(songId: String, uploadId: String) = session.api.setJamCover(songId, uploadId)
     override suspend fun removeCover(songId: String) = session.api.removeJamCover(songId)

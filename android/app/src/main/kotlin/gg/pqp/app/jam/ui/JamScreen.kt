@@ -26,6 +26,7 @@ import gg.pqp.app.PqpApplication
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.jam.JamInstrument
+import gg.pqp.app.jam.JamNoticeStore
 import gg.pqp.app.jam.JamSeenStore
 import gg.pqp.app.jam.JamSongSummary
 import gg.pqp.app.jam.JamSongViewModel
@@ -89,6 +90,21 @@ fun JamScreen(
     var studios by remember { mutableIntStateOf(wall.heldStudio?.opening ?: 0) }
     var startSheet by rememberSaveable { mutableStateOf(false) }
     val callActive = (context.applicationContext as PqpApplication).callActive
+    // What waits for THIS person's answer, and the notices that say so: read when the wall opens, held back (no card over the
+    // transport) while a song or the studio is open.
+    val notices = remember(session) { JamNoticeStore.of(session) }
+    val noticeState by notices.state.collectAsStateWithLifecycle()
+    val holding = openSong != null || studio != null
+    androidx.compose.runtime.DisposableEffect(holding) {
+        val release = if (holding) notices.hold() else null
+        onDispose { release?.invoke() }
+    }
+
+    /** A song by its id (the wall's strip, a notice): it opens like a tile does, under a view model of its own. */
+    fun openById(id: String) {
+        openings += 1
+        openSong = id
+    }
 
     fun openStudio(launch: JamStudioLaunch) {
         studios += 1
@@ -109,6 +125,7 @@ fun JamScreen(
     )
 
     LifecycleStartEffect(channelId) {
+        notices.refresh()
         wall.start()
         onStopOrDispose { wall.stop() }
     }
@@ -141,6 +158,8 @@ fun JamScreen(
                             val draft = waiting?.draft
                             if (draft != null) newSong(draft) else startSheet = true
                         },
+                        notices = noticeState,
+                        onOpenSongById = ::openById,
                     )
                 } else {
                     val model: JamSongViewModel = viewModel(
@@ -160,6 +179,8 @@ fun JamScreen(
                         onRecord = ::openStudio,
                         onRefreshConfig = wall::refreshConfig,
                         onBack = { openSong = null },
+                        publicEnabled = noticeState.enabled,
+                        pending = noticeState.pending(songId),
                     )
                 }
             }

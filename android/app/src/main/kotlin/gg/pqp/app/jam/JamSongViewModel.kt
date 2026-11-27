@@ -57,6 +57,11 @@ data class JamSongUi(
     val callLive: Boolean = false,
     /** The take being adjusted, with the edits not yet saved. Heard at once, sent on "Salvar". */
     val adjust: JamAdjust? = null,
+    /**
+     * The takes asked to be heard whose own file is still on its way, by id: playback starts when THEY are decoded, never
+     * before (the button says "preparing" meanwhile). Kept per take, so stopping one is not stopping another.
+     */
+    val listenPending: Set<String> = emptySet(),
 ) {
     enum class Phase { Loading, Ready, Failed, Gone }
 
@@ -131,6 +136,8 @@ class JamSongViewModel(
     private val channelId: String,
     private val callActive: StateFlow<Boolean>,
     private val player: JamPlayer = JamPlayer(),
+    /** What the starter's answers to waiting parts change outside the song (the inbox the wall's pill reads). */
+    requestsHook: JamRequestsHook = JamRequestsHook.None,
 ) : ViewModel() {
     private val appContext = context.applicationContext
     private val loader = JamStemLoader(appContext, http)
@@ -206,6 +213,10 @@ class JamSongViewModel(
                     ).reconciled()
                 }
                 syncStems()
+                listenAfterLoad?.let { id ->
+                    listenAfterLoad = null
+                    loaded.tracks.firstOrNull { it.id == id }?.let(::listen)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ApiException) {
@@ -321,7 +332,23 @@ class JamSongViewModel(
         _ui.update { it.copy(originMs = origin, durationMs = player.durationMs.value) }
         applyLevels()
         video.park(origin + positionMs)
+        resolveListens()
     }
+
+    /**
+     * The takes asked to be heard start the moment THEIR OWN files are decoded and the band is ready: the tap meant "play
+     * it", and starting on the old mix would play the band without the very part that was asked for (`JamListen.resolve`).
+     */
+    private fun resolveListens() {
+        val ui = _ui.value
+        if (ui.listenPending.isEmpty()) return
+        val step = JamListen.resolve(ui.listenPending, ui.stems, songReady = ui.ready, playing = ui.playing)
+        if (step.pending != ui.listenPending) _ui.update { it.copy(listenPending = step.pending) }
+        if (step.failed) notice(JamNotice.PlaybackFailed)
+        if (step.play) play()
+    }
+
+    private fun instrumentOf(trackId: String): JamInstrument? = _ui.value.state?.tracks?.firstOrNull { it.id == trackId }?.instrument
 
     private fun applyLevels() {
         val ui = _ui.value
@@ -450,8 +477,37 @@ class JamSongViewModel(
     }
 
     fun stopAudition(instrument: JamInstrument) {
-        _ui.update { it.copy(auditioning = it.auditioning - instrument) }
+        // Only this instrument's wish goes: another take that is still loading keeps its own.
+        _ui.update {
+            it.copy(
+                auditioning = it.auditioning - instrument,
+                listenPending = JamListen.stopped(it.listenPending, instrument, ::instrumentOf),
+            )
+        }
         syncStems()
+    }
+
+    /** A take asked to be heard before the song's own read held it: heard as soon as the read lands. */
+    private var listenAfterLoad: String? = null
+
+    /** "Ouvir com a banda": hear this take in place of the mix's of its instrument, and play as soon as it can. */
+    fun listen(track: JamTrack) {
+        if (_ui.value.state?.tracks?.none { it.id == track.id } != false) {
+            // The frame is behind the notice: read the song again and hear the take when it is there.
+            listenAfterLoad = track.id
+            load()
+            return
+        }
+        // Refused up front when it cannot play (a call is live): nothing is auditioned, and the button never says it is
+        // playing something that is not.
+        if (!_ui.value.playing && !JamFocusPolicy.mayStart(callActive.value)) {
+            notice(JamNotice.CallLive)
+            return
+        }
+        audition(track)
+        _ui.update { it.copy(listenPending = JamListen.wish(it.listenPending, track.id, track.instrument, ::instrumentOf)) }
+        // Decoded already (heard before, or the loader was quick): starts now. Otherwise it waits for ITS file.
+        resolveListens()
     }
 
     // --- writes ---
@@ -566,6 +622,45 @@ class JamSongViewModel(
 
     /** The edit sheet's logic: title, artist and cover, with the state that survives a rotation. */
     val editor = JamSongEditor(backend, viewModelScope, songId, ::applySongAnswer, ::refreshPermissions)
+
+    // --- the song's public state ---
+
+    private val _publication = MutableStateFlow<JamPublication?>(null)
+
+    /**
+     * What `GET /api/jam-songs/:id/public` said to this person (null for anybody who is not the starter or a participant,
+     * and until it is read). The share button needs its `status` (a public page exists only for `live`) and the waiting
+     * block its `autoAcceptOutside`.
+     */
+    val publication: StateFlow<JamPublication?> = _publication.asStateFlow()
+
+    /** Read it (again). Best effort: a read that fails leaves what was known, and the next screen event asks again. */
+    fun readPublication() {
+        viewModelScope.launch {
+            try {
+                _publication.value = backend.publication(songId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Nothing is lost: the share button falls back to the song's own link, the block to the manual hint.
+            }
+        }
+    }
+
+    // --- answering the parts that wait for the starter ---
+
+    /** Accept (with an undo for a few seconds) or decline the parts people outside sent: `JamRequests`. */
+    val requests = JamRequests(
+        backend = backend,
+        scope = viewModelScope,
+        channelId = channelId,
+        song = { _ui.value.state?.song },
+        apply = ::onFrame,
+        accepts = { answer -> _ui.value.state?.accepts(answer) != false },
+        endAudition = { track -> if (_ui.value.auditioning[track.instrument] == track.id) stopAudition(track.instrument) },
+        permissionsChanged = ::refreshPermissions,
+        hook = requestsHook,
+    )
 
     // --- adjusting a take ---
 
@@ -765,6 +860,7 @@ class JamSongViewModel(
                 songId = songId,
                 channelId = channelId,
                 callActive = callActive,
+                requestsHook = JamNoticeStore.of(session).asRequestsHook(),
             ) as T
         }
     }

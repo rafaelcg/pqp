@@ -458,7 +458,7 @@ class PushController(
         intent.data = null
 
         val target = DeepLink.target(path)
-            ?: tag?.let { DeepLinkTarget.Conversation(it) }
+            ?: DeepLink.conversationTag(tag)
             ?: DeepLink.target(link)
             ?: return false
         _pendingTarget.value = target

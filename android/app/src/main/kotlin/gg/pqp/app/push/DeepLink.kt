@@ -30,6 +30,20 @@ sealed interface DeepLinkTarget {
     data class JamSong(val serverId: String, val channelId: String, val songId: String) : DeepLinkTarget
 
     /**
+     * A jam song by its id alone: `/app/jam/<songId>`, the path of the push that tells a starter a part arrived (and
+     * tells the sender how it went), and the web's own address for a public song. It has no server and no channel in
+     * it: where the song lives is the server's to say (`GET /api/jam-songs/:id`), so the router asks. `/app/jam/mine`
+     * and `/app/jam/new` are web screens (a person's songs, a new public song) with nothing to open here.
+     */
+    data class JamPublicSong(val songId: String) : DeepLinkTarget
+
+    /**
+     * `/app/jam/mine` ("Tuas músicas") and `/app/jam/new` (a new public song): web screens the phone has no equivalent
+     * of, so the web opens them. [page] is the last segment, exactly `mine` or `new`.
+     */
+    data class JamWeb(val page: String) : DeepLinkTarget
+
+    /**
      * A DM or a group. `channelId` really is a channel id: a conversation is a
      * `channels` row with `kind` of `dm` or `group`, and `/app/dm/<id>` carries
      * that id, not a separate conversation id.
@@ -67,7 +81,7 @@ val DeepLinkTarget.channelId: String?
         is DeepLinkTarget.ForumPost -> postId
         is DeepLinkTarget.JamSong -> channelId
         is DeepLinkTarget.Conversation -> channelId
-        is DeepLinkTarget.Server, is DeepLinkTarget.Bau, is DeepLinkTarget.Invite -> null
+        is DeepLinkTarget.Server, is DeepLinkTarget.Bau, is DeepLinkTarget.Invite, is DeepLinkTarget.JamPublicSong, is DeepLinkTarget.JamWeb -> null
     }
 
 object DeepLink {
@@ -139,9 +153,26 @@ object DeepLink {
             segments.size >= 3 && segments[1] == "dm" ->
                 DeepLinkTarget.Conversation(segments[2])
 
+            // `/app/jam/<songId>` (the take-notice push). A song id is a UUID and becomes a URL path segment, so
+            // anything else (the web's `mine` and `new`, or whatever another app puts in an intent) is not one.
+            segments.size >= 3 && segments[1] == "jam" && isSongId(segments[2]) ->
+                DeepLinkTarget.JamPublicSong(segments[2].lowercase())
+
+            segments.size == 3 && segments[1] == "jam" && (segments[2] == "mine" || segments[2] == "new") ->
+                DeepLinkTarget.JamWeb(segments[2])
+
             else -> null
         }
     }
+
+    /**
+     * A push's `tag` read as a conversation, which it is ONLY when it is a conversation id: `buildPushPayload` tags a DM
+     * with the channel id, and every other push tags itself with a prefix (`jam-take:`, `bau:`, `stream:`,
+     * `channel-session:`, `watch-party-waitlist:`). Reading any tag as a conversation opened a "not found" conversation
+     * for a jam push whose path did not parse.
+     */
+    fun conversationTag(tag: String?): DeepLinkTarget.Conversation? =
+        tag?.trim()?.takeIf { SONG_ID.matches(it) }?.let { DeepLinkTarget.Conversation(it) }
 
     private fun pqpScheme(raw: String): DeepLinkTarget? {
         if (!raw.startsWith(PQP_SCHEME)) return null
@@ -165,6 +196,10 @@ object DeepLink {
      * exact, which is the same call `ios/pqp/Sources/Core/DeepLink.swift`
      * makes. The Swift twin of this function.
      */
+    private val SONG_ID = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+    private fun isSongId(id: String): Boolean = SONG_ID.matches(id)
+
     private fun isUsableCode(code: String): Boolean =
         code.length in 1..64 && code.all { it.isLetterOrDigit() || it == '-' || it == '_' }
 
