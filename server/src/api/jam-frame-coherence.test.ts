@@ -304,7 +304,7 @@ describeDb("a jam frame and the same viewer's read, on two API processes", () =>
       publicConsent: "yes",
     });
     expect(reply.status, JSON.stringify(reply.body)).toBe(201);
-    return reply.body;
+    return { ...reply.body, audioUploadId };
   }
 
   /** What this viewer's own read says about the song right now. */
@@ -447,6 +447,21 @@ describeDb("a jam frame and the same viewer's read, on two API processes", () =>
     const carolRead = await call<{ song: JamSongSummary }>(apiB, "GET", `/api/jam-songs/${songId}`, CAROL);
     expect(waiting.song).toEqual(carolRead.body.song);
     expect(waiting.song).toMatchObject({ instruments: ["guitar"], missingInstruments: ["bass", "drums"] });
+    // A RETRY of the same claim (the answer was lost): 200, the same track, and the room hears the take again
+    // (a frame is applied by id), as the same read, so a first attempt that died after committing is made good.
+    const retry = await call<{ track: JamTrack; song: JamSongSummary }>(apiB, "POST", `/api/jam-songs/${songId}/tracks`, CAROL, {
+      instrument: "bass",
+      audioUploadId: waiting.audioUploadId,
+      durationMs: 12_000,
+      peaks: [0.2, 0.7],
+      publicConsent: "yes",
+    });
+    expect(retry.status, JSON.stringify(retry.body)).toBe(200);
+    expect(retry.body.track.id).toBe(waiting.track.id);
+    expect(retry.body.song).toEqual(carolRead.body.song);
+    const again = (await bothHear("jam-track-added")) as Extract<JamFrame, { type: "jam-track-added" }>;
+    expect(again.track.id).toBe(waiting.track.id);
+    expect(again.song).toMatchObject({ instruments: ["guitar"], missingInstruments: ["bass", "drums"], trackCount: 2 });
     // The starter is told live (over the bus: the take landed on api-a, her socket is on api-b) and the inbox has it.
     await waitFor(() => viewers[0]!.frames.some((f) => f.type === "jam-public-notice" && f.kind === "take"), 10_000, "the starter's notice");
     expect(takeNotices(viewers[0]!)).toMatchObject([{ songId, instrument: "bass", admitted: false, trackId: waiting.track.id }]);

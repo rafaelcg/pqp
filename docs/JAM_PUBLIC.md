@@ -507,7 +507,7 @@ to see and act on what is there; the client collapses it and nothing pings. Here
 | Live `jam-public-notice` (`take`), and the auto-accept `admitted: true` one | not sent (it is the live half of the item) |
 | Push | not sent |
 | The inbox (`GET /api/jam-public/inbox`), the waiting strip, the tile pill, the song's "N partes esperando" block, `pendingTakes` | **listed.** It is the starter's worklist: the part is also readable in the song's own track list, so hiding it here would hide nothing and only remove the one-tap Aceitar / Recusar. These read state, which is why a blocked part counts there and not in a card |
-| Accept and Refuse | work as for any part; the answer to the sender (`accepted` / `refused`) is the sender's own feed and is not stopped by the starter's block |
+| Accept and Refuse | work as for any part; the answer to the sender (`accepted` / `refused`, and the late `accepted` of an auto-accept) is the sender's own feed and is not stopped by the starter's block |
 
 A blocked sender is not told they are blocked: nothing about their side changes.
 Pinned by `jam-take-notices.test.ts` (three cases) and `jam-frame-coherence.test.ts`
@@ -529,9 +529,15 @@ afterwards by `noteJamTrackAdded`. At that moment an outside take still looked l
 a member of the band, so every client that applied the frame (web, iOS, Android) drew
 the song as filled ("pronta", the wrong "falta ...", an extra instrument icon, an
 extra row in "Faixas") until the wall was read again, while every read said the
-opposite. Now the route reads the summary and the track after `noteJamTrackAdded`
-returns (which also settles an auto-accept that put the take in the mix inside that
-call), for the frame and for the sender's own answer, retries included. Every other
+opposite. Now the route reads the summary and the track together, from one snapshot
+(`getJamSongAndTrack`), after `noteJamTrackAdded` returns (which also settles an
+auto-accept that put the take in the mix inside that call), for the frame and for
+the sender's own answer. Only an outside take on a published song can differ from
+what `addJamTrack` read (for anybody else the public row changes nothing the summary
+says), so only those adds pay the extra read. A retry of the claim answers 200 and
+announces the take again: a frame is applied by id, and the retry may be the first
+request whose post-write read worked (the one before it committed and then failed),
+so no other viewer would otherwise ever hear of the take. Every other
 frame (`jam-track-updated`, `jam-track-deleted`, `jam-song-updated`, the admission
 announcer) already read the summary after its own commit and needed nothing;
 `jam-song-created` is never sent for a song with no track, `jam-song-deleted` and

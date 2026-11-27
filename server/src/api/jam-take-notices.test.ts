@@ -76,7 +76,7 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
 const { resetSharedRateLimit } = await import("../lib/cluster-rate-limit.js");
 const { resetFeatureFlagsForTests, setGlobalFlag, startFeatureFlags } = await import("../lib/flags.js");
-const { resetJamPublicCountersForTests } = await import("../services/jam-public.js");
+const { admitAutoAcceptedTakes, resetJamPublicCountersForTests } = await import("../services/jam-public.js");
 const { takeJamPublicNoticesForTests, takeJamTakeDecisionsForTests } = await import("../services/jam-public-notify.js");
 const { jamTakeNoticeCounters } = await import("../services/jam-take-notices.js");
 const { deleteJamTrack, getJamTrackRow } = await import("../services/jam.js");
@@ -564,6 +564,24 @@ describeDb("telling the starter about takes", () => {
     expect(admitted).toHaveLength(1);
     expect(admitted[0]!.notice.trackId).toBe(fine.body.track.id);
     expect((await publicSong(song))!.song.needs).toEqual([]);
+  });
+
+  it("a take admitted late from a blocked recorder: the starter is not nudged, the SENDER is still told it went in", async () => {
+    const song = await startSong();
+    expect((await call(starter, "PATCH", `/api/jam-songs/${song}/public`, { autoAcceptOutside: true })).status).toBe(200);
+    await getPool().query(`INSERT INTO user_blocks (user_id, blocked_user_id) VALUES ($1, $2)`, [starter.id, taker.id]);
+    const take = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    expect(take.status).toBe(201);
+    // Make it what a held take is when its hold clears: sent a while ago, not in the mix, not yet admitted.
+    await getPool().query(`UPDATE jam_tracks SET in_mix = FALSE, created_at = NOW() - INTERVAL '2 minutes' WHERE id = $1`, [take.body.track.id]);
+    await getPool().query(`UPDATE jam_public_tracks SET auto_admitted_at = NULL WHERE track_id = $1`, [take.body.track.id]);
+    await getPool().query(`UPDATE jam_public_songs SET auto_accept_since = NOW() - INTERVAL '1 hour' WHERE song_id = $1`, [song]);
+    takeJamPublicNoticesForTests();
+    takeJamTakeDecisionsForTests();
+    expect(await admitAutoAcceptedTakes({ songId: song })).toEqual([take.body.track.id]);
+    await vi.waitFor(async () => expect((await notices(taker)).map((one) => one.kind)).toEqual(["accepted"]));
+    expect(takeJamTakeDecisionsForTests().map((one) => [one.userId, one.frame.decision])).toEqual([[taker.id, "accepted"]]);
+    expect(takeJamPublicNoticesForTests().filter((one) => one.userId === starter.id)).toEqual([]);
   });
 
   it("flag off: nothing is written, nothing is read, no decision is sent, and no live frame reaches the starter; the inbox stays", async () => {

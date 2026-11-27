@@ -412,6 +412,30 @@ export async function getJamSongSummary(
   return result.rows[0] ? mapSong(result.rows[0]) : null;
 }
 
+/**
+ * A song's channel summary and one of its tracks, read from ONE snapshot, so a
+ * `jam-track-added` frame (or the sender's answer) can never pair a summary from
+ * before a change of the mix with a track from after it. Null when either is gone.
+ * Reads only: no network between BEGIN and COMMIT (signing a URL is local).
+ */
+export async function getJamSongAndTrack(
+  songId: string,
+  trackId: string,
+): Promise<{ song: JamSongSummary; track: JamTrack } | null> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const [song, track] = [await getJamSongSummary(songId, client), await getJamTrack(trackId, client)];
+    await client.query("COMMIT");
+    return song && track ? { song, track } : null;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 const PUBLIC_VIEW_SUMMARY_SELECT = summarySelect("public");
 
 /**
