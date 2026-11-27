@@ -97,8 +97,13 @@ async function read<T>(path: string, signal?: AbortSignal, init?: RequestInit): 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-export async function fetchJamConfig(signal?: AbortSignal): Promise<PublicJamConfig> {
-  const body = await read<unknown>("/api/public/jams/config", signal);
+/**
+ * `fresh` asks past the browser's own copy: the answer is cached for 60 seconds (`max-age=60`, on purpose, so a
+ * crowd does not each ask the database), and a visitor who is looking at "A jam ainda não abriu" and comes back to
+ * the tab must not be told the same thing from a copy the browser kept.
+ */
+export async function fetchJamConfig(signal?: AbortSignal, options: { fresh?: boolean } = {}): Promise<PublicJamConfig> {
+  const body = await read<unknown>("/api/public/jams/config", signal, options.fresh ? { cache: "reload" } : undefined);
   return { enabled: isObject(body) && body.enabled === true };
 }
 

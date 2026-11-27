@@ -2060,6 +2060,22 @@ html[data-app-shell] #root {
 }
 
 /*
+ * A phone's corner card never covers what is under it: while one is up the shell ends above it
+ * (`lib/corner-space.ts` sets the variable and the attribute). From the `sm` breakpoint up the card
+ * is a corner of a desktop window and the shell keeps its whole height.
+ */
+@media (max-width: 39.999rem) {
+  html[data-app-shell][data-corner-space] #root {
+    height: calc(100% - var(--pqp-corner-space, 0px));
+  }
+  @supports (height: 100dvh) {
+    html[data-app-shell][data-corner-space] #root {
+      height: calc(100dvh - var(--pqp-corner-space, 0px));
+    }
+  }
+}
+
+/*
  * Installed to the home screen with `apple-mobile-web-app-status-bar-style:
  * black-translucent`, the app draws under the status bar and the home
  * indicator — so the shell has to inset itself or the top row sits beneath the

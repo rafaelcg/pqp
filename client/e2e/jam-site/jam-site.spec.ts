@@ -32,7 +32,8 @@ function song(id: string, title: string, parts: Array<[string, string]>, needs: 
     id,
     title,
     artist: null,
-    coverUrl: null,
+    // A cover is part of what earns the hero (`pickFeatured`); `song(..., { coverUrl: null })` is the coverless one.
+    coverUrl: "/e2e-media/cover.png",
     durationMs: 6000,
     previewPeaks: [0.2, 0.6, 0.3, 0.9, 0.4, 0.7, 0.2, 0.5, 0.8, 0.3, 0.6, 0.4],
     parts: parts.map(([instrument, name]) => ({ instrument, person: person(name), hasVideo: false })),
@@ -75,6 +76,9 @@ function track(id: string, instrument: string, name: string, offsetMs = 0) {
     videoSources: [],
   };
 }
+
+/** A 2x2 PNG: a cover that loads without a media server. */
+const COVER_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFklEQVR4nGP4z8Dwn4GB4T8DAwMDAA0KAgHqk9E0AAAAAElFTkSuQmCC", "base64");
 
 const WAV = (() => {
   const sr = 44100;
@@ -151,6 +155,9 @@ async function mockApi(
   await page.route(/\/api\/public\/jams\/[0-9a-f-]{36}\/play$/, async (route) => {
     calls.plays.push(route.request().url());
     await route.fulfill({ status: 204 });
+  });
+  await page.route("**/e2e-media/cover.png", async (route) => {
+    await route.fulfill({ body: COVER_PNG, contentType: "image/png", headers: { "access-control-allow-origin": "*" } });
   });
   await page.route("**/e2e-media/*.wav", async (route) => {
     calls.media.push(route.request().url());
@@ -321,9 +328,9 @@ test.describe("a song", () => {
     expect(shadow).not.toBe("none");
   });
 
-  test("the play button on the home opens the song and starts it", async ({ page }) => {
-    await mockApi(page);
-    // The engine's code is fetched when the page is idle; wait for it so the click can unlock the audio.
+  test("a play button on the home opens the song PAUSED: opening never starts sound", async ({ page }) => {
+    const calls = await mockApi(page);
+    // The engine's code is fetched when the page is idle; wait for it, so the audio could have been unlocked.
     const warmed = page.waitForResponse((response) => /jam-session/.test(response.url()), { timeout: 20_000 });
     await page.goto("/jam");
     await expect(page.locator("[data-jam-card]")).toHaveCount(2);
@@ -332,7 +339,60 @@ test.describe("a song", () => {
     await page.waitForTimeout(1000);
     await page.locator(`[data-jam-card] [data-jam-play="${SONG_B}"]`).click();
     await expect(page).toHaveURL(new RegExp(`/jam/m/${SONG_B}$`));
+    await expect(page.locator("[data-jam-toggle]")).toHaveAttribute("data-playing", "false");
+    await page.waitForTimeout(1200);
+    await expect(page.locator("[data-jam-toggle]")).toHaveAttribute("data-playing", "false");
+    await expect(page.locator("[data-jam-time]")).toContainText("0:00");
+    expect(calls.plays).toEqual([]);
+    expect(calls.media).toEqual([]);
+  });
+
+  test("play song A, then open song B from the home, a link, or Back: B is paused at 0:00 and no play is counted for it", async ({ page }) => {
+    const calls = await mockApi(page);
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-card]")).toHaveCount(2);
+    // The hero is A. Open it and press its play: this is a person starting a song.
+    await page.locator(`[data-jam-hero="${SONG_A}"] [data-jam-play]`).click();
+    await expect(page).toHaveURL(new RegExp(`/jam/m/${SONG_A}$`));
+    const toggle = page.locator("[data-jam-toggle]");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("data-playing", "true", { timeout: 15_000 });
+    await expect.poll(() => calls.plays.filter((url) => url.includes(SONG_A)).length).toBe(1);
+
+    const assertPausedAtZero = async (id: string, counted = 0) => {
+      await expect(page).toHaveURL(new RegExp(`/jam/m/${id}$`));
+      await expect(page.locator("[data-jam-toggle]")).toHaveAttribute("data-playing", "false");
+      await page.waitForTimeout(1200);
+      await expect(page.locator("[data-jam-toggle]")).toHaveAttribute("data-playing", "false");
+      await expect(page.locator("[data-jam-time]")).toContainText("0:00");
+      expect(calls.plays.filter((url) => url.includes(id)).length).toBe(counted);
+    };
+
+    // 1. back to the home, the round play button on another card
+    await page.goBack();
+    await expect(page.locator("[data-jam-card]").first()).toBeVisible();
+    await page.locator(`[data-jam-card] [data-jam-play="${SONG_B}"]`).click();
+    await assertPausedAtZero(SONG_B);
+
+    // 2. the same song's title link from the home
+    await page.goBack();
+    await expect(page.locator("[data-jam-card]").first()).toBeVisible();
+    await page.locator(`[data-jam-card="${SONG_B}"] h3 a`).click();
+    await assertPausedAtZero(SONG_B);
+
+    // 3. the song that WAS heard, opened again from the hero's "open" link: paused, and not counted again
+    await page.goBack();
+    await expect(page.locator(`[data-jam-hero="${SONG_A}"]`)).toBeVisible();
+    await page.locator(`[data-jam-hero="${SONG_A}"] a:not([data-jam-play])`).first().click();
+    await assertPausedAtZero(SONG_A, 1);
+
+    // 4. pressing B's own play is what starts it, and counts one play
+    await page.goBack();
+    await page.locator(`[data-jam-card="${SONG_B}"] h3 a`).click();
+    await assertPausedAtZero(SONG_B);
+    await page.locator("[data-jam-toggle]").click();
     await expect(page.locator("[data-jam-toggle]")).toHaveAttribute("data-playing", "true", { timeout: 15_000 });
+    await expect.poll(() => calls.plays.filter((url) => url.includes(SONG_B)).length).toBe(1);
   });
 
   test("lays out one to nine parts as a mosaic that covers its box", async ({ page }) => {
@@ -649,6 +709,34 @@ test.describe("a visitor the app says is signed in", () => {
     expect(url.searchParams.get("instrument")).toBe("bass");
   });
 
+  test("on a phone the door to the songs has a word beside the initial, and the header still fits (problem 7)", async ({ page }) => {
+    await mockApi(page);
+    await appRoute(page);
+    const hint = signedIn("Rafa");
+    await page.addInitScript(({ key, raw }) => localStorage.setItem(key, raw), hint);
+    for (const width of [390, 360]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("/jam");
+      await expect(page.locator("[data-jam-account]")).toBeVisible();
+      // the accessible name never depended on the picture
+      await expect(page.locator("[data-jam-account]")).toHaveAttribute("aria-label", "Tuas músicas");
+      await expect(page.locator("[data-jam-account-short]")).toBeVisible();
+      await expect(page.locator("[data-jam-account-short]")).toHaveText("Músicas");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+      // nothing in the header is cut off by the right edge
+      const right = await page.locator("header button").last().evaluate((node) => node.getBoundingClientRect().right);
+      expect(right).toBeLessThanOrEqual(width);
+      const label = await page.locator("[data-jam-account-short]").evaluate((node) => ({ clipped: node.scrollWidth > node.clientWidth }));
+      expect(label.clipped).toBe(false);
+    }
+    // below 360 px the word steps aside for the note, which the link's own name still labels
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-account-short]")).toBeHidden();
+    await expect(page.locator("[data-jam-account]")).toHaveAttribute("aria-label", "Tuas músicas");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+  });
+
   test("start, like and report go straight on as well", async ({ page }) => {
     await mockApi(page);
     await appRoute(page);
@@ -746,8 +834,8 @@ test.describe("a visitor the app says is signed in", () => {
 });
 
 test.describe("how it works and the featured slot", () => {
-  const ORIGINAL = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Cantiga nossa", [["vocals", "Lia"]], []);
-  const COVER = song("2e3d4c5b-6a7f-4e8d-9c0b-1b2c3d4e5f60", "Um hit", [["guitar", "Duda"]], ["bass"], { artist: "Banda Famosa", likes: 900 });
+  const ORIGINAL = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Cantiga nossa", [["vocals", "Lia"], ["keys", "Beto"]], []);
+  const COVER = song("2e3d4c5b-6a7f-4e8d-9c0b-1b2c3d4e5f60", "Um hit", [["guitar", "Duda"], ["drums", "Ivo"]], ["bass"], { artist: "Banda Famosa", likes: 900 });
 
   test("the strip is under the hero, in three steps, and costs no media request", async ({ page }) => {
     await mockApi(page);
@@ -799,13 +887,36 @@ test.describe("how it works and the featured slot", () => {
     await shot(page, "03-home-empty-320");
   });
 
-  test("the featured slot is the first original, not a more liked cover", async ({ page }) => {
-    await mockApi(page, { songs: [COVER, ORIGINAL, A] });
+  test("the featured slot is an original, not a more liked cover", async ({ page }) => {
+    await mockApi(page, { songs: [COVER, ORIGINAL] });
     await page.goto("/jam");
     await expect(page.locator(`[data-jam-hero="${ORIGINAL.id}"]`)).toBeVisible();
     // the cover is still on the page, as a card
     await expect(page.locator(`[data-jam-card="${COVER.id}"]`)).toHaveCount(1);
     await expect(page.locator(`[data-jam-card="${ORIGINAL.id}"]`)).toHaveCount(0);
+  });
+
+  test("a rough upload does not take the front page: no hero, and the page leads with how it works and the list", async ({ page }) => {
+    const rough = song("3f4e5d6c-7b8a-4c9d-8e0f-1a2b3c4d5e6f", "Primeira gravação", [["guitar", "Estranho"]], [], { coverUrl: null, plays: 0, likes: 0 });
+    await mockApi(page, { songs: [rough, B] });
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-card]")).toHaveCount(2);
+    await expect(page.locator("[data-jam-hero]")).toHaveCount(0);
+    await expect(page.locator("[data-jam-lead]")).toHaveAttribute("data-jam-lead", "how");
+    // The strip is the first thing under the tagline, on a wide window too, and the list follows it.
+    const how = (await page.locator("[data-jam-how]").boundingBox())!;
+    const grid = (await page.locator("[data-jam-grid]").boundingBox())!;
+    expect(how.y).toBeLessThan(grid.y);
+    await expect(page.locator("[data-jam-hero] , [data-jam-wants]")).toHaveCount(0);
+  });
+
+  test("the hero is the song that earned it, not the newest one: a cover, two people, and the most engagement among them", async ({ page }) => {
+    const fresh = song("4a5b6c7d-8e9f-4a0b-9c1d-2e3f4a5b6c7d", "Acabou de sair", [["guitar", "Zé"], ["bass", "Nina"]], [], { plays: 2, likes: 0 });
+    const loved = song("5b6c7d8e-9f0a-4b1c-8d2e-3f4a5b6c7d8e", "Todo mundo ouviu", [["guitar", "Zé"], ["keys", "Nina"]], [], { plays: 400, likes: 30 });
+    await mockApi(page, { songs: [fresh, loved] });
+    await page.goto("/jam");
+    await expect(page.locator(`[data-jam-hero="${loved.id}"]`)).toBeVisible();
+    await expect(page.locator(`[data-jam-card="${fresh.id}"]`)).toHaveCount(1);
   });
 
   test("with only covers the featured slot is the first song", async ({ page }) => {
@@ -904,7 +1015,7 @@ test.describe("a song that takes no part", () => {
   });
 
   test("the featured slot passes over a closed original for one that takes a part", async ({ page }) => {
-    const open = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Cantiga aberta", [["vocals", "Lia"]], []);
+    const open = song("1d2c3b4a-5f6e-4d7c-8b9a-0a1b2c3d4e5f", "Cantiga aberta", [["vocals", "Lia"], ["keys", "Beto"]], []);
     await mockApi(page, { songs: [D, open] });
     await page.goto("/jam");
     await expect(page.locator(`[data-jam-hero="${open.id}"]`)).toBeVisible();
@@ -997,6 +1108,59 @@ test.describe("when the flag is off", () => {
     await page.goto(`/jam/m/${SONG_A}`);
     await expect(page.locator("[data-jam-soon]")).toBeVisible();
     expect(calls.detail).toEqual([]);
+  });
+
+  /** The flag is flipped on while a tab is open on the holding page (the answer is cached for 60 s on purpose). */
+  async function flippable(page: Page) {
+    const state = { enabled: false, asked: 0, fresh: 0 };
+    await mockApi(page, { enabled: false });
+    await page.unroute("**/api/public/jams/config");
+    await page.route("**/api/public/jams/config", async (route) => {
+      state.asked += 1;
+      await route.fulfill({ json: { enabled: state.enabled }, headers: { "cache-control": "public, max-age=60" } });
+    });
+    return state;
+  }
+
+  test("a tab left on the holding page opens by itself when it gets focus after the flag went on", async ({ page }) => {
+    const state = await flippable(page);
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-soon]")).toBeVisible();
+    const before = state.asked;
+    state.enabled = true;
+    // The tab comes back into view (a real switch fires both events).
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page.locator("[data-jam-soon]")).toHaveCount(0);
+    await expect(page.locator("[data-jam-card]").first()).toBeVisible();
+    expect(state.asked).toBeGreaterThan(before);
+  });
+
+  test("with no focus at all it asks again after the answer's own cache window, and not before", async ({ page }) => {
+    await page.clock.install();
+    const state = await flippable(page);
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-soon]")).toBeVisible();
+    const first = state.asked;
+    state.enabled = true;
+    await page.clock.fastForward(30_000);
+    expect(state.asked).toBe(first);
+    await page.clock.fastForward(36_000);
+    await expect(page.locator("[data-jam-card]").first()).toBeVisible();
+    expect(state.asked).toBeGreaterThan(first);
+  });
+
+  test("a site that is on never goes back to the holding page under somebody who is listening", async ({ page }) => {
+    await page.clock.install();
+    const state = await flippable(page);
+    state.enabled = true;
+    await page.goto("/jam");
+    await expect(page.locator("[data-jam-card]").first()).toBeVisible();
+    const asked = state.asked;
+    state.enabled = false;
+    await page.clock.fastForward(200_000);
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(page.locator("[data-jam-soon]")).toHaveCount(0);
+    expect(state.asked).toBe(asked);
   });
 });
 
@@ -1263,7 +1427,7 @@ test.describe("round 3 minors", () => {
     await mockApi(page);
     await page.goto("/jam");
     await expect(page.locator("[data-jam-hero] [data-jam-play-label]")).toContainText("Ouvir na página da música");
-    await expect(page.locator("[data-jam-card] [data-jam-play]").first()).toHaveAttribute("title", /Abre a música e já começa a tocar/);
+    await expect(page.locator("[data-jam-card] [data-jam-play]").first()).toHaveAttribute("title", /Abre a página da música/);
   });
 });
 

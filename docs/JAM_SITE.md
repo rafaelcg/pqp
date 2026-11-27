@@ -81,20 +81,50 @@ the generic `noindex` card.
 ## What the pages draw
 
 - **Home (Palco).** A featured song, a three-step "Como funciona" strip, tabs,
-  cards. **The featured slot prefers an original**: of the first six of Em alta,
-  the first song with a part to show whose `artist` is null, else the first with
-  a part (`pickFeatured`, `lib/jam-featured.ts`, re-exported by `src/jam-site/featured.ts`; the app's own doors into public jams, the "A Jam abriu" card, Novidades, the directory strip, search and Cmd+K, pick their song with the same function), so the showcase is never
-  somebody else's hit when an original is on the page. It also prefers a song
-  that takes a part (`joinMode` not `closed`, below): first original that takes
-  one, else first original, else first that takes one, else the first song. A
-  closed original still beats an open cover (the cover is the rights risk), and
-  its page says plainly that it takes no part. When the hero IS closed and other
+  cards. **A song has to EARN the featured slot** (`pickFeatured`,
+  `lib/jam-featured.ts`, re-exported by `src/jam-site/featured.ts`; the app's own
+  doors into public jams, the "A Jam abriu" card, Novidades, the directory strip,
+  search and Cmd+K, pick their song with the same function). It used to be "the
+  first song of Em alta", and on launch day the first rough upload by a stranger
+  (one part, nine seconds, no cover) would have been the front page for everyone
+  (launch screenshots, problem 2). Now a song is **eligible** only when it has a
+  **cover**, at least **two parts from at least two different people**
+  (`distinctPeople`: by handle, else by name and picture) and is not the
+  viewer's own song from the last day (`FeaturedOptions.viewer`, matched by HANDLE
+  only: the site knows a signed-in visitor just by a first name, which cannot tell
+  two people apart, so it passes none, and the two-people minimum is what keeps a
+  song nobody has joined off the front page; `exclude` takes ids for a caller that
+  knows them). Hidden, removed and still-in-review songs
+  never reach the payload (the server's one "public" rule), so there is nothing
+  to check for them here. Among the eligible songs the old preference holds: an
+  original (`artist` null) that takes a part (`joinMode` not `closed`), else any
+  original, else a song that takes a part, else any. A closed original still
+  beats an open cover (the cover is the rights risk), and its page says plainly
+  that it takes no part. **Inside a preference class the tie goes to engagement,
+  not recency**: `featuredScore` is plays plus five times the likes, halved for
+  every 14 days since the song was published (`FEATURED_HALF_LIFE_DAYS`); a tie
+  of scores is the page's own Em alta order. The public payload carries LIFETIME
+  counters, not a windowed count, so "recent" is that decay; a true window needs
+  the server to count plays per day (not built: it would be a new function over
+  `jam_public_plays`, never an edit to the song summary). **Em alta is `top`
+  (most liked, then newest) and the hero is always one of its first twelve
+  (`FEATURED_WINDOW`)**, so the hero never contradicts the list under it.
+  **When nothing earned it the home has no hero**: `pickFeatured` is `null`, the
+  page leads with "Como funciona" at every width (`data-jam-lead="how"`) and the
+  list, and the app's doors offer "Começar uma jam" instead of a song (they
+  already treat a `null` featured song as "there is nothing to listen to yet").
+  **An operator who wants to pin a song without a deploy has no cheap way
+  today.** What exists is the dashboard's unpublish and review routes
+  (`/api/admin/jam-public/*`, which take a weak song OFF the list). A pin would
+  be a `featured_at` column on `jam_public_songs`, a dashboard route that sets it
+  and one clause in the list query that sorts it first: a migration plus a
+  service change in `jam-public.ts`, so it was described, not built. When the
+  hero IS closed and other
   songs still want one, up to three of them (those asking for an instrument
   first, then open songs; a `wanted` song with nothing missing is left out, its
   listed instruments are not in the payload, `pickWantingParts`) sit under it as "Essas tão pedindo gente" (`wants.*`), with
   "Ver todas" opening Falta alguém, so a visitor always has something to record
-  on; nothing extra when the hero takes a part or none does. The hero reads the
-  top twelve (`FEATURED_WINDOW`) so a closed hero still finds some. **The strip**
+  on; nothing extra when the hero takes a part or none does. **The strip**
   (`how-it-works.tsx`, `intro.*` in the catalogues) says "Ouve. Não precisa de
   conta." / "Grava a parte que falta, de fone, em cima da banda." / "Quem começou
   escolhe o que entra na mistura." with the site's own icons on instrument-hue
@@ -113,7 +143,11 @@ the generic `noindex` card.
   **The cover is not one of the squares**: it is a small thumbnail beside the
   title (the hero's "Em destaque" line, a card's title row), the way the song
   page has it, because a painting drawn as a tile read as a part somebody
-  played. Nothing on the home downloads audio or video (pinned by
+  played. **A song with no cover has a generated one** (`SongCover` ->
+  `JamGeneratedCover`, `lib/jam-generated-cover.tsx`): see "The cover a song
+  has when nobody picked one" below. The play button on a card and the hero's
+  "Ouvir na página da música" are LINKS to the song page: **opening a song never
+  starts sound**, see "Playing". Nothing on the home downloads audio or video (pinned by
   `e2e/jam-site/jam-site.spec.ts`).
 - **Song.** The mosaic is the page. One tile per public part: its video when the
   payload has one (`pickJamVideoUrl`, `canPlayType`, the same function the app
@@ -164,6 +198,25 @@ now takes a `StemTrack` (the five numbers plus `inMix`) so a `PublicJamTrack`
 goes through it; the in-app player is unchanged. Audio is fetched and decoded on
 the first press, never on the page view. A play is noted (`POST .../play`) on
 the first successful start.
+
+**Opening a song never starts sound, and a play is counted only when the person
+started it** (launch screenshots, problem 1). After pressing play on one song,
+opening another (from the home, a new song's page, a channel song in the app)
+started it at once and counted a play, but only after a first listen: the home's
+play button carried a "start it" wish in `history.state`, and the page honoured
+it only when the engine's code was already warm and the audio context already
+unlocked, which is exactly the state after a first listen (a fresh load stayed
+paused, so round 3 had called it "no autoplay"). The wish is gone. The home's
+buttons are plain links (their label says "Abrir ...", their tooltip "Abre a
+página da música"), the song page makes its player and waits, and the only
+thing that starts a song is the page's own play button (or Space). A new player
+also stops whatever an earlier song left running on the shared engine. Pinned
+by `e2e/jam-site/jam-site.spec.ts` ("play song A, then open song B ...": B is
+paused at 0:00 and its play count did not change, from the home's round button,
+a title link, the hero's link and Back) and, in the app, `lib/jam-open-never-plays.test.ts`.
+
+**A song with no cover** shows a generated one wherever a small cover shows:
+see below.
 
 **A sheet covers the player.** The account sheet (and every `Sheet`, through
 `jam-site/cover.ts`) pauses the song under it, and uncovering starts nothing
@@ -233,6 +286,44 @@ longer used by the app and are kept for an older build still in a tab.
 `docs/JAM_PUBLIC.md` section "In the app" says what the view is made of.
 
 
+## When the flag is off, and the 60 seconds
+
+`GET /api/public/jams/config` is cached for 60 seconds on purpose (a crowd does not
+each ask the database). So a tab left on "A jam ainda não abriu" used to stay there
+after the flag went on. `useJamConfig` (`jam-site/use-jam-data.ts`) now asks again
+while the answer is "off" or an error: when the tab gets focus or comes back into
+view (`fetchJamConfig(..., { fresh: true })` skips the browser's own copy) and every
+`CONFIG_RECHECK_MS` (65 s, a little past the cache) while it is visible. A re-check
+is silent and never runs while the site is on: the home does not turn into the
+holding page under somebody who is listening. Pinned in `e2e/jam-site`.
+
+## The cover a song has when nobody picked one
+
+A coverless song used to show whatever each surface improvised (a flat yellow
+bar in the share card, a letter, a note icon), which reads as a glitch, and on
+launch day most songs have no cover. `lib/jam-generated-cover.tsx` is the one
+picture now: **deterministic from the song id** (FNV-1a into mulberry32, with our
+own shuffle: an engine's `sort(() => random)` orders differently in Safari and
+Chrome), a ground in one instrument's colour and three flat shapes (circle, half,
+square, bar, quarter) in the other instruments' colours, all `--color-inst-*`
+role tokens, **flat and opaque** (no gradient, no opacity, no blur). A song with
+one instrument has no other colour to use, so its shapes are `--color-on-inst`.
+It carries the band: the colours are the instruments of the song's parts. Used by
+the site's `SongCover` (hero, card title row, song page) and in the app by the
+chat link card, the share card ("Chama a galera") and its picker, "Tuas
+músicas" and the quick switcher. The wall's tile and the song panel keep the
+art they have always had for a coverless song (the band's gradient and faces);
+the Novidades shelf keeps its part squares, which also say what is still asked.
+
+**The unfurl image does not use it, on purpose.** A link preview is a PNG that
+WhatsApp, X, Discord and Slack fetch and none of them draws an SVG, and the
+cover route (`/api/public/jams/<id>/cover`) is a stable address for the
+scanner-approved object, which a coverless song has none of (404, `no-store`,
+byte for byte like every unknown id). A coverless song's `og:image` is therefore
+the generic jam card (`/images/og-jam.png`, the band as a mosaic with one empty
+dashed seat), as it was; `lib/jam-edge.test.ts` pins that
+("uses the jam card, not the main pqp card, when there is no cover").
+
 ## Does the site know who is signed in?
 
 **Short answer: it is told, it does not look.** The site loads no Clerk (decision
@@ -270,8 +361,10 @@ answers "nobody" (`ClerkAppGate`). Sent to every request to `pqp.gg` hosts, abou
 25 bytes, and not on cross-origin API fetches (no credentials).
 
 What a signed-in visitor sees: their initial (a glyph when only the link's marker
-arrived) and "Tuas músicas" where "Entrar" was (a small note instead of the words
-below 640 px; the name is on the chip's title), linking to `/app?jam=mine`, which
+arrived) and "Tuas músicas" where "Entrar" was (below 640 px a short word,
+"Músicas", beside the initial, `nav.accountShort`; under 360 px, where it does not
+fit beside the wordmark and "Começar", the note icon, named by the link's own
+`aria-label`; the name is on the chip's title), linking to `/app?jam=mine`, which
 opens **Tuas músicas** in the app (`docs/JAM_PUBLIC.md` §"Tuas músicas"; user test
 round 3, N-3: the chip used to land on the chat home); every record, like, report
 and start goes straight to the app, no sheet. A

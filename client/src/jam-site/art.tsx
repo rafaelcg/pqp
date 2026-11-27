@@ -1,6 +1,7 @@
 import type { PublicJamSong } from "@pqp/shared";
 import { useMemo, useState } from "react";
 import { jt } from "@/lib/i18n/jam-site";
+import { JamGeneratedCover } from "@/lib/jam-generated-cover";
 import { artCells } from "./art-cells";
 import { mosaicLayout } from "./mosaic";
 import { MosaicGrid, MoreStill, NeedStill, StillTile } from "./tiles";
@@ -80,25 +81,31 @@ export function SongArt({
 
 /**
  * The song's cover as a small thumbnail (a card's title row, the hero's
- * heading): the same small, rounded picture the song page shows at the top of
- * the page, never a tile of the mosaic. Renders nothing without one, or when
- * it fails to load.
+ * heading, the song page's top): the same small, rounded picture everywhere,
+ * never a tile of the mosaic. A song with no cover (or one that fails to load)
+ * gets the generated one (`JamGeneratedCover`: flat shapes in the colours of
+ * its instruments, the same for the same song on every surface), so a card
+ * never has a hole where a picture goes and a rough upload does not look broken.
  */
 export function SongCover({
-  title,
-  coverUrl,
+  song,
   className,
 }: {
-  title: string;
-  coverUrl: string | null;
+  song: Pick<PublicJamSong, "id" | "title" | "coverUrl" | "parts">;
   className?: string;
 }) {
   const [broken, setBroken] = useState(false);
-  if (!coverUrl || broken) return null;
+  if (!song.coverUrl || broken) {
+    return (
+      <span aria-hidden="true" data-jam-cover="generated" className={cn("relative block shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-surface-2", className)}>
+        <JamGeneratedCover songId={song.id} instruments={song.parts.map((part) => part.instrument)} />
+      </span>
+    );
+  }
   return (
     <img
-      src={coverUrl}
-      alt={jt("art.cover", { title })}
+      src={song.coverUrl}
+      alt={jt("art.cover", { title: song.title })}
       loading="lazy"
       decoding="async"
       draggable={false}

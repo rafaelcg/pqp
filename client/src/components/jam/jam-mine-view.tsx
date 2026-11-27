@@ -1,5 +1,5 @@
 import type { JamPublicMyPart } from "@pqp/shared";
-import { ArrowLeft, Check, Clock, ExternalLink, Music2, X } from "lucide-react";
+import { ArrowLeft, Check, Clock, ExternalLink, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { bidiClean } from "@/lib/bidi";
@@ -13,6 +13,7 @@ import { useJamPublicWaiting } from "@/lib/jam-public-store";
 import { mineIsEmpty, minePartState, orderMineParts, waitingOn } from "@/lib/jam-mine";
 import { cn } from "@/lib/utils";
 import { JamCoverPhoto, useJamCover } from "./jam-cover";
+import { JamGeneratedCover } from "@/lib/jam-generated-cover";
 
 /**
  * "Tuas músicas" (`/app/jam/mine`): the one place a returning person finds the
@@ -176,7 +177,7 @@ export function JamMineView({ onClose }: { onClose: () => void }) {
                         data-waiting={waiting}
                         className="flex w-full items-center gap-3 rounded-[var(--radius-card)] bg-surface-2 p-3 text-left outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
                       >
-                        <MineCover url={song.coverUrl} />
+                        <MineCover songId={song.id} url={song.coverUrl} instruments={song.instruments} />
                         <span className="flex min-w-0 flex-1 flex-col leading-snug">
                           <span className="truncate text-[15px] font-bold text-text">{bidiClean(song.title)}</span>
                           <span className="truncate text-[13px] text-text-secondary">
@@ -219,11 +220,11 @@ export function JamMineView({ onClose }: { onClose: () => void }) {
   );
 }
 
-function MineCover({ url }: { url: string | null }) {
+function MineCover({ songId, url, instruments }: { songId: string; url: string | null; instruments?: readonly string[] }) {
   const cover = useJamCover(url);
   return (
     <span aria-hidden="true" className="relative grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-[var(--radius-control)] bg-surface-3 text-text-secondary">
-      {cover.src !== null && cover.status !== "failed" ? <JamCoverPhoto cover={cover} /> : <Music2 className="h-5 w-5" />}
+      {cover.src !== null && cover.status !== "failed" ? <JamCoverPhoto cover={cover} /> : <JamGeneratedCover songId={songId} instruments={instruments} />}
     </span>
   );
 }

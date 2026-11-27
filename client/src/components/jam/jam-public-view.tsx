@@ -54,8 +54,9 @@ export interface JamPublicViewProps {
   /** A new jam got its first part: the address becomes the song's. */
   onSongStarted: (songId: string) => void;
   /**
-   * A Jam notice, drawn in the flow above the song (`lib/jam-notice-placement.ts`): it moves the song
-   * down, so it can never sit over play, record or share. Not drawn while the studio is open.
+   * A Jam notice, drawn at the top of the song's body (`lib/jam-notice-placement.ts`): it scrolls away
+   * with the page, so it can never sit over play, record or share and never moves the song's header.
+   * Not drawn while the studio is open.
    */
   noticeSlot?: React.ReactNode;
 }
@@ -284,7 +285,6 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted, notice
 
   return frame(
     <>
-      {studio === null && noticeSlot}
       <div className="min-h-0 flex-1" inert={studio !== null}>
         <JamSongPanel
           key={song.id}
@@ -297,6 +297,7 @@ export function JamPublicView({ target, viewerId, onClose, onSongStarted, notice
           freshTrackId={freshTrackId}
           autoplay={false}
           publicView
+          noticeSlot={studio === null ? noticeSlot : null}
           onAutoAcceptChange={setAutoAccept}
           onRecord={(instrument) => record(instrument)}
           onStartOwn={startPublicJam}

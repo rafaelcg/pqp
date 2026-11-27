@@ -23,16 +23,31 @@ html[data-jam-site] h2 {
   letter-spacing: -0.02em;
 }
 
-/* How strongly an instrument's colour is pulled toward the text colour where it
-   draws a line on the page: a pale yellow needs more help on a light page. */
+/* An instrument's colour as TEXT or a line on the page (`inkMix`, `instruments.ts`). On the dark page it is
+   the colour pulled 20% toward the text colour, as it always was. On the light page a pale colour pulled
+   toward the text colour stays pale (62% left the yellow of "Falta uma guitarra." at 2.4:1), so the light
+   page takes the deep end of the same hue, the jam tiles' own ink (`--color-tile-*-ink`, 5.9:1 or more on
+   every light surface, pinned by `instruments.test.ts`). */
 html[data-jam-site] {
   --jam-ink-mix: 80%;
   --jam-wave-dim: 0.38;
+  --jam-ink-guitar: color-mix(in oklab, var(--color-inst-guitar) var(--jam-ink-mix), var(--color-text));
+  --jam-ink-bass: color-mix(in oklab, var(--color-inst-bass) var(--jam-ink-mix), var(--color-text));
+  --jam-ink-drums: color-mix(in oklab, var(--color-inst-drums) var(--jam-ink-mix), var(--color-text));
+  --jam-ink-vocals: color-mix(in oklab, var(--color-inst-vocals) var(--jam-ink-mix), var(--color-text));
+  --jam-ink-keys: color-mix(in oklab, var(--color-inst-keys) var(--jam-ink-mix), var(--color-text));
+  --jam-ink-other: color-mix(in oklab, var(--color-inst-other) var(--jam-ink-mix), var(--color-text));
 }
 
 html[data-jam-site][data-theme="light"] {
   --jam-ink-mix: 62%;
   --jam-wave-dim: 0.62;
+  --jam-ink-guitar: var(--color-tile-guitar-ink);
+  --jam-ink-bass: var(--color-tile-bass-ink);
+  --jam-ink-drums: var(--color-tile-drums-ink);
+  --jam-ink-vocals: var(--color-tile-vocals-ink);
+  --jam-ink-keys: var(--color-tile-keys-ink);
+  --jam-ink-other: var(--color-tile-other-ink);
 }
 
 /* The seek bar: a thin track that fills with the accent, a thumb that is there

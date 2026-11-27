@@ -102,6 +102,7 @@ export function JamAnnouncementHint({
         dismissLabel={t("jamAnnouncement.dismiss")}
         dataAttribute="jam-announcement"
         hero={<JamHowToHero />}
+        phoneHero={false}
         title={t("jamAnnouncement.title")}
         body={t("jamAnnouncement.body")}
         footer={

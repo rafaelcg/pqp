@@ -66,6 +66,8 @@ export function useJamPlayback(
   options: {
     autoplay?: boolean;
     onPlayError?: () => void;
+    /** Called from the press that asks to PLAY (not to pause): the person started it, which is what a play count needs. */
+    onPersonPlay?: () => void;
     /**
      * Who is listening. Their own parts are loaded from the original, never from the Opus listening copy:
      * the song panel lets them adjust one (gain, offset, trim) and audition it, and that is work on the
@@ -92,6 +94,8 @@ export function useJamPlayback(
   const wantAutoplay = useRef(options.autoplay === true);
   const playErrorRef = useRef(options.onPlayError);
   playErrorRef.current = options.onPlayError;
+  const personPlayRef = useRef(options.onPersonPlay);
+  personPlayRef.current = options.onPersonPlay;
   const loadedOnce = useRef(false);
   const viewerId = options.viewerId ?? null;
 
@@ -263,6 +267,7 @@ export function useJamPlayback(
     if (engine.player.state === "playing") {
       engine.player.pause();
     } else {
+      personPlayRef.current?.();
       engine.player.play().catch(fail);
     }
   }, [engine]);

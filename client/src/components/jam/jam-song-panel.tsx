@@ -1,6 +1,6 @@
 import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
-import { ArrowLeft, Camera, Check, ChevronDown, Lock, LockOpen, Mic, MoreHorizontal, Pencil, Send, Share2, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { ArrowLeft, Camera, Check, ChevronDown, Lock, LockOpen, Mic, MoreHorizontal, Pause, Pencil, Play, Plus, Send, Share2, Trash2, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -76,7 +76,10 @@ export interface JamSongPanelProps {
   onPlayingChange?: (playing: boolean) => void;
   /** The take to drop into its lane with an entrance (the one just posted). */
   freshTrackId?: string | null;
-  /** Start playing as soon as the stems are in. */
+  /**
+   * Start playing as soon as the stems are in: only for the round play button on the song's own tile
+   * (that tap IS this song's play). Opening a song never plays it, so it is off unless a caller says so.
+   */
   autoplay?: boolean;
   /** Each change is the wall's round button pressed on this song while it is open: play, or pause. */
   playNonce?: number;
@@ -92,6 +95,11 @@ export interface JamSongPanelProps {
    * the dock offers "Começar a minha" instead of a dead end (user test round 2, N2).
    */
   onStartOwn?: () => void;
+  /**
+   * A Jam notice for the song's view (`lib/jam-notice-placement.ts`), drawn at the top of the body, so it
+   * scrolls away with the page: it never sits over play, record or share and never moves the header.
+   */
+  noticeSlot?: ReactNode;
   /** The server this song's channel belongs to, for the publish sheet. Null outside a channel. */
   originName?: string | null;
 }
@@ -107,18 +115,26 @@ export function JamSongPanel({
   onClose,
   onPlayingChange,
   freshTrackId,
-  autoplay = true,
+  autoplay = false,
   playNonce = 0,
   publicView = false,
   onAutoAcceptChange,
   onStartOwn,
+  noticeSlot = null,
   originName = null,
 }: JamSongPanelProps) {
   const { t } = useTranslation();
   const tracks = useMemo(() => orderTracks(detail?.tracks ?? []), [detail?.tracks]);
+  // A play is counted only when this person started it here: their own press, or the round play button
+  // that opened the song for them (`autoplay`). Never because the engine happened to be playing.
+  const personStarted = useRef(autoplay);
+  const markPersonStarted = () => {
+    personStarted.current = true;
+  };
   const playback = useJamPlayback(song.id, tracks, {
     autoplay,
     onPlayError: () => setError(t("jam.studio.playError")),
+    onPersonPlay: markPersonStarted,
     viewerId,
   });
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +171,7 @@ export function JamSongPanel({
   // A public jam counts a play the first time it is heard in this view.
   const playCounted = useRef(false);
   useEffect(() => {
-    if (publicView && playing && !playCounted.current) {
+    if (publicView && playing && personStarted.current && !playCounted.current) {
       playCounted.current = true;
       void notePublicPlay(song.id);
     }
@@ -412,6 +428,8 @@ export function JamSongPanel({
     </button>
   ) : null;
 
+  const dockSecondary =
+    "flex h-10 min-w-0 flex-1 items-center justify-center gap-2 truncate rounded-full bg-surface-2 px-3 text-sm font-bold text-text outline-none ring-1 ring-inset ring-border transition-[background-color,transform] duration-[var(--duration-fast)] hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:h-11 motion-safe:active:scale-[0.98] motion-reduce:transition-none disabled:opacity-60";
   const shareLabel = pub.share ? t("jam.invite.share") : t("jam.share.title");
   const sharePill = canShare ? (
     <button
@@ -505,6 +523,7 @@ export function JamSongPanel({
       </header>
 
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-5 sm:px-5">
+        {noticeSlot && <div className="-mx-3 sm:-mx-5" data-jam-notice-slot="">{noticeSlot}</div>}
         {pub.strip && <div className="-mx-3 sm:-mx-5">{pub.strip}</div>}
         {/* Parts waiting for the starter's answer come FIRST, above the stage: finding them took a starter six minutes when they sat below it (launch test N1). */}
         <JamPublicRequests
@@ -804,6 +823,29 @@ export function JamSongPanel({
               )}
             </>
           )
+        )}
+        {publicView && !isEmpty && detail && (
+          // The three the doors promise (Ouvir, Gravar minha parte, Começar a minha): the song opened from a
+          // door offers the same three where they apply. The play is the song's own, in words.
+          <div data-jam-dock-more="" className="mx-auto flex w-full gap-2 sm:max-w-sm">
+            <button
+              type="button"
+              data-jam-dock-listen=""
+              data-playing={playing ? "true" : "false"}
+              onClick={playback.toggle}
+              disabled={playback.status === "loading"}
+              className={dockSecondary}
+            >
+              {playing ? <Pause className="h-4 w-4 shrink-0" fill="currentColor" aria-hidden /> : <Play className="h-4 w-4 shrink-0" fill="currentColor" aria-hidden />}
+              {playing ? t("jam.song.pause") : t("jam.public.dock.listen")}
+            </button>
+            {onStartOwn && viewer?.isAuthor !== true && reason !== "closed" && (
+              <button type="button" data-jam-dock-start="" onClick={onStartOwn} className={dockSecondary}>
+                <Plus className="h-4 w-4 shrink-0" aria-hidden />
+                {t("jam.song.startOwn")}
+              </button>
+            )}
+          </div>
         )}
         {outsideRecord && reason === null && first && !pub.viewerWaiting && (
           <p data-jam-outside-hint="" className="text-center text-[13px] leading-snug text-text-secondary [text-wrap:pretty]">

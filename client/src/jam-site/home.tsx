@@ -9,13 +9,13 @@ import { HowItWorks } from "./how-it-works";
 import { useAsk } from "./auth-sheet";
 import { useHead } from "./head";
 import { INSTRUMENT_LOOK, INSTRUMENTS, asInstrument, inkMix, type Instrument } from "./instruments";
-import { unlockAudioInGesture, warmJamEngine } from "./player";
-import { Link, navigateTo, useJamRoute } from "./router";
+import { warmJamEngine } from "./player";
+import { Link, useJamRoute } from "./router";
 import { jamPath } from "./route";
 import { CONTAINER, FromAppNotice } from "./shell";
 import { Badge } from "./tiles";
 import { button, focusRing, Skeleton } from "./ui";
-import { FEATURED_WINDOW, useFeatured, useJamList, type JamTab } from "./use-jam-data";
+import { FEATURED_WINDOW, featuredOptions, useFeatured, useJamList, type JamTab } from "./use-jam-data";
 import { cn, compactCount, instrumentName, listOf, personLabel } from "./util";
 
 const TABS: readonly JamTab[] = ["top", "needs", "new", "done"];
@@ -73,9 +73,12 @@ function Meta({ song, className, stacked = false }: { song: PublicJamSong; class
 }
 
 /**
- * Opens the song and starts it: the audio is unlocked inside this very click. The home does not play in
- * place (the song page is where the band, the parts and the controls are), so the button SAYS where it
- * goes: the hero's is a pill with words, a card's round one has a tooltip (round 1 m5, partly open in round 3).
+ * Opens the song. It does NOT start it: opening a song never makes a sound, and sound starts only on that
+ * song's own play button on its own page (and a play is counted only then). The home does not play in place
+ * (the song page is where the band, the parts and the controls are), so the button SAYS where it goes: the
+ * hero's is a pill with words, a card's round one has a tooltip (round 1 m5, partly open in round 3).
+ * It used to carry a "start it" wish in `history.state` after an unlocked click, which worked only once
+ * somebody had pressed play on another song in the same tab (launch screenshots, problem 1).
  */
 function PlayButton({ song, size, label }: { song: PublicJamSong; size: "card" | "hero"; label: string }) {
   const path = useSongPath()(song);
@@ -87,13 +90,6 @@ function PlayButton({ song, size, label }: { song: PublicJamSong; size: "card" |
       data-jam-play={song.id}
       onPointerEnter={() => void warmJamEngine()}
       onFocus={() => void warmJamEngine()}
-      onClick={(event) => {
-        // Only ask the song page to start when the audio could be unlocked in THIS click.
-        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-        event.preventDefault();
-        const unlocked = unlockAudioInGesture();
-        navigateTo(path, { state: unlocked ? { autoplay: true } : null });
-      }}
       className={cn(
         "relative z-10 shrink-0 rounded-full transition-[transform,background-color] duration-[var(--duration-fast)] motion-reduce:transition-none",
         focusRing,
@@ -125,7 +121,7 @@ function Card({ song, skippable }: { song: PublicJamSong; skippable: boolean }) 
       </div>
       <div className="mt-3 min-w-0">
         <div className="flex items-start gap-2.5">
-          <SongCover title={song.title} coverUrl={song.coverUrl} className="mt-0.5 h-9 w-9" />
+          <SongCover song={song} className="mt-0.5 h-9 w-9" />
           <h3 className="line-clamp-2 min-w-0 flex-1 text-base font-bold leading-snug">
             <Link
               href={path}
@@ -178,7 +174,7 @@ function Hero({ song, status }: { song: PublicJamSong | null; status: "loading" 
       </div>
       <div className="min-w-0">
         <div className="flex items-center gap-3">
-          <SongCover title={song.title} coverUrl={song.coverUrl} className="h-12 w-12" />
+          <SongCover song={song} className="h-12 w-12" />
           <p className="text-sm font-semibold text-text-secondary">{jt("home.featured")}</p>
         </div>
         <h2 className="mt-2 break-words font-display text-[clamp(2.5rem,7vw,4.25rem)] font-extrabold leading-[0.98] tracking-[-0.025em]">
@@ -414,6 +410,7 @@ export function HomePage() {
     setNeed(null);
     window.requestAnimationFrame(() => document.querySelector('[data-jam-tab="needs"]')?.scrollIntoView({ block: "start" }));
   };
+  const hasHero = featured.status === "loading" || featured.song !== null;
   const sentinel = useRef<HTMLDivElement | null>(null);
   const fromApp = useJamRoute().search.get("from") === "app";
 
@@ -458,7 +455,7 @@ export function HomePage() {
   // Waiting for the hero instead would hold usable cards behind a second request;
   // leaving nothing out would draw the hero's song as a card and pull it out a
   // moment later, shifting every card after it.
-  const heroId = tab !== "top" ? null : featured.status === "loading" ? (pickFeatured(list.songs.slice(0, FEATURED_WINDOW))?.id ?? null) : (featured.song?.id ?? null);
+  const heroId = tab !== "top" ? null : featured.status === "loading" ? (pickFeatured(list.songs.slice(0, FEATURED_WINDOW), featuredOptions())?.id ?? null) : (featured.song?.id ?? null);
   const shown = useMemo(() => (heroId ? list.songs.filter((song) => song.id !== heroId) : list.songs), [heroId, list.songs]);
   const cards = useMemo(() => shown.map((song, index) => <Card key={song.id} song={song} skippable={index >= SKIPPED_AFTER} />), [shown]);
 
@@ -469,12 +466,13 @@ export function HomePage() {
       </h1>
       {fromApp && <FromAppNotice body={jt("fromApp.start")} />}
       {/* On a phone the strip comes first: the hero's play button is a screen down, and a cold visitor should know what a jam is before it. From lg the hero sits beside its art and the strip goes under it. */}
-      <div className="flex flex-col">
+      {/* No song has earned the hero (`pickFeatured`): the page leads with how it works and the list, never with a weak song. */}
+      <div className="flex flex-col" data-jam-lead={hasHero ? "hero" : "how"}>
         <div className="order-2 lg:order-1">
           <Hero song={featured.song} status={featured.status} />
           <WantsPart songs={wanting} onAll={showWanting} />
         </div>
-        <HowItWorks className="order-1 mt-5 lg:order-2 lg:mt-10" />
+        <HowItWorks className={cn("order-1 mt-5", hasHero && "lg:order-2 lg:mt-10")} />
       </div>
       <div className="mt-10 sm:mt-14">
         <Tabs tab={tab} onTab={setTab} need={need} onNeed={setNeed} />

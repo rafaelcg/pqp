@@ -2,11 +2,9 @@ import type { JamSongSummary } from "@pqp/shared";
 import { Check, Hash, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { songNeed } from "@/lib/jam-wall";
 import { JamCoverPhoto, useJamCover } from "./jam-cover";
 import { useNeedLabel } from "./jam-need";
-import { bandOrder } from "./jam-art";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { fetchForwardDestinations } from "@/lib/api";
@@ -16,6 +14,7 @@ import { jamSongShareUrl } from "@/lib/jam-share";
 import { sendShareMessage, type ShareResult } from "@/lib/jam-share-send";
 import { cn } from "@/lib/utils";
 import { UserText } from "./user-text";
+import { JamGeneratedCover } from "@/lib/jam-generated-cover";
 
 /**
  * "Mandar no chat": the text channels of this song's server that the person may
@@ -199,18 +198,13 @@ function SongLine({ song }: { song: JamSongSummary }) {
   const needLabel = useNeedLabel();
   const cover = useJamCover(song.coverUrl);
   const need = songNeed(song);
-  const band = bandOrder(song.instruments);
   return (
     <div className="flex items-center gap-3" data-jam-share-song="">
       <span aria-hidden="true" className="relative h-10 w-10 shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-2">
         {cover.src !== null && cover.status !== "failed" ? (
           <JamCoverPhoto cover={cover} eager />
         ) : (
-          <span className="absolute inset-0 flex flex-col justify-center gap-[2px] p-[5px]">
-            {band.slice(0, 5).map((instrument) => (
-              <span key={instrument} className={`min-h-[4px] flex-1 rounded-full ${JAM_INSTRUMENT_LOOK[instrument].fill}`} />
-            ))}
-          </span>
+          <JamGeneratedCover songId={song.id} instruments={song.instruments} />
         )}
       </span>
       <span className="min-w-0">

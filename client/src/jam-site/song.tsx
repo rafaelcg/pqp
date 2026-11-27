@@ -78,9 +78,6 @@ function OriginCard({ origin }: { origin: NonNullable<PublicJamSongDetail["song"
 function Loaded(props: { detail: PublicJamSongDetail; refresh: () => Promise<PublicJamSongDetail | null>; fromApp: boolean; appRecord: boolean }) {
   const { detail, refresh } = props;
   const [player, setPlayer] = useState<PublicPlayer | null>(null);
-  // Read once, at the first render: the effect below runs twice under strict mode, and the
-  // first run clears the marker so a reload does not start the song again.
-  const [autoplay] = useState(() => (window.history.state as { autoplay?: boolean } | null)?.autoplay === true);
   useEffect(() => {
     const made = createPublicPlayer({
       tracks: detail.tracks,
@@ -90,11 +87,7 @@ function Loaded(props: { detail: PublicJamSongDetail; refresh: () => Promise<Pub
     });
     setPlayer(made);
     void warmJamEngine();
-    // The home's play button sent us here to start it.
-    if (autoplay) {
-      window.history.replaceState(null, "");
-      made.toggle();
-    }
+    // Opening a song never starts it: only this page's own play button does.
     return () => {
       made.dispose();
       setPlayer(null);
@@ -198,7 +191,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
       {fromApp && <FromAppNotice body={appRecord ? jt("fromApp.record") : jt("fromApp.body")} />}
 
       <div className="mt-4 flex items-center gap-4 sm:gap-5">
-        <SongCover title={song.title} coverUrl={song.coverUrl} className="h-16 w-16 sm:h-24 sm:w-24" />
+        <SongCover song={song} className="h-16 w-16 sm:h-24 sm:w-24" />
         <div className="min-w-0 flex-1">
         {song.origin && (
           <p className="flex items-center gap-2 text-[15px] font-bold text-text-secondary" data-jam-origin-line="">

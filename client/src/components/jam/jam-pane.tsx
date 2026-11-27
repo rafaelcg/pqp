@@ -298,8 +298,9 @@ export function JamPane({
     if (routeSongId === openSongId) {
       return;
     }
-    // A link or Back opens a song and waits: only a card or its round button, or a take just posted, plays.
-    // (a card in the chat that was playing this very song hands it over, and it goes on)
+    // Opening a song never starts it: a link, Back, a card, a door or a take just posted all open it and
+    // wait. Only the round play button on the song's own tile plays, and a card in the chat that was
+    // already playing this very song hands it over, so what was heard goes on.
     setOpenAutoplay(takeHandoffAutoplay(routeSongId));
     setOpenSongIdState(routeSongId);
     setSongGone(false);
@@ -573,16 +574,17 @@ export function JamPane({
     // sound: unlock the audio right here, not later from an effect.
     unlockJamAudio();
     if (songId === openSongId) {
-      // Already open. The round button plays or pauses it; the card plays it unless it is
-      // playing already (then it has nothing left to do).
-      if (via === "play" || !openPlaying) {
+      // Already open. The round button plays or pauses it; the card has nothing left to do.
+      if (via === "play") {
         setPlayNonce((before) => before + 1);
       }
       return;
     }
     const go = () => {
       setFreshTrackId(null);
-      setOpenAutoplay(true);
+      // The round play button is that song's own play tap: it opens the song and plays it. A tap on
+      // the card is only opening it.
+      setOpenAutoplay(via === "play");
       setOpenSongId(songId, stepRef.current === "song" ? "swap" : "push");
     };
     const doc = document as Document & { startViewTransition?: (update: () => void) => { finished: Promise<void> } };
@@ -989,7 +991,8 @@ export function JamPane({
           onStay={stayInStudio}
           onPosted={({ songId, trackId }) => {
             setFreshTrackId(trackId);
-            setOpenAutoplay(true);
+            // Landing on the song after a recording never starts it: the studio's review was the listen.
+            setOpenAutoplay(false);
             if (studio.mode === "new") {
               // A new song: the studio's entry becomes the song's, so Back from
               // the song is the wall and not a studio that no longer exists.

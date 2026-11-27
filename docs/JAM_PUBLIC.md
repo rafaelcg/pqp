@@ -637,11 +637,30 @@ bring it back).
 **Where a Jam notice may draw** (`lib/jam-notice-placement.ts`, N-1). One at a
 time: the toast holds the cards back, only the newest card is drawn with "Mais N
 esperando depois dessa". Never over a transport: with the studio open nothing is
-drawn (it waits), over a public view the card is drawn in the flow above the song
-(`noticeSlot`), over a channel's own song panel it waits, and the corner queue
+drawn (it waits), over a public view the card is drawn at the top of the song's BODY
+(`noticeSlot`, passed through to `JamSongPanel`: it scrolls away with the page and
+never moves the song's header or its play button; it used to sit above the whole
+panel and pushed the header down on a phone), over a channel's own song panel it
+waits, and the corner queue
 yields while one is up (`JamHintContext.notice`). On a desktop it sits at the
 bottom right where the corner cards are, not at the top where the app's own
 buttons are.
+
+**The song opened in the app offers the same three the doors promise.** The dock of
+a public song (`JamSongPanel`, `publicView`) has "Mandar minha parte" (where the
+account may record), a labelled **Ouvir** (play, **Pausar** while it plays) and
+**Começar a minha** (not for the song's own starter, and not on a closed song,
+whose dock already makes it the main button). Opening a song never starts it: the
+corner card's and the doors' "Ouvir uma jam" open it paused; on the wall the round
+play button on a song's own tile is the only open-and-play (`openFromTile`), and a
+card in the chat that was already playing the same song hands it over. A play is
+counted (`notePublicPlay`) only when a person started it in that view
+(`useJamPlayback`'s `onPersonPlay`). See `docs/JAM_SITE.md` "Playing".
+
+**The featured song** is `pickFeatured` and a song must earn it (a cover, two
+parts from two people, engagement over a 14-day half-life as the tie-break; `null`
+when nothing did, and then the doors offer "Começar uma jam"): `docs/JAM_SITE.md`,
+home.
 
 **The share message** (`lib/jam-share-text.ts`, N-2): `jamStillNeeds` is the one
 rule for what a song still asks for (the server's `needs` is the same list), the

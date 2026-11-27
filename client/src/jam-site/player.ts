@@ -43,23 +43,7 @@ export function warmJamEngine(): Promise<SessionModule> {
   return sessionPromise;
 }
 
-/**
- * Unlock the audio from inside a click that is about to take somebody to a song
- * and start it (a play button on the home). The engine is one object for the
- * whole page, so the song page picks up the context this made.
- */
-export function unlockAudioInGesture(): boolean {
-  if (sessionModule) {
-    sessionModule.unlockJamAudio();
-    return true;
-  }
-  // The engine's code is not here yet: nothing could be unlocked in this click,
-  // so the caller must not promise a start it cannot make. The song opens paused.
-  void warmJamEngine();
-  return false;
-}
-
-export type PlayerPhase ="idle" | "loading" | "ready" | "error";
+export type PlayerPhase = "idle" | "loading" | "ready" | "error";
 
 export interface PlayerState {
   phase: PlayerPhase;
@@ -230,6 +214,8 @@ export function createPublicPlayer(options: PlayerOptions): PublicPlayer {
   async function load(session: SessionModule): Promise<Engine | null> {
     const next = await session.getJamEngine();
     if (disposed) return null;
+    // The engine is one object for the whole page: whatever an earlier song left running is not this song's sound.
+    if (next.player.state !== "stopped") next.player.stop();
     engine = next;
     set({ phase: "loading", bytes: null });
     let wanted = stemTracks();

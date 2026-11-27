@@ -1,8 +1,18 @@
 import type { PublicJamSong, PublicJamSongDetail } from "@pqp/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchJam, fetchJamConfig, fetchJamList, JamApiError } from "./api";
-import { FEATURED_WINDOW, pickFeatured } from "./featured";
+import { FEATURED_WINDOW, pickFeatured, type FeaturedOptions } from "./featured";
 import type { Instrument } from "./instruments";
+
+/**
+ * Who is looking, for the hero rule. The site knows a signed-in visitor only by the first word of their name
+ * (`session.ts`), which cannot tell two people apart, so it passes no viewer: a song is never dropped from a
+ * stranger's hero because somebody else shares a first name. (The rule's two-people minimum already keeps a song
+ * nobody has joined off the front page.)
+ */
+export function featuredOptions(): FeaturedOptions {
+  return {};
+}
 
 /**
  * Reads of the public API, as hooks. Each ends in one of a few plain states so
@@ -13,6 +23,20 @@ import type { Instrument } from "./instruments";
 
 export type ConfigState = "loading" | "on" | "off" | "error";
 
+/**
+ * How long after an answer of "not yet" (or of an error) the site asks again while the tab is open: a little more
+ * than the answer's own 60-second cache (`GET /api/public/jams/config`, `max-age=60`), so the ask lands on a
+ * fresh copy and not on the one that said "off".
+ */
+export const CONFIG_RECHECK_MS = 65_000;
+
+/**
+ * Whether the site is open, as the API says. It asks on arrival, and while the answer is "off" or an error it asks
+ * AGAIN: when the tab comes back into view or gets focus, and every `CONFIG_RECHECK_MS` while it is visible. So a
+ * flag flipped on shows up in a tab that was left open, with no reload, and nobody is stuck on "A jam ainda não
+ * abriu". A re-check is silent (the page stays as it is until the answer changes) and never runs while the site
+ * is on: the home does not go to a holding page under somebody who is listening.
+ */
 export function useJamConfig(): { state: ConfigState; retry: () => void } {
   const [state, setState] = useState<ConfigState>("loading");
   const [attempt, setAttempt] = useState(0);
@@ -29,6 +53,36 @@ export function useJamConfig(): { state: ConfigState; retry: () => void } {
     );
     return () => controller.abort();
   }, [attempt]);
+
+  const waiting = state === "off" || state === "error";
+  useEffect(() => {
+    if (!waiting) return;
+    let controller: AbortController | null = null;
+    const check = () => {
+      if (document.visibilityState === "hidden") return;
+      controller?.abort();
+      const mine = new AbortController();
+      controller = mine;
+      fetchJamConfig(mine.signal, { fresh: true }).then(
+        (config) => {
+          if (config.enabled) setState("on");
+          else setState((before) => (before === "error" ? "off" : before));
+        },
+        () => {
+          // Still no answer: the page keeps what it said, and the timer asks again.
+        },
+      );
+    };
+    const timer = window.setInterval(check, CONFIG_RECHECK_MS);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+      controller?.abort();
+    };
+  }, [waiting]);
   return { state, retry: () => setAttempt((n) => n + 1) };
 }
 
@@ -161,7 +215,7 @@ export function useFeatured(): {
     const controller = new AbortController();
     fetchJamList({ sort: "top", limit: FEATURED_WINDOW }, controller.signal).then(
       (result) => {
-        setSong(pickFeatured(result.songs));
+        setSong(pickFeatured(result.songs, featuredOptions()));
         setSongs(result.songs);
         setStatus("ready");
       },

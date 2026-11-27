@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import en from "./en/translation.json";
+import es from "./es/translation.json";
 import ptBR from "./pt-BR/translation.json";
 
 /**
@@ -39,5 +40,26 @@ describe("pt-BR jam copy", () => {
   it("every English jam key is in pt-BR, so a new string cannot ship untranslated", () => {
     const missing = Object.keys(en).filter((key) => key.startsWith("jam.") && !(key in pt));
     expect(missing).toEqual([]);
+  });
+
+  it("the start sheet's examples are invented: a product strict about rights does not name a real song or band", () => {
+    const REAL = /nirvana|in bloom|beatles|radiohead|coldplay|queen|metallica|legi[aã]o urbana|djavan|caetano|gilberto gil/i;
+    for (const catalogue of [en, ptBR, es] as Array<Record<string, string>>) {
+      for (const key of ["jam.start.songTitlePlaceholder", "jam.start.artistPlaceholder"]) {
+        expect(catalogue[key], key).toBeTruthy();
+        expect(catalogue[key]).not.toMatch(REAL);
+      }
+    }
+  });
+
+  it("the first take's timing words are plain (no slang that reads as an error) and short enough for a 390 px lane", () => {
+    for (const catalogue of [en, ptBR, es] as Array<Record<string, string>>) {
+      expect(catalogue["jam.latency.chipLabelEstimate"]).not.toMatch(/chutou|guess|adivin/i);
+      expect(catalogue["jam.latency.chipLabelEstimate"]).toMatch(/estimad|estimated/i);
+      // the lane's own label sits beside a 14 px icon in a column a phone leaves about 80 px for
+      const short = catalogue["jam.review.estimatedShort"]!;
+      expect(short.length).toBeLessThanOrEqual(10);
+      expect(short).not.toMatch(/\.\.\.|…/);
+    }
   });
 });
