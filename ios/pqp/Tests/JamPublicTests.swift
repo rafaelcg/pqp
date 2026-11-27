@@ -262,13 +262,13 @@ private struct PublicTestToken: TokenProviding {
     func refreshedToken() async -> TokenRefresh { .token("stub") }
 }
 
-private struct Sent: @unchecked Sendable {
+struct Sent: @unchecked Sendable {
     let method: String
     let path: String
     let json: [String: Any]?
 }
 
-private func sentBody(_ request: URLRequest) -> [String: Any]? {
+func sentBody(_ request: URLRequest) -> [String: Any]? {
     var data = request.httpBody
     if data == nil, let stream = request.httpBodyStream {
         stream.open()
@@ -291,7 +291,7 @@ func makePublicSession() -> SessionStore {
     return SessionStore(authMode: .devBypass, tokenProvider: PublicTestToken(), api: api)
 }
 
-private func inboxJSON(_ tracks: [(id: String, instrument: String)], song: String = "s1") -> String {
+func inboxJSON(_ tracks: [(id: String, instrument: String)], song: String = "s1") -> String {
     let rows = tracks.map { entry in
         """
         {"songId":"\(song)","songTitle":"Lua cheia","track":{"id":"\(entry.id)","songId":"\(song)","authorId":"u2",
@@ -305,7 +305,7 @@ private func inboxJSON(_ tracks: [(id: String, instrument: String)], song: Strin
     return "{\"takes\":[\(rows.joined(separator: ","))]}"
 }
 
-private func noticesJSON(_ items: [(id: String, kind: String, song: String)]) -> String {
+func noticesJSON(_ items: [(id: String, kind: String, song: String)]) -> String {
     let rows = items.map {
         """
         {"id":"\($0.id)","kind":"\($0.kind)","songId":"\($0.song)","title":"Lua cheia","instruments":["bass"],"count":1,
@@ -316,7 +316,7 @@ private func noticesJSON(_ items: [(id: String, kind: String, song: String)]) ->
 }
 
 /// A server: config, inbox and notices are the test's, everything else answers `{}`.
-private func publicRoute(
+func publicRoute(
     log: LockedBox<[Sent]>,
     enabled: LockedBox<Bool> = LockedBox(true),
     inbox: LockedBox<String> = LockedBox(inboxJSON([])),
@@ -537,7 +537,7 @@ final class JamPublicStoreTests: XCTestCase {
 
 // MARK: - The starter's answer on an open song
 
-private func requestSongJSON(updated: String = "2026-11-27T10:05:00.000Z") -> String {
+func requestSongJSON(updated: String = "2026-11-27T10:05:00.000Z") -> String {
     """
     {"id":"s1","channelId":"chan-1","serverId":"srv-1","title":"Lua cheia","artist":null,
      "joinMode":"wanted","wantedInstruments":["bass","drums"],"authorId":"u1","authorName":"rafa","authorAvatarUrl":null,
@@ -546,7 +546,7 @@ private func requestSongJSON(updated: String = "2026-11-27T10:05:00.000Z") -> St
     """
 }
 
-private func requestTrackJSON(_ id: String, instrument: String, inMix: Bool, author: String = "u2") -> String {
+func requestTrackJSON(_ id: String, instrument: String, inMix: Bool, author: String = "u2") -> String {
     """
     {"id":"\(id)","songId":"s1","authorId":"\(author)","authorName":"Bia","authorAvatarUrl":null,
      "instrument":"\(instrument)","label":null,"audioUrl":"https://example.invalid/\(id).m4a","audioContentType":"audio/mp4",
@@ -556,15 +556,15 @@ private func requestTrackJSON(_ id: String, instrument: String, inMix: Bool, aut
     """
 }
 
-private let requestDetail = """
+let requestDetail = """
 {"song":\(requestSongJSON()),"tracks":[\(requestTrackJSON("t0", instrument: "guitar", inMix: true, author: "u1")),\(requestTrackJSON("t1", instrument: "bass", inMix: false)),\(requestTrackJSON("t2", instrument: "drums", inMix: false))],
  "viewer":{"isAuthor":true,"canModerate":false,"addableInstruments":["guitar"],"votedTrackIds":[]}}
 """
 
-private let requestChannel: Channel = try! Coding.decoder.decode(Channel.self, from: Data("""
+let requestChannel: Channel = try! Coding.decoder.decode(Channel.self, from: Data("""
 {"id":"chan-1","serverId":"srv-1","kind":"server","name":"jam","type":"jam","position":0,"isPrivate":false}
 """.utf8))
-private let requestServer = Server(id: "srv-1", name: "S", ownerId: "u1", role: "owner", createdAt: Date())
+let requestServer = Server(id: "srv-1", name: "S", ownerId: "u1", role: "owner", createdAt: Date())
 
 @MainActor
 final class JamRequestAnswerTests: XCTestCase {

@@ -234,7 +234,13 @@ final class JamWallModel {
         switch frame {
         case .songDeleted(_, let id):
             songs.removeAll { $0.id == id }
-        case .songUpdated(_, let song), .trackAdded(_, let song, _), .trackUpdated(_, let song, _), .trackDeleted(_, let song, _):
+        case .songUpdated(_, let song):
+            // A new title or artist may no longer match the words (or newly match
+            // them): the server decides, so the words are asked again.
+            guard songs.contains(where: { $0.id == song.id }) else { return }
+            Task { [weak self] in await self?.runSearch() }
+            return
+        case .trackAdded(_, let song, _), .trackUpdated(_, let song, _), .trackDeleted(_, let song, _):
             guard let index = songs.firstIndex(where: { $0.id == song.id }) else { return }
             songs[index] = song
         default:

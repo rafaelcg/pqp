@@ -112,10 +112,9 @@ struct HomeView: View {
                 if queue.card != nil, !session.jamPublic.cardsAreHeld {
                     JamTakeNoticeCard(
                         queue: queue,
-                        onOpen: { notice in
-                            session.jamPublic.ack(notice.id)
-                            session.requestNavigation(.publicJam(songId: notice.songId))
-                        },
+                        // Not spent here: the song spends it when it opens, so a link that
+                        // fails to land leaves the card to tap again.
+                        onOpen: { notice in session.requestNavigation(.publicJam(songId: notice.songId)) },
                         onDismiss: { notice in session.jamPublic.ack(notice.id) }
                     )
                     .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))

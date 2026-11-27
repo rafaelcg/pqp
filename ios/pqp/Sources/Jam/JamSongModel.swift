@@ -786,10 +786,14 @@ final class JamSongModel {
             let reply = try await session.api.updateJamTrack(id: previous.trackId, patch: .init(inMix: false))
             let effect = state.apply(.trackUpdated(channelId: channel.id, song: reply.song, track: reply.track))
             answer = JamAnswer(kind: .undone, trackId: previous.trackId, instrument: previous.instrument, name: previous.name)
+            // Back in the inbox at once, whatever the read that follows does.
+            session.jamPublic.restoreInboxTake(JamPublicInboxItem(songId: song.id, songTitle: song.title, track: reply.track))
             session.jamPublic.waitingMayHaveChanged()
             if effect == .reloadStems { await syncEngine() }
         } catch {
             requestError = Self.message(for: error)
+            // The undo may have committed with its answer lost: ask where things stand.
+            session.jamPublic.waitingMayHaveChanged()
         }
     }
 

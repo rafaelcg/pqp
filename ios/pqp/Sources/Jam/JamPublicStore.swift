@@ -45,6 +45,13 @@ final class JamPublicStore {
     @ObservationIgnored private var readToken = 0
     /// Something asked to read again while a read was out.
     @ObservationIgnored private var readAgain = false
+    /// The socket came back: the flag may have been flipped meanwhile, so the
+    /// next read asks the config again (a successful "off" clears what is held).
+    @ObservationIgnored private var configStale = false
+    /// A live `take` frame that has not yet been reconciled with a read that
+    /// succeeded in full (the inbox AND the notices), so a transient failure
+    /// cannot consume the only frame.
+    @ObservationIgnored private var pendingTake: JamPublicNoticeFrame?
 
     /// The cards a person is shown, newest first: the server's items, with the
     /// local one (if any) in front, since it is the moment that just happened.
@@ -85,15 +92,17 @@ final class JamPublicStore {
     private func readOnce() async {
         guard let api else { return }
         let mine = epoch
-        if !enabled || !loaded {
+        if !enabled || !loaded || configStale {
             guard let config = await api.jamPublicConfig() else { return }
             guard mine == epoch else { return }
+            configStale = false
             loaded = true
             enabled = config.enabled
             if !config.enabled {
                 inbox = []
                 notices = []
                 liveTake = nil
+                pendingTake = nil
                 return
             }
         }
@@ -106,6 +115,11 @@ final class JamPublicStore {
         if let inboxAnswer { inbox = inboxAnswer.takes }
         if let noticeAnswer { notices = noticeAnswer.notices }
         settleLiveTake()
+        // Both lists are fresh: now the live frame can be judged against them.
+        if inboxAnswer != nil, noticeAnswer != nil, let frame = pendingTake {
+            pendingTake = nil
+            noteLiveTake(frame)
+        }
     }
 
     /// The local card goes when nothing waits on its song any more (it was
@@ -127,11 +141,9 @@ final class JamPublicStore {
         case .decision:
             Task { await refresh() }
         case .notice(let notice):
-            Task { [weak self] in
-                await self?.refresh()
-                guard let self, self.enabled else { return }
-                self.noteLiveTake(notice)
-            }
+            // Kept until a read that succeeded in full has seen it (`readOnce`).
+            if notice.kind == .take, !notice.admitted { pendingTake = notice }
+            Task { await refresh() }
         }
     }
 
@@ -151,6 +163,7 @@ final class JamPublicStore {
     /// The socket came back: frames sent while it was down are gone.
     func reconnected() {
         guard api != nil else { return }
+        configStale = true
         Task { await refresh() }
     }
 
@@ -166,6 +179,21 @@ final class JamPublicStore {
         notices.removeAll { $0.id == id }
         guard let api else { return }
         Task { try? await api.ackJamTakeNotice(id: id) }
+    }
+
+    /// The person opened a song: whatever the server told them about it is read.
+    /// Spent HERE and not when the card was tapped, so a link that fails to
+    /// land (a transient read) leaves the card where it was.
+    func ackNotices(forSong songId: String) {
+        for notice in notices where notice.songId == songId { ack(notice.id) }
+        if liveTake?.songId == songId { liveTake = nil }
+    }
+
+    /// An accepted take went back out of the mix (an undo): it waits again,
+    /// without waiting for a read that may fail.
+    func restoreInboxTake(_ item: JamPublicInboxItem) {
+        guard !inbox.contains(where: { $0.track.id == item.track.id }) else { return }
+        inbox.append(item)
     }
 
     /// A take left the inbox (put in the mix, or declined): it goes without
@@ -201,5 +229,7 @@ final class JamPublicStore {
         inbox = []
         notices = []
         liveTake = nil
+        pendingTake = nil
+        configStale = false
     }
 }

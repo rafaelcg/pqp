@@ -87,7 +87,10 @@ struct JamSongView: View {
         }
         // Asked again every time a song opens, even when something is held: a push
         // that brought the person here may have beaten the first read.
-        .task { await session.jamPublic.refresh() }
+        .task {
+            await session.jamPublic.refresh()
+            session.jamPublic.ackNotices(forSong: model.song.id)
+        }
         .onChange(of: callActive) { _, now in model.callActive = now }
         // The flag is flipped per server with no deploy: back in the foreground, an
         // open song asks again whether it may still be edited.
