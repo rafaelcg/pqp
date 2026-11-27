@@ -7786,12 +7786,13 @@ CREATE INDEX IF NOT EXISTS idx_jam_tracks_video_pending
   ON jam_tracks (created_at DESC)
   WHERE video_key IS NOT NULL AND video_mp4_content_type IS NULL AND deleted_at IS NULL;
 
--- The audio copy's backfill scan (`enqueueMissingJamAudioCopies`): live lossless
--- tracks with no copy, newest first. Small by construction (a track leaves it
+-- The audio copy's backfill walk (`enqueueMissingJamAudioCopies`): live lossless
+-- tracks with no copy, newest first, in the order of a keyset cursor
+-- ((created_at, id) < cursor), so a pass reads only its own few rows. Small by construction (a track leaves it
 -- the moment its copy is confirmed or its job settles without one), so the scan
 -- that finds nothing to queue touches few rows however many tracks exist.
 CREATE INDEX IF NOT EXISTS idx_jam_tracks_audio_copy_pending
-  ON jam_tracks (created_at DESC)
+  ON jam_tracks (created_at DESC, id DESC)
   WHERE audio_content_type = 'audio/flac' AND audio_listen_content_type IS NULL
     AND deleted_at IS NULL;
 
@@ -8014,6 +8015,11 @@ CREATE TABLE IF NOT EXISTS jam_public_tracks (
 );
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_song ON jam_public_tracks (song_id);
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_author ON jam_public_tracks (author_id);
+-- The audio copy's backfill walks the tracks of public songs first, newest published
+-- first, in the order of a keyset cursor (`enqueueMissingJamAudioCopies`).
+CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_backfill
+  ON jam_public_tracks (created_at DESC, track_id DESC)
+  WHERE removed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_recorded
   ON jam_public_tracks (author_id, created_at) WHERE origin = 'recorded';
 CREATE INDEX IF NOT EXISTS idx_jam_public_tracks_video_pending

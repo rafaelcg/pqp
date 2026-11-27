@@ -289,6 +289,16 @@ replaces it, and is deleted with it.
   AAC, Opus or MP3 is already at most 1.4 MB per minute, and decoders disagree about
   the delay of those formats (WebKit moved an MP3 by 12 ms, above), so an ffmpeg-made
   copy could land where the browser's own decode of the original does not.
+- **The contract**: `audioSources` lives on `jamListenTrackSchema` (`jamTrackSchema`
+  plus the list), which `jamSongDetailResponseSchema` and the public track use, and
+  NOT on `jamTrackSchema`, the shape the phones check field by field
+  (`JamContractTest`): a phone that does not use a copy has no reason to carry the
+  field, and its decoder skips the unknown key.
+- **The backfill is two bounded walks**, not a ranking of the backlog: public
+  tracks first (keyset cursor over `idx_jam_public_tracks_backfill`), then the rest
+  (cursor over `idx_jam_tracks_audio_copy_pending`), each `LIMIT`ed and each row
+  looked at once. On 400,000 tracks a pass reads a handful of index entries (0.05 to
+  0.08 ms) instead of seq scanning the table (231 to 595 ms).
 - **The client chooses from data**, with no rebuild: a track with `audioSources`
   (copy first, original last) loads from the copy; without it, from the FLAC. See
   `client/src/lib/jam-listen-copy.ts`, `syncJamStems(..., { listen: true })` in

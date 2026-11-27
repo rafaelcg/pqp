@@ -392,7 +392,7 @@ export const publicJamTrackSchema = z.object({
   audioUrl: z.string(),
   audioContentType: z.string(),
   /**
-   * The Opus listening copy first, the original last, as `JamTrack.audioSources`:
+   * The Opus listening copy first, the original last, as `JamListenTrack.audioSources`:
    * present only when a copy is made AND the runtime flag `jam_audio_copy` is
    * on, absent otherwise (so the flag off reads byte for byte as before). A
    * player decodes the first one it can and falls back down the list, and the

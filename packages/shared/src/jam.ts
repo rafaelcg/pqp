@@ -787,15 +787,6 @@ export const jamTrackSchema = z.object({
   audioContentType: z.string(),
   audioBytes: z.number().int().nonnegative(),
   /**
-   * The files a LISTENER may play this track's audio from, best first: the
-   * Opus listening copy (when one is made and `jam_audio_copy` is on), then the
-   * original. Present only on the reads that serve listeners (the public site
-   * and the in-app public view), never on a channel's own read, and absent when
-   * there is no copy: read it as `audioSources ?? []` and fall back to
-   * `audioUrl`. See `jamAudioSourceSchema`.
-   */
-  audioSources: z.array(jamAudioSourceSchema).optional(),
-  /**
    * Null when the track has no video. THE BEST FILE FOR EVERY PLAYER: the
    * H.264 + AAC MP4 copy (`jamVideoSourceSchema`) once the worker made one,
    * the recorded file until then. A client that reads only this field and its
@@ -830,11 +821,30 @@ export const jamTrackSchema = z.object({
 });
 export type JamTrack = z.infer<typeof jamTrackSchema>;
 
+/**
+ * A track as the reads that serve LISTENERS send it: `jamTrackSchema` plus the
+ * files its audio may be played from, best first. The Opus listening copy (when
+ * one is made and the runtime flag `jam_audio_copy` is on), then the original.
+ * Present only on the reads that serve listeners (the public site and the in-app
+ * public view), never on a channel's own read, and absent when there is no copy:
+ * read it as `audioSources ?? []` and fall back to `audioUrl`. See
+ * `jamAudioSourceSchema`.
+ *
+ * A SEPARATE schema on purpose: `jamTrackSchema` is the contract the phones read
+ * field by field (`JamContractTest`), and a phone that does not use a copy has no
+ * reason to carry the field. An unknown key is skipped by their decoders, so they
+ * keep playing `audioUrl`.
+ */
+export const jamListenTrackSchema = jamTrackSchema.extend({
+  audioSources: z.array(jamAudioSourceSchema).optional(),
+});
+export type JamListenTrack = z.infer<typeof jamListenTrackSchema>;
+
 /** `GET /api/jam-songs/:songId`: the deep link and the song view. */
 export const jamSongDetailResponseSchema = z.object({
   song: jamSongSummarySchema,
   /** Live tracks, oldest first: the order they were added is the stable one. */
-  tracks: z.array(jamTrackSchema),
+  tracks: z.array(jamListenTrackSchema),
   viewer: jamSongViewerSchema,
 });
 export type JamSongDetailResponse = z.infer<typeof jamSongDetailResponseSchema>;

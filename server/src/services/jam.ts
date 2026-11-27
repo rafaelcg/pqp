@@ -24,6 +24,7 @@ import {
   type JamSongSummary,
   type JamTrack,
   type JamAudioSource,
+  type JamListenTrack,
   type JamVideoSource,
   type JamUploadKind,
   type JamUploadTicket,
@@ -500,7 +501,7 @@ function audioSourcesOf(row: JamTrackRow, ttl: number): JamAudioSource[] | undef
   ].filter((source) => source.url !== "");
 }
 
-function mapTrack(row: TrackJoinRow, options: { listening?: boolean } = {}): JamTrack {
+function mapTrack(row: TrackJoinRow, options: { listening?: boolean } = {}): JamListenTrack {
   const ttl = attachmentUrlTtlSeconds();
   const videoSources = videoSourcesOf(row, ttl);
   const audioSources = options.listening ? audioSourcesOf(row, ttl) : undefined;
