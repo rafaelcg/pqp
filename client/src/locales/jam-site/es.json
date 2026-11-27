@@ -92,6 +92,8 @@
   "record.keys": "Grabar el teclado",
   "record.other": "Grabar tu parte",
   "record.any": "Grabar tu parte",
+  "record.or": "O graba:",
+  "record.others": "Otros instrumentos que pide la canción",
   "song.back": "Todas las jams",
   "song.startedBy": "Empezada por {who}",
   "song.error": "No se pudo cargar esta jam.",

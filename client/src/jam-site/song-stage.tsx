@@ -222,9 +222,12 @@ function NeedTile({ instrument, onClick }: { instrument: Instrument; onClick: ()
   );
 }
 
+/** The dashed tiles a stage draws: past this the rest are the record bar's, and the cells stay big enough to read. */
+const MAX_NEED_TILES = 4;
+
 export function SongStage({
   tracks,
-  need,
+  needs,
   player,
   spot,
   onSpot,
@@ -232,8 +235,8 @@ export function SongStage({
   label,
 }: {
   tracks: readonly PublicJamTrack[];
-  /** The first instrument the song still asks for, or null. */
-  need: Instrument | null;
+  /** Every instrument the song still asks for: a dashed tile each (at most four, the cells are small). */
+  needs: readonly Instrument[];
   player: PublicPlayer;
   /** Index into `tracks` of the spotlit part, or null. */
   spot: number | null;
@@ -246,9 +249,9 @@ export function SongStage({
   const items: Item[] = useMemo(
     () => [
       ...tracks.map((track): Item => ({ kind: "part", track })),
-      ...(need ? [{ kind: "need", instrument: need } as Item] : []),
+      ...needs.slice(0, MAX_NEED_TILES).map((instrument): Item => ({ kind: "need", instrument })),
     ],
-    [tracks, need],
+    [tracks, needs],
   );
   const stage = useStageAspect();
   const aspect = wide ? stage : 0.8;

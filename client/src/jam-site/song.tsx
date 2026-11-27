@@ -12,6 +12,7 @@ import { useHead } from "./head";
 import { SongCover } from "./art";
 import { takesParts } from "./featured";
 import { asInstrument, type Instrument } from "./instruments";
+import { usePauseWhenCovered } from "./cover";
 import { createPublicPlayer, warmJamEngine, type PublicPlayer } from "./player";
 import { Link, mainOrigin, useJamRoute } from "./router";
 import { jamCanonicalUrl, jamPath } from "./route";
@@ -114,6 +115,8 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
   const ask = useAsk();
   const [spot, setSpot] = useState<number | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  // The account sheet (and any other) covers the song: it pauses under it instead of playing at a person who is reading.
+  usePauseWhenCovered(player);
 
   const lastSpot = useRef<number | null>(null);
   const select = useCallback(
@@ -240,7 +243,7 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
         <div className="order-2">
         <SongStage
           tracks={tracks}
-          need={need}
+          needs={needs}
           player={player}
           spot={spot}
           onSpot={select}
@@ -251,10 +254,10 @@ function Ready({ detail, fromApp, appRecord, player }: { detail: PublicJamSongDe
         <SongTransport
           player={player}
           likes={song.likes}
-          need={need}
+          needs={needs}
           onLike={() => ask({ kind: "like", songId: song.id })}
           onShare={() => void share()}
-          onRecord={takes ? () => record(need) : null}
+          onRecord={takes ? record : null}
           className="order-1 mb-5"
           shareSlot={shareOpen ? <ShareMenu song={shareSong} locale={locale} onClose={() => setShareOpen(false)} /> : null}
         />

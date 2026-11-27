@@ -92,6 +92,8 @@
   "record.keys": "Record keys",
   "record.other": "Record your part",
   "record.any": "Record your part",
+  "record.or": "Or record:",
+  "record.others": "Other instruments the song asks for",
   "song.back": "All jams",
   "song.startedBy": "Started by {who}",
   "song.error": "Could not load this jam.",
