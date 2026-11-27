@@ -30,6 +30,7 @@ import {
   deleteJamSong,
   deleteJamTrack,
   getJamSongRow,
+  getJamSongAndTrack,
   getJamSongSummary,
   getJamSongSummaryPublicView,
   getJamTrack,
@@ -531,23 +532,9 @@ export function registerJamRoutes(router: Router): void {
       request,
       forceOutOfMix: outside,
     });
-    if (!result.created) {
-      // A retry of a claim whose public row the first request did not get to
-      // write (it is idempotent, so a row already there is left alone).
-      if (published) {
-        await noteJamTrackAdded({
-          song,
-          trackId: result.track.id,
-          userId: user.id,
-          outside,
-          publicConsent: request.publicConsent,
-        });
-      }
-      return {
-        track: result.track,
-        song: await summaryForCaller(access, song, user.id, result.song),
-      };
-    }
+    // A retry of a claim whose public row the first request did not get to
+    // write (it is idempotent, so a row already there is left alone), or the
+    // first request itself.
     if (published) {
       await noteJamTrackAdded({
         song,
@@ -557,16 +544,37 @@ export function registerJamRoutes(router: Router): void {
         publicConsent: request.publicConsent,
       });
     }
+    // What the room and the sender are handed is read AFTER the track's public
+    // row is written. `result.song` was read before it, when an outside take
+    // still looked like a part of the band: the summary leaves a waiting outside
+    // take out of `instruments` and `missingInstruments`, and only the public
+    // row says "outside". Same function the reads call, read after the same
+    // write, so a frame and the next read cannot disagree. The track comes from
+    // the SAME snapshot (auto-accept may have put it in the mix inside that very
+    // call, and a change of the mix between two reads would pair them wrongly).
+    // Only an outside take on a published song can differ from `result`: for
+    // anybody else the public row changes nothing the summary or the track
+    // says, so those adds pay no extra read.
+    let { song: summary, track } = result;
+    if (published && outside) {
+      const settled = await getJamSongAndTrack(song.id, result.track.id);
+      if (!settled) {
+        throw new HttpError(404, JAM_NOT_FOUND);
+      }
+      ({ song: summary, track } = settled);
+    }
+    // Announced for a retry too: a frame is applied by id and is idempotent, and
+    // the retry may be the first request whose post-write read succeeded (the
+    // one before it committed the take and then failed), so no other viewer has
+    // heard of the take yet.
     announceIn(song.channel_id, (channelId) => ({
       type: "jam-track-added",
       channelId,
-      song: result.song,
-      track: result.track,
+      song: summary,
+      track,
     }));
-    return new Created({
-      track: result.track,
-      song: await summaryForCaller(access, song, user.id, result.song),
-    });
+    const body = { track, song: await summaryForCaller(access, song, user.id, summary) };
+    return result.created ? new Created(body) : body;
   });
 
   // Edit a track, field by field (jam.ts header): the track's author owns

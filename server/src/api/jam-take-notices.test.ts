@@ -76,7 +76,7 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
 const { resetSharedRateLimit } = await import("../lib/cluster-rate-limit.js");
 const { resetFeatureFlagsForTests, setGlobalFlag, startFeatureFlags } = await import("../lib/flags.js");
-const { resetJamPublicCountersForTests } = await import("../services/jam-public.js");
+const { admitAutoAcceptedTakes, resetJamPublicCountersForTests } = await import("../services/jam-public.js");
 const { takeJamPublicNoticesForTests, takeJamTakeDecisionsForTests } = await import("../services/jam-public-notify.js");
 const { jamTakeNoticeCounters } = await import("../services/jam-take-notices.js");
 const { deleteJamTrack, getJamTrackRow } = await import("../services/jam.js");
@@ -519,26 +519,82 @@ describeDb("telling the starter about takes", () => {
     expect(await declinedAt(own.body.track.id)).toBeNull();
   });
 
-  it("a starter who blocked the recorder is not told (the take still waits in the inbox)", async () => {
+  it("a starter who blocked the recorder is not nudged at all (no item, no frame, no push); the take still waits in the inbox", async () => {
     const song = await startSong();
     await getPool().query(`INSERT INTO user_blocks (user_id, blocked_user_id) VALUES ($1, $2)`, [starter.id, taker.id]);
     const take = await addTrack(taker, song, "bass", { publicConsent: "yes" });
     expect(take.status).toBe(201);
     expect(await notices(starter)).toEqual([]);
     expect(jamTakeNoticeCounters()).toMatchObject({ created: 0, skippedBlocked: 1, pushClaimed: 0 });
+    // The live half of the notice is as silent as the durable half: no "new part" toast.
+    expect(takeJamPublicNoticesForTests().filter((one) => one.notice.kind === "take")).toEqual([]);
+    // The inbox is state, not a nudge: the take is listed so the starter can still refuse it.
     const inbox = await call<{ takes: unknown[] }>(starter, "GET", "/api/jam-public/inbox");
     expect(inbox.body.takes).toHaveLength(1);
+    expect((await call(starter, "DELETE", `/api/jam-tracks/${take.body.track.id}`)).status).toBe(204);
+    expect((await call<{ takes: unknown[] }>(starter, "GET", "/api/jam-public/inbox")).body.takes).toHaveLength(0);
   });
 
-  it("flag off: nothing is written, nothing is read, no decision is sent; the old frame still goes", async () => {
+  it("a blocked recorder's part is not counted in an item somebody else's part opened, and the item goes when only theirs is left", async () => {
+    const song = await startSong();
+    const fromOther = await addTrack(other, song, "drums", { publicConsent: "yes" });
+    expect(fromOther.status).toBe(201);
+    await getPool().query(`INSERT INTO user_blocks (user_id, blocked_user_id) VALUES ($1, $2)`, [starter.id, taker.id]);
+    const fromTaker = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    expect(fromTaker.status).toBe(201);
+    // One frame (the other person's), and the item names the one part and its instrument.
+    expect(takeJamPublicNoticesForTests().filter((one) => one.notice.kind === "take")).toHaveLength(1);
+    expect(await notices(starter)).toMatchObject([{ kind: "take", count: 1, instruments: ["drums"] }]);
+    // The inbox has both: it is the worklist.
+    expect((await call<{ takes: unknown[] }>(starter, "GET", "/api/jam-public/inbox")).body.takes).toHaveLength(2);
+    // Blocking after the fact quiets what is left: the only waiting part is from a blocked person.
+    expect((await call(starter, "PATCH", `/api/jam-tracks/${fromOther.body.track.id}`, { inMix: true })).status).toBe(200);
+    expect(await notices(starter)).toEqual([]);
+    expect((await call<{ takes: unknown[] }>(starter, "GET", "/api/jam-public/inbox")).body.takes).toHaveLength(1);
+  });
+
+  it("an auto-accepted take from a blocked recorder goes in and tells the starter nothing live", async () => {
+    const song = await startSong();
+    expect((await call(starter, "PATCH", `/api/jam-songs/${song}/public`, { autoAcceptOutside: true })).status).toBe(200);
+    await getPool().query(`INSERT INTO user_blocks (user_id, blocked_user_id) VALUES ($1, $2)`, [starter.id, taker.id]);
+    const blocked = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    const fine = await addTrack(other, song, "drums", { publicConsent: "yes" });
+    expect([blocked.status, fine.status]).toEqual([201, 201]);
+    const admitted = takeJamPublicNoticesForTests().filter((one) => one.notice.kind === "take" && one.notice.admitted);
+    expect(admitted).toHaveLength(1);
+    expect(admitted[0]!.notice.trackId).toBe(fine.body.track.id);
+    expect((await publicSong(song))!.song.needs).toEqual([]);
+  });
+
+  it("a take admitted late from a blocked recorder: the starter is not nudged, the SENDER is still told it went in", async () => {
+    const song = await startSong();
+    expect((await call(starter, "PATCH", `/api/jam-songs/${song}/public`, { autoAcceptOutside: true })).status).toBe(200);
+    await getPool().query(`INSERT INTO user_blocks (user_id, blocked_user_id) VALUES ($1, $2)`, [starter.id, taker.id]);
+    const take = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    expect(take.status).toBe(201);
+    // Make it what a held take is when its hold clears: sent a while ago, not in the mix, not yet admitted.
+    await getPool().query(`UPDATE jam_tracks SET in_mix = FALSE, created_at = NOW() - INTERVAL '2 minutes' WHERE id = $1`, [take.body.track.id]);
+    await getPool().query(`UPDATE jam_public_tracks SET auto_admitted_at = NULL WHERE track_id = $1`, [take.body.track.id]);
+    await getPool().query(`UPDATE jam_public_songs SET auto_accept_since = NOW() - INTERVAL '1 hour' WHERE song_id = $1`, [song]);
+    takeJamPublicNoticesForTests();
+    takeJamTakeDecisionsForTests();
+    expect(await admitAutoAcceptedTakes({ songId: song })).toEqual([take.body.track.id]);
+    await vi.waitFor(async () => expect((await notices(taker)).map((one) => one.kind)).toEqual(["accepted"]));
+    expect(takeJamTakeDecisionsForTests().map((one) => [one.userId, one.frame.decision])).toEqual([[taker.id, "accepted"]]);
+    expect(takeJamPublicNoticesForTests().filter((one) => one.userId === starter.id)).toEqual([]);
+  });
+
+  it("flag off: nothing is written, nothing is read, no decision is sent, and no live frame reaches the starter; the inbox stays", async () => {
     await noticesFlag(false);
     const song = await startSong();
     const take = await addTrack(taker, song, "bass", { publicConsent: "yes" });
     expect(take.status).toBe(201);
     expect(await notices(starter)).toEqual([]);
     expect((await getPool().query(`SELECT 1 FROM jam_take_notices`)).rowCount).toBe(0);
-    // The nudge that existed before this feature is untouched by the switch.
-    expect(takeJamPublicNoticesForTests().filter((one) => one.notice.kind === "take")).toHaveLength(1);
+    // Off is off all the way: no card, no push, and no live "new part" toast either.
+    expect(takeJamPublicNoticesForTests().filter((one) => one.notice.kind === "take")).toEqual([]);
+    // The waiting strip and the song's block read the inbox, which is state and not behind the switch.
+    expect((await call<{ takes: unknown[] }>(starter, "GET", "/api/jam-public/inbox")).body.takes).toHaveLength(1);
     expect((await call(starter, "PATCH", `/api/jam-tracks/${take.body.track.id}`, { inMix: true })).status).toBe(200);
     expect(takeJamTakeDecisionsForTests()).toEqual([]);
     expect(await notices(taker)).toEqual([]);

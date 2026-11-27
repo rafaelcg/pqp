@@ -1,4 +1,5 @@
 import type {
+  JamFrame,
   JamPublicConsent,
   JamPublicConsentRequest,
   JamPublicInboxItem,
@@ -8,6 +9,7 @@ import type {
 } from "@pqp/shared";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { onConfigRefresh } from "@/lib/config-refresh";
+import { subscribeJamFrames } from "@/lib/jam-frames";
 import {
   ackJamTakeNotice,
   answerJamConsent,
@@ -89,13 +91,31 @@ function status(error: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
-/** Empty everything held: another account is looking now. */
-export function resetJamPublic(): void {
+/** The account the store holds for (`setJamViewer` passes it): the frames of the songs it started are its own. */
+let viewerId: string | null = null;
+
+/**
+ * Empty everything held: another account is looking now. `forViewer` is who: the
+ * store reads the waiting lists again when a frame says a song THEY started
+ * changed (see `scheduleWaitingRead`).
+ */
+export function resetJamPublic(forViewer: string | null = null): void {
   epoch += 1;
   me = UNKNOWN;
   waiting = NOTHING;
   meLoad = null;
   waitingLoad = null;
+  viewerId = forViewer;
+  if (rereadTimer !== null) {
+    clearTimeout(rereadTimer);
+    rereadTimer = null;
+  }
+  rereadRunning = false;
+  rereadQueued = false;
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
   emit();
 }
 
@@ -180,7 +200,12 @@ const WAITING_RETRY_MS = [3000, 10000, 30000] as const;
  * times, 3, 10 and 30 seconds later, one retry in flight at a time.
  */
 export function refreshJamPublicWaiting(attempt = 0): void {
-  void loadJamPublicWaiting()
+  void refreshWithRetries(attempt);
+}
+
+/** The same, as a promise for the one caller that has to know when the read it asked for is over. */
+function refreshWithRetries(attempt: number): Promise<void> {
+  return loadJamPublicWaiting()
     .catch(() => undefined)
     .then(() => {
       if (!waitingStale || attempt >= WAITING_RETRY_MS.length || retryTimer !== null) {
@@ -306,6 +331,96 @@ export function subscribeJamPublicNotices(listener: (notice: JamPublicNotice) =>
     noticeListeners.delete(listener);
   };
 }
+
+// ---- the starter's own songs, live ---------------------------------------------
+
+/** A burst of frames (several parts, one answer after another) is one read. */
+const REREAD_DEBOUNCE_MS = 400;
+let rereadTimer: ReturnType<typeof setTimeout> | null = null;
+let rereadRunning = false;
+let rereadQueued = false;
+
+/**
+ * Read the waiting lists again soon: debounced, one read in flight, and a change that lands
+ * while it runs queues exactly one more (the read that was out may predate it). The strip, the
+ * tile pill and the song's block read the inbox, and a part that waits no longer announces itself
+ * through a notice when the switch is off or the sender is blocked, so the starter's own song
+ * frames are what keep them from trailing the song.
+ */
+function scheduleWaitingRead(): void {
+  if (!me.enabled || rereadTimer !== null) {
+    return;
+  }
+  if (rereadRunning) {
+    rereadQueued = true;
+    return;
+  }
+  rereadTimer = setTimeout(() => {
+    rereadTimer = null;
+    void runWaitingRead();
+  }, REREAD_DEBOUNCE_MS);
+}
+
+async function runWaitingRead(): Promise<void> {
+  const mine = epoch;
+  rereadRunning = true;
+  try {
+    // A read already out may have started before the change: let it land, then read once more.
+    if (waitingLoad) {
+      await waitingLoad.catch(() => undefined);
+    }
+    if (mine === epoch) {
+      // The store's own best-effort refresh: a read that fails is tried again 3, 10 and 30 seconds
+      // later, so a transient error does not consume the only nudge this frame gave.
+      await refreshWithRetries(0);
+    }
+  } finally {
+    if (mine === epoch) {
+      rereadRunning = false;
+      if (rereadQueued) {
+        rereadQueued = false;
+        scheduleWaitingRead();
+      }
+    }
+  }
+}
+
+/** A read of the waiting lists is out (anybody's), so a change that lands now may be missed by it. */
+const readOut = (): boolean => waitingLoad !== null || rereadRunning;
+
+/**
+ * Whether a frame can change the starter's inbox. The client holds no "this song is public" flag (a
+ * summary has none), so the question is whether the take is, or was, a request: an outside take is
+ * another person's take that is not in the mix, or one the inbox already lists (its accept, undo or
+ * refusal). The ordinary in-mix takes of a private channel song cost nothing. While a read is out,
+ * any frame of the starter's own song about another person's part (and any song deletion) counts,
+ * because the read may have begun before it and must not be the last word.
+ */
+function mayChangeInbox(frame: JamFrame): boolean {
+  if (frame.type === "jam-song-deleted") {
+    return readOut() || waiting.inbox.some((one) => one.songId === frame.songId);
+  }
+  if (frame.type !== "jam-track-added" && frame.type !== "jam-track-updated" && frame.type !== "jam-track-deleted") {
+    return false;
+  }
+  if (frame.song.authorId !== viewerId) {
+    return false;
+  }
+  const listed = (trackId: string) =>
+    waiting.inbox.some((one) => one.track.id === trackId || one.songId === frame.song.id);
+  if (frame.type === "jam-track-deleted") {
+    return readOut() || listed(frame.trackId);
+  }
+  const { track } = frame;
+  const fromSomeoneElse = track.authorId !== viewerId;
+  return (fromSomeoneElse && (!track.inMix || readOut())) || listed(track.id);
+}
+
+subscribeJamFrames((frame: JamFrame) => {
+  if (me.enabled && viewerId !== null && mayChangeInbox(frame)) {
+    scheduleWaitingRead();
+  }
+});
 
 /** The socket came back: frames sent while it was down are gone, so read again. */
 export function jamPublicReconnected(): void {
