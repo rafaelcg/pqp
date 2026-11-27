@@ -1,8 +1,14 @@
 import type { PublicJamSong, PublicJamSongDetail } from "@pqp/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchJam, fetchJamConfig, fetchJamList, JamApiError } from "./api";
-import { FEATURED_WINDOW, pickFeatured } from "./featured";
+import { FEATURED_WINDOW, pickFeatured, type FeaturedOptions } from "./featured";
 import type { Instrument } from "./instruments";
+import { currentSignedIn } from "./session";
+
+/** Who is looking, for the hero rule: a song they started in the last day is not featured to them. */
+export function featuredOptions(): FeaturedOptions {
+  return { viewer: { name: currentSignedIn()?.name ?? null } };
+}
 
 /**
  * Reads of the public API, as hooks. Each ends in one of a few plain states so
@@ -161,7 +167,7 @@ export function useFeatured(): {
     const controller = new AbortController();
     fetchJamList({ sort: "top", limit: FEATURED_WINDOW }, controller.signal).then(
       (result) => {
-        setSong(pickFeatured(result.songs));
+        setSong(pickFeatured(result.songs, featuredOptions()));
         setSongs(result.songs);
         setStatus("ready");
       },

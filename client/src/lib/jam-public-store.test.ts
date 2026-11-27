@@ -29,11 +29,16 @@ const framesModule = await import("./jam-frames");
 const { FEATURED_WINDOW } = await import("./jam-featured");
 
 type Mode = "open" | "wanted" | "closed";
-const song = (id: string, artist: string | null, joinMode: Mode = "open", parts = 1) => ({
+/** A song that has earned the slot (a cover, two parts from two people) unless the arguments say so. */
+const song = (id: string, artist: string | null, joinMode: Mode = "open", parts = 2, cover: string | null = `/cover/${id}.jpg`) => ({
   id,
   artist,
   joinMode,
-  parts: Array.from({ length: parts }, () => ({})),
+  coverUrl: cover,
+  plays: 0,
+  likes: 0,
+  publishedAt: new Date(Date.now() - 86_400_000).toISOString(),
+  parts: Array.from({ length: parts }, (_, index) => ({ person: { name: `P${index % 2}`, handle: null, avatarUrl: null } })),
   needs: [],
 });
 
@@ -98,6 +103,13 @@ describe("the song a door opens", () => {
   it("skips a song with no part to hear", async () => {
     api.list.mockResolvedValue({ songs: [song("bare", null, "open", 0), song("heard", null)] });
     expect((await store.fetchFeaturedPublicJam())?.id).toBe("heard");
+  });
+
+  it("is null when no song earned the slot, so a door offers starting one instead of a weak song", async () => {
+    api.list.mockResolvedValue({
+      songs: [song("rough", null, "open", 1, null), song("nocover", null, "open", 2, null), song("solo", null, "open", 1)],
+    });
+    expect(await store.fetchFeaturedPublicJam()).toBeNull();
   });
 
   it("is null when there is no public song", async () => {

@@ -76,7 +76,10 @@ export interface JamSongPanelProps {
   onPlayingChange?: (playing: boolean) => void;
   /** The take to drop into its lane with an entrance (the one just posted). */
   freshTrackId?: string | null;
-  /** Start playing as soon as the stems are in. */
+  /**
+   * Start playing as soon as the stems are in: only for the round play button on the song's own tile
+   * (that tap IS this song's play). Opening a song never plays it, so it is off unless a caller says so.
+   */
   autoplay?: boolean;
   /** Each change is the wall's round button pressed on this song while it is open: play, or pause. */
   playNonce?: number;
@@ -107,7 +110,7 @@ export function JamSongPanel({
   onClose,
   onPlayingChange,
   freshTrackId,
-  autoplay = true,
+  autoplay = false,
   playNonce = 0,
   publicView = false,
   onAutoAcceptChange,
@@ -116,9 +119,16 @@ export function JamSongPanel({
 }: JamSongPanelProps) {
   const { t } = useTranslation();
   const tracks = useMemo(() => orderTracks(detail?.tracks ?? []), [detail?.tracks]);
+  // A play is counted only when this person started it here: their own press, or the round play button
+  // that opened the song for them (`autoplay`). Never because the engine happened to be playing.
+  const personStarted = useRef(autoplay);
+  const markPersonStarted = () => {
+    personStarted.current = true;
+  };
   const playback = useJamPlayback(song.id, tracks, {
     autoplay,
     onPlayError: () => setError(t("jam.studio.playError")),
+    onPersonPlay: markPersonStarted,
     viewerId,
   });
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +165,7 @@ export function JamSongPanel({
   // A public jam counts a play the first time it is heard in this view.
   const playCounted = useRef(false);
   useEffect(() => {
-    if (publicView && playing && !playCounted.current) {
+    if (publicView && playing && personStarted.current && !playCounted.current) {
       playCounted.current = true;
       void notePublicPlay(song.id);
     }

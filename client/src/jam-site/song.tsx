@@ -78,9 +78,6 @@ function OriginCard({ origin }: { origin: NonNullable<PublicJamSongDetail["song"
 function Loaded(props: { detail: PublicJamSongDetail; refresh: () => Promise<PublicJamSongDetail | null>; fromApp: boolean; appRecord: boolean }) {
   const { detail, refresh } = props;
   const [player, setPlayer] = useState<PublicPlayer | null>(null);
-  // Read once, at the first render: the effect below runs twice under strict mode, and the
-  // first run clears the marker so a reload does not start the song again.
-  const [autoplay] = useState(() => (window.history.state as { autoplay?: boolean } | null)?.autoplay === true);
   useEffect(() => {
     const made = createPublicPlayer({
       tracks: detail.tracks,
@@ -90,11 +87,7 @@ function Loaded(props: { detail: PublicJamSongDetail; refresh: () => Promise<Pub
     });
     setPlayer(made);
     void warmJamEngine();
-    // The home's play button sent us here to start it.
-    if (autoplay) {
-      window.history.replaceState(null, "");
-      made.toggle();
-    }
+    // Opening a song never starts it: only this page's own play button does.
     return () => {
       made.dispose();
       setPlayer(null);
