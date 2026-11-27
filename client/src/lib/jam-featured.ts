@@ -44,10 +44,12 @@ export interface FeaturedOptions {
   /** Songs that must not be featured whatever they are (ids). */
   exclude?: ReadonlySet<string>;
   /**
-   * The viewer, when known: a song they started themselves in the last day is not featured to
-   * them. Matched on the handle when both sides have one, else on the display name.
+   * The viewer, when known BY HANDLE: a song they started themselves in the last day is not
+   * featured to them. Only a handle identifies somebody (display names collide, and the public
+   * site's signed-in hint is just a first name), so without one nothing is excluded here; the
+   * two-people rule already keeps a song nobody has joined off the front page.
    */
-  viewer?: { handle?: string | null; name?: string | null } | null;
+  viewer?: { handle?: string | null } | null;
   /** Epoch ms, for tests. */
   now?: number;
 }
@@ -68,11 +70,8 @@ function startedByViewer(song: FeaturedCandidate, options: FeaturedOptions): boo
   const viewer = options.viewer;
   const by = song.startedBy;
   if (!viewer || !by) return false;
-  if (viewer.handle && by.handle) return viewer.handle.toLowerCase() === by.handle.toLowerCase();
-  if (!viewer.name) return false;
-  // The signed-in hint the site holds is the FIRST word of the display name.
-  const first = (name: string) => name.trim().split(/\s+/)[0]!.toLowerCase();
-  return first(by.name) === first(viewer.name);
+  if (!viewer.handle || !by.handle) return false;
+  return viewer.handle.toLowerCase() === by.handle.toLowerCase();
 }
 
 /**

@@ -90,8 +90,11 @@ the generic `noindex` card.
   (launch screenshots, problem 2). Now a song is **eligible** only when it has a
   **cover**, at least **two parts from at least two different people**
   (`distinctPeople`: by handle, else by name and picture) and is not the
-  viewer's own song from the last day (`FeaturedOptions.viewer`; the site passes
-  the signed-in hint's first name). Hidden, removed and still-in-review songs
+  viewer's own song from the last day (`FeaturedOptions.viewer`, matched by HANDLE
+  only: the site knows a signed-in visitor just by a first name, which cannot tell
+  two people apart, so it passes none, and the two-people minimum is what keeps a
+  song nobody has joined off the front page; `exclude` takes ids for a caller that
+  knows them). Hidden, removed and still-in-review songs
   never reach the payload (the server's one "public" rule), so there is nothing
   to check for them here. Among the eligible songs the old preference holds: an
   original (`artist` null) that takes a part (`joinMode` not `closed`), else any

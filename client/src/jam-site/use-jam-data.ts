@@ -3,11 +3,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchJam, fetchJamConfig, fetchJamList, JamApiError } from "./api";
 import { FEATURED_WINDOW, pickFeatured, type FeaturedOptions } from "./featured";
 import type { Instrument } from "./instruments";
-import { currentSignedIn } from "./session";
 
-/** Who is looking, for the hero rule: a song they started in the last day is not featured to them. */
+/**
+ * Who is looking, for the hero rule. The site knows a signed-in visitor only by the first word of their name
+ * (`session.ts`), which cannot tell two people apart, so it passes no viewer: a song is never dropped from a
+ * stranger's hero because somebody else shares a first name. (The rule's two-people minimum already keeps a song
+ * nobody has joined off the front page.)
+ */
 export function featuredOptions(): FeaturedOptions {
-  return { viewer: { name: currentSignedIn()?.name ?? null } };
+  return {};
 }
 
 /**

@@ -81,14 +81,21 @@ describe("isFeaturable: a song must earn the slot", () => {
     expect(isFeaturable(s("a", null), { exclude: new Set(["a"]) })).toBe(false);
     expect(isFeaturable(s("a", null), { exclude: new Set(["other"]) })).toBe(true);
   });
-  it("refuses the viewer's own song from the last day, by handle or by first name, and accepts it later", () => {
+  it("refuses the viewer's own song from the last day by HANDLE, and accepts it later", () => {
     const mine = (age: number) => s("mine", null, 2, "open", { age, by: { name: "Rafa Silva", handle: "rafa" } });
     expect(isFeaturable(mine(0.2), { now: NOW, viewer: { handle: "Rafa" } })).toBe(false);
-    expect(isFeaturable(mine(0.2), { now: NOW, viewer: { name: "rafa" } })).toBe(false);
     expect(isFeaturable(mine(3), { now: NOW, viewer: { handle: "rafa" } })).toBe(true);
     expect(isFeaturable(mine(0.2), { now: NOW, viewer: { handle: "someone" } })).toBe(true);
-    expect(isFeaturable(mine(0.2), { now: NOW, viewer: { name: null } })).toBe(true);
+    expect(isFeaturable(mine(0.2), { now: NOW, viewer: { handle: null } })).toBe(true);
     expect(isFeaturable(mine(0.2), { now: NOW, viewer: null })).toBe(true);
+  });
+  it("never drops another person's song because they share a display name or a first name with the viewer", () => {
+    const stranger = s("stranger", null, 2, "open", { age: 0.2, by: { name: "Alex Rivera", handle: null } });
+    const sameName = s("same", null, 2, "open", { age: 0.2, by: { name: "Rafa", handle: "rafa2" } });
+    expect(isFeaturable(stranger, { now: NOW, viewer: { handle: "alex" } })).toBe(true);
+    expect(isFeaturable(sameName, { now: NOW, viewer: { handle: "rafa" } })).toBe(true);
+    // a viewer with no handle identifies nobody: nothing is excluded
+    expect(isFeaturable(stranger, { now: NOW, viewer: {} })).toBe(true);
   });
   it("hidden and reported songs are the server's to leave out: they never reach the payload", () => {
     // Nothing in the payload names them, so nothing here can: this pins that no flag is read.
