@@ -5,7 +5,7 @@ import ptApp from "../locales/pt-BR/translation.json";
 import enSite from "../locales/jam-site/en.json";
 import esSite from "../locales/jam-site/es.json";
 import ptSite from "../locales/jam-site/pt-BR.json";
-import { jamShareKind, jamShareText, jamStillNeeds, type JamShareKind, type JamShareWords } from "./jam-share-text";
+import { jamPendingOf, jamShareKind, jamShareText, jamStillNeeds, type JamShareKind, type JamShareWords } from "./jam-share-text";
 
 type Catalogue = Record<string, string>;
 
@@ -167,6 +167,28 @@ describe("a message from somebody whose part waits for the starter (round 3, N-2
         if (locale === "pt-BR") expect(text, key).not.toMatch(/\b(voc[eê]s?|seu|seus|sua|suas)\b/i);
       }
     }
+  });
+});
+
+describe("jamPendingOf: one rule for a public view and a channel's own song (Farol, PR 1778)", () => {
+  const tracks = [
+    { authorId: "me", inMix: false, instrument: "drums" },
+    { authorId: "me", inMix: true, instrument: "bass" },
+    { authorId: "other", inMix: false, instrument: "vocals" },
+    { authorId: "me", inMix: false, instrument: "drums" },
+  ];
+  it("is what I recorded that is not in the mix, once per instrument, nothing of anybody else's", () => {
+    expect(jamPendingOf(tracks, "me", false)).toEqual(["drums"]);
+  });
+  it("is empty for the starter (their out-of-mix takes are their own choice) and for nobody signed in", () => {
+    expect(jamPendingOf(tracks, "me", true)).toEqual([]);
+    expect(jamPendingOf(tracks, null, false)).toEqual([]);
+  });
+  it("changes nothing for a channel song's second take of an instrument already in the band", () => {
+    // my drums wait, but drums are in the band already: the share asks for what is still missing either way
+    const song = { joinMode: "wanted" as const, wantedInstruments: ["drums", "vocals"], instruments: ["drums"] };
+    expect(jamStillNeeds(song, jamPendingOf(tracks, "me", false))).toEqual(["vocals"]);
+    expect(jamStillNeeds(song, [])).toEqual(["vocals"]);
   });
 });
 

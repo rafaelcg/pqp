@@ -51,7 +51,6 @@ import {
   assertUnderTakeLimit,
   hasJamPublicAccess,
   isJamSongPublished,
-  markTakeDeclined,
   mayRecordPublicly,
   noteJamCoverChanged,
   noteJamTrackAdded,
@@ -673,14 +672,10 @@ export function registerJamRoutes(router: Router): void {
         : null;
     const gone = await deleteJamTrack(track, {
       dropEmptySong: track.song_author_id === user.id || isModerator,
+      // Remembered for "Tuas músicas" in the same transaction as the delete, whatever the notices flag
+      // says: a notice is a nudge, this is what the sender can look up later.
+      declined: track.song_author_id === user.id && track.author_id !== user.id && !track.in_mix,
     });
-    if (track.song_author_id === user.id && track.author_id !== user.id && !track.in_mix) {
-      // The row remembers the refusal for "Tuas músicas" whatever the notices flag says: a notice is a
-      // nudge, this is what the sender can look up later.
-      void markTakeDeclined(track.id).catch((error: unknown) => {
-        console.error("[jam-public] could not remember a declined take:", error instanceof Error ? error.message : error);
-      });
-    }
     if (declined) {
       void recordTakeDecision(declined, "refused");
     }

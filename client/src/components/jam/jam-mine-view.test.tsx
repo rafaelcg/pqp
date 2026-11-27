@@ -21,7 +21,7 @@ vi.mock("@/lib/jam-public-api", () => ({
 }));
 
 import { peekPublicJamRequest } from "@/lib/jam-public-nav";
-import { JamMineView } from "./jam-mine-view";
+import { JamMineView, MINE_PAGE } from "./jam-mine-view";
 
 const SONG = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
@@ -116,20 +116,55 @@ describe("Tuas músicas (round 3, N-3)", () => {
     expect(peekPublicJamRequest()?.target).toBe("new");
   });
 
-  it("a failed read says so and can try again", async () => {
+  it("one failed read leaves the other list on screen, and each has its own retry (Farol, PR 1778)", async () => {
     api.mine.mockRejectedValue(new Error("offline"));
-    api.parts.mockRejectedValue(new Error("offline"));
+    api.parts.mockResolvedValue({ parts: [part({ trackId: "w", state: "waiting" })] });
     await mount();
-    expect(host.querySelector("[data-jam-mine-error]")).not.toBeNull();
+    // the parts I sent are there, the songs I started say they did not load
+    expect(host.querySelector("[data-jam-mine-parts]")).not.toBeNull();
+    expect(host.querySelector("[data-jam-mine-error=started]")).not.toBeNull();
+    expect(host.querySelector("[data-jam-mine-error=parts]")).toBeNull();
+    expect(host.querySelector("[data-jam-mine-empty]")).toBeNull();
     api.mine.mockResolvedValue({ songs: [started("Garoa em Pelotas")] });
-    api.parts.mockResolvedValue({ parts: [] });
+    const partsCalls = api.parts.mock.calls.length;
     await act(async () => {
-      host.querySelector<HTMLButtonElement>("[data-jam-mine-error] button")!.click();
+      host.querySelector<HTMLButtonElement>("[data-jam-mine-error=started] button")!.click();
     });
     await act(async () => {
       await Promise.resolve();
     });
     expect(host.querySelector("[data-jam-mine-started]")).not.toBeNull();
+    expect(host.querySelector("[data-jam-mine-error]")).toBeNull();
+    // retrying one list did not read the other again
+    expect(api.parts.mock.calls.length).toBe(partsCalls);
+  });
+
+  it("both failing says so twice, and never claims there is nothing", async () => {
+    api.mine.mockRejectedValue(new Error("offline"));
+    api.parts.mockRejectedValue(new Error("offline"));
+    await mount();
+    expect(host.querySelectorAll("[data-jam-mine-error]")).toHaveLength(2);
+    expect(host.querySelector("[data-jam-mine-empty]")).toBeNull();
+  });
+
+  it("a long history is drawn a page at a time, with its covers lazy (Farol, PR 1778)", async () => {
+    const many = Array.from({ length: MINE_PAGE * 2 + 3 }, (_, index) => ({
+      song: { id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`, title: `Musica ${index}`, coverUrl: `/cover-${index}.jpg` },
+      publication: { status: "live" },
+    })) as unknown as JamPublicMineResponse["songs"];
+    api.mine.mockResolvedValue({ songs: many });
+    api.parts.mockResolvedValue({ parts: [] });
+    await mount();
+    expect(host.querySelectorAll("[data-jam-mine-song]")).toHaveLength(MINE_PAGE);
+    // no cover asks to load before it is near the screen
+    const images = [...host.querySelectorAll("img[data-jam-cover-photo]")];
+    expect(images.length).toBe(MINE_PAGE);
+    expect(images.every((image) => image.getAttribute("loading") === "lazy")).toBe(true);
+    act(() => host.querySelector<HTMLButtonElement>("[data-jam-mine-more]")!.click());
+    expect(host.querySelectorAll("[data-jam-mine-song]")).toHaveLength(MINE_PAGE * 2);
+    act(() => host.querySelector<HTMLButtonElement>("[data-jam-mine-more]")!.click());
+    expect(host.querySelectorAll("[data-jam-mine-song]")).toHaveLength(MINE_PAGE * 2 + 3);
+    expect(host.querySelector("[data-jam-mine-more]")).toBeNull();
   });
 
   it("has its own way back to the site and a back arrow, so nobody is left in the chat product with no door", async () => {

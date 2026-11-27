@@ -52,6 +52,42 @@ beforeEach(async () => {
   await store.loadJamPublicWaiting();
 });
 
+describe("a best-effort read after something the person did (Farol, PR 1778)", () => {
+  it("a failed read never rejects, leaves the list as it was, and is tried again until it lands", async () => {
+    vi.useFakeTimers();
+    try {
+      api.notices.mockRejectedValueOnce(new Error("offline")).mockResolvedValue({ notices: [] });
+      expect(() => store.refreshJamPublicWaiting()).not.toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+      // the read failed: the old notice is still there, and the list is known to be stale
+      expect(store.getJamPublicWaiting().notices.map((one) => one.id)).toEqual(["n1"]);
+      expect(store.jamPublicWaitingStaleForTests()).toBe(true);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(store.getJamPublicWaiting().notices).toEqual([]);
+      expect(store.jamPublicWaitingStaleForTests()).toBe(false);
+      // and it stopped: nothing is asked again
+      const calls = api.notices.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(api.notices.mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after three retries instead of asking forever", async () => {
+    vi.useFakeTimers();
+    try {
+      api.notices.mockReset();
+      api.notices.mockRejectedValue(new Error("offline"));
+      store.refreshJamPublicWaiting();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(api.notices.mock.calls.length).toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("the durable list", () => {
   it("is read with the rest of what is waiting, at boot", () => {
     expect(store.getJamPublicWaiting().notices.map((one) => one.id)).toEqual(["n1"]);

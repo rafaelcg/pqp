@@ -1,4 +1,4 @@
-import type { JamPublicMineResponse, JamPublicMyPart } from "@pqp/shared";
+import type { JamPublicMyPart } from "@pqp/shared";
 import { ArrowLeft, Check, Clock, ExternalLink, Music2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -27,32 +27,83 @@ import { JamCoverPhoto, useJamCover } from "./jam-cover";
  * with nothing to go back to (finding M1) and no strip is needed for it.
  */
 
-type Load =
-  | { status: "loading" }
-  | { status: "error" }
-  | { status: "ready"; started: JamPublicMineResponse["songs"]; parts: JamPublicMyPart[] };
+/**
+ * Each list has its own read, its own error and its own retry: with one endpoint down the other
+ * still shows (Farol, PR 1778), and a person is told which half is missing.
+ */
+type Section<T> = { status: "loading" } | { status: "error" } | { status: "ready"; items: T[] };
 
-export function JamMineView({ onClose }: { onClose: () => void }) {
-  const { t, locale } = useTranslation();
-  const { inbox } = useJamPublicWaiting();
-  const [load, setLoad] = useState<Load>({ status: "loading" });
+/** How many rows of a list are drawn before "Ver mais": a long history is not a hundred covers at once. */
+export const MINE_PAGE = 12;
+
+function useSection<T>(read: () => Promise<T[]>): { section: Section<T>; retry: () => void } {
+  const [section, setSection] = useState<Section<T>>({ status: "loading" });
   const [tries, setTries] = useState(0);
-
   useEffect(() => {
     let cancelled = false;
-    setLoad({ status: "loading" });
-    void Promise.all([fetchJamPublicMine(), fetchJamPublicMyParts()]).then(
-      ([mine, parts]) => {
-        if (!cancelled) setLoad({ status: "ready", started: mine.songs, parts: orderMineParts(parts.parts) });
+    setSection({ status: "loading" });
+    read().then(
+      (items) => {
+        if (!cancelled) setSection({ status: "ready", items });
       },
       () => {
-        if (!cancelled) setLoad({ status: "error" });
+        if (!cancelled) setSection({ status: "error" });
       },
     );
     return () => {
       cancelled = true;
     };
+    // `read` is a module function: one read per try.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tries]);
+  return { section, retry: () => setTries((n) => n + 1) };
+}
+
+const readStarted = async () => (await fetchJamPublicMine()).songs;
+const readParts = async () => orderMineParts((await fetchJamPublicMyParts()).parts);
+
+function SectionError({ onRetry, kind }: { onRetry: () => void; kind: "started" | "parts" }) {
+  const { t } = useTranslation();
+  return (
+    <div role="status" className="flex flex-col items-start gap-2 rounded-[var(--radius-card)] bg-surface-2 p-3" data-jam-mine-error={kind}>
+      <p className="text-sm text-text-secondary">{t("jam.mine.error")}</p>
+      <Button variant="secondary" size="sm" className="pointer-coarse:h-11" onClick={onRetry}>
+        {t("jam.wall.retry")}
+      </Button>
+    </div>
+  );
+}
+
+function Skeleton() {
+  const { t } = useTranslation();
+  return (
+    <div aria-busy="true" aria-label={t("jam.mine.loading")} className="flex flex-col gap-3" data-jam-mine-loading="">
+      {[0, 1].map((index) => (
+        <div key={index} className="h-[4.5rem] rounded-[var(--radius-card)] bg-surface-2 motion-safe:animate-pulse" />
+      ))}
+    </div>
+  );
+}
+
+function MoreButton({ shown, total, onMore }: { shown: number; total: number; onMore: () => void }) {
+  const { t } = useTranslation();
+  if (shown >= total) {
+    return null;
+  }
+  return (
+    <Button variant="secondary" className="mt-3 w-full" onClick={onMore} data-jam-mine-more="">
+      {t("jam.wall.more")}
+    </Button>
+  );
+}
+
+export function JamMineView({ onClose }: { onClose: () => void }) {
+  const { t, locale } = useTranslation();
+  const { inbox } = useJamPublicWaiting();
+  const started = useSection(readStarted);
+  const parts = useSection(readParts);
+  const [startedShown, setStartedShown] = useState(MINE_PAGE);
+  const [partsShown, setPartsShown] = useState(MINE_PAGE);
 
   // Escape leaves, unless a dialog owns the key.
   useEffect(() => {
@@ -93,24 +144,7 @@ export function JamMineView({ onClose }: { onClose: () => void }) {
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-8 pt-4 sm:px-5">
-          {load.status === "loading" && (
-            <div aria-busy="true" aria-label={t("jam.mine.loading")} className="flex flex-col gap-3" data-jam-mine-loading="">
-              {[0, 1, 2].map((index) => (
-                <div key={index} className="h-[4.5rem] rounded-[var(--radius-card)] bg-surface-2 motion-safe:animate-pulse" />
-              ))}
-            </div>
-          )}
-
-          {load.status === "error" && (
-            <div role="status" className="mt-10 flex flex-col items-center gap-3 text-center" data-jam-mine-error="">
-              <p className="text-sm text-text-secondary">{t("jam.mine.error")}</p>
-              <Button variant="secondary" onClick={() => setTries((n) => n + 1)}>
-                {t("jam.wall.retry")}
-              </Button>
-            </div>
-          )}
-
-          {load.status === "ready" && mineIsEmpty(load.started, load.parts) && (
+          {started.section.status === "ready" && parts.section.status === "ready" && mineIsEmpty(started.section.items, parts.section.items) && (
             <div className="mt-6 flex flex-col items-start gap-3 rounded-[var(--radius-card)] bg-surface-2 p-4" data-jam-mine-empty="">
               <h2 className="font-display text-lg font-extrabold text-text">{t("jam.mine.empty.title")}</h2>
               <p className="text-sm leading-snug text-text-secondary [text-wrap:pretty]">{t("jam.mine.empty.body")}</p>
@@ -118,16 +152,23 @@ export function JamMineView({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          {load.status === "ready" && load.started.length > 0 && (
+          {/* What I started: shown whenever its own read says something, an empty list draws no header. */}
+          {started.section.status === "loading" && <Skeleton />}
+          {started.section.status === "error" && (
+            <div className="mb-6">
+              <SectionError kind="started" onRetry={started.retry} />
+            </div>
+          )}
+          {started.section.status === "ready" && started.section.items.length > 0 && (
             <section aria-labelledby="jam-mine-started" data-jam-mine-started="" className="mb-8">
               <h2 id="jam-mine-started" className="mb-2.5 font-display text-base font-extrabold text-text">
                 {t("jam.mine.started")}
               </h2>
               <ul className="flex flex-col gap-2">
-                {load.started.map(({ song, publication }) => {
+                {started.section.items.slice(0, startedShown).map(({ song, publication }) => {
                   const waiting = waitingOn(song.id, inbox);
                   return (
-                    <li key={song.id}>
+                    <li key={song.id} className="[content-visibility:auto] [contain-intrinsic-size:auto_4.5rem]">
                       <button
                         type="button"
                         onClick={() => openPublicJamById(song.id)}
@@ -152,19 +193,24 @@ export function JamMineView({ onClose }: { onClose: () => void }) {
                   );
                 })}
               </ul>
+              <MoreButton shown={startedShown} total={started.section.items.length} onMore={() => setStartedShown((n) => n + MINE_PAGE)} />
             </section>
           )}
 
-          {load.status === "ready" && load.parts.length > 0 && (
+          {/* What I sent. */}
+          {parts.section.status === "loading" && <Skeleton />}
+          {parts.section.status === "error" && <SectionError kind="parts" onRetry={parts.retry} />}
+          {parts.section.status === "ready" && parts.section.items.length > 0 && (
             <section aria-labelledby="jam-mine-parts" data-jam-mine-parts="" className="mb-4">
               <h2 id="jam-mine-parts" className="mb-2.5 font-display text-base font-extrabold text-text">
                 {t("jam.mine.parts")}
               </h2>
               <ul className="flex flex-col gap-2">
-                {load.parts.map((part) => (
+                {parts.section.items.slice(0, partsShown).map((part) => (
                   <MinePartRow key={part.trackId} part={part} />
                 ))}
               </ul>
+              <MoreButton shown={partsShown} total={parts.section.items.length} onMore={() => setPartsShown((n) => n + MINE_PAGE)} />
             </section>
           )}
         </div>
@@ -177,7 +223,7 @@ function MineCover({ url }: { url: string | null }) {
   const cover = useJamCover(url);
   return (
     <span aria-hidden="true" className="relative grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-[var(--radius-control)] bg-surface-3 text-text-secondary">
-      {cover.src !== null && cover.status !== "failed" ? <JamCoverPhoto cover={cover} eager /> : <Music2 className="h-5 w-5" />}
+      {cover.src !== null && cover.status !== "failed" ? <JamCoverPhoto cover={cover} /> : <Music2 className="h-5 w-5" />}
     </span>
   );
 }
@@ -189,7 +235,7 @@ function MinePartRow({ part }: { part: JamPublicMyPart }) {
   const { key, name } = minePartState(part);
   const StateIcon = part.state === "in" ? Check : part.state === "refused" ? X : Clock;
   return (
-    <li>
+    <li className="[content-visibility:auto] [contain-intrinsic-size:auto_4.5rem]">
       <button
         type="button"
         onClick={() => openPublicJamById(part.songId)}

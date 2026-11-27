@@ -1663,14 +1663,6 @@ export async function myPublicParts(userId: string): Promise<JamPublicMyPart[]> 
   }));
 }
 
-/** The song's starter declined an outside take: the row remembers it, for "Tuas músicas". */
-export async function markTakeDeclined(trackId: string): Promise<void> {
-  await getPool().query(
-    `UPDATE jam_public_tracks SET declined_at = NOW() WHERE track_id = $1 AND outside AND declined_at IS NULL`,
-    [trackId],
-  );
-}
-
 /** The caller's published songs, newest first. */
 export async function myPublicJams(
   userId: string,

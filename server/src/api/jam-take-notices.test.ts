@@ -79,6 +79,7 @@ const { resetFeatureFlagsForTests, setGlobalFlag, startFeatureFlags } = await im
 const { resetJamPublicCountersForTests } = await import("../services/jam-public.js");
 const { takeJamPublicNoticesForTests, takeJamTakeDecisionsForTests } = await import("../services/jam-public-notify.js");
 const { jamTakeNoticeCounters } = await import("../services/jam-take-notices.js");
+const { deleteJamTrack, getJamTrackRow } = await import("../services/jam.js");
 
 // ------------------------------------------------------------ fake storage
 
@@ -483,6 +484,39 @@ describeDb("telling the starter about takes", () => {
     // A song that stopped being public takes its parts off the list.
     await getPool().query(`UPDATE jam_public_songs SET unpublished_at = NOW() WHERE song_id = $1`, [song]);
     expect(await parts(taker)).toEqual([]);
+  });
+
+  it("the refusal is written in the same transaction as the delete, so it cannot be lost on its own (Farol, PR 1778)", async () => {
+    const declinedAt = async (trackId: string) =>
+      (await getPool().query<{ declined_at: Date | null }>(`SELECT declined_at FROM jam_public_tracks WHERE track_id = $1`, [trackId])).rows[0]!
+        .declined_at;
+    const song = await startSong();
+    const bass = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+    const drums = await addTrack(taker, song, "drums", { publicConsent: "yes" });
+    const guitar = await addTrack(taker, song, "bass", { publicConsent: "yes" });
+
+    // Through the route: the stamp is there the moment the delete answers, nothing detached to wait for.
+    expect((await call(starter, "DELETE", `/api/jam-tracks/${bass.body.track.id}`)).status).toBe(204);
+    expect(await declinedAt(bass.body.track.id)).not.toBeNull();
+
+    // Through the service: a delete that finds nothing to delete (already gone) rolls back and stamps nothing.
+    const row = (await getJamTrackRow(drums.body.track.id))!;
+    expect(await deleteJamTrack(row, { declined: true })).not.toBeNull();
+    const stamped = await declinedAt(drums.body.track.id);
+    expect(stamped).not.toBeNull();
+    expect(await deleteJamTrack(row, { declined: true })).toBeNull();
+    expect(await declinedAt(drums.body.track.id)).toEqual(stamped);
+
+    // A take that went into the mix before the delete landed was not refused, it was removed: no stamp.
+    expect((await call(starter, "PATCH", `/api/jam-tracks/${guitar.body.track.id}`, { inMix: true })).status).toBe(200);
+    const inMix = (await getJamTrackRow(guitar.body.track.id))!;
+    expect(await deleteJamTrack({ ...inMix, in_mix: false }, { declined: true })).not.toBeNull();
+    expect(await declinedAt(guitar.body.track.id)).toBeNull();
+
+    // The sender's own delete is never a refusal.
+    const own = await addTrack(taker, song, "drums", { publicConsent: "yes" });
+    expect((await call(taker, "DELETE", `/api/jam-tracks/${own.body.track.id}`)).status).toBe(204);
+    expect(await declinedAt(own.body.track.id)).toBeNull();
   });
 
   it("a starter who blocked the recorder is not told (the take still waits in the inbox)", async () => {

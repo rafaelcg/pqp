@@ -72,6 +72,24 @@ export function jamShareText(song: JamShareSong, words: JamShareWords): string {
 }
 
 /**
+ * The instruments of the viewer's own parts that wait for somebody else's answer: the parts
+ * they recorded that are not in the mix, on a song they did not start. The same rule for a
+ * public view and for a channel's own song (a channel song's second take of an instrument
+ * already in the band is excluded anyway by `jamStillNeeds`, so it changes nothing there, and
+ * a share from either surface cannot ask for what the person has already sent).
+ */
+export function jamPendingOf(
+  tracks: ReadonlyArray<{ authorId: string | null; inMix: boolean; instrument: string }>,
+  viewerId: string | null,
+  isStarter: boolean,
+): string[] {
+  if (viewerId === null || isStarter) {
+    return [];
+  }
+  return [...new Set(tracks.filter((track) => track.authorId === viewerId && !track.inMix).map((track) => track.instrument))];
+}
+
+/**
  * WHAT A SONG STILL NEEDS: the ONE rule, for the share card, the song page's own
  * share button and (as the server's `needs`, which is the same rule) the public site.
  *

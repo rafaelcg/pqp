@@ -17,10 +17,10 @@ import {
 } from "@/lib/jam-api";
 import type { BandLane } from "@/lib/jam-clip";
 import { bandFitsBelowStage, readBandOpen, writeBandOpen } from "@/lib/jam-band-pref";
-import { setJamHintContext } from "@/lib/jam-hint-context";
+import { holdJamSong } from "@/lib/jam-hint-context";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cannotRecordReason, pickInstrument } from "@/lib/jam-record";
-import { dropInboxTake, loadJamPublicWaiting } from "@/lib/jam-public-store";
+import { dropInboxTake, refreshJamPublicWaiting } from "@/lib/jam-public-store";
 import { notePublicPlay } from "@/lib/jam-public-api";
 import { oneAtATime, switchTakeIn } from "@/lib/jam-mix";
 import {
@@ -178,10 +178,7 @@ export function JamSongPanel({
   }, [playNonce]);
 
   // A song is open: the app's notices keep off its transport (`lib/jam-notice-placement.ts`).
-  useEffect(() => {
-    setJamHintContext({ song: true });
-    return () => setJamHintContext({ song: false });
-  }, []);
+  useEffect(() => holdJamSong(), []);
 
   // Opening a song puts the keyboard in it: focus lands on the song's name, so
   // Tab goes through the song and Escape closes it. (Not stolen back later: this
@@ -227,10 +224,12 @@ export function JamSongPanel({
       guard(async () => {
         const reply = await updateJamTrack(answer.trackId, { inMix: false });
         writeFrame({ type: "jam-track-updated", channelId, song: reply.song, track: reply.track });
-        // The inbox is what lists a waiting part, and the sender's "entrou" item goes with the part (round 3, N-5).
-        await loadJamPublicWaiting();
-        pub.refreshPublication();
+        // The undo happened: say so first. The reads below only bring the lists up to date (the inbox is what
+        // lists a waiting part, and the sender's "entrou" item goes with the part, round 3, N-5) and are a
+        // best effort with their own retry, so a failed one cannot make a done undo look undone.
         setAnswered({ ...answer, kind: "undone" });
+        refreshJamPublicWaiting();
+        pub.refreshPublication();
       }),
     ).finally(() => setRequestBusy(null));
   }
@@ -858,7 +857,7 @@ export function JamSongPanel({
             // A part of mine that went in may have an "entrou" notice waiting: the server voids it with
             // the part (round 3, N-5), and the read is what takes it off this screen too.
             if (viewerId !== null && track.authorId === viewerId) {
-              void loadJamPublicWaiting();
+              refreshJamPublicWaiting();
             }
             if (wasDecline) {
               setAnswered({ kind: "refused", trackId: track.id, instrument: track.instrument, name: track.authorName ?? null });
