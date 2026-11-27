@@ -437,6 +437,70 @@ export function resolveCollapsed(
   return shape === "expanded" ? preferred : "none";
 }
 
+/**
+ * WHEN A HIDDEN STAGE COMES BACK ON ITS OWN: a share started that was not up
+ * a moment ago (issues 1589 and 1590).
+ *
+ * "Esconder o vídeo" is stored, so it used to outlive the call it was about:
+ * somebody who hid one boring share never saw another, not a friend's game
+ * in next week's call and not the preview of their own screen, and nothing
+ * on screen said the stage was put away. So a NEW share undoes it. Our own
+ * share counts too, because a stage hidden from a previous call is exactly
+ * how a person ended up sharing with no picture of what was going out.
+ *
+ * "New" is a diff, because the wire carries no start time: somebody sharing
+ * now who was not a moment ago. The caller names sharers by PERSON (the
+ * stage's own key, `userId` falling back to the peer id), never by peer id
+ * alone, because a resume, a transport change or a rejoin of the same room
+ * mints a new peer id for a share that never stopped. A new call starts from
+ * nobody, so joining a call with a share already up counts, which is the first
+ * report in issue 1589. While the call is not connected (a rejoin in flight
+ * empties the roster first) nothing is compared and the last answer is kept.
+ *
+ * What it deliberately leaves alone: a share already up when the person hid
+ * the stage, a share ending, and a camera. Hiding the stage during a share is
+ * a choice about THAT share, and it holds until somebody starts another.
+ */
+export interface CallSharers {
+  /** The call these sharers belong to; `null` outside a call. */
+  channelId: string | null;
+  /** Everybody sharing, watched or not, by person key. */
+  keys: readonly string[];
+}
+
+export const NO_CALL_SHARERS: CallSharers = { channelId: null, keys: [] };
+
+/**
+ * `keys` is everybody sharing and `watched` the ones this person has not
+ * dismissed (or left waiting for "Assistir"). Only a watched share can count
+ * as started, but the baseline is everybody: a share that was up while
+ * dismissed is already known, so neither a re-minted peer id nor watching it
+ * later makes it new.
+ */
+export function trackCallSharers(
+  previous: CallSharers,
+  current: {
+    channelId: string | null;
+    connected: boolean;
+    keys: readonly string[];
+    watched: readonly string[];
+  },
+): { next: CallSharers; started: boolean } {
+  const baseline =
+    current.channelId === previous.channelId ? previous.keys : [];
+  if (!current.connected) {
+    return {
+      next: { channelId: current.channelId, keys: baseline },
+      started: false,
+    };
+  }
+  const seen = new Set(baseline);
+  return {
+    next: { channelId: current.channelId, keys: current.keys },
+    started: current.watched.some((key) => !seen.has(key)),
+  };
+}
+
 const STORAGE_KEY = "pqp:call-split";
 
 /**

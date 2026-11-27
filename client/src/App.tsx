@@ -360,7 +360,10 @@ import {
   loadCallSplit,
   saveCallSplit,
   effectiveOrientation,
+  NO_CALL_SHARERS,
   strongestStageShape,
+  trackCallSharers,
+  type CallSharers,
   type CallSplitKind,
   type CallSplitPreference,
   type CallStageShape,
@@ -2753,6 +2756,75 @@ function MainAppContent({
     // Only the rising edge matters; the split is read at that instant.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presentingAParty]);
+  // A stored "Esconder o vídeo" gives way to a share that just started, ours
+  // included (issues 1589, 1590; the rule is `trackCallSharers`). Sharers are
+  // keyed by person the way the stage keys its tiles, so a peer id re-minted
+  // by a resume, a transport change or a rejoin is not a new share. Our own
+  // id is added from `isSharingScreen` because the roster that would echo it
+  // back can land after the preview is already up. A share this person has
+  // not chosen to watch (`dismissedSharePeerIds`) never counts as started, but
+  // it is still part of who is sharing, so a re-mint does not make it new.
+  const [callSharerKeys, callWatchedKeys] = useMemo(() => {
+    const ids = [...voiceState.screenSharePeerIds];
+    if (
+      voiceState.isSharingScreen &&
+      voiceState.peerId &&
+      !ids.includes(voiceState.peerId)
+    ) {
+      ids.push(voiceState.peerId);
+    }
+    const keyOf = (peerId: string) =>
+      peerId === voiceState.peerId
+        ? (voiceState.self?.userId ?? peerId)
+        : (voiceState.remotePeers.find((peer) => peer.peerId === peerId)
+            ?.userId ?? peerId);
+    const keysOf = (list: string[]) =>
+      [...new Set(list.map(keyOf))].sort().join("\n");
+    return [
+      keysOf(ids),
+      keysOf(ids.filter((id) => !voiceState.dismissedSharePeerIds.includes(id))),
+    ];
+  }, [
+    voiceState.screenSharePeerIds,
+    voiceState.isSharingScreen,
+    voiceState.peerId,
+    voiceState.self?.userId,
+    voiceState.remotePeers,
+    voiceState.dismissedSharePeerIds,
+  ]);
+  const callConnected = voiceState.status === "connected";
+  // Seeded with what is up right now, so a remount mid-call (the voice
+  // session lives outside React) does not take every live share as new.
+  const callSharers = useRef<CallSharers>(
+    callConnected
+      ? {
+          channelId: voiceState.voiceChannelId,
+          keys: callSharerKeys ? callSharerKeys.split("\n") : [],
+        }
+      : NO_CALL_SHARERS,
+  );
+  useEffect(() => {
+    const { next, started } = trackCallSharers(callSharers.current, {
+      channelId: voiceState.voiceChannelId,
+      connected: callConnected,
+      keys: callSharerKeys ? callSharerKeys.split("\n") : [],
+      watched: callWatchedKeys ? callWatchedKeys.split("\n") : [],
+    });
+    callSharers.current = next;
+    if (!started) {
+      return;
+    }
+    // A functional update, so a split change landing in the same commit (the
+    // presenter rule above, an orientation flip) is not written back stale.
+    setCallSplit((previous) => {
+      if (previous.collapsed !== "stage") {
+        return previous;
+      }
+      const restored: CallSplitPreference = { ...previous, collapsed: "none" };
+      saveCallSplit(restored);
+      return restored;
+    });
+  }, [callSharerKeys, callWatchedKeys, callConnected, voiceState.voiceChannelId]);
   /**
    * "ATIVAR O MIC?" ONCE, AT GO-LIVE. The host always joins muted (see
    * `handleWatchPartyGoLive`), which used to leave a permanent red strip

@@ -15,6 +15,8 @@ vi.stubGlobal("localStorage", {
   },
 });
 
+import type { CallSharers } from "./call-split";
+
 const {
   fitToPictureDelta,
   CALL_SPLIT_DEFAULT,
@@ -31,6 +33,8 @@ const {
   resolveCollapsed,
   resolveOrientation,
   saveCallSplit,
+  NO_CALL_SHARERS,
+  trackCallSharers,
   splitAvailable,
   splitBounds,
   splitFraction,
@@ -616,5 +620,82 @@ describe("fitToPictureDelta", () => {
         sideBySide: false,
       }),
     ).toBe(0);
+  });
+});
+
+describe("trackCallSharers", () => {
+  const live = (keys: string[], channelId = "lobby", watched = keys) => ({
+    channelId,
+    connected: true,
+    keys,
+    watched,
+  });
+  const step = (previous: CallSharers, current: Parameters<typeof trackCallSharers>[1]) =>
+    trackCallSharers(previous, current);
+
+  it("counts a friend who starts sharing", () => {
+    const before = step(NO_CALL_SHARERS, live(["ana"])).next;
+    expect(step(before, live(["ana", "bia"])).started).toBe(true);
+  });
+
+  it("counts a share already up when the call starts", () => {
+    // Issue 1589: the stage was hidden in an earlier call, and the next call
+    // opened on chat alone while a friend's screen was up.
+    expect(step(NO_CALL_SHARERS, live(["bia"])).started).toBe(true);
+  });
+
+  it("counts our own share like anybody else's", () => {
+    // Issue 1590: a share with no picture of what is going out is the bug.
+    const before = step(NO_CALL_SHARERS, live(["bia"])).next;
+    expect(step(before, live(["bia", "me"])).started).toBe(true);
+  });
+
+  it("leaves a share the person hid the stage over alone", () => {
+    const before = step(NO_CALL_SHARERS, live(["ana", "bia"])).next;
+    expect(step(before, live(["bia", "ana"])).started).toBe(false);
+  });
+
+  it("does not count a share that ends, and counts it again when it restarts", () => {
+    const both = step(NO_CALL_SHARERS, live(["ana", "bia"])).next;
+    const ended = step(both, live(["ana"]));
+    expect(ended.started).toBe(false);
+    expect(step(ended.next, live(["ana", "bia"])).started).toBe(true);
+  });
+
+  it("does not count a rejoin of the same room, which empties the roster first", () => {
+    // join() clears the share ids before the welcome; the status is not
+    // connected in between, so the empty list is never taken as an answer.
+    const before = step(NO_CALL_SHARERS, live(["bia"])).next;
+    const rejoining = step(before, { channelId: "lobby", connected: false, keys: [], watched: [] });
+    expect(rejoining.started).toBe(false);
+    expect(step(rejoining.next, live(["bia"])).started).toBe(false);
+  });
+
+  it("starts from nobody in a different call", () => {
+    const before = step(NO_CALL_SHARERS, live(["bia"], "lobby")).next;
+    expect(step(before, live(["bia"], "games")).started).toBe(true);
+    const left = step(before, { channelId: null, connected: false, keys: [], watched: [] }).next;
+    expect(step(left, live(["bia"], "lobby")).started).toBe(true);
+  });
+
+  it("does not count a dismissed share whose peer id is re-minted", () => {
+    // Dismissal is by peer id, so a resume or a transport change drops it and
+    // the same share comes back watched. It was already up: not a start.
+    const before = step(NO_CALL_SHARERS, live(["ana", "bia"], "lobby", ["ana"])).next;
+    expect(step(before, live(["ana", "bia"])).started).toBe(false);
+  });
+
+  it("does not count a share that arrives dismissed, nor watching it later", () => {
+    // A share waiting for "Assistir" is not shown, so it must not reopen the
+    // stage; pressing "Assistir" is watching a share that was already up.
+    const before = step(NO_CALL_SHARERS, live(["ana"])).next;
+    const waiting = step(before, live(["ana", "bia"], "lobby", ["ana"]));
+    expect(waiting.started).toBe(false);
+    expect(step(waiting.next, live(["ana", "bia"])).started).toBe(false);
+  });
+
+  it("is quiet when seeded with the sharers already up (a remount mid-call)", () => {
+    const seeded: CallSharers = { channelId: "lobby", keys: ["bia"] };
+    expect(step(seeded, live(["bia"])).started).toBe(false);
   });
 });
