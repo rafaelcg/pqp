@@ -309,7 +309,40 @@ replaces it, and is deleted with it.
 - **The client chooses from data**, with no rebuild: a track with `audioSources`
   (copy first, original last) loads from the copy; without it, from the FLAC. See
   `client/src/lib/jam-listen-copy.ts`, `syncJamStems(..., { listen: true })` in
-  `client/src/lib/jam-session.ts`, and `client/src/jam-site/player.ts`.
+  `client/src/lib/jam-session.ts`, `client/src/jam-site/player.ts` and, in the app,
+  `client/src/hooks/use-jam-playback.ts`: see "Who loads what" below.
+
+#### Who loads what
+
+Every caller of `syncJamStems`, and the file each one gets:
+
+| Caller | Asks | Loads |
+|---|---|---|
+| The public site's player (`jam-site/player.ts`) | `listen` | the copy where the track offers one, else the FLAC |
+| The song panel (`useJamPlayback`), in a channel or in the in-app public view | `listen`, and `originals` = the viewer's own parts | the copy where offered, per stem back to the FLAC; the viewer's own parts always the FLAC |
+| A card's play button in a conversation (`jam-chat-player.ts`) | `listen` | the copy where the read offers one (a recipient outside the song's channel), else the FLAC |
+| The studio (`use-jam-studio.ts`, three calls) | nothing | the FLAC, always |
+
+Why the panel keeps the viewer's own parts on the FLAC: the panel lets the author
+adjust a recording (gain, offset, trim, `TrackAdjust`) and the public read hands a
+non-member their own part with `audioSources` like every other. Adjusting is work on
+the recording itself, so it hears the file it will be saved against. The copy is
+sample-aligned and equal in length, but the rule costs one stem's bytes and needs no
+argument about tolerances.
+
+A member of the song's channel is never offered a copy by the server, so for them
+`listen` changes nothing and the panel loads the FLAC as before; likewise with the
+flag off. The decision is in the data, which is why the panel and the card can ask to
+listen unconditionally.
+
+**From listening to recording.** The studio opens over the same engine and the same
+book (`jam-session.ts`). Its mount sync has no `listen`, so every stem heard from a
+copy is replaced by the original, and `startRecording` awaits another sync before it
+opens the take, so recording never starts against a copy. The panel stays mounted
+behind the studio; its own later syncs (a part arriving) do not put a stem back on a
+copy, because a listening sync accepts what is already loaded. Pinned in
+`use-jam-playback-listen.test.tsx`, which also fails if a studio call ever passes
+`listen`.
 
 ### Alignment: the encoder's delay is declared, compensated and checked
 
@@ -451,10 +484,8 @@ at well over 100 times real time), one stem at a time.
   sound with none of that, which is why it is the recommended next step.
 - **Channel and studio reads are unchanged.** A member of the channel reads the
   whole song with no `audioSources`, and the studio never asks for one. The in-app
-  public view's server read carries the list; the client side of that one door is
-  `useJamPlayback` passing `{ listen: true }` to `syncJamStems`, which lives in
-  `client/src/hooks/use-jam-playback.ts`, outside the files this change was allowed
-  to touch, so it is the one line left for the next change.
+  public view's server read carries the list and the app now uses it (the song panel
+  and the conversation card pass `listen`; see "Who loads what").
 - **Phones.** `ios/` and `android/` ignore `audioSources` and keep playing
   `audioUrl`: correct and unchanged. Android can prefer an `opus` entry and fall back
   to `audioUrl`; iOS needs a second copy in CAF or an Opus decoder, see
@@ -477,7 +508,9 @@ at well over 100 times real time), one stem at a time.
    `bytes.copy / bytes.original` is about 0.17. Each failure is also logged
    `jamAudioCopy.failed trackId=... reason=...`.
 5. Open a public song on jam.pqp.gg with the network panel open: the stems are
-   `.listen.ogg`, and it plays. Do the same in Safari.
+   `.listen.ogg`, and it plays. Do the same in Safari. Then open it in the app
+   (`/app/jam/<id>`, signed in as somebody who is not in its channel): the same
+   `.listen.ogg` requests on open, and "Mandar minha parte" fetches the `.flac`s.
 6. To stop the backfill: set the flag off (everything stops: no enqueue, no claim,
    no offer); to pause only the backfill and keep new tracks queueing, set
    `JAM_AUDIO_COPY_BACKFILL_PER_MINUTE=0` on the worker. Copies already made stay in
