@@ -816,6 +816,90 @@ describeDb("the Opus listening copy of a jam stem", () => {
       expect(await enqueueMissingJamAudioCopies()).toBe(0);
       expect(await jobs()).toEqual([]);
     });
+
+    it("a failed enqueue moves no cursor: the same stems are picked up on the next pass", async () => {
+      const ids = await oldTracks(4);
+      await copyFlag(true);
+      const pool = getPool();
+      const real = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+      let failed = 0;
+      const spy = vi.spyOn(pool, "query").mockImplementation(((...args: unknown[]) => {
+        if (typeof args[0] === "string" && args[0].includes("INSERT INTO speech_jobs") && failed === 0) {
+          failed += 1;
+          return Promise.reject(new Error("connection reset"));
+        }
+        return real(...args);
+      }) as never);
+      try {
+        await expect(enqueueMissingJamAudioCopies(2)).rejects.toThrow("connection reset");
+        expect(await jobs()).toEqual([]);
+        // The newest two again, not the two after them.
+        expect(await enqueueMissingJamAudioCopies(2)).toBe(2);
+      } finally {
+        spy.mockRestore();
+      }
+      expect((await jobs()).map((job) => job.track_id)).toEqual([ids[3], ids[2]]);
+      expect(await enqueueMissingJamAudioCopies(2)).toBe(2);
+      expect((await jobs()).map((job) => job.track_id)).toEqual([ids[3], ids[2], ids[1], ids[0]]);
+    });
+
+    it("a failed READ moves no cursor either", async () => {
+      const ids = await oldTracks(3);
+      await copyFlag(true);
+      const pool = getPool();
+      const real = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+      let failed = 0;
+      const spy = vi.spyOn(pool, "query").mockImplementation(((...args: unknown[]) => {
+        // The rest walk is the second read of a pass; make it throw once, after the public walk finished.
+        if (typeof args[0] === "string" && args[0].includes("ORDER BY t.created_at DESC") && !args[0].includes("EXISTS (SELECT 1 FROM jam_public_tracks pt WHERE pt.track_id") && failed === 0) {
+          failed += 1;
+          return Promise.reject(new Error("canceling statement due to statement timeout"));
+        }
+        return real(...args);
+      }) as never);
+      try {
+        await expect(enqueueMissingJamAudioCopies(2)).rejects.toThrow("statement timeout");
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await enqueueMissingJamAudioCopies(2)).toBe(2);
+      expect((await jobs()).map((job) => job.track_id)).toEqual([ids[2], ids[1]]);
+    });
+
+    it("a song made public while the walks are partway down their backlog is not left behind them", async () => {
+      await oldTracks(8);
+      await copyFlag(true);
+      expect(await enqueueMissingJamAudioCopies(2)).toBe(2); // both walks have now started
+      // An old stem, recorded before the flag (no job), whose song is published only now.
+      const late = await channelSong(alice, "Publicada depois");
+      await getPool().query(`UPDATE jam_tracks SET created_at = NOW() - INTERVAL '10 days' WHERE id = $1`, [late.track.id]);
+      await getPool().query(`DELETE FROM speech_jobs WHERE track_id = $1`, [late.track.id]);
+      expect((await call(alice, "PUT", `/api/jam-songs/${late.song}/public`, {})).status).toBe(200);
+      // The next pass takes it first, ahead of the walk and without waiting for the walk to wrap.
+      expect(await enqueueMissingJamAudioCopies(1)).toBe(1);
+      expect((await jobs()).map((job) => job.track_id)).toContain(late.track.id);
+      expect((await jobs()).filter((job) => job.track_id === late.track.id)).toHaveLength(1);
+    });
+
+    it("a finished backlog costs no walk: a later pass reads nothing but the catch-up", async () => {
+      await oldTracks(3);
+      await copyFlag(true);
+      expect(await enqueueMissingJamAudioCopies(5)).toBe(3); // history, to its end
+      const pool = getPool();
+      const real = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+      const sql: string[] = [];
+      const spy = vi.spyOn(pool, "query").mockImplementation(((...args: unknown[]) => {
+        if (typeof args[0] === "string") sql.push(args[0]);
+        return real(...args);
+      }) as never);
+      try {
+        expect(await enqueueMissingJamAudioCopies(5)).toBe(0);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(sql.some((text) => text.includes("ORDER BY t.created_at DESC"))).toBe(false);
+      expect(sql.some((text) => text.includes("ORDER BY pt.created_at, pt.track_id"))).toBe(true);
+    });
   });
 
   // ------------------------------------------------- the whole path, real ffmpeg

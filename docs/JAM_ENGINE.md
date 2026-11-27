@@ -294,11 +294,18 @@ replaces it, and is deleted with it.
   NOT on `jamTrackSchema`, the shape the phones check field by field
   (`JamContractTest`): a phone that does not use a copy has no reason to carry the
   field, and its decoder skips the unknown key.
-- **The backfill is two bounded walks**, not a ranking of the backlog: public
-  tracks first (keyset cursor over `idx_jam_public_tracks_backfill`), then the rest
-  (cursor over `idx_jam_tracks_audio_copy_pending`), each `LIMIT`ed and each row
-  looked at once. On 400,000 tracks a pass reads a handful of index entries (0.05 to
-  0.08 ms) instead of seq scanning the table (231 to 595 ms).
+- **The backfill is bounded reads, never a ranking of the backlog**, and it is for
+  history: a track recorded from now on queues its own job in its insert. Three
+  `LIMIT`ed, index-backed reads a pass: a catch-up of public tracks published since
+  the last pass (keyset over `idx_jam_public_tracks_backfill`, so a song made public
+  while the walks are partway down their backlog is not left behind), then a public
+  walk and a rest walk over `idx_jam_tracks_audio_copy_pending`, which is partial on
+  "no copy yet" so a finished stem leaves it. Each walk's cursor only moves down, a
+  row is looked at once, a walk that reaches its end stays done (restarting after six
+  hours, or when the flag blinks off and on), and a cursor moves only after its batch
+  was enqueued, so a failed read or INSERT repeats the same stems. On 400,000 tracks
+  a pass reads a handful of index entries (0.05 to 0.2 ms); a finished catalogue's
+  walk covers only what failed (3,000 leftover rows: 4 to 8 ms, once).
 - **The client chooses from data**, with no rebuild: a track with `audioSources`
   (copy first, original last) loads from the copy; without it, from the FLAC. See
   `client/src/lib/jam-listen-copy.ts`, `syncJamStems(..., { listen: true })` in

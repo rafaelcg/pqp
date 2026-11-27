@@ -153,39 +153,76 @@ export async function enqueueJamAudioCopy(
   return enqueueSpeechJob(db, { kind: JAM_AUDIO_COPY_JOB_KIND, trackId });
 }
 
-/** After a pass that found nothing to queue, the backfill rests this long. */
-const BACKFILL_IDLE_MS = 30 * 60_000;
-let backfillIdleUntil = 0;
-/** A song made public AFTER its stems were recorded is found within this, by the public scan. */
-const PUBLIC_IDLE_MS = 5 * 60_000;
-/** The public scan's own rest: set when a pass found no public track waiting. */
-let publicIdleUntil = 0;
-/** Where the walk over the public tracks is (by when each was published); same rules as `restCursor`. */
-let publicCursor: { at: string; id: string } | null = null;
-/** Where the walk over the rest of the backlog is: only ever moves down (older), reset when the backlog is over. */
-let restCursor: { at: string; id: string } | null = null;
+/** A walk that reached its end starts again after this, in case a track slipped past it (a flag that blinked off and on between two passes). */
+const WALK_RESTART_MS = 6 * 60 * 60_000;
+/** A catch-up that has nothing newer to find re-reads this much of the recent past, for rows whose transaction committed late. */
+const CATCH_UP_OVERLAP = "2 minutes";
+const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+
+interface Cursor {
+  at: string;
+  id: string;
+}
+/** One walk over the pending stems: where it is, or when it finished. */
+interface Walk {
+  cursor: Cursor | null;
+  /** Epoch ms the walk reached its end; 0 while it is still going. */
+  doneAt: number;
+}
+
+/**
+ * THE BACKFILL'S STATE, in this process only. All of it is a cache of "where was I":
+ * losing it (a restart, the flag going off) costs one more look at the pending
+ * stems, never a stem. A cursor moves only AFTER the batch it produced was
+ * enqueued (`enqueueMissingJamAudioCopies`), so a failed read or INSERT repeats
+ * the same stems on the next pass instead of skipping them.
+ */
+const state = {
+  /** Tracks of public songs, newest first, over the pending index. */
+  publicWalk: { cursor: null, doneAt: 0 } as Walk,
+  /** Every other stem, newest first, over the same index. */
+  restWalk: { cursor: null, doneAt: 0 } as Walk,
+  /** Newly public tracks, oldest first, by when they were published: where the catch-up has read up to. */
+  catchUp: null as Cursor | null,
+};
 
 function resetBackfillState(): void {
-  backfillIdleUntil = 0;
-  publicIdleUntil = 0;
-  publicCursor = null;
-  restCursor = null;
+  state.publicWalk = { cursor: null, doneAt: 0 };
+  state.restWalk = { cursor: null, doneAt: 0 };
+  state.catchUp = null;
+}
+
+/** A walk is running, or finished long enough ago to look once more. */
+function walkIsDue(walk: Walk): boolean {
+  return walk.doneAt === 0 || Date.now() - walk.doneAt >= WALK_RESTART_MS;
 }
 
 /**
  * Queue the stems that have no copy and no job yet: every track recorded before
- * the flag went on. Newest first, the tracks of public songs ahead of the
- * rest (those are the ones a listener downloads), each in a scan bounded by
- * its LIMIT and an index (see the two queries below), at most `limit` per call and
+ * the flag went on. A track recorded from now on queues its own job in its
+ * insert (`enqueueJamAudioCopy`), so this is for HISTORY, plus a catch-up for
+ * what became public after its stem was recorded. At most `limit` per call and
  * never more than `cap` waiting or running at once, so a backlog of a hundred
  * thousand stems is a trickle (`backfillPerPass()` a minute) and the worker's
  * one lane is never a queue's worth behind. Rows only, so it runs on any
  * process whatever ffmpeg says; claiming is what needs libopus.
  *
- * It also cancels what the flag and the tracks no longer want: with the flag
- * off it does nothing at all (the rest period is cleared, so a flip on starts
- * at once), and a QUEUED job whose track was deleted is dropped here instead
- * of waiting to be claimed (a running one finds the track gone and stops).
+ * NEVER A RANKING OF THE BACKLOG. Three bounded, index-backed reads, in this order:
+ *
+ *   1. the CATCH-UP: public tracks published since the last pass, oldest first,
+ *      keyset over `idx_jam_public_tracks_backfill`. A song made public while the
+ *      history walks are partway down their backlog is not left behind them.
+ *   2. the PUBLIC WALK: pending stems of public songs, newest first, keyset
+ *      over `idx_jam_tracks_audio_copy_pending`, which is partial on "no copy
+ *      yet", so a finished stem has left the index and a finished catalogue costs
+ *      nothing (what is left in it is what failed or was skipped);
+ *   3. the REST WALK: the same index, every other pending stem.
+ *
+ * Each walk's cursor only moves down and a row is looked at once; a walk that
+ * reaches its end stays done (until `WALK_RESTART_MS`, the flag blinking, or a
+ * restart). The flag off does nothing at all and forgets everything, so a flip on
+ * starts clean. A QUEUED job whose track was deleted is dropped here instead of
+ * waiting to be claimed (a running one finds the track gone and stops).
  */
 export async function enqueueMissingJamAudioCopies(
   limit = backfillPerPass(),
@@ -195,8 +232,9 @@ export async function enqueueMissingJamAudioCopies(
     resetBackfillState();
     return 0;
   }
+  const pool = getPool();
   // Cancel before counting: a job for a track that is gone is not "waiting" for anything.
-  await getPool().query(
+  await pool.query(
     `DELETE FROM speech_jobs j
       WHERE j.kind = $1 AND j.status = 'queued'
         AND NOT EXISTS (
@@ -204,10 +242,10 @@ export async function enqueueMissingJamAudioCopies(
            WHERE t.id = j.track_id AND t.deleted_at IS NULL AND t.media_purged_at IS NULL)`,
     [JAM_AUDIO_COPY_JOB_KIND],
   );
-  if (limit <= 0 || Date.now() < backfillIdleUntil) {
+  if (limit <= 0) {
     return 0;
   }
-  const waiting = await getPool().query<{ n: number }>(
+  const waiting = await pool.query<{ n: number }>(
     `SELECT COUNT(*)::int AS n FROM speech_jobs WHERE kind = $1 AND status IN ('queued', 'running')`,
     [JAM_AUDIO_COPY_JOB_KIND],
   );
@@ -215,66 +253,89 @@ export async function enqueueMissingJamAudioCopies(
   if (room === 0) {
     return 0;
   }
-  // TWO BOUNDED, INDEX-BACKED WALKS, never a ranking of the whole backlog, each
-  // with a keyset cursor that only moves down so every row is looked at once
-  // however many minutes the trickle takes: the tracks of public songs first,
-  // newest published first (`idx_jam_public_tracks_backfill`), then the rest,
-  // newest first (`idx_jam_tracks_audio_copy_pending`).
+
+  // What each read decides is STAGED here and published to `state` only after the
+  // batch is enqueued: a read or an INSERT that fails changes nothing.
   const picked: string[] = [];
-  if (Date.now() >= publicIdleUntil) {
-    const publicFirst = await getPool().query<{ id: string; at: string }>(
-      `SELECT t.id, pt.created_at::text AS at FROM jam_public_tracks pt
-         JOIN jam_tracks t ON t.id = pt.track_id
-        WHERE pt.removed_at IS NULL
-          AND ($4::timestamptz IS NULL OR (pt.created_at, pt.track_id) < ($4::timestamptz, $5::uuid))
-          AND t.audio_content_type = $3 AND t.audio_listen_content_type IS NULL
+  const PENDING = `t.audio_content_type = $3 AND t.audio_listen_content_type IS NULL
           AND t.deleted_at IS NULL AND t.media_purged_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM speech_jobs j WHERE j.kind = $2 AND j.track_id = t.id)
-        ORDER BY pt.created_at DESC, pt.track_id DESC
-        LIMIT $1`,
-      [room, JAM_AUDIO_COPY_JOB_KIND, LOSSLESS_TYPE, publicCursor?.at ?? null, publicCursor?.id ?? null],
-    );
-    picked.push(...publicFirst.rows.map((row) => row.id));
-    const lastPublic = publicFirst.rows[publicFirst.rows.length - 1];
-    if (lastPublic) publicCursor = { at: lastPublic.at, id: lastPublic.id };
-    if (publicFirst.rows.length < room) {
-      // The public walk is over. A public track recorded from now on queues its own job in
-      // its insert, and one made public later is found when the walk starts again, after the rest.
-      publicCursor = null;
-      publicIdleUntil = Date.now() + PUBLIC_IDLE_MS;
-    }
-  }
-  if (picked.length < room) {
-    const rest = await getPool().query<{ id: string; at: string }>(
-      `SELECT t.id, t.created_at::text AS at FROM jam_tracks t
-        WHERE t.audio_content_type = $3 AND t.audio_listen_content_type IS NULL
-          AND t.deleted_at IS NULL AND t.media_purged_at IS NULL
-          AND ($4::timestamptz IS NULL OR (t.created_at, t.id) < ($4::timestamptz, $5::uuid))
-          AND NOT EXISTS (SELECT 1 FROM speech_jobs j WHERE j.kind = $2 AND j.track_id = t.id)
-        ORDER BY t.created_at DESC, t.id DESC
-        LIMIT $1`,
-      [room - picked.length, JAM_AUDIO_COPY_JOB_KIND, LOSSLESS_TYPE, restCursor?.at ?? null, restCursor?.id ?? null],
-    );
-    picked.push(...rest.rows.map((row) => row.id));
-    const last = rest.rows[rest.rows.length - 1];
-    if (last) restCursor = { at: last.at, id: last.id };
-  }
-  if (picked.length === 0) {
-    // The backlog is over (new tracks queue their own job), for both scans. The next pass,
-    // after the rest period, starts the walk from the top again.
-    restCursor = null;
-    backfillIdleUntil = Date.now() + BACKFILL_IDLE_MS;
-    return 0;
-  }
-  const inserted = await getPool().query(
-    `INSERT INTO speech_jobs (kind, track_id)
-     SELECT $1, id FROM unnest($2::uuid[]) AS id
-     ON CONFLICT (kind, track_id) WHERE track_id IS NOT NULL DO NOTHING
-     RETURNING id`,
-    [JAM_AUDIO_COPY_JOB_KIND, picked],
+          AND NOT (t.id = ANY($6::uuid[]))`;
+  const staged: {
+    catchUp?: Cursor | null;
+    publicWalk?: Walk;
+    restWalk?: Walk;
+  } = {};
+
+  // 1. Newly public.
+  const clock = await pool.query<{ now: string; behind: string }>(
+    `SELECT now()::text AS now, (now() - interval '${CATCH_UP_OVERLAP}')::text AS behind`,
   );
-  await getPool().query(`SELECT pg_notify($1, '')`, [SPEECH_JOBS_CHANNEL]);
-  return inserted.rowCount ?? 0;
+  const from = state.catchUp ?? { at: clock.rows[0]!.behind, id: NIL_UUID };
+  const fresh = await pool.query<{ id: string; at: string }>(
+    `SELECT t.id, pt.created_at::text AS at FROM jam_public_tracks pt
+       JOIN jam_tracks t ON t.id = pt.track_id
+      WHERE pt.removed_at IS NULL
+        AND (pt.created_at, pt.track_id) > ($4::timestamptz, $5::uuid)
+        AND ${PENDING}
+      ORDER BY pt.created_at, pt.track_id
+      LIMIT $1`,
+    [room, JAM_AUDIO_COPY_JOB_KIND, LOSSLESS_TYPE, from.at, from.id, picked],
+  );
+  picked.push(...fresh.rows.map((row) => row.id));
+  const lastFresh = fresh.rows[fresh.rows.length - 1];
+  // Short of the room means everything published so far was read: the next pass starts at "now" less the overlap.
+  staged.catchUp =
+    fresh.rows.length >= room && lastFresh
+      ? { at: lastFresh.at, id: lastFresh.id }
+      : { at: clock.rows[0]!.behind, id: NIL_UUID };
+
+  // 2 and 3. The two walks over the pending index.
+  const walkQuery = (publicOnly: boolean) => `SELECT t.id, t.created_at::text AS at FROM jam_tracks t
+      WHERE ($4::timestamptz IS NULL OR (t.created_at, t.id) < ($4::timestamptz, $5::uuid))
+        AND ${publicOnly ? "EXISTS (SELECT 1 FROM jam_public_tracks pt WHERE pt.track_id = t.id AND pt.removed_at IS NULL) AND" : ""}
+        ${PENDING}
+      ORDER BY t.created_at DESC, t.id DESC
+      LIMIT $1`;
+  for (const which of ["publicWalk", "restWalk"] as const) {
+    const walk = state[which];
+    if (picked.length >= room || !walkIsDue(walk)) continue;
+    const here = walk.doneAt === 0 ? walk.cursor : null;
+    const asked = room - picked.length;
+    const rows = await pool.query<{ id: string; at: string }>(walkQuery(which === "publicWalk"), [
+      asked,
+      JAM_AUDIO_COPY_JOB_KIND,
+      LOSSLESS_TYPE,
+      here?.at ?? null,
+      here?.id ?? null,
+      picked,
+    ]);
+    picked.push(...rows.rows.map((row) => row.id));
+    const last = rows.rows[rows.rows.length - 1];
+    // Short of what was asked means the walk reached the end of the index.
+    staged[which] =
+      rows.rows.length < asked
+        ? { cursor: null, doneAt: Date.now() }
+        : { cursor: last ? { at: last.at, id: last.id } : here, doneAt: 0 };
+  }
+
+  let enqueued = 0;
+  if (picked.length > 0) {
+    const inserted = await pool.query(
+      `INSERT INTO speech_jobs (kind, track_id)
+       SELECT $1, id FROM unnest($2::uuid[]) AS id
+       ON CONFLICT (kind, track_id) WHERE track_id IS NOT NULL DO NOTHING
+       RETURNING id`,
+      [JAM_AUDIO_COPY_JOB_KIND, picked],
+    );
+    enqueued = inserted.rowCount ?? 0;
+    await pool.query(`SELECT pg_notify($1, '')`, [SPEECH_JOBS_CHANNEL]).catch(() => undefined);
+  }
+  // Durably enqueued (or nothing to enqueue): now the cursors may move.
+  if (staged.catchUp !== undefined) state.catchUp = staged.catchUp;
+  if (staged.publicWalk) state.publicWalk = staged.publicWalk;
+  if (staged.restWalk) state.restWalk = staged.restWalk;
+  return enqueued;
 }
 
 interface TrackRow {
