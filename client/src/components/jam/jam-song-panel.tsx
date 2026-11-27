@@ -119,6 +119,7 @@ export function JamSongPanel({
   const playback = useJamPlayback(song.id, tracks, {
     autoplay,
     onPlayError: () => setError(t("jam.studio.playError")),
+    viewerId,
   });
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<JamTrack | null>(null);

@@ -170,7 +170,10 @@ async function run(songId: string, op: { id: number; songId: string }): Promise<
     return;
   }
   engine.player.stop();
-  await syncJamStems(engine, detail.tracks);
+  // A card only listens: a song read as a listener (a recipient outside its channel) is heard from the Opus
+  // copies the server offers, the originals otherwise. The song panel, opened from the card, loads the
+  // viewer's own parts whole when it syncs next (`useJamPlayback`).
+  await syncJamStems(engine, detail.tracks, undefined, undefined, { listen: true });
   if (stale(op)) {
     return;
   }

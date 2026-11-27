@@ -63,7 +63,16 @@ function mixSignature(tracks: readonly JamTrack[]): string {
 export function useJamPlayback(
   songId: string | null,
   tracks: readonly JamTrack[],
-  options: { autoplay?: boolean; onPlayError?: () => void } = {},
+  options: {
+    autoplay?: boolean;
+    onPlayError?: () => void;
+    /**
+     * Who is listening. Their own parts are loaded from the original, never from the Opus listening copy:
+     * the song panel lets them adjust one (gain, offset, trim) and audition it, and that is work on the
+     * recording itself (`syncJamStems`' `originals`).
+     */
+    viewerId?: string | null;
+  } = {},
 ): JamPlayback {
   const [engine, setEngine] = useState<JamEngine | null>(null);
   const [status, setStatus] = useState<JamPlayback["status"]>("loading");
@@ -84,6 +93,7 @@ export function useJamPlayback(
   const playErrorRef = useRef(options.onPlayError);
   playErrorRef.current = options.onPlayError;
   const loadedOnce = useRef(false);
+  const viewerId = options.viewerId ?? null;
 
   // The engine, once: created on first need, shared with the studio.
   useEffect(() => {
@@ -139,11 +149,25 @@ export function useJamPlayback(
     // started a run over a song with no length, which ended at once. The button
     // waits for the stems; nothing is lost, it is a spinner for a moment.
     setStatus("loading");
-    void syncJamStems(engine, tracksRef.current, (trackId, next) => {
-      if (!cancelled) {
-        setStemStatus((before) => (before[trackId] === next ? before : { ...before, [trackId]: next }));
-      }
-    }).then(() => {
+    // This hook only LISTENS (the studio syncs for itself, without `listen`): a track the server offers
+    // an Opus copy of is heard from the copy, per stem falling back to the original. The server offers one
+    // only to somebody who is not in the song's channel and only with `jam_audio_copy` on, so for a member
+    // and with the flag off this loads the originals exactly as before. The viewer's own parts are the
+    // exception: they are adjusted and auditioned here, so they stay on the original.
+    const own = new Set(
+      tracksRef.current.filter((track) => viewerId !== null && track.authorId === viewerId).map((track) => track.id),
+    );
+    void syncJamStems(
+      engine,
+      tracksRef.current,
+      (trackId, next) => {
+        if (!cancelled) {
+          setStemStatus((before) => (before[trackId] === next ? before : { ...before, [trackId]: next }));
+        }
+      },
+      undefined,
+      { listen: true, originals: own },
+    ).then(() => {
       if (cancelled) {
         return;
       }
@@ -168,7 +192,7 @@ export function useJamPlayback(
     return () => {
       cancelled = true;
     };
-  }, [engine, songId, signature]);
+  }, [engine, songId, signature, viewerId]);
 
   // Leaving the song: stop and let the stems go.
   useEffect(() => {
