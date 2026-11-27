@@ -131,6 +131,8 @@ class JamSongViewModel(
     private val channelId: String,
     private val callActive: StateFlow<Boolean>,
     private val player: JamPlayer = JamPlayer(),
+    /** What the starter's answers to waiting parts change outside the song (the inbox the wall's pill reads). */
+    requestsHook: JamRequestsHook = JamRequestsHook.None,
 ) : ViewModel() {
     private val appContext = context.applicationContext
     private val loader = JamStemLoader(appContext, http)
@@ -321,7 +323,16 @@ class JamSongViewModel(
         _ui.update { it.copy(originMs = origin, durationMs = player.durationMs.value) }
         applyLevels()
         video.park(origin + positionMs)
+        // A take the person asked to hear starts the moment the band with it is ready: the tap meant "play it", and the
+        // take's own file is still on its way when the tap lands.
+        if (playAfterLoad && _ui.value.ready) {
+            playAfterLoad = false
+            if (!_ui.value.playing) play()
+        }
     }
+
+    /** Set by [listen]: start playing as soon as the band with the chosen take is ready. */
+    private var playAfterLoad = false
 
     private fun applyLevels() {
         val ui = _ui.value
@@ -450,8 +461,16 @@ class JamSongViewModel(
     }
 
     fun stopAudition(instrument: JamInstrument) {
+        playAfterLoad = false
         _ui.update { it.copy(auditioning = it.auditioning - instrument) }
         syncStems()
+    }
+
+    /** "Ouvir com a banda": hear this take in place of the mix's of its instrument, and play as soon as it can. */
+    fun listen(track: JamTrack) {
+        audition(track)
+        if (_ui.value.playing) return
+        if (_ui.value.ready) play() else playAfterLoad = true
     }
 
     // --- writes ---
@@ -566,6 +585,45 @@ class JamSongViewModel(
 
     /** The edit sheet's logic: title, artist and cover, with the state that survives a rotation. */
     val editor = JamSongEditor(backend, viewModelScope, songId, ::applySongAnswer, ::refreshPermissions)
+
+    // --- the song's public state ---
+
+    private val _publication = MutableStateFlow<JamPublication?>(null)
+
+    /**
+     * What `GET /api/jam-songs/:id/public` said to this person (null for anybody who is not the starter or a participant,
+     * and until it is read). The share button needs its `status` (a public page exists only for `live`) and the waiting
+     * block its `autoAcceptOutside`.
+     */
+    val publication: StateFlow<JamPublication?> = _publication.asStateFlow()
+
+    /** Read it (again). Best effort: a read that fails leaves what was known, and the next screen event asks again. */
+    fun readPublication() {
+        viewModelScope.launch {
+            try {
+                _publication.value = backend.publication(songId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Nothing is lost: the share button falls back to the song's own link, the block to the manual hint.
+            }
+        }
+    }
+
+    // --- answering the parts that wait for the starter ---
+
+    /** Accept (with an undo for a few seconds) or decline the parts people outside sent: `JamRequests`. */
+    val requests = JamRequests(
+        backend = backend,
+        scope = viewModelScope,
+        channelId = channelId,
+        song = { _ui.value.state?.song },
+        apply = ::onFrame,
+        accepts = { answer -> _ui.value.state?.accepts(answer) != false },
+        endAudition = { track -> if (_ui.value.auditioning[track.instrument] == track.id) stopAudition(track.instrument) },
+        permissionsChanged = ::refreshPermissions,
+        hook = requestsHook,
+    )
 
     // --- adjusting a take ---
 
@@ -765,6 +823,7 @@ class JamSongViewModel(
                 songId = songId,
                 channelId = channelId,
                 callActive = callActive,
+                requestsHook = JamNoticeStore.of(session).asRequestsHook(),
             ) as T
         }
     }

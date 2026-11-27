@@ -253,6 +253,15 @@ class WireProtocolTest {
             "jam-track-updated",
             "jam-track-deleted",
             "jam-track-votes",
+            // The two jam frames of the PUBLIC side (`JamPublicFrame.decode`, `jam-public.ts`), to the one account they are
+            // about. `jam-public-notice` with kind `take` tells a song's starter a part from outside arrived and waits for
+            // their answer; `jam-take-decision` tells the SENDER the starter accepted or refused it. Not in
+            // `chatServerMessageSchema` either, so named here. Losing either one is a notice that never comes live (the
+            // durable list is still read on boot and on a reconnect), but it is exactly the silence launch test N1 found:
+            // a starter who needed 376 s to find a part, and a sender never told how it went. `jam-public-notice` also
+            // reads an unknown kind as `consent`, which is why the sender's frame is a type of its own.
+            "jam-public-notice",
+            "jam-take-decision",
             // handshake
             "ready",
         )

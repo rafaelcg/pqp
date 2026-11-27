@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -118,6 +119,8 @@ fun JamTile(
     shared: JamSharedScope?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Parts from outside waiting for THIS account's answer on this song (the starter's inbox); 0 draws nothing. */
+    waiting: Int = 0,
 ) {
     val reduce = rememberReduceMotion()
     val colors = MaterialTheme.colorScheme
@@ -170,7 +173,9 @@ fun JamTile(
     ).joinToString(" · ")
     val needText = need.text()
     // TalkBack reads in logical order: only the explicit bidi controls dropped, no isolate characters
-    val description = stringResource(R.string.jam_tile_description, JamBidi.clean(song.title), JamBidi.clean(subtitle.ifEmpty { who }), needText)
+    val baseDescription = stringResource(R.string.jam_tile_description, JamBidi.clean(song.title), JamBidi.clean(subtitle.ifEmpty { who }), needText)
+    val waitingBanner = if (waiting > 0) pluralStringResource(R.plurals.jam_requests_banner, waiting, waiting) else null
+    val description = if (waitingBanner != null) "$baseDescription, $waitingBanner" else baseDescription
 
     Box(
         modifier = modifier
@@ -258,19 +263,41 @@ fun JamTile(
             }
         }
 
-        if (fresh) {
-            Text(
-                text = stringResource(R.string.jam_tile_new),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = colors.onPrimary,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(10.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(colors.primary)
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-            )
+        if (fresh || waiting > 0) {
+            // Top right: what is waiting on THIS person comes first, a new arrival's mark under it. Opaque palette
+            // shapes (the accent), never a translucent wash over the picture.
+            Column(
+                Modifier.align(Alignment.TopEnd).padding(10.dp),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                if (waiting > 0) {
+                    Text(
+                        text = pluralStringResource(R.plurals.jam_requests_count, waiting, waiting),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = colors.onPrimary,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(colors.primary)
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                            .testTag("jam.tile.waiting.${song.id}"),
+                    )
+                }
+                if (fresh) {
+                    Text(
+                        text = stringResource(R.string.jam_tile_new),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.onPrimary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(colors.primary)
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+            }
         }
 
         Column(

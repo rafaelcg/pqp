@@ -5,6 +5,7 @@ import gg.pqp.app.core.PqpJson
 import gg.pqp.app.jam.record.CreateJamUploadRequest
 import gg.pqp.app.jam.record.JamSongResponse
 import gg.pqp.app.jam.record.JamUploadTicket
+import gg.pqp.app.social.OkResponse
 import gg.pqp.app.social.deleteJson
 import gg.pqp.app.social.getJson
 import gg.pqp.app.social.postJson
@@ -171,6 +172,33 @@ internal suspend fun putJamCover(
 }
 
 private const val COVER_CHUNK = 16 * 1024
+
+// --- take notices (docs/JAM_PUBLIC.md, "Telling the starter") ---
+
+/** `GET /api/jam-public/config`: the flag `jam_public`, which the whole notice machinery sits behind. */
+suspend fun ApiClient.jamPublicConfig(): JamPublicMeConfig = getJson("/api/jam-public/config")
+
+/** `GET /api/jam-public/inbox`: the outside takes waiting for this account's answer, on every song it started. */
+suspend fun ApiClient.jamPublicInbox(): JamPublicInboxResponse = getJson("/api/jam-public/inbox")
+
+/** `GET /api/jam-public/notices`: the open items (empty while `jam_take_notices` or `jam_public` is off). */
+suspend fun ApiClient.jamTakeNotices(): JamTakeNoticesResponse = getJson("/api/jam-public/notices")
+
+/** `POST /api/jam-public/notices/ack`: the item is spent. Allowed with the flag off: it is the person's own row. */
+suspend fun ApiClient.ackJamTakeNotice(id: String) {
+    postJson<OkResponse>(
+        "/api/jam-public/notices/ack",
+        PqpJson.encodeToString(AckJamTakeNoticeRequest.serializer(), AckJamTakeNoticeRequest(id)),
+    )
+}
+
+/** `GET /api/jam-songs/:id/public`: the starter's (or a participant's) read of the song's public state. Null for anybody else. */
+suspend fun ApiClient.jamPublication(songId: String): JamPublication? =
+    getJson<JamPublicationResponse>("/api/jam-songs/$songId/public").publication
+
+/** Where a song lives (server and channel), for the deep link that has only its id. */
+suspend fun ApiClient.jamSongPlace(songId: String): JamSongPlace.Place =
+    getJson<JamSongPlace>("/api/jam-songs/$songId").song
 
 /** The deep link a "Copiar link" hands out: the web's route for the same song. */
 fun jamSongLink(baseUrl: String, serverId: String, channelId: String, songId: String): String =

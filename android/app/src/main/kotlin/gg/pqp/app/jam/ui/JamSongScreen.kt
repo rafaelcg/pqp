@@ -129,7 +129,11 @@ import gg.pqp.app.jam.JamNotice
 import gg.pqp.app.jam.JamPeaks
 import gg.pqp.app.jam.JamPermissions
 import gg.pqp.app.jam.JamPlayhead
+import gg.pqp.app.jam.JamInstrument
 import gg.pqp.app.jam.JamRecordRules
+import gg.pqp.app.jam.JamShare
+import gg.pqp.app.jam.JamRequestAction
+import gg.pqp.app.jam.JamRequestsUi
 import gg.pqp.app.jam.RecordGate
 import gg.pqp.app.jam.JamSongSummary
 import gg.pqp.app.jam.JamSongUi
@@ -178,8 +182,14 @@ fun JamSongScreen(
     /** Read the flag again: this screen stays open while it may change, and the wall does not start again for it. */
     onRefreshConfig: () -> Unit,
     onBack: () -> Unit,
+    /** `jam_public` is on for this account: the share button may hand out a public page, and the waiting parts exist. */
+    publicEnabled: Boolean = false,
+    /** The parts people outside sent to THIS song that wait for this person's answer (the starter's inbox). */
+    pending: List<JamTrack> = emptyList(),
 ) {
     val ui by model.ui.collectAsStateWithLifecycle()
+    val requests by model.requests.ui.collectAsStateWithLifecycle()
+    val publication by model.publication.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbars = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -218,6 +228,13 @@ fun JamSongScreen(
         if (editorFailure.failure == JamWriteFailure.Off || ui.adjust?.failure == JamWriteFailure.Off || editorFailure.done) onRefreshConfig()
     }
 
+    // The song's public state is read for its starter and for anybody with a part in it (the server answers null for the
+    // rest), and again when a part arrives for the starter: the share button and the waiting block read it.
+    val involved = ui.state?.let { it.viewer.isAuthor || it.tracks.any { track -> viewerId != null && track.authorId == viewerId } } == true
+    LaunchedEffect(publicEnabled, involved, pending.size) {
+        if (publicEnabled && involved) model.readPublication()
+    }
+
     // The app left the screen: pause, so a song is never left playing to nobody.
     LifecycleStartEffect(songId) {
         onRefreshConfig()
@@ -252,6 +269,18 @@ fun JamSongScreen(
 
     val link = jamSongLink(Backend.appUrl, serverId, channelId, songId)
     val copiedText = stringResource(R.string.jam_link_copied)
+    // A song a stranger can open (public, live) is shared with its public page and the web's message, which asks for what is
+    // still missing; a private channel song keeps the app's own link, as before.
+    val songToShare = ui.state?.song
+    val publicShare = songToShare != null && JamShare.offered(publicEnabled, publication?.status, songToShare.channelId)
+    val shareMessage = if (publicShare && songToShare != null) {
+        val tracks = ui.state?.tracks.orEmpty()
+        jamShareMessage(songToShare, JamShare.pendingOf(tracks, viewerId, ui.state?.viewer?.isAuthor == true))
+    } else {
+        null
+    }
+    val publicLink = if (publicShare) JamShare.publicLink(Backend.appUrl, songId) else null
+    val copyTarget = publicLink ?: link
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbars) },
@@ -281,7 +310,7 @@ fun JamSongScreen(
                                     leadingIcon = { Icon(PqpIcons.Copy, contentDescription = null) },
                                     onClick = {
                                         menu = false
-                                        copyLink(context, link)
+                                        copyLink(context, copyTarget)
                                         scope.launch { snackbars.showSnackbar(copiedText) }
                                     },
                                 )
@@ -290,7 +319,11 @@ fun JamSongScreen(
                                     leadingIcon = { Icon(PqpIcons.Share, contentDescription = null) },
                                     onClick = {
                                         menu = false
-                                        shareLink(context, link)
+                                        if (publicLink != null && shareMessage != null) {
+                                            sendSongToSheet(context, songToShare?.title.orEmpty(), shareMessage, publicLink)
+                                        } else {
+                                            shareLink(context, link)
+                                        }
                                     },
                                 )
                                 if (canEditSong) {
@@ -374,9 +407,16 @@ fun JamSongScreen(
                     onDeleteTrack = { confirmTrack = it },
                     // Opening another take's editor, or closing this one, with edits unsaved asks first.
                     onAdjust = { track, open -> guarded { if (open) model.adjustClose() else model.startAdjust(track) } },
+                    pending = pending,
+                    autoAccept = publication?.autoAcceptOutside == true,
+                    requests = requests,
                 )
             }
         }
+    }
+
+    requests.confirmDecline?.let { track ->
+        JamDeclineDialog(track = track, onConfirm = model.requests::confirmDecline, onDismiss = model.requests::cancelDecline)
     }
 
     val sheetSong = ui.state?.song
@@ -455,6 +495,43 @@ private fun copyLink(context: Context, link: String) {
     clipboard.setPrimaryClip(ClipData.newPlainText("pqp", link))
 }
 
+/** The system share sheet with the web's message and the song's public link: WhatsApp is one tap away. */
+private fun sendSongToSheet(context: Context, title: String, message: String, url: String) {
+    val send = Intent(Intent.ACTION_SEND)
+        .setType("text/plain")
+        .putExtra(Intent.EXTRA_SUBJECT, JamBidi.clean(title))
+        .putExtra(Intent.EXTRA_TEXT, "$message $url")
+    context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
+/**
+ * What a shared song says, from what it is missing (the web's `useJamInviteMessage`): names are in the person's own
+ * language, lower case, in a list ("baixo e voz"); the sender's own waiting parts are told and never asked for again.
+ */
+@Composable
+fun jamShareMessage(song: JamSongSummary, pending: List<JamInstrument>): String {
+    val needs = JamShare.stillNeeds(song, pending)
+    val kind = JamShare.kind(song.joinMode, needs)
+    val and = stringResource(R.string.jam_and)
+    val title = JamBidi.clean(song.title)
+    val list = joinList(needs.map { it.label() }, and)
+    val mine = joinList(pending.map { it.label() }, and)
+    val text = if (pending.isEmpty()) {
+        when (kind) {
+            JamShare.Kind.Needs -> pluralStringResource(R.plurals.jam_share_needs, needs.size, title, list)
+            JamShare.Kind.Open -> stringResource(R.string.jam_share_open, title)
+            JamShare.Kind.Listen -> stringResource(R.string.jam_share_listen, title)
+        }
+    } else {
+        when (kind) {
+            JamShare.Kind.Needs -> pluralStringResource(R.plurals.jam_share_sent_needs, needs.size, title, list, mine)
+            JamShare.Kind.Open -> stringResource(R.string.jam_share_sent_open, title, mine)
+            JamShare.Kind.Listen -> stringResource(R.string.jam_share_sent_listen, title, mine)
+        }
+    }
+    return text.replace(Regex("\\s+"), " ").trim()
+}
+
 private fun shareLink(context: Context, link: String) {
     val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, link)
     context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -502,11 +579,17 @@ private fun SongBody(
     onDeleteTrack: (JamTrack) -> Unit,
     /** The faders were tapped on [JamTrack]; true when that take's editor is the one open. */
     onAdjust: (JamTrack, Boolean) -> Unit,
+    /** Parts from outside waiting for the starter's answer: they come first on the page, above the stage. */
+    pending: List<JamTrack>,
+    autoAccept: Boolean,
+    requests: JamRequestsUi,
 ) {
     val state = ui.state ?: return
     val song = state.song
     val stack = ui.stack
-    val others = ui.otherTakes
+    // A waiting part is a question, not an alternative take: it is listed in its own block, never twice.
+    val pendingIds = remember(pending) { pending.mapTo(HashSet()) { it.id } }
+    val others = ui.otherTakes.filter { it.id !in pendingIds }
     val reduce = rememberReduceMotion()
     // The one playhead is drawn across the lanes and NOT across an open adjust editor, which has a playhead of its own on a
     // different scale: where the editor sits is measured against the block, and the line skips it.
@@ -530,12 +613,55 @@ private fun SongBody(
         }
     }
 
+    // What waits for the starter is the first thing on the page, so anything that arrives or answers there is brought into
+    // view: a part that lands while the list is scrolled down, an answer, a refused write. Never on the box leaving.
+    var seenPending by remember { mutableStateOf(pending.size) }
+    LaunchedEffect(pending.size, requests.answer?.trackId, requests.answer?.kind, requests.failure) {
+        val arrived = pending.size > seenPending
+        seenPending = pending.size
+        val said = requests.answer != null || requests.failure != null
+        if ((arrived || said) && (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0)) {
+            if (reduce) listState.scrollToItem(0) else listState.animateScrollToItem(0)
+        }
+    }
+
     LazyColumn(
         state = listState,
         contentPadding = PaddingValues(start = Spacing.gutter, end = Spacing.gutter, top = Spacing.sm, bottom = Spacing.xl),
         verticalArrangement = Arrangement.spacedBy(Spacing.md),
         modifier = Modifier.fillMaxSize().onGloballyPositioned { listCoordinates = it }.testTag("jam.song.list"),
     ) {
+        if (pending.isNotEmpty() || requests.answer != null) {
+            item(key = "requests") {
+                Column(Modifier.animateItem(), verticalArrangement = Arrangement.spacedBy(Spacing.md)) {
+                    JamRequestsBlock(
+                        takes = pending,
+                        autoAccept = autoAccept,
+                        auditioning = ui.auditioning,
+                        requests = requests,
+                        onListen = { track ->
+                            when {
+                                ui.auditioning[track.instrument] == track.id -> model.stopAudition(track.instrument)
+                                // The song's own read may not hold it yet (the frame is behind the notice): read again.
+                                state.tracks.none { it.id == track.id } -> model.load()
+                                else -> model.listen(track)
+                            }
+                        },
+                        onAccept = model.requests::accept,
+                        onDecline = model.requests::askDecline,
+                    )
+                    requests.answer?.let { answer ->
+                        JamAnswerBox(
+                            answer = answer,
+                            busy = requests.busy != null,
+                            failure = requests.failure?.takeIf { it.trackId == answer.trackId && it.action == JamRequestAction.Undo },
+                            onUndo = model.requests::undo,
+                            onDismiss = { model.requests.dismissAnswer(answer.trackId, answer.kind) },
+                        )
+                    }
+                }
+            }
+        }
         item(key = "header") {
             SongHeader(model, ui, song, shared, Modifier.fillMaxWidth().aspectRatio(if (ui.videoTracks.isEmpty()) 1.5f else 16f / 9f))
         }

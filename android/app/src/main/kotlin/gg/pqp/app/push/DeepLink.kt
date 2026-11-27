@@ -30,6 +30,14 @@ sealed interface DeepLinkTarget {
     data class JamSong(val serverId: String, val channelId: String, val songId: String) : DeepLinkTarget
 
     /**
+     * A jam song by its id alone: `/app/jam/<songId>`, the path of the push that tells a starter a part arrived (and
+     * tells the sender how it went), and the web's own address for a public song. It has no server and no channel in
+     * it: where the song lives is the server's to say (`GET /api/jam-songs/:id`), so the router asks. `/app/jam/mine`
+     * and `/app/jam/new` are web screens (a person's songs, a new public song) with nothing to open here.
+     */
+    data class JamPublicSong(val songId: String) : DeepLinkTarget
+
+    /**
      * A DM or a group. `channelId` really is a channel id: a conversation is a
      * `channels` row with `kind` of `dm` or `group`, and `/app/dm/<id>` carries
      * that id, not a separate conversation id.
@@ -67,7 +75,7 @@ val DeepLinkTarget.channelId: String?
         is DeepLinkTarget.ForumPost -> postId
         is DeepLinkTarget.JamSong -> channelId
         is DeepLinkTarget.Conversation -> channelId
-        is DeepLinkTarget.Server, is DeepLinkTarget.Bau, is DeepLinkTarget.Invite -> null
+        is DeepLinkTarget.Server, is DeepLinkTarget.Bau, is DeepLinkTarget.Invite, is DeepLinkTarget.JamPublicSong -> null
     }
 
 object DeepLink {
@@ -139,6 +147,11 @@ object DeepLink {
             segments.size >= 3 && segments[1] == "dm" ->
                 DeepLinkTarget.Conversation(segments[2])
 
+            // `/app/jam/<songId>` (the take-notice push). A song id is a UUID and becomes a URL path segment, so
+            // anything else (the web's `mine` and `new`, or whatever another app puts in an intent) is not one.
+            segments.size >= 3 && segments[1] == "jam" && isSongId(segments[2]) ->
+                DeepLinkTarget.JamPublicSong(segments[2].lowercase())
+
             else -> null
         }
     }
@@ -165,6 +178,10 @@ object DeepLink {
      * exact, which is the same call `ios/pqp/Sources/Core/DeepLink.swift`
      * makes. The Swift twin of this function.
      */
+    private val SONG_ID = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+    private fun isSongId(id: String): Boolean = SONG_ID.matches(id)
+
     private fun isUsableCode(code: String): Boolean =
         code.length in 1..64 && code.all { it.isLetterOrDigit() || it == '-' || it == '_' }
 

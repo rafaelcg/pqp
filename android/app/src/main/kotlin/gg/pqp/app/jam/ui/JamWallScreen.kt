@@ -41,8 +41,10 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,6 +63,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
 import gg.pqp.app.jam.JamBand
 import gg.pqp.app.jam.JamBands
+import gg.pqp.app.jam.JamNoticeRules
+import gg.pqp.app.jam.JamNoticeState
 import gg.pqp.app.jam.JamSongSummary
 import gg.pqp.app.jam.JamRecordRules
 import gg.pqp.app.jam.JamTileInfo
@@ -97,8 +101,18 @@ fun JamWallScreen(
     onOpenSong: (JamSongSummary) -> Unit,
     /** The record button and the empty wall's call to action: start a song with a first recording. */
     onRecordNew: () -> Unit,
+    /** What waits for THIS person's answer (the starter's inbox): the strip above the songs and the pill on a tile. */
+    notices: JamNoticeState = JamNoticeState(),
+    /** A song by its id, from the strip or the list of songs with a part waiting. */
+    onOpenSongById: (String) -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
+    // Only the songs this wall holds: it asks for what it can open (a part on a song of another wall has its own).
+    val waitingSongs = remember(notices.inbox, state.wall.songs) {
+        JamNoticeRules.waitingOn(notices.inbox, state.wall.songs.mapTo(HashSet()) { it.id })
+    }
+    var inboxOpen by remember { mutableStateOf(false) }
+    if (inboxOpen && waitingSongs.size < 2) inboxOpen = false
     val listState = rememberLazyListState()
     val reduce = rememberReduceMotion()
     // Tiles that already settled in this visit: scrolling one back into view must not play its entrance again.
@@ -185,6 +199,15 @@ fun JamWallScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.fillMaxSize().widthIn(max = MaxWallWidth)) {
+                if (state.phase == JamWallUiState.Phase.Ready) {
+                    JamWaitingStrip(
+                        songs = waitingSongs,
+                        onSee = {
+                            // Every waiting part is on one song: go straight to it, where they are the first thing on the page.
+                            if (waitingSongs.size == 1) onOpenSongById(waitingSongs.first().songId) else inboxOpen = true
+                        },
+                    )
+                }
                 val showFilters = state.phase == JamWallUiState.Phase.Ready && !state.emptyWall
                 if (showFilters) {
                     FilterStrip(state.filter, onSelect = model::setFilter)
@@ -216,11 +239,22 @@ fun JamWallScreen(
                             shared = shared,
                             model = model,
                             onOpenSong = onOpenSong,
+                            waitingOf = { id -> notices.waitingCount(id) },
                         )
                     }
                 }
             }
         }
+    }
+    if (inboxOpen) {
+        JamInboxSheet(
+            songs = waitingSongs,
+            onOpen = { id ->
+                inboxOpen = false
+                onOpenSongById(id)
+            },
+            onDismiss = { inboxOpen = false },
+        )
     }
 }
 
@@ -265,6 +299,7 @@ private fun Mosaic(
     shared: JamSharedScope?,
     model: JamWallViewModel,
     onOpenSong: (JamSongSummary) -> Unit,
+    waitingOf: (String) -> Int,
 ) {
     val visible = state.visible
     val lastId = visible.lastOrNull()?.id
@@ -340,6 +375,7 @@ private fun Mosaic(
                             modifier = Modifier
                                 .weight(entry.cell.columns.toFloat())
                                 .fillMaxSize(),
+                            waiting = waitingOf(song.id),
                         )
                     }
                     // A lone small tile at the very end keeps its own width.

@@ -1992,4 +1992,81 @@
     <string name="activities_ended_channel_gone">O canal foi apagado.</string>
     <string name="activities_ended_disabled">O pqp desligou esta atividade. Tua conversa continua aqui.</string>
     <string name="activities_ended_plain">Terminou.</string>
+
+    <!-- Jam: parts that wait for the starter's answer, and the sender's "tua parte entrou". The web's words
+         (jam.public.card.*, jam.public.requests.*, jam.public.answered.*). -->
+    <plurals name="jam_notice_take">
+        <item quantity="one">Chegou uma parte de %1$s em \"%2$s\".</item>
+        <item quantity="other">%3$d partes esperando tua resposta em \"%2$s\" (%1$s).</item>
+    </plurals>
+    <plurals name="jam_notice_accepted">
+        <item quantity="one">Tua parte de %1$s entrou em \"%2$s\".</item>
+        <item quantity="other">%3$d partes tuas entraram em \"%2$s\".</item>
+    </plurals>
+    <plurals name="jam_notice_refused">
+        <item quantity="one">Tua parte de %1$s em \"%2$s\" não entrou.</item>
+        <item quantity="other">%3$d partes tuas em \"%2$s\" não entraram.</item>
+    </plurals>
+    <string name="jam_notice_other_instrument">outro instrumento</string>
+    <string name="jam_notice_reply">Ver e responder</string>
+    <string name="jam_notice_open">Ver a música</string>
+    <string name="jam_notice_close">Fechar</string>
+    <plurals name="jam_notice_more">
+        <item quantity="one">Mais %d esperando depois dessa.</item>
+        <item quantity="other">Mais %d esperando depois dessa.</item>
+    </plurals>
+    <string name="jam_notice_toast_take">Pedido novo em \"%1$s\".</string>
+    <string name="jam_notice_toast_admitted">Uma parte nova entrou sozinha em \"%1$s\".</string>
+    <string name="jam_notice_toast_see">Ver</string>
+    <string name="jam_open_gone">Essa música não existe mais, ou não é dessa Jam.</string>
+    <string name="jam_open_failed">Não deu pra abrir essa música.</string>
+
+    <plurals name="jam_requests_banner">
+        <item quantity="one">%d parte esperando tua resposta</item>
+        <item quantity="other">%d partes esperando tua resposta</item>
+    </plurals>
+    <plurals name="jam_requests_count">
+        <item quantity="one">%d esperando</item>
+        <item quantity="other">%d esperando</item>
+    </plurals>
+    <string name="jam_requests_hint">Visitantes mandaram essas partes. Elas só entram na mix quando tu aceitar.</string>
+    <string name="jam_requests_hint_auto">Visitantes mandaram essas partes. Elas entram sozinhas quando a revisão da plataforma terminar, ou tu aceita agora.</string>
+    <string name="jam_requests_listen">Ouvir com a banda</string>
+    <string name="jam_requests_stop">Parar</string>
+    <string name="jam_requests_accept">Aceitar</string>
+    <string name="jam_requests_decline">Recusar</string>
+    <string name="jam_requests_decline_title">Recusar esse pedido?</string>
+    <string name="jam_requests_decline_body">A gravação é apagada. Ela nunca entrou na música.</string>
+    <string name="jam_requests_failed_accept">Não deu pra aceitar essa parte. Ela continua esperando por ti.</string>
+    <string name="jam_requests_failed_decline">Não deu pra recusar essa parte. Ela continua esperando por ti.</string>
+    <string name="jam_requests_failed_undo">Não deu pra tirar de volta. Ela continua na música.</string>
+    <string name="jam_answer_accepted">%1$s: a parte de %2$s entrou na música. Já aparece pra quem abre ela, no site e no app.</string>
+    <string name="jam_answer_undo">Desfazer</string>
+    <string name="jam_answer_undone">Voltou pra fila. A parte de %2$s de %1$s continua esperando tua resposta.</string>
+    <string name="jam_answer_refused">Parte recusada. A parte de %2$s de %1$s não entra na música, e %1$s recebe o aviso.</string>
+    <string name="jam_answer_close">Fechar</string>
+    <string name="jam_answer_anonymous">Alguém</string>
+
+    <plurals name="jam_waiting_strip">
+        <item quantity="one">%d parte esperando tua resposta.</item>
+        <item quantity="other">%d partes esperando tua resposta.</item>
+    </plurals>
+    <string name="jam_waiting_see">Ver</string>
+    <string name="jam_inbox_title">Pedidos de visitantes</string>
+    <string name="jam_inbox_hint">Gravações de visitantes que querem entrar nas tuas músicas públicas. Abre a música pra ouvir com a banda e decidir.</string>
+    <string name="jam_inbox_open">Ouvir</string>
+
+    <!-- Jam: what a shared song says (the web's jam.invite.text.*), always with the song's public link. -->
+    <plurals name="jam_share_needs">
+        <item quantity="one">%1$s: falta %2$s nessa. Grava a tua parte:</item>
+        <item quantity="other">%1$s: faltam %2$s nessa. Grava a tua parte:</item>
+    </plurals>
+    <string name="jam_share_open">%1$s: jam aberta pra quem quiser. Entra e grava a tua parte:</string>
+    <string name="jam_share_listen">%1$s: dá uma ouvida nessa jam:</string>
+    <plurals name="jam_share_sent_needs">
+        <item quantity="one">%1$s: mandei a minha parte de %3$s, ela entra quando quem começou aceitar. Ainda falta %2$s. Grava a tua parte:</item>
+        <item quantity="other">%1$s: mandei a minha parte de %3$s, ela entra quando quem começou aceitar. Ainda faltam %2$s. Grava a tua parte:</item>
+    </plurals>
+    <string name="jam_share_sent_open">%1$s: mandei a minha parte de %2$s, ela entra quando quem começou aceitar. Jam aberta pra quem quiser, entra e grava a tua parte:</string>
+    <string name="jam_share_sent_listen">%1$s: mandei a minha parte de %2$s, ela entra quando quem começou aceitar. Dá uma ouvida nessa jam:</string>
 </resources>

@@ -45,8 +45,11 @@ import gg.pqp.app.bau.CommunityHomeConfigs
 import gg.pqp.app.bau.ui.BauScreen
 import gg.pqp.app.ui.chat.BauPostTarget
 import gg.pqp.app.bau.BauPostRef
+import gg.pqp.app.core.Backend
 import gg.pqp.app.forward.ForwardOpen
 import gg.pqp.app.forward.ForwardSent
+import gg.pqp.app.jam.jamSongPlace
+import gg.pqp.app.jam.ui.drawn
 import gg.pqp.app.forward.ui.ForwardHost
 import gg.pqp.app.forward.ui.LocalOpenForward
 import gg.pqp.app.forward.ui.rememberOpenForward
@@ -488,6 +491,27 @@ private fun SignedInNav(
         watchPartyHost.dismissError()
     }
 
+    // A public jam song the phone has no screen for (a standalone public jam, a channel of a server this account is not in)
+    // opens on the web, in a Custom Tab: a signed-in browser reads `/app/jam/<id>`, which is what the web's own push opens.
+    val openWeb: (String) -> Unit = remember(context) {
+        { url: String ->
+            try {
+                androidx.browser.customtabs.CustomTabsIntent.Builder().setShowTitle(true).build()
+                    .launchUrl(context, android.net.Uri.parse(url))
+            } catch (_: android.content.ActivityNotFoundException) {
+                // No browser on the phone: there is nowhere else to send it.
+            }
+        }
+    }
+
+    // The take notices: a card above the screen for a part that waits for this person's answer (or "tua parte entrou"),
+    // in the flow so it never covers a control, and held back while a song or the studio is open.
+    val jamNotices = remember(session) { gg.pqp.app.jam.JamNoticeStore.of(session) }
+    val jamNoticeState by jamNotices.state.collectAsStateWithLifecycle()
+    val jamNoticeHolds by jamNotices.holds.collectAsStateWithLifecycle()
+    val jamNoticeShowing = jamNoticeState.drawn(jamNoticeHolds).let { it.toast || it.card != null }
+    val noticeScope = androidx.compose.runtime.rememberCoroutineScope()
+
     // A tapped notification, routed only once the app is signed in and has a
     // NavController. Anything tapped earlier waited on the controller.
     //
@@ -502,7 +526,7 @@ private fun SignedInNav(
     LaunchedEffect(Unit) {
         push.pendingTarget.filterNotNull().collect { target ->
             push.consumeTarget()
-            navigateToPush(nav, session, target)
+            navigateToPush(nav, session, target, context, notify = { forwardNotice = it }, openWeb = openWeb)
         }
     }
 
@@ -623,12 +647,21 @@ private fun SignedInNav(
             onSignInAgain = session::signOut,
             modifier = if (voiceState.isActive) Modifier else Modifier.statusBarsPadding(),
         )
+        gg.pqp.app.jam.ui.JamNoticeHost(
+            store = jamNotices,
+            topInset = !voiceState.isActive && !connectionBannerShowing,
+            onOpenSong = { songId ->
+                noticeScope.launch {
+                    openJamSongById(nav, session, songId, context, notify = { forwardNotice = it }, openWeb = openWeb)
+                }
+            },
+        )
 
         Box(
             modifier = Modifier
                 .weight(1f)
                 .then(
-                    if (voiceState.isActive || connectionBannerShowing) {
+                    if (voiceState.isActive || connectionBannerShowing || jamNoticeShowing) {
                         Modifier.consumeWindowInsets(WindowInsets.statusBars)
                     } else {
                         Modifier
@@ -1165,6 +1198,11 @@ private suspend fun navigateToPush(
     nav: androidx.navigation.NavHostController,
     session: SessionStore,
     target: DeepLinkTarget,
+    context: android.content.Context,
+    /** A line to say once (a song that is gone). */
+    notify: (String) -> Unit = {},
+    /** Open an address in the browser (a public song the phone has no screen for). */
+    openWeb: (String) -> Unit = {},
 ) {
     fun serverName(id: String): String =
         session.servers.value.firstOrNull { it.id == id }?.name.orEmpty()
@@ -1237,18 +1275,13 @@ private suspend fun navigateToPush(
 
         // A jam song's own link: the channel list under it so back lands on the server, then the wall
         // with the song open. A server where jam is off still reads (the flag gates writes, not reads).
-        is DeepLinkTarget.JamSong -> {
-            val name = serverName(target.serverId)
-            nav.navigate(ChannelsRoute(target.serverId, name))
-            val jam = try {
-                session.api.channels(target.serverId)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                null
-            }?.firstOrNull { it.id == target.channelId }
-            nav.navigate(JamRoute(target.serverId, target.channelId, jam?.name.orEmpty(), name, target.songId))
-        }
+        is DeepLinkTarget.JamSong ->
+            openJamWall(nav, session, target.serverId, target.channelId, target.songId)
+
+        // `/app/jam/<songId>`: the push that tells a starter a part arrived, and the sender how it went. The path has
+        // no server and no channel in it, so the server says where the song lives.
+        is DeepLinkTarget.JamPublicSong ->
+            openJamSongById(nav, session, target.songId, context, notify = notify, openWeb = openWeb)
 
         is DeepLinkTarget.Server ->
             nav.navigate(ChannelsRoute(target.serverId, serverName(target.serverId)))
@@ -1296,5 +1329,67 @@ private suspend fun navigateToPush(
             val joined = session.redeemInvite(target.code) ?: return
             nav.navigate(ChannelsRoute(joined.serverId, joined.serverName))
         }
+    }
+}
+
+/** A jam channel's wall with [songId] open on it, the server's channel list under it so back lands on the server. */
+private suspend fun openJamWall(
+    nav: androidx.navigation.NavHostController,
+    session: SessionStore,
+    serverId: String,
+    channelId: String,
+    songId: String,
+) {
+    val name = session.servers.value.firstOrNull { it.id == serverId }?.name.orEmpty()
+    nav.navigate(ChannelsRoute(serverId, name))
+    val jam = try {
+        session.api.channels(serverId)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }?.firstOrNull { it.id == channelId }
+    nav.navigate(JamRoute(serverId, channelId, jam?.name.orEmpty(), name, songId))
+}
+
+/**
+ * Open a song from its id alone: a take notice's push (`/app/jam/<songId>`) and the card that follows the person around
+ * the app. Where the song lives is the server's to say (`GET /api/jam-songs/:id`), and [JamSongOpening] turns the answer
+ * into one of four outcomes: the wall of its channel with the song open, the web (a public song the phone has no screen
+ * for: a standalone public jam, or a channel of a server this account is not in), or a line saying the song is gone or
+ * could not be read. Nothing is guessed: a failed read changes nothing and says so.
+ */
+internal suspend fun openJamSongById(
+    nav: androidx.navigation.NavHostController,
+    session: SessionStore,
+    songId: String,
+    context: android.content.Context,
+    notify: (String) -> Unit,
+    openWeb: (String) -> Unit,
+) {
+    var status: Int? = null
+    val place = try {
+        session.api.jamSongPlace(songId)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: gg.pqp.app.core.ApiException) {
+        status = e.status
+        null
+    } catch (e: Exception) {
+        null
+    }
+    // Judged only once the server list has been answered, and then strictly: a song of a server this account is not in
+    // would be a dead wall. Before that, try it.
+    val servers = session.servers.value
+    val serversLoaded = session.serversLoaded.value
+    val opening = gg.pqp.app.jam.JamSongOpening.of(place, status) { serverId ->
+        !serversLoaded || servers.any { it.id.equals(serverId, ignoreCase = true) }
+    }
+    fun say(res: Int) = notify(context.getString(res))
+    when (opening) {
+        is gg.pqp.app.jam.JamSongOpening.InApp -> openJamWall(nav, session, opening.serverId, opening.channelId, songId)
+        gg.pqp.app.jam.JamSongOpening.Web -> openWeb(gg.pqp.app.jam.jamPublicSongAppLink(Backend.appUrl, songId))
+        gg.pqp.app.jam.JamSongOpening.Gone -> say(R.string.jam_open_gone)
+        gg.pqp.app.jam.JamSongOpening.Failed -> say(R.string.jam_open_failed)
     }
 }
