@@ -22,6 +22,17 @@ interface JamBackend {
     suspend fun config(serverId: String): JamConfig
     suspend fun songs(channelId: String, cursor: String? = null, limit: Int = JamLimits.PAGE_SIZE): JamSongListResponse
     suspend fun song(songId: String): JamSongDetailResponse
+
+    /**
+     * The channel's songs that match [query] (title and artist, accent-blind: the server's `q`). A default so a fake that
+     * does not search need not say.
+     */
+    suspend fun searchSongs(
+        channelId: String,
+        query: String,
+        cursor: String? = null,
+        limit: Int = JamLimits.PAGE_SIZE,
+    ): JamSongListResponse = error("search is not offered by this backend")
     suspend fun vote(trackId: String, voted: Boolean): JamVoteResponse
     suspend fun setInMix(trackId: String, inMix: Boolean): JamTrackWithSong
     suspend fun deleteTrack(trackId: String)
@@ -72,6 +83,9 @@ class SessionJamBackend(private val session: SessionStore) : JamBackend {
         session.api.jamSongs(channelId, cursor, limit)
 
     override suspend fun song(songId: String) = session.api.jamSong(songId)
+
+    override suspend fun searchSongs(channelId: String, query: String, cursor: String?, limit: Int) =
+        session.api.jamSongs(channelId, cursor, limit, q = query)
     override suspend fun vote(trackId: String, voted: Boolean) =
         if (voted) session.api.voteJamTrack(trackId) else session.api.unvoteJamTrack(trackId)
 

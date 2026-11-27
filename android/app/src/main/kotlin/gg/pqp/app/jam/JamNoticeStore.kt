@@ -199,24 +199,38 @@ class JamNoticeStore(
         }
     }
 
-    /** The inbox and the notice items, asked together. Coalesced: a burst of frames is one read. */
+    /** A nudge arrived while a read was out: the answer being read may predate it, so one more read follows. */
+    private var rereadWanted = false
+
+    /**
+     * The inbox and the notice items, asked together. A burst of frames shares the read in flight, and a nudge that
+     * arrives DURING a read is not lost to it: the read in flight may have been produced before what the nudge says
+     * (three takes at once left the strip at 2 and the card at 3, round 2 QA), so it is followed by exactly one more.
+     * The returned job ends when the last read has landed.
+     */
     fun loadWaiting(): Job {
         if (!_state.value.enabled) return scope.launch { }
-        waitingLoad?.takeIf { it.isActive }?.let { return it }
+        waitingLoad?.takeIf { it.isActive }?.let {
+            rereadWanted = true
+            return it
+        }
         val mine = epoch
         val run = scope.launch {
-            val inbox = scope.async { runCatchingRead { backend.inbox() } }
-            val notices = scope.async { runCatchingRead { backend.notices() } }
-            val gotInbox = inbox.await()
-            val gotNotices = notices.await()
-            if (mine != epoch) return@launch
-            _state.update {
-                it.copy(
-                    inbox = gotInbox?.takes ?: it.inbox,
-                    notices = gotNotices?.notices ?: it.notices,
-                    stale = gotInbox == null || gotNotices == null,
-                )
-            }
+            do {
+                rereadWanted = false
+                val inbox = scope.async { runCatchingRead { backend.inbox() } }
+                val notices = scope.async { runCatchingRead { backend.notices() } }
+                val gotInbox = inbox.await()
+                val gotNotices = notices.await()
+                if (mine != epoch) return@launch
+                _state.update {
+                    it.copy(
+                        inbox = gotInbox?.takes ?: it.inbox,
+                        notices = gotNotices?.notices ?: it.notices,
+                        stale = gotInbox == null || gotNotices == null,
+                    )
+                }
+            } while (rereadWanted)
         }
         waitingLoad = run
         return run

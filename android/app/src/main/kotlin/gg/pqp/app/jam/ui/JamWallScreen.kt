@@ -53,7 +53,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -63,7 +65,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
 import gg.pqp.app.jam.JamBand
 import gg.pqp.app.jam.JamBands
+import gg.pqp.app.jam.JamBidi
 import gg.pqp.app.jam.JamNoticeRules
+import gg.pqp.app.jam.JamSearchRules
+import gg.pqp.app.jam.JamSearchState
 import gg.pqp.app.jam.JamNoticeState
 import gg.pqp.app.jam.JamSongSummary
 import gg.pqp.app.jam.JamRecordRules
@@ -199,17 +204,9 @@ fun JamWallScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.fillMaxSize().widthIn(max = MaxWallWidth)) {
-                if (state.phase == JamWallUiState.Phase.Ready) {
-                    JamWaitingStrip(
-                        songs = waitingSongs,
-                        onSee = {
-                            // Every waiting part is on one song: go straight to it, where they are the first thing on the page.
-                            if (waitingSongs.size == 1) onOpenSongById(waitingSongs.first().songId) else inboxOpen = true
-                        },
-                    )
-                }
                 val showFilters = state.phase == JamWallUiState.Phase.Ready && !state.emptyWall
                 if (showFilters) {
+                    SearchField(state.query, onChange = model::setQuery)
                     FilterStrip(state.filter, onSelect = model::setFilter)
                 }
                 when {
@@ -240,6 +237,11 @@ fun JamWallScreen(
                             model = model,
                             onOpenSong = onOpenSong,
                             waitingOf = { id -> notices.waitingCount(id) },
+                            waitingSongs = waitingSongs,
+                            // Every waiting part is on one song: go straight to it, where they are the first thing on the page.
+                            onSeeWaiting = {
+                                if (waitingSongs.size == 1) onOpenSongById(waitingSongs.first().songId) else inboxOpen = true
+                            },
                         )
                     }
                 }
@@ -255,6 +257,84 @@ fun JamWallScreen(
             },
             onDismiss = { inboxOpen = false },
         )
+    }
+}
+
+/**
+ * The wall's search: title and artist, accent-blind, asked from two letters after a short pause (`JamSearchRules`), the
+ * same on both phones. The text shows as it is typed; the field says what it waits for after one letter, and a clear
+ * button takes it back to the wall.
+ */
+@Composable
+private fun SearchField(query: String, onChange: (String) -> Unit) {
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val label = stringResource(R.string.jam_search_label)
+    androidx.compose.material3.OutlinedTextField(
+        value = query,
+        onValueChange = onChange,
+        singleLine = true,
+        placeholder = { Text(stringResource(R.string.jam_search_hint), maxLines = 1) },
+        leadingIcon = { Icon(PqpIcons.Search, contentDescription = null) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onChange("") }, modifier = Modifier.testTag("jam.search.clear")) {
+                    Icon(PqpIcons.Close, contentDescription = stringResource(R.string.jam_search_clear))
+                }
+            }
+        },
+        // Only when there is something to say: an empty supporting slot still reserves its height.
+        supportingText = if (JamSearchRules.needsMore(query)) ({ Text(stringResource(R.string.jam_search_min)) }) else null,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { focus.clearFocus() }),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.gutter)
+            .semantics { contentDescription = label }
+            .testTag("jam.search"),
+    )
+}
+
+/** The three answers of a search that must never look alike: still asking, no results, and a search that failed. */
+@Composable
+private fun SearchStatus(state: JamWallUiState, onRetry: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    when (val s = state.search) {
+        is JamSearchState.Searching -> Row(
+            Modifier.fillMaxWidth().padding(vertical = Spacing.sm).semantics { liveRegion = LiveRegionMode.Polite }.testTag("jam.search.searching"),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(Spacing.sm))
+            Text(stringResource(R.string.jam_search_searching), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+        }
+        is JamSearchState.Done -> if (s.songs.isEmpty()) {
+            Text(
+                text = stringResource(R.string.jam_search_empty, JamBidi.clean(s.query)),
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = Spacing.xl)
+                    .semantics { liveRegion = LiveRegionMode.Polite }
+                    .testTag("jam.search.empty"),
+            )
+        }
+        is JamSearchState.Failed -> Column(
+            Modifier.fillMaxWidth().padding(vertical = Spacing.lg).semantics { liveRegion = LiveRegionMode.Polite }.testTag("jam.search.failed"),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.md),
+        ) {
+            Text(
+                text = stringResource(R.string.jam_search_failed),
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.error,
+                textAlign = TextAlign.Center,
+            )
+            Button(onClick = onRetry, modifier = Modifier.testTag("jam.search.retry")) { Text(stringResource(R.string.jam_retry)) }
+        }
+        JamSearchState.Idle -> Unit
     }
 }
 
@@ -300,6 +380,8 @@ private fun Mosaic(
     model: JamWallViewModel,
     onOpenSong: (JamSongSummary) -> Unit,
     waitingOf: (String) -> Int,
+    waitingSongs: List<JamNoticeRules.WaitingSong>,
+    onSeeWaiting: () -> Unit,
 ) {
     val visible = state.visible
     val lastId = visible.lastOrNull()?.id
@@ -317,13 +399,32 @@ private fun Mosaic(
         val grow = max(1f, fontScale).let { 1f + (it - 1f) * 0.55f }
         val unit: Dp = if (columns == 1) unitWidth * 0.42f * grow else unitWidth * 0.92f * grow
 
+        // A row that appears ABOVE what is on screen would leave the list scrolled past it: when the waiting row arrives
+        // while the list is at (or near) the top, the list goes back to the top so the row is seen.
+        val hasWaitingRow = waitingSongs.isNotEmpty() && !state.searching
+        LaunchedEffect(hasWaitingRow) {
+            if (hasWaitingRow && listState.firstVisibleItemIndex <= 1) {
+                if (reduce) listState.scrollToItem(0) else listState.animateScrollToItem(0)
+            }
+        }
+
         LazyColumn(
             state = listState,
             contentPadding = PaddingValues(start = gutter, end = gutter, top = Spacing.xs, bottom = Spacing.xxl * 3),
             verticalArrangement = Arrangement.spacedBy(Gap),
             modifier = Modifier.fillMaxSize().testTag("jam.list"),
         ) {
-            if (visible.isEmpty()) {
+            // What waits for THIS person is the first row of the list, not a fixed bar: a row of the list is never under the
+            // record button, at any width or font scale, and scrolls like everything else.
+            if (waitingSongs.isNotEmpty() && !state.searching) {
+                item(key = "waiting") {
+                    JamWaitingStrip(songs = waitingSongs, onSee = onSeeWaiting, modifier = Modifier.animateItem())
+                }
+            }
+            if (state.searching) {
+                item(key = "search-status") { SearchStatus(state, onRetry = model::retrySearch) }
+            }
+            if (visible.isEmpty() && !state.searching) {
                 item(key = "filter-empty") {
                     Text(
                         text = stringResource(R.string.jam_filter_empty),
@@ -398,7 +499,19 @@ private const val LARGE_TYPE = 1.5f
 
 @Composable
 private fun Footer(state: JamWallUiState, onRetry: () -> Unit) {
+    val results = state.search as? JamSearchState.Done
     when {
+        results != null && results.loadingMore -> Box(Modifier.fillMaxWidth().padding(Spacing.lg), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+        }
+        results != null && results.moreFailed -> Text(
+            text = stringResource(R.string.jam_more_failed),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onRetry).padding(Spacing.lg).testTag("jam.search.moreFailed"),
+        )
+        state.searching -> Spacer(Modifier.height(Spacing.sm))
         state.loadingMore -> Box(Modifier.fillMaxWidth().padding(Spacing.lg), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
         }

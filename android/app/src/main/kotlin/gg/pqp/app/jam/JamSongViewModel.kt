@@ -57,6 +57,8 @@ data class JamSongUi(
     val callLive: Boolean = false,
     /** The take being adjusted, with the edits not yet saved. Heard at once, sent on "Salvar". */
     val adjust: JamAdjust? = null,
+    /** A take was asked to be heard and its file is still on its way: playback is about to start (the button says so). */
+    val playPending: Boolean = false,
 ) {
     enum class Phase { Loading, Ready, Failed, Gone }
 
@@ -331,6 +333,7 @@ class JamSongViewModel(
         // take's own file is still on its way when the tap lands.
         if (playAfterLoad && _ui.value.ready) {
             playAfterLoad = false
+            _ui.update { it.copy(playPending = false) }
             if (!_ui.value.playing) play()
         }
     }
@@ -466,7 +469,7 @@ class JamSongViewModel(
 
     fun stopAudition(instrument: JamInstrument) {
         playAfterLoad = false
-        _ui.update { it.copy(auditioning = it.auditioning - instrument) }
+        _ui.update { it.copy(auditioning = it.auditioning - instrument, playPending = false) }
         syncStems()
     }
 
@@ -481,9 +484,20 @@ class JamSongViewModel(
             load()
             return
         }
+        // Refused up front when it cannot play (a call is live): nothing is auditioned, and the button never says it is
+        // playing something that is not.
+        if (!_ui.value.playing && !JamFocusPolicy.mayStart(callActive.value)) {
+            notice(JamNotice.CallLive)
+            return
+        }
         audition(track)
         if (_ui.value.playing) return
-        if (_ui.value.ready) play() else playAfterLoad = true
+        if (_ui.value.ready) {
+            play()
+        } else {
+            playAfterLoad = true
+            _ui.update { it.copy(playPending = true) }
+        }
     }
 
     // --- writes ---

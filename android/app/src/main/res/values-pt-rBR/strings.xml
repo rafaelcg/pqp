@@ -2015,7 +2015,7 @@
         <item quantity="one">Mais %d esperando depois dessa.</item>
         <item quantity="other">Mais %d esperando depois dessa.</item>
     </plurals>
-    <string name="jam_notice_toast_take">Pedido novo em \"%1$s\".</string>
+    <string name="jam_notice_toast_take">Chegou uma parte em \"%1$s\".</string>
     <string name="jam_notice_toast_admitted">Uma parte nova entrou sozinha em \"%1$s\".</string>
     <string name="jam_notice_toast_see">Ver</string>
     <string name="jam_open_gone">Essa música não existe mais, ou não é dessa Jam.</string>
@@ -2035,7 +2035,7 @@
     <string name="jam_requests_stop">Parar</string>
     <string name="jam_requests_accept">Aceitar</string>
     <string name="jam_requests_decline">Recusar</string>
-    <string name="jam_requests_decline_title">Recusar esse pedido?</string>
+    <string name="jam_requests_decline_title">Recusar a parte de %1$s de %2$s?</string>
     <string name="jam_requests_decline_body">A gravação é apagada. Ela nunca entrou na música.</string>
     <string name="jam_requests_failed_accept">Não deu pra aceitar essa parte. Ela continua esperando por ti.</string>
     <string name="jam_requests_failed_decline">Não deu pra recusar essa parte. Ela continua esperando por ti.</string>
@@ -2069,4 +2069,19 @@
     </plurals>
     <string name="jam_share_sent_open">%1$s: mandei a minha parte de %2$s, ela entra quando quem começou aceitar. Jam aberta pra quem quiser, entra e grava a tua parte:</string>
     <string name="jam_share_sent_listen">%1$s: mandei a minha parte de %2$s, ela entra quando quem começou aceitar. Dá uma ouvida nessa jam:</string>
+
+    <!-- Spoken labels of the waiting-part buttons: the instrument and the sender, so three parts are not three identical buttons. -->
+    <string name="jam_requests_listen_for">Ouvir com a banda a parte de %1$s de %2$s</string>
+    <string name="jam_requests_stop_for">Parar de ouvir a parte de %1$s de %2$s</string>
+    <string name="jam_requests_accept_for">Aceitar a parte de %1$s de %2$s</string>
+    <string name="jam_requests_decline_for">Recusar a parte de %1$s de %2$s</string>
+
+    <!-- Jam: searching a wall (title and artist, accent-blind, from two letters), the same on both phones. -->
+    <string name="jam_search_label">Buscar músicas</string>
+    <string name="jam_search_hint">Nome ou artista</string>
+    <string name="jam_search_clear">Limpar a busca</string>
+    <string name="jam_search_min">Escreve pelo menos 2 letras.</string>
+    <string name="jam_search_searching">Buscando</string>
+    <string name="jam_search_empty">Nenhuma música com \"%1$s\". Confere a grafia ou limpa a busca.</string>
+    <string name="jam_search_failed">A busca não deu certo, então isso não diz se a música existe. Confere a internet e tenta de novo.</string>
 </resources>

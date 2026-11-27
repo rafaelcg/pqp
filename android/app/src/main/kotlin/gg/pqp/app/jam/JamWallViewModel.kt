@@ -10,6 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -73,11 +74,26 @@ data class JamWallUiState(
      */
     val chaseStopped: Boolean = false,
     val previews: Map<String, JamPreview> = emptyMap(),
+    /** What is typed in the search field (shown as typed, searched once it is two letters). */
+    val query: String = "",
+    val search: JamSearchState = JamSearchState.Idle,
 ) {
     enum class Phase { Loading, Ready, Failed }
 
-    /** The songs the filter lets through, in the server's order. */
-    val visible: List<JamSongSummary> get() = wall.songs.filter(filter::matches)
+    /** The songs the filter lets through, in the server's order: the search's results while one is up, else the wall. */
+    val visible: List<JamSongSummary>
+        get() {
+            val base = when (val s = search) {
+                is JamSearchState.Done -> s.songs
+                is JamSearchState.Searching -> s.previous ?: emptyList()
+                is JamSearchState.Failed -> emptyList()
+                JamSearchState.Idle -> wall.songs
+            }
+            return base.filter(filter::matches)
+        }
+
+    /** A search is on screen (asked, answered or failed): the wall's own paging and empty states stand aside. */
+    val searching: Boolean get() = search != JamSearchState.Idle
 
     /** Nothing in the channel at all, as opposed to nothing under this filter. */
     val emptyWall: Boolean get() = phase == Phase.Ready && wall.isEmpty
@@ -236,7 +252,9 @@ class JamWallViewModel(
      * followed is no longer the wall's) is dropped, and a failure leaves a retry
      * in place of the end of the wall.
      */
-    fun loadMore() = loadMore(auto = 0)
+    fun loadMore() {
+        if (_state.value.searching) searchMore() else loadMore(auto = 0)
+    }
 
     /** [auto] is how many pages in a row the wall has asked for by itself under a filter that nothing passes. */
     private fun loadMore(auto: Int) {
@@ -278,6 +296,99 @@ class JamWallViewModel(
     private fun markSeen() {
         val newest = _state.value.wall.songs.firstOrNull()?.updatedAtMs ?: return
         seen(newest)
+    }
+
+    // --- search ---
+
+    private var searchJob: Job? = null
+    private var searchGeneration = 0
+
+    /**
+     * The field changed. What is typed shows at once; a request goes out [JamSearchRules.DEBOUNCE_MS] after the last key,
+     * and only for two letters or more. Fewer clears the search and the wall is the wall again. An answer that a newer
+     * key has overtaken is dropped.
+     */
+    fun setQuery(typed: String) {
+        val text = typed.take(JamSearchRules.MAX_CHARS)
+        searchJob?.cancel()
+        searchGeneration += 1
+        val effective = JamSearchRules.effective(text)
+        if (effective == null) {
+            _state.update { it.copy(query = text, search = JamSearchState.Idle) }
+            return
+        }
+        val request = searchGeneration
+        _state.update { current ->
+            val previous = when (val s = current.search) {
+                is JamSearchState.Done -> s.songs
+                is JamSearchState.Searching -> s.previous
+                else -> null
+            }
+            current.copy(query = text, search = JamSearchState.Searching(previous))
+        }
+        searchJob = viewModelScope.launch {
+            delay(JamSearchRules.DEBOUNCE_MS)
+            runSearch(effective, request)
+        }
+    }
+
+    /** "Tentar de novo" after a failed search. */
+    fun retrySearch() {
+        val effective = JamSearchRules.effective(_state.value.query) ?: return
+        searchJob?.cancel()
+        searchGeneration += 1
+        val request = searchGeneration
+        _state.update { it.copy(search = JamSearchState.Searching(null)) }
+        searchJob = viewModelScope.launch { runSearch(effective, request) }
+    }
+
+    private suspend fun runSearch(query: String, request: Int) {
+        try {
+            val page = backend.searchSongs(channelId, query, limit = JamLimits.PAGE_MAX)
+            if (request != searchGeneration) return
+            _state.update { it.copy(search = JamSearchState.Done(query, page.songs, page.nextCursor)) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            if (request != searchGeneration) return
+            _state.update { it.copy(search = JamSearchState.Failed(query)) }
+        }
+    }
+
+    /** The next page of results (the last tile came on screen): kept apart from the wall's own paging. */
+    private fun searchMore() {
+        val done = _state.value.search as? JamSearchState.Done ?: return
+        val cursor = done.nextCursor ?: return
+        if (done.loadingMore) return
+        val request = searchGeneration
+        _state.update { it.copy(search = done.copy(loadingMore = true, moreFailed = false)) }
+        viewModelScope.launch {
+            try {
+                val page = backend.searchSongs(channelId, done.query, cursor, JamLimits.PAGE_MAX)
+                _state.update { current ->
+                    val now = current.search as? JamSearchState.Done
+                    if (request != searchGeneration || now == null || now.query != done.query) {
+                        current
+                    } else {
+                        val known = now.songs.mapTo(HashSet()) { it.id }
+                        current.copy(
+                            search = now.copy(
+                                songs = now.songs + page.songs.filter { it.id !in known },
+                                nextCursor = page.nextCursor,
+                                loadingMore = false,
+                            ),
+                        )
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _state.update { current ->
+                    val now = current.search as? JamSearchState.Done
+                    if (request != searchGeneration || now == null) current else current.copy(search = now.copy(loadingMore = false, moreFailed = true))
+                }
+            }
+        }
     }
 
     // --- live frames ---

@@ -36,6 +36,19 @@ object JamNoticeRules {
     /** Takes waiting on [songId]: the wall's tile pill. */
     fun waitingCount(inbox: List<JamPublicInboxItem>, songId: String): Int = inbox.count { it.songId == songId }
 
+    /**
+     * The waiting parts being heard RIGHT NOW, for the button's label: the take is the one in place of the mix's of its
+     * instrument AND something is playing, or is about to (its file is still on its way). After the clip ends, or when
+     * playback was refused (a call is live), nothing is "heard": the button says "Ouvir" again and never "Parar".
+     */
+    fun listening(
+        pending: List<JamTrack>,
+        auditioning: Map<JamInstrument, String>,
+        playing: Boolean,
+        playPending: Boolean,
+    ): Set<String> =
+        if (playing || playPending) pending.filter { auditioning[it.instrument] == it.id }.mapTo(HashSet()) { it.id } else emptySet()
+
     /** Songs with a take waiting, in the order the inbox lists them, with how many. */
     fun songsWaiting(inbox: List<JamPublicInboxItem>): List<WaitingSong> =
         inbox.groupBy { it.songId }.map { (id, items) -> WaitingSong(id, items.first().songTitle, items.size) }

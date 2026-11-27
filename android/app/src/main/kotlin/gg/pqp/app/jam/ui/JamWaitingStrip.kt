@@ -49,7 +49,6 @@ fun JamWaitingStrip(songs: List<JamNoticeRules.WaitingSong>, onSee: () -> Unit, 
     Row(
         modifier
             .fillMaxWidth()
-            .padding(horizontal = Spacing.gutter, vertical = Spacing.xs)
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(start = Spacing.md, top = Spacing.sm, bottom = Spacing.sm, end = Spacing.sm)

@@ -90,6 +90,30 @@ class JamNoticeRulesTest {
         assertEquals(two, JamNoticeRules.afterDrop(two, "ghost"))
     }
 
+    // --- the Listen button's label follows real playback ---
+
+    private val bass = JamTrack(id = "t1", songId = "s1", instrument = JamInstrument.Bass)
+    private val drums = JamTrack(id = "t2", songId = "s1", instrument = JamInstrument.Drums)
+
+    @Test
+    fun `a part is listened to only while it plays or is about to`() {
+        val chosen = mapOf(JamInstrument.Bass to "t1")
+        assertEquals(setOf("t1"), JamNoticeRules.listening(listOf(bass, drums), chosen, playing = true, playPending = false))
+        assertEquals("its file is still on its way", setOf("t1"), JamNoticeRules.listening(listOf(bass, drums), chosen, playing = false, playPending = true))
+    }
+
+    @Test
+    fun `after the clip ends, or when playback was refused, nobody is listened to`() {
+        val chosen = mapOf(JamInstrument.Bass to "t1")
+        assertTrue(JamNoticeRules.listening(listOf(bass, drums), chosen, playing = false, playPending = false).isEmpty())
+    }
+
+    @Test
+    fun `only the chosen take of an instrument is listened to`() {
+        val chosen = mapOf(JamInstrument.Bass to "someone-else")
+        assertTrue(JamNoticeRules.listening(listOf(bass), chosen, playing = true, playPending = false).isEmpty())
+    }
+
     // --- where a song's id leads ---
 
     private fun place(server: String? = "srv", channel: String? = "chan") = JamSongPlace.Place("s1", server, channel, "Lua")

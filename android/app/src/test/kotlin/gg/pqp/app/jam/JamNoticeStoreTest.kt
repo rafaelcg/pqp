@@ -67,13 +67,18 @@ class JamNoticeStoreTest {
             return config
         }
 
+        /** Holds a read after its answer was produced (so it predates what happens meanwhile), like a slow server. */
+        val inboxGates = ArrayDeque<kotlinx.coroutines.CompletableDeferred<Unit>>()
+
         override suspend fun inbox(): JamPublicInboxResponse {
             inboxReads += 1
             if (inboxFailures > 0) {
                 inboxFailures -= 1
                 error("offline")
             }
-            return inbox
+            val answer = inbox
+            inboxGates.removeFirstOrNull()?.await()
+            return answer
         }
 
         override suspend fun notices(): JamTakeNoticesResponse {
@@ -241,6 +246,27 @@ class JamNoticeStoreTest {
         advanceUntilIdle()
         // Each frame waits for the read in flight instead of starting its own: far fewer reads than frames.
         assertTrue("reads: ${backend.inboxReads - before}", backend.inboxReads - before <= 2)
+    }
+
+    @Test
+    fun `frames that arrive during a read are not lost to it, the count ends right`() = runTest {
+        val backend = Backend().apply { inbox = JamPublicInboxResponse(listOf(item("t1", "s1"))) }
+        val store = store(backend)
+        advanceUntilIdle()
+        // A read is out, produced before the next two takes arrived (three at once, as the QA found).
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        backend.inboxGates += gate
+        backend.frameFlow.tryEmit(takeFrame())
+        runCurrent()
+        backend.inbox = JamPublicInboxResponse(listOf(item("t1", "s1"), item("t2", "s1"), item("t3", "s1")))
+        backend.notices = JamTakeNoticesResponse(listOf(notice("n1", "s1", count = 3)))
+        backend.frameFlow.tryEmit(takeFrame())
+        backend.frameFlow.tryEmit(takeFrame())
+        runCurrent()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("the strip and the pill read the same 3 as the card", 3, store.state.value.waitingCount("s1"))
+        assertEquals(3, store.state.value.notices.single().count)
     }
 
     @Test

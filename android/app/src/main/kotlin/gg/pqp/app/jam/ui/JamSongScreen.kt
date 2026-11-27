@@ -126,6 +126,7 @@ import gg.pqp.app.jam.JamWriteFailure
 import gg.pqp.app.jam.JamNaming
 import gg.pqp.app.jam.JamNeed
 import gg.pqp.app.jam.JamNotice
+import gg.pqp.app.jam.JamNoticeRules
 import gg.pqp.app.jam.JamPeaks
 import gg.pqp.app.jam.JamPermissions
 import gg.pqp.app.jam.JamPlayhead
@@ -590,6 +591,11 @@ private fun SongBody(
     // A waiting part is a question, not an alternative take: it is listed in its own block, never twice.
     val pendingIds = remember(pending) { pending.mapTo(HashSet()) { it.id } }
     val others = ui.otherTakes.filter { it.id !in pendingIds }
+    // Heard right now: the take is the one in place of the mix's AND something is playing (or about to). After the clip
+    // ends, or when playback was refused, the button says "Ouvir" again.
+    val listening = remember(pending, ui.auditioning, ui.playing, ui.playPending) {
+        JamNoticeRules.listening(pending, ui.auditioning, ui.playing, ui.playPending)
+    }
     val reduce = rememberReduceMotion()
     // The one playhead is drawn across the lanes and NOT across an open adjust editor, which has a playhead of its own on a
     // different scale: where the editor sits is measured against the block, and the line skips it.
@@ -637,10 +643,10 @@ private fun SongBody(
                     JamRequestsBlock(
                         takes = pending,
                         autoAccept = autoAccept,
-                        auditioning = ui.auditioning,
+                        listening = listening,
                         requests = requests,
                         onListen = { track ->
-                            if (ui.auditioning[track.instrument] == track.id) model.stopAudition(track.instrument) else model.listen(track)
+                            if (track.id in listening) model.stopAudition(track.instrument) else model.listen(track)
                         },
                         onAccept = model.requests::accept,
                         onDecline = model.requests::askDecline,
@@ -1467,7 +1473,7 @@ private fun TransportBar(
                 }
                 // Where the real record button will go: honest about where recording is, never dead.
                 val recordLabel = stringResource(R.string.jam_record)
-                if (LocalDensity.current.fontScale >= 1.4f) {
+                if (LocalDensity.current.fontScale >= 1.15f) {
                     // Big type: the label would squeeze the clock, so the button is its glyph, still named for TalkBack.
                     androidx.compose.material3.OutlinedIconButton(onClick = onRecord, modifier = Modifier.testTag("jam.record")) {
                         Icon(PqpIcons.Mic, contentDescription = recordLabel)

@@ -51,10 +51,13 @@ suspend fun ApiClient.jamSongs(
     channelId: String,
     cursor: String? = null,
     limit: Int = JamLimits.PAGE_SIZE,
+    /** The wall's search: matches title and artist, case and accent insensitive (the server's `q`). */
+    q: String? = null,
 ): JamSongListResponse {
     val query = buildMap {
         put("limit", limit.coerceIn(1, JamLimits.PAGE_MAX).toString())
         if (cursor != null) put("cursor", cursor)
+        if (!q.isNullOrBlank()) put("q", q)
     }
     return getJson("/api/channels/$channelId/jam-songs", query)
 }

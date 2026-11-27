@@ -38,6 +38,12 @@ sealed interface DeepLinkTarget {
     data class JamPublicSong(val songId: String) : DeepLinkTarget
 
     /**
+     * `/app/jam/mine` ("Tuas músicas") and `/app/jam/new` (a new public song): web screens the phone has no equivalent
+     * of, so the web opens them. [page] is the last segment, exactly `mine` or `new`.
+     */
+    data class JamWeb(val page: String) : DeepLinkTarget
+
+    /**
      * A DM or a group. `channelId` really is a channel id: a conversation is a
      * `channels` row with `kind` of `dm` or `group`, and `/app/dm/<id>` carries
      * that id, not a separate conversation id.
@@ -75,7 +81,7 @@ val DeepLinkTarget.channelId: String?
         is DeepLinkTarget.ForumPost -> postId
         is DeepLinkTarget.JamSong -> channelId
         is DeepLinkTarget.Conversation -> channelId
-        is DeepLinkTarget.Server, is DeepLinkTarget.Bau, is DeepLinkTarget.Invite, is DeepLinkTarget.JamPublicSong -> null
+        is DeepLinkTarget.Server, is DeepLinkTarget.Bau, is DeepLinkTarget.Invite, is DeepLinkTarget.JamPublicSong, is DeepLinkTarget.JamWeb -> null
     }
 
 object DeepLink {
@@ -152,9 +158,21 @@ object DeepLink {
             segments.size >= 3 && segments[1] == "jam" && isSongId(segments[2]) ->
                 DeepLinkTarget.JamPublicSong(segments[2].lowercase())
 
+            segments.size == 3 && segments[1] == "jam" && (segments[2] == "mine" || segments[2] == "new") ->
+                DeepLinkTarget.JamWeb(segments[2])
+
             else -> null
         }
     }
+
+    /**
+     * A push's `tag` read as a conversation, which it is ONLY when it is a conversation id: `buildPushPayload` tags a DM
+     * with the channel id, and every other push tags itself with a prefix (`jam-take:`, `bau:`, `stream:`,
+     * `channel-session:`, `watch-party-waitlist:`). Reading any tag as a conversation opened a "not found" conversation
+     * for a jam push whose path did not parse.
+     */
+    fun conversationTag(tag: String?): DeepLinkTarget.Conversation? =
+        tag?.trim()?.takeIf { SONG_ID.matches(it) }?.let { DeepLinkTarget.Conversation(it) }
 
     private fun pqpScheme(raw: String): DeepLinkTarget? {
         if (!raw.startsWith(PQP_SCHEME)) return null

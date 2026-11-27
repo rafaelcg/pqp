@@ -60,14 +60,35 @@ class DeepLinkTest {
     }
 
     @Test
-    fun `the web's other jam screens, and anything that is not a song id, open nothing here`() {
+    fun `anything under jam that is not a song id, or the web's two screens, opens nothing here`() {
         // `/app/jam/mine` and `/app/jam/new` are web screens; an id becomes a URL path segment, so it is checked.
-        assertNull(DeepLink.target("/app/jam/mine"))
-        assertNull(DeepLink.target("/app/jam/new"))
         assertNull(DeepLink.target("/app/jam"))
         assertNull(DeepLink.target("/app/jam/not-a-uuid"))
         assertNull(DeepLink.target("/app/jam/../../api/me"))
         assertNull(DeepLink.target("/app/jam/0b6d3a52-7c1e-4f0a-9d3e-1a2b3c4d5e6f%2F..%2Fme"))
+    }
+
+    @Test
+    fun `the web's mine and new screens are web pages here, nothing else under jam is`() {
+        assertEquals(DeepLinkTarget.JamWeb("mine"), DeepLink.target("/app/jam/mine"))
+        assertEquals(DeepLinkTarget.JamWeb("new"), DeepLink.target("https://pqp.gg/app/jam/new"))
+        assertNull(DeepLinkTarget.JamWeb("mine").channelId)
+        assertNull(DeepLink.target("/app/jam/other"))
+        assertNull(DeepLink.target("/app/jam/mine/extra"))
+    }
+
+    @Test
+    fun `a push tag is a conversation only when it is a conversation id`() {
+        // `buildPushPayload` tags a DM with the channel id; every other push tags itself with a prefix.
+        val id = "0b6d3a52-7c1e-4f0a-9d3e-1a2b3c4d5e6f"
+        assertEquals(DeepLinkTarget.Conversation(id), DeepLink.conversationTag(id))
+        assertNull(DeepLink.conversationTag("jam-take:$id:take"))
+        assertNull(DeepLink.conversationTag("bau:$id"))
+        assertNull(DeepLink.conversationTag("stream:$id"))
+        assertNull(DeepLink.conversationTag("channel-session:$id"))
+        assertNull(DeepLink.conversationTag("watch-party-waitlist:$id"))
+        assertNull(DeepLink.conversationTag(""))
+        assertNull(DeepLink.conversationTag(null))
     }
 
     @Test

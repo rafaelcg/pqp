@@ -34,11 +34,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import gg.pqp.app.R
 import gg.pqp.app.jam.JamAnswer
 import gg.pqp.app.jam.JamAnswerKind
@@ -68,7 +70,8 @@ import kotlinx.coroutines.delay
 fun JamRequestsBlock(
     takes: List<JamTrack>,
     autoAccept: Boolean,
-    auditioning: Map<JamInstrument, String>,
+    /** The parts being heard RIGHT NOW (playing, or about to): the label follows real playback, never a refused tap. */
+    listening: Set<String>,
     requests: JamRequestsUi,
     onListen: (JamTrack) -> Unit,
     onAccept: (JamTrack) -> Unit,
@@ -103,7 +106,7 @@ fun JamRequestsBlock(
             androidx.compose.runtime.key(track.id) {
                 RequestRow(
                     track = track,
-                    heard = auditioning[track.instrument] == track.id,
+                    heard = track.id in listening,
                     busy = requests.busy != null,
                     failure = requests.failure?.takeIf { it.trackId == track.id },
                     onListen = { onListen(track) },
@@ -128,6 +131,14 @@ private fun RequestRow(
 ) {
     val colors = MaterialTheme.colorScheme
     val name = JamBidi.clean(track.authorName ?: stringResource(R.string.jam_answer_anonymous))
+    // What a screen reader says for each button: whose part and which instrument, so three parts are not three
+    // identical "Aceitar".
+    val who = track.instrument.label()
+    val listenFor = stringResource(if (heard) R.string.jam_requests_stop_for else R.string.jam_requests_listen_for, who, name)
+    val acceptFor = stringResource(R.string.jam_requests_accept_for, who, name)
+    val declineFor = stringResource(R.string.jam_requests_decline_for, who, name)
+    // The glyph grows with the text it sits beside.
+    val glyph = with(androidx.compose.ui.platform.LocalDensity.current) { 16.sp.toDp() }
     Column(
         Modifier
             .fillMaxWidth()
@@ -168,15 +179,26 @@ private fun RequestRow(
             itemVerticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            OutlinedButton(onClick = onListen, modifier = Modifier.testTag("jam.request.listen.${track.id}")) {
-                Icon(if (heard) PqpIcons.Pause else PqpIcons.Play, contentDescription = null, modifier = Modifier.size(16.dp))
+            OutlinedButton(
+                onClick = onListen,
+                modifier = Modifier.semantics { contentDescription = listenFor }.testTag("jam.request.listen.${track.id}"),
+            ) {
+                Icon(if (heard) PqpIcons.Pause else PqpIcons.Play, contentDescription = null, modifier = Modifier.size(glyph))
                 Spacer(Modifier.width(6.dp))
                 Text(stringResource(if (heard) R.string.jam_requests_stop else R.string.jam_requests_listen))
             }
-            Button(onClick = onAccept, enabled = !busy, modifier = Modifier.testTag("jam.request.accept.${track.id}")) {
+            Button(
+                onClick = onAccept,
+                enabled = !busy,
+                modifier = Modifier.semantics { contentDescription = acceptFor }.testTag("jam.request.accept.${track.id}"),
+            ) {
                 Text(stringResource(R.string.jam_requests_accept))
             }
-            TextButton(onClick = onDecline, enabled = !busy, modifier = Modifier.testTag("jam.request.decline.${track.id}")) {
+            TextButton(
+                onClick = onDecline,
+                enabled = !busy,
+                modifier = Modifier.semantics { contentDescription = declineFor }.testTag("jam.request.decline.${track.id}"),
+            ) {
                 Text(stringResource(R.string.jam_requests_decline))
             }
         }
@@ -243,7 +265,7 @@ fun JamAnswerBox(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                if (answer.kind == JamAnswerKind.Refused) PqpIcons.Close else PqpIcons.Confirm,
+                if (answer.kind == JamAnswerKind.Refused) PqpIcons.Block else PqpIcons.Confirm,
                 contentDescription = null,
                 tint = colors.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
@@ -265,7 +287,7 @@ fun JamAnswerBox(
             )
             if (answer.kind == JamAnswerKind.Accepted) {
                 OutlinedButton(onClick = onUndo, enabled = !busy, modifier = Modifier.testTag("jam.answer.undo")) {
-                    Icon(PqpIcons.Undo, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(PqpIcons.Undo, contentDescription = null, modifier = Modifier.size(with(androidx.compose.ui.platform.LocalDensity.current) { 16.sp.toDp() }))
                     Spacer(Modifier.width(6.dp))
                     Text(stringResource(R.string.jam_answer_undo))
                 }
@@ -290,7 +312,15 @@ fun JamAnswerBox(
 fun JamDeclineDialog(track: JamTrack, enabled: Boolean, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.jam_requests_decline_title)) },
+        title = {
+            Text(
+                stringResource(
+                    R.string.jam_requests_decline_title,
+                    track.instrument.label(),
+                    JamBidi.isolate(track.authorName ?: stringResource(R.string.jam_answer_anonymous)),
+                ),
+            )
+        },
         text = { Text(stringResource(R.string.jam_requests_decline_body)) },
         confirmButton = {
             TextButton(onClick = onConfirm, enabled = enabled, modifier = Modifier.testTag("jam.decline.confirm")) {

@@ -2030,7 +2030,7 @@
         <item quantity="one">%d more after this one.</item>
         <item quantity="other">%d more after this one.</item>
     </plurals>
-    <string name="jam_notice_toast_take">New request on \"%1$s\".</string>
+    <string name="jam_notice_toast_take">A new part arrived in \"%1$s\".</string>
     <string name="jam_notice_toast_admitted">A new part joined \"%1$s\" on its own.</string>
     <string name="jam_notice_toast_see">See</string>
     <string name="jam_open_gone">This song no longer exists, or it is not from this jam.</string>
@@ -2050,7 +2050,7 @@
     <string name="jam_requests_stop">Stop</string>
     <string name="jam_requests_accept">Accept</string>
     <string name="jam_requests_decline">Decline</string>
-    <string name="jam_requests_decline_title">Decline this request?</string>
+    <string name="jam_requests_decline_title">Decline %2$s\'s %1$s part?</string>
     <string name="jam_requests_decline_body">The recording is deleted. It never joined the song.</string>
     <string name="jam_requests_failed_accept">Could not accept this part. It is still waiting for you.</string>
     <string name="jam_requests_failed_decline">Could not decline this part. It is still waiting for you.</string>
@@ -2084,4 +2084,19 @@
     </plurals>
     <string name="jam_share_sent_open">%1$s: I sent my %2$s part, it joins once whoever started the jam accepts it. A jam open to anyone, come record yours:</string>
     <string name="jam_share_sent_listen">%1$s: I sent my %2$s part, it joins once whoever started the jam accepts it. Give the jam a listen:</string>
+
+    <!-- Spoken labels of the waiting-part buttons: the instrument and the sender, so three parts are not three identical buttons. -->
+    <string name="jam_requests_listen_for">Listen with the band to %2$s\'s %1$s part</string>
+    <string name="jam_requests_stop_for">Stop listening to %2$s\'s %1$s part</string>
+    <string name="jam_requests_accept_for">Accept %2$s\'s %1$s part</string>
+    <string name="jam_requests_decline_for">Decline %2$s\'s %1$s part</string>
+
+    <!-- Jam: searching a wall (title and artist, accent-blind, from two letters), the same on both phones. -->
+    <string name="jam_search_label">Search songs</string>
+    <string name="jam_search_hint">Name or artist</string>
+    <string name="jam_search_clear">Clear search</string>
+    <string name="jam_search_min">Type at least 2 letters.</string>
+    <string name="jam_search_searching">Searching</string>
+    <string name="jam_search_empty">No song matches \"%1$s\". Check the spelling or clear the search.</string>
+    <string name="jam_search_failed">The search did not go through, so this says nothing about whether the song exists. Check your connection and try again.</string>
 </resources>

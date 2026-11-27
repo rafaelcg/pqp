@@ -1283,6 +1283,9 @@ private suspend fun navigateToPush(
         is DeepLinkTarget.JamPublicSong ->
             openJamSongById(nav, session, target.songId, context, notify = notify, openWeb = openWeb)
 
+        // The web's "Tuas músicas" and "new public song": the phone has no screen for either.
+        is DeepLinkTarget.JamWeb -> openWeb("${Backend.appUrl}/app/jam/${target.page}")
+
         is DeepLinkTarget.Server ->
             nav.navigate(ChannelsRoute(target.serverId, serverName(target.serverId)))
 
@@ -1332,7 +1335,14 @@ private suspend fun navigateToPush(
     }
 }
 
-/** A jam channel's wall with [songId] open on it, the server's channel list under it so back lands on the server. */
+/**
+ * A jam channel's wall with [songId] open on it, the server's channel list under it so back lands on the server.
+ *
+ * ONE WALL PER CHANNEL IN THE BACK STACK. Two identical taps on a push used to stack two walls (five Back presses to
+ * leave, round 2 QA). A wall of this channel that is already in the stack, on top or under other screens, is taken out
+ * (with everything above it) and opened fresh on the song, so Back leaves in one press and the screen always shows the
+ * song that was asked for. The channel list under it is reused rather than pushed again.
+ */
 private suspend fun openJamWall(
     nav: androidx.navigation.NavHostController,
     session: SessionStore,
@@ -1341,7 +1351,20 @@ private suspend fun openJamWall(
     songId: String,
 ) {
     val name = session.servers.value.firstOrNull { it.id == serverId }?.name.orEmpty()
-    nav.navigate(ChannelsRoute(serverId, name))
+    val existing = nav.currentBackStack.value.lastOrNull { entry ->
+        entry.destination.hasRoute<JamRoute>() && entry.toRoute<JamRoute>().channelId == channelId
+    }
+    if (existing != null) {
+        // Everything above it goes, then it.
+        while (nav.currentBackStackEntry != null && nav.currentBackStackEntry != existing) {
+            if (!nav.popBackStack()) break
+        }
+        nav.popBackStack()
+    }
+    val top = nav.currentBackStackEntry
+    val listIsUnder = top != null && top.destination.hasRoute<ChannelsRoute>() &&
+        top.toRoute<ChannelsRoute>().serverId.equals(serverId, ignoreCase = true)
+    if (!listIsUnder) nav.navigate(ChannelsRoute(serverId, name))
     val jam = try {
         session.api.channels(serverId)
     } catch (e: kotlinx.coroutines.CancellationException) {
