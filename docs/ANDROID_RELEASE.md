@@ -625,6 +625,32 @@ automatically**. Paste it by hand into either:
   from the internal track is being promoted to production, since Play asks
   for one string per locale there regardless of what the upload carried.
 
+### 0.4.40 (`versionCode` 47)
+
+Since 0.4.39 (`versionCode` 46): in Jam you hear when someone sends a part to a
+song you started, and you can listen, accept or refuse it right there. You also
+get a notice when your part gets in, tapping a notice opens the song, you can
+share a song with a ready-made message, and you can search songs on the Jam
+wall.
+
+**pt-BR**:
+
+```
+No Jam, agora tu fica sabendo quando alguém manda uma parte pra uma música que
+tu começou. Dá pra ouvir, aceitar ou recusar ali mesmo. Tu também é avisado
+quando a tua parte entra, e tocar no aviso abre a música. Dá pra compartilhar
+uma música com uma mensagem pronta e buscar músicas no mural do Jam.
+```
+
+**en-US**:
+
+```
+In Jam you now hear when someone sends a part to a song you started. You can
+listen, accept or refuse it right there. You also get a notice when your part
+gets in, and tapping a notice opens the song. You can share a song with a
+ready-made message, and search songs on the Jam wall.
+```
+
 ### 0.4.37 (`versionCode` 44)
 
 Since 0.4.36 (`versionCode` 43): a call uses a connected wired, USB or
