@@ -56,7 +56,7 @@ function AccountLink() {
         aria-label={jt("nav.account")}
         title={signedIn.name ? `${signedIn.name} · ${jt("nav.account")}` : jt("nav.account")}
         data-jam-account=""
-        className={cn(buttonClass.base, buttonClass.ghost, "h-11 gap-2 px-1 text-sm sm:pl-1.5 sm:pr-4")}
+        className={cn(buttonClass.base, buttonClass.ghost, "h-11 gap-1.5 px-1 text-sm min-[390px]:gap-2 sm:pl-1.5 sm:pr-4")}
       >
         <span
           aria-hidden="true"
@@ -89,13 +89,13 @@ export function Header() {
   const home = jamPath(mount, { kind: "home" });
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-surface-0">
-      <div className={cn(CONTAINER, "flex h-16 items-center gap-1 min-[390px]:gap-2 min-[430px]:gap-3")}>
+      <div className={cn(CONTAINER, "flex h-16 items-center gap-1 min-[430px]:gap-3")}>
         <Link
           href={home}
           aria-label={jt("nav.home")}
           className="inline-flex h-11 items-center rounded-[var(--radius-control)] outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
-          <Wordmark className="max-[389px]:text-[19px]" />
+          <Wordmark className="max-[389px]:text-[18px]" />
         </Link>
         <nav aria-label={jt("nav.label")} className="ml-3 hidden sm:block">
           <Link
@@ -113,7 +113,7 @@ export function Header() {
         <AccountLink />
         {/* below 480 px the long label ("Começar uma jam") does not fit beside the wordmark, "Entrar" and the toggle (390
             px is a common phone): the short one is drawn and the long one stays the name, which still contains it */}
-        <button type="button" data-jam-start="" aria-label={jt("nav.start")} onClick={() => ask({ kind: "start" })} className={cn(buttonClass.base, buttonClass.primary, "h-11 px-3 text-sm max-[359px]:px-2.5 min-[390px]:px-4 min-[430px]:px-[18px]")}>
+        <button type="button" data-jam-start="" aria-label={jt("nav.start")} onClick={() => ask({ kind: "start" })} className={cn(buttonClass.base, buttonClass.primary, "h-11 px-3 text-sm max-[389px]:px-2.5 min-[430px]:px-[18px]")}>
           <span className="max-[479px]:hidden">{jt("nav.start")}</span>
           <span className="min-[480px]:hidden" aria-hidden="true">
             {jt("nav.startShort")}
