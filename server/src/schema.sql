@@ -4680,6 +4680,17 @@ ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS stop_attempts INTEGER NOT NULL
 -- one run, the legacy names, base 0.
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS runs JSONB;
 
+-- A MODERATOR DELETED THIS RECORDING (`DELETE .../watch-party/history/:sessionAt`).
+-- Stamped on EVERY row of the broadcast (every rung, the camera, the mic, an LL
+-- row) in one statement, so the history list, the replay and download doors and
+-- the availability predicate refuse it from that instant, whatever storage is
+-- doing. The retention sweep then treats the row as due at once, regardless of
+-- `keep_replay`, and removes the objects through its usual guarded path; the
+-- row stays behind as a tombstone (`cleaned_at` set too) so counters stay
+-- honest. NULL on every row written before this existed. No index: the sweep's
+-- claim query already walks `idx_hls_sessions_cleanup`.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
 -- WHO IS PRESENTING, AS A PERSON (users.id), for an LL session: the peer id
 -- beside it changes on every reconnect that cannot resume, and a page reload
 -- leaves no seat anywhere that still names the person. The machine a session

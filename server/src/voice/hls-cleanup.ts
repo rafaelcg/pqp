@@ -12,6 +12,15 @@
  *     ago (thirty days, and since 2026-09-22 what every new watch-party row
  *     is written with).
  *
+ * A third way to be due: `deleted_at IS NOT NULL` (a moderator deleted the
+ * recording, `deleteWatchPartyBroadcast` in `hls-history.ts`), whatever
+ * `keep_replay` says and however young the session is. The row was already
+ * refused by every reader the instant it was stamped; this is only the part
+ * that removes the bytes, through the same guarded path as any other session.
+ * `cleanDeletedBroadcast` runs it for one broadcast right away (the route
+ * kicks it), and this sweep is the backstop for a kick that failed, was
+ * skipped for a live egress, or ran on a process with no storage.
+ *
  * Safety property this file exists to hold: the sweep deletes only objects
  * whose key starts with *that session's own* `object_prefix` -- the same
  * string `hls-egress.ts` used as `filenamePrefix` when it told LiveKit where
@@ -88,6 +97,8 @@ export async function countDueSessions(
      WHERE cleaned_at IS NULL
        AND ended_at IS NOT NULL
        AND (
+         deleted_at IS NOT NULL
+         OR
          (keep_replay = FALSE AND ended_at < NOW() - ($1 || ' minutes')::interval)
          OR
          (keep_replay = TRUE AND ended_at < NOW() - ($2 || ' hours')::interval)
@@ -119,6 +130,9 @@ interface DueSession {
   channel_id: string;
   object_prefix: string;
   egress_id: string | null;
+  mode: string | null;
+  ended_at: Date;
+  deleted_at: Date | null;
 }
 
 /**
@@ -147,11 +161,13 @@ async function dueSessions(
   replayHours: number,
 ): Promise<DueSession[]> {
   const result = await getPool().query<DueSession>(
-    `SELECT id, channel_id, object_prefix, egress_id
+    `SELECT id, channel_id, object_prefix, egress_id, mode, ended_at, deleted_at
      FROM hls_sessions
      WHERE cleaned_at IS NULL
        AND ended_at IS NOT NULL
        AND (
+         deleted_at IS NOT NULL
+         OR
          (keep_replay = FALSE AND ended_at < NOW() - ($1 || ' minutes')::interval)
          OR
          (keep_replay = TRUE AND ended_at < NOW() - ($2 || ' hours')::interval)
@@ -636,37 +652,137 @@ export async function sweepHlsSessions(): Promise<number> {
   const activeEgressIds = new Set(active.map((info) => info.egressId));
   let cleaned = 0;
   for (const session of due) {
-    if (session.egress_id && activeEgressIds.has(session.egress_id)) {
-      logEvent("voice.hlsSweepSkippedLiveEgress", {
-        sessionId: session.id,
-        channelId: session.channel_id,
-        egressId: session.egress_id,
-      });
-      continue;
+    if (await cleanDueSession(config, session, activeEgressIds)) {
+      cleaned += 1;
     }
-    try {
-      const deletedCount = await deleteSessionObjects(
-        config,
-        session.channel_id,
-        session.object_prefix,
-        session.egress_id,
-      );
-      await getPool().query(
-        `UPDATE hls_sessions SET cleaned_at = NOW() WHERE id = $1`,
-        [session.id],
-      );
-      logEvent("voice.hlsSessionCleaned", {
+  }
+  return cleaned;
+}
+
+/**
+ * How long after `ended_at` a DELETED session keeps being swept before it is
+ * marked cleaned, because something may still be writing under its prefix.
+ *
+ * Two late writers exist. A LiveKit egress finishes uploading its last
+ * segments and manifest for a few seconds after the API stamps the row
+ * ended, which the ordinary retention window (`LIVE_HLS_RETENTION_MINUTES`)
+ * has always covered by simply waiting. And a low-latency session's film is
+ * made on the media box AFTER the show (`tools/pqp-remux/internal/film`,
+ * about a quarter of an hour for a two-hour show) and uploaded to
+ * `<prefix>/film.mp4`, a job the API cannot cancel. A delete issued right
+ * after a show would sweep the prefix, mark it cleaned, and the film would
+ * land a few minutes later with nobody ever looking again. So a deleted row
+ * is swept every tick, and only stamped `cleaned_at` once it is this far
+ * past its end; for the usual delete, days later, that is the first pass.
+ */
+export function deletedSettleMs(
+  session: Pick<DueSession, "mode">,
+  retentionMinutes = hlsRetentionMinutes(),
+): number {
+  const retention = retentionMinutes * 60_000;
+  return session.mode === "ll" ? Math.max(retention, 60 * 60_000) : retention;
+}
+
+/**
+ * Cleans one due session; true when it was fully cleaned and stamped. The
+ * body of the sweep's loop, shared with `cleanDeletedBroadcast`.
+ */
+async function cleanDueSession(
+  config: StorageConfig,
+  session: DueSession,
+  activeEgressIds: ReadonlySet<string>,
+): Promise<boolean> {
+  if (session.egress_id && activeEgressIds.has(session.egress_id)) {
+    logEvent("voice.hlsSweepSkippedLiveEgress", {
+      sessionId: session.id,
+      channelId: session.channel_id,
+      egressId: session.egress_id,
+    });
+    return false;
+  }
+  try {
+    const deletedCount = await deleteSessionObjects(
+      config,
+      session.channel_id,
+      session.object_prefix,
+      session.egress_id,
+    );
+    if (
+      session.deleted_at !== null &&
+      Date.now() - session.ended_at.getTime() < deletedSettleMs(session)
+    ) {
+      // Objects are gone for now; a late writer may still add some. Leave the
+      // row due so the next tick lists again.
+      logEvent("voice.hlsDeletedSessionSettling", {
         sessionId: session.id,
         channelId: session.channel_id,
         objectsDeleted: deletedCount,
       });
+      return false;
+    }
+    await getPool().query(
+      `UPDATE hls_sessions SET cleaned_at = NOW() WHERE id = $1`,
+      [session.id],
+    );
+    logEvent("voice.hlsSessionCleaned", {
+      sessionId: session.id,
+      channelId: session.channel_id,
+      objectsDeleted: deletedCount,
+      deleted: session.deleted_at !== null,
+    });
+    return true;
+  } catch (error) {
+    logEvent("voice.hlsSessionCleanupFailed", {
+      sessionId: session.id,
+      channelId: session.channel_id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * Removes the objects of one DELETED broadcast right away, instead of at the
+ * next sweep tick. Called by the delete route after the rows are stamped (and
+ * committed: nothing here runs inside a transaction), fire and forget. Same
+ * guarded path as the sweep (`deleteSessionObjects`, the prefix checks, the
+ * live-egress skip, the settle rule above); a failure leaves the rows due and
+ * the sweep finishes the job. Returns the number of rows fully cleaned.
+ */
+export async function cleanDeletedBroadcast(
+  channelId: string,
+  startedAtMs: number,
+): Promise<number> {
+  const config = liveHlsStorageConfig();
+  if (!config) {
+    return 0;
+  }
+  const rows = await getPool().query<DueSession>(
+    `SELECT id, channel_id, object_prefix, egress_id, mode, ended_at, deleted_at
+     FROM hls_sessions
+     WHERE channel_id = $1
+       AND started_at = to_timestamp($2 / 1000.0)
+       AND deleted_at IS NOT NULL
+       AND ended_at IS NOT NULL
+       AND cleaned_at IS NULL`,
+    [channelId, startedAtMs],
+  );
+  if (rows.rows.length === 0) {
+    return 0;
+  }
+  const active = await listActiveEgresses();
+  if (active === null) {
+    logEvent("voice.hlsSweepSkipped", {
+      reason: "list-egress-failed",
+      due: rows.rows.length,
+    });
+    return 0;
+  }
+  const activeEgressIds = new Set(active.map((info) => info.egressId));
+  let cleaned = 0;
+  for (const session of rows.rows) {
+    if (await cleanDueSession(config, session, activeEgressIds)) {
       cleaned += 1;
-    } catch (error) {
-      logEvent("voice.hlsSessionCleanupFailed", {
-        sessionId: session.id,
-        channelId: session.channel_id,
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
   }
   return cleaned;
