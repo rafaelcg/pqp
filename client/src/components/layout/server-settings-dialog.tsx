@@ -163,6 +163,8 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "bau_plus.grace": "serverSettings.audit.action.bau_plus.grace",
   "bau_plus.expire": "serverSettings.audit.action.bau_plus.expire",
   "bau_plus.vip_regrant": "serverSettings.audit.action.bau_plus.vip_regrant",
+  "watch_party.recording_delete":
+    "serverSettings.audit.action.watch_party.recording_delete",
   "forum.post_pin": "serverSettings.audit.action.forum.post_pin",
   "forum.post_lock": "serverSettings.audit.action.forum.post_lock",
   "forum.post_delete": "serverSettings.audit.action.forum.post_delete",

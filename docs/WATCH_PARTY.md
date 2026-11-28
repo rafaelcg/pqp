@@ -3547,6 +3547,80 @@ makes it a download. The headerless door
 (`tryWatchPartyDownloadCapabilityDoor`) is therefore the one that answers the
 product's own link, with the Bearer route for everything else.
 
+### Apagar gravação: deleting a past broadcast
+
+Every finished row in "Transmissões anteriores" has a quiet trash button. It
+opens an in-page confirmation (never `window.confirm`) that names the broadcast
+and its date and says plainly that the recording goes for everybody, that it
+cannot be undone, and that copies somebody already downloaded are not affected.
+Cancel holds the focus, Escape backs out, and the confirm shows busy and then
+an error if it fails. It exists because a private audio leak into a party
+needed to be gone, and the only way used to be hand-deleting objects on the box.
+
+`DELETE /api/channels/:channelId/watch-party/history/:sessionAt` (same
+`requireWatchPartyHistoryAccess` as the rest of the surface, so START_WATCH_PARTY
+or MANAGE_CHANNELS; 404 for an unknown or already deleted broadcast, 409 while
+any row of it is still on air) answers the fresh list, like the keep toggle.
+
+**The delete is a database write, and storage is cleaned afterwards.**
+`hls_sessions.deleted_at` is stamped on EVERY row of the broadcast (each rung,
+the camera, the mic, an LL row) in one statement, in the same transaction as an
+`audit_log` row (`watch_party.recording_delete`, the server's audit log shows who
+deleted what; nothing between BEGIN and COMMIT touches the network). From that
+instant every reader refuses it, whatever the bucket is doing:
+
+- `AVAILABLE_PREDICATE` carries `deleted_at IS NULL`, so the list's
+  `replayAvailable`, the replay mint, the download sizes and byte routes (the
+  Bearer door and the headerless `?t=` door both go through it) and the LL and
+  rung lookups all answer "not there". The list drops the group if ANY of its
+  rows carries the stamp. `PATCH` (keep) and the replay mint answer 404.
+- The replay playlist builders ask `broadcastDeleted` before their 30 s caches.
+  Without that, a master or rung cached by a process, or one a viewer minted a
+  token for before the delete, was served for up to 30 s; the test warms the
+  caches and mints every token first.
+- A playlist or download a viewer already holds signed URLs for stops when the
+  objects go, which is seconds after the delete. Bytes already on somebody's disk
+  are theirs.
+
+The objects are removed by the retention sweep's own guarded path, never a
+second one. `cleanDeletedBroadcast` (`hls-cleanup.ts`) runs it for the one
+broadcast right after the route commits, in the background; the sweep treats
+`deleted_at IS NOT NULL` as due at once, whatever `keep_replay` says, which is
+also the backstop when the kick failed, found the media server unreachable, or
+ran with no storage. Both go through `deleteSessionObjects`: the `live/<channel>/`
+guard, every key vetted before any is deleted, the egress manifest beside the
+prefix, and the skip while the egress is still running. A storage failure
+therefore changes nothing a person can see: the row is hidden and refused, stays
+due, and the next tick tries again (`countDueSessions` counts it, so the
+dashboard's due number shows the debt).
+
+**Runs and LL are covered by the prefix.** A rung restarted in place writes its
+runs under `<object_prefix>-r<ms>...` and the mic archive's runs under
+`...-mic-r<ms>.ogg`, all starting with the row's prefix; an LL row's prefix is a
+directory (`...-ll/`) holding the segments, `master.m3u8`, `film.mp4` and
+`film.json`. One listing of each row's own prefix reaches all of it.
+
+**A deleted row is swept until it is settled, not once.** The LL film is made on
+the media box after the show (about a quarter of an hour for two hours) and
+uploaded under the prefix by a job the API cannot cancel, and a closing egress
+uploads for a few seconds after the row is stamped ended. A delete right after
+a show would sweep, mark `cleaned_at`, and the film would land afterwards for
+nobody to look at again. So a deleted row is only stamped cleaned once it is
+past `deletedSettleMs` from its `ended_at` (the retention window, and one hour
+for an LL row); until then every tick lists and deletes again. For the usual
+delete, days after the show, that is the first pass. The tombstone rows stay
+(`deleted_at` and `cleaned_at` both set), hidden from the list, so counters and
+the user stats copied from `hls_session_viewers` are untouched.
+
+**What this does not reach.** An egress manifest (`live/<channel>/<egressId>.json`)
+is deleted for the row's current `egress_id` only, as the retention sweep always
+has; a rung that restarted in place leaves its earlier runs' manifests, which
+hold metadata and no media. And any copy of the recording made outside the API
+is out of reach: the egress box's `/srv/party-archive/live/<channelId>/`
+(`docs/EVENT_RUNBOOK.md`, the 2026-09-12 postmortem) is a hand-made mirror that
+nothing in this repository writes or prunes, so removing a leaked recording
+also means removing that directory on the box by hand.
+
 ## Watching without an account
 
 A streamer's link used to send a signed-out visitor straight to sign-up, and

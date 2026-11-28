@@ -63,6 +63,26 @@ export function setWatchPartyHistoryKeepReplay(
 }
 
 /**
+ * Deletes a broadcast's recording for everybody, for good ("Apagar
+ * gravação"). Answers the fresh list, like the keep-replay toggle. 409 while
+ * the broadcast is still live, 404 when it is already gone (somebody else
+ * deleted it first), 403 without the history permission.
+ *
+ * The server stamps the broadcast deleted at once and removes the files
+ * afterwards, so a success here means every door is already closed even if
+ * storage has not caught up.
+ */
+export function deleteWatchPartyHistoryBroadcast(
+  channelId: string,
+  sessionId: string,
+): Promise<{ broadcasts: WatchPartyHistoryEntry[] }> {
+  return apiFetch(
+    `/api/channels/${channelId}/watch-party/history/${sessionId}`,
+    { method: "DELETE" },
+  );
+}
+
+/**
  * Mints a playable URL for an ended broadcast that is still available --
  * same viewer-token machinery as a live stream, a 60-minute capability
  * already embedded in the URL. Feed it straight to `HlsWatchPlayer`'s `src`.

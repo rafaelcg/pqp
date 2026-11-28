@@ -208,11 +208,13 @@ import {
 } from "../voice/backends.js";
 import { liveHlsConfigForServer } from "../voice/hls-egress.js";
 import { setRequestedHlsMode } from "../voice/hls-remux.js";
+import { cleanDeletedBroadcast } from "../voice/hls-cleanup.js";
 import {
   buildReplayMasterPlaylist,
   buildReplaySignedPlaylist,
   buildWatchPartyDownloadPlan,
   checkWatchPartyReplayAccess,
+  deleteWatchPartyBroadcast,
   isWatchPartyDownloadKind,
   listWatchPartyHistory,
   setWatchPartyKeepReplay,
@@ -9558,6 +9560,46 @@ router.patch(
         "This broadcast's recording is no longer available",
       );
     }
+    return {
+      broadcasts: await listWatchPartyHistory(channelId!, HISTORY_PAGE_MAX),
+    };
+  },
+);
+
+/**
+ * "Apagar gravação": the whole broadcast, for everybody, for good. Same
+ * access as the rest of this surface. 404 for a broadcast that does not exist
+ * (or was already deleted), 409 while any row of it is still on air.
+ *
+ * The answer does not wait for storage. `deleteWatchPartyBroadcast` stamps
+ * every row (that alone closes every door, see `hls-history.ts`) and writes
+ * the audit row in one transaction; the objects are removed afterwards, here
+ * in the background and by the retention sweep as the backstop, so a bucket
+ * that is slow or down never makes the delete fail or hang.
+ */
+router.delete(
+  "/api/channels/:channelId/watch-party/history/:sessionAt",
+  async ({ user }, { channelId, sessionAt }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireWatchPartyHistoryAccess(channel, user.id);
+    const startedAtMs = parseWatchPartyHistorySessionAt(sessionAt);
+    const result = await deleteWatchPartyBroadcast(channelId!, startedAtMs, {
+      serverId: channel.server_id,
+      actorId: user.id,
+    });
+    if (result.status === "not-found") {
+      throw new NotFound("Broadcast not found");
+    }
+    if (result.status === "live") {
+      throw new HttpError(409, "This broadcast is still live");
+    }
+    void cleanDeletedBroadcast(channelId!, startedAtMs).catch((error: unknown) => {
+      logEvent("voice.hlsBroadcastDeleteCleanupFailed", {
+        channelId,
+        startedAt: startedAtMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     return {
       broadcasts: await listWatchPartyHistory(channelId!, HISTORY_PAGE_MAX),
     };

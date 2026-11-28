@@ -285,6 +285,13 @@ export const AUDIT_ACTIONS = [
   "bau_plus.grace",
   "bau_plus.expire",
   "bau_plus.vip_regrant",
+  /**
+   * A moderator deleted a watch party's recording for everybody
+   * (`DELETE /api/channels/:id/watch-party/history/:sessionAt`). Targets the
+   * channel; `changes` carries the broadcast's start. The files go afterwards
+   * and are not listed here.
+   */
+  "watch_party.recording_delete",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

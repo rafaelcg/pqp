@@ -51,12 +51,23 @@
  * 10-minute default retention window, and without the re-check a request late
  * in that gap would keep being served after the history API already reports
  * the broadcast gone.
+ *
+ * A DELETED BROADCAST IS UNAVAILABLE FROM THE INSTANT IT IS STAMPED.
+ * `deleteWatchPartyBroadcast` writes `deleted_at` on every row of the group
+ * in one statement, and `AVAILABLE_PREDICATE` carries `deleted_at IS NULL`,
+ * so every reader built on it (list, replay mint, download sizes and plan,
+ * the rung and LL lookups) answers "not there" without waiting for storage,
+ * which is deleted afterwards by `hls-cleanup.ts` and may fail or lag. The
+ * replay builders also ask `broadcastDeleted` BEFORE their 30 s caches, since
+ * a cache hit would otherwise outlive the delete on any process.
  */
 import { PassThrough, Readable, Transform, type Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { getPool } from "../db.js";
+import { logEvent } from "../lib/log.js";
 import { listObjects, signRequest } from "../lib/s3.js";
+import { logAudit } from "../services/audit.js";
 import {
   hlsObjectPrefix,
   hlsReplayHours,
@@ -98,6 +109,7 @@ const REQUEST_TIMEOUT_MS = 10_000;
  * mint-time check and the serve-time check cannot drift apart. */
 const AVAILABLE_PREDICATE = `
   cleaned_at IS NULL
+  AND deleted_at IS NULL
   AND ended_at IS NOT NULL
   AND (
     (keep_replay = FALSE AND ended_at >= NOW() - ($retentionParam || ' minutes')::interval)
@@ -174,6 +186,14 @@ export async function listWatchPartyHistory(
        WHERE channel_id = $1
          AND (rung IS NULL OR rung = ANY($5::text[]))
        GROUP BY channel_id, started_at
+       -- A deleted broadcast never shows, whichever of its rows (including
+       -- the camera and the mic, which this WHERE leaves out) carries the stamp.
+       HAVING NOT EXISTS (
+         SELECT 1 FROM hls_sessions d
+         WHERE d.channel_id = hls_sessions.channel_id
+           AND d.started_at = hls_sessions.started_at
+           AND d.deleted_at IS NOT NULL
+       )
        ORDER BY started_at DESC
        LIMIT $2
      )
@@ -247,9 +267,17 @@ export async function checkWatchPartyReplayAccess(
     fully_available: boolean;
   }>(
     `SELECT
-       EXISTS (
-         SELECT 1 FROM hls_sessions
-         WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+       (
+         EXISTS (
+           SELECT 1 FROM hls_sessions
+           WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+         )
+         -- A deleted broadcast does not exist, to anybody.
+         AND NOT EXISTS (
+           SELECT 1 FROM hls_sessions
+           WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+             AND deleted_at IS NOT NULL
+         )
        ) AS has_rows,
        EXISTS (
          SELECT 1 FROM hls_sessions
@@ -311,22 +339,30 @@ export async function setWatchPartyKeepReplay(
       id: string;
       rung: string | null;
       cleaned_at: Date | null;
+      deleted_at: Date | null;
       ended_at: Date | null;
       keep_replay: boolean;
     }>(
-      `SELECT id, rung, cleaned_at, ended_at, keep_replay
+      `SELECT id, rung, cleaned_at, deleted_at, ended_at, keep_replay
        FROM hls_sessions
        WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
        FOR UPDATE`,
       [channelId, startedAtMs],
     );
-    if (rows.rows.length === 0) {
+    if (
+      rows.rows.length === 0 ||
+      rows.rows.some((row) => row.deleted_at !== null)
+    ) {
       await client.query("ROLLBACK");
       return "not-found";
     }
     const ladderRungs = new Set(LADDER_RUNG_NAMES);
     const isAvailable = (row: (typeof rows.rows)[number]): boolean => {
-      if (row.cleaned_at !== null || row.ended_at === null) {
+      if (
+        row.cleaned_at !== null ||
+        row.deleted_at !== null ||
+        row.ended_at === null
+      ) {
         return false;
       }
       // `<=`, not `<`, to match every SQL form of this predicate elsewhere
@@ -352,6 +388,113 @@ export async function setWatchPartyKeepReplay(
     return "ok";
   } catch (error) {
     await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Has a moderator deleted this broadcast (any row of the group)? Asked
+ * uncached by the replay builders before they touch their own caches. */
+export async function broadcastDeleted(
+  channelId: string,
+  startedAtMs: number,
+): Promise<boolean> {
+  const result = await getPool().query(
+    `SELECT 1 FROM hls_sessions
+     WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+       AND deleted_at IS NOT NULL
+     LIMIT 1`,
+    [channelId, startedAtMs],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export type WatchPartyDeleteResult =
+  | { status: "ok"; rows: number }
+  | { status: "not-found" }
+  /** At least one row of the group has not ended: the broadcast is on air. */
+  | { status: "live" };
+
+/**
+ * "Apagar gravação": a moderator takes one whole broadcast away, for
+ * everybody, for good.
+ *
+ * THIS ONLY STAMPS ROWS. `deleted_at` goes on EVERY row of the group (each
+ * ladder rung, the camera, the mic archive, an LL row) in one statement, and
+ * that alone makes the broadcast unavailable to every door (see the header of
+ * this file). The objects are removed afterwards by `hls-cleanup.ts`
+ * (`cleanDeletedBroadcast`, kicked by the route, and the retention sweep as
+ * the backstop), so a storage outage or a slow bucket never makes the delete
+ * itself fail or lag, and nothing between BEGIN and COMMIT touches the
+ * network.
+ *
+ * `FOR UPDATE` FIRST, like `setWatchPartyKeepReplay`, so a camera row being
+ * reopened or the sweep stamping a row cannot slip between the "everything
+ * has ended" check and the write. The audit row rides the same transaction:
+ * a delete with no record of who did it is not allowed to exist.
+ */
+export async function deleteWatchPartyBroadcast(
+  channelId: string,
+  startedAtMs: number,
+  audit: { serverId: string; actorId: string },
+): Promise<WatchPartyDeleteResult> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const rows = await client.query<{
+      id: string;
+      ended_at: Date | null;
+      deleted_at: Date | null;
+    }>(
+      `SELECT id, ended_at, deleted_at
+       FROM hls_sessions
+       WHERE channel_id = $1 AND started_at = to_timestamp($2 / 1000.0)
+       FOR UPDATE`,
+      [channelId, startedAtMs],
+    );
+    if (
+      rows.rows.length === 0 ||
+      rows.rows.some((row) => row.deleted_at !== null)
+    ) {
+      await client.query("ROLLBACK");
+      return { status: "not-found" };
+    }
+    if (rows.rows.some((row) => row.ended_at === null)) {
+      await client.query("ROLLBACK");
+      return { status: "live" };
+    }
+    await client.query(
+      `UPDATE hls_sessions SET deleted_at = NOW() WHERE id = ANY($1::uuid[])`,
+      [rows.rows.map((row) => row.id)],
+    );
+    await logAudit(
+      {
+        serverId: audit.serverId,
+        actorId: audit.actorId,
+        action: "watch_party.recording_delete",
+        targetType: "channel",
+        targetId: channelId,
+        changes: [
+          {
+            key: "startedAt",
+            old: null,
+            new: new Date(startedAtMs).toISOString(),
+          },
+        ],
+      },
+      client,
+    );
+    await client.query("COMMIT");
+    logEvent("voice.hlsBroadcastDeleted", {
+      channelId,
+      startedAt: startedAtMs,
+      rows: rows.rows.length,
+      actorId: audit.actorId,
+    });
+    return { status: "ok", rows: rows.rows.length };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     throw error;
   } finally {
     client.release();
@@ -478,6 +621,12 @@ export async function buildReplayMasterPlaylist(input: {
   token?: string | null;
   now?: number;
 }): Promise<string | null> {
+  // Before any cache below: a hit would outlive a delete on every process.
+  if (await broadcastDeleted(input.channelId, input.startedAt)) {
+    throw new HlsPlaylistNotFound(
+      `Replay ${input.startedAt} of channel ${input.channelId} was deleted`,
+    );
+  }
   const rungs = await replaySessionRungs(
     input.channelId,
     input.startedAt,
@@ -629,6 +778,12 @@ export async function buildReplaySignedPlaylist(
   rung: string | undefined,
   now = Date.now(),
 ): Promise<string> {
+  // Before any cache below: a hit would outlive a delete on every process.
+  if (await broadcastDeleted(channelId, startedAt)) {
+    throw new HlsPlaylistNotFound(
+      `Replay ${startedAt} of channel ${channelId} was deleted`,
+    );
+  }
   if (rung !== undefined && isLlReplayTrack(rung)) {
     return buildLlReplaySignedPlaylist(channelId, startedAt, rung, now);
   }

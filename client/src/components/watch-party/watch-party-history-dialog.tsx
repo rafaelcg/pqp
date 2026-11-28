@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, Download } from "lucide-react";
+import { ChevronDown, Download, Trash2 } from "lucide-react";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
+import { DeleteBroadcastDialog } from "@/components/watch-party/watch-party-history-delete-dialog";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { formatCallDuration } from "@/components/dm/call-stage-state";
 import { ApiError } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn, formatTime } from "@/lib/utils";
 import {
+  deleteWatchPartyHistoryBroadcast,
   fetchWatchPartyHistory,
   fetchWatchPartyHistoryDownloads,
   fetchWatchPartyHistoryReplay,
@@ -123,6 +126,10 @@ export function downloadsAfterPollFailure(
   }
   return { status: "error", message };
 }
+
+/** How long a deleted row folds away before it leaves the list: the base
+ * duration token (200ms) plus a frame, so the removal never cuts the fold. */
+const DELETE_EXIT_MS = 220;
 
 /** Literal keys rather than a template, so a grep for a key still finds it. */
 const DOWNLOAD_LABEL_KEYS: Record<WatchPartyDownloadKind, MessageKey> = {
@@ -268,89 +275,135 @@ function WatchPartyHistoryRow({
   busy,
   foldedReason,
   downloads,
+  exiting,
   onToggleKeepReplay,
   onWatch,
   onRequestDownloads,
+  onRequestDelete,
 }: {
   entry: WatchPartyHistoryEntry;
   busy: boolean;
   foldedReason?: FoldedReason;
   downloads?: WatchPartyDownloadsState;
+  /** Just deleted: the row folds away (a plain removal under reduced motion). */
+  exiting?: boolean;
   onToggleKeepReplay: (entry: WatchPartyHistoryEntry, next: boolean) => void;
   onWatch: (entry: WatchPartyHistoryEntry) => void;
   onRequestDownloads: (entry: WatchPartyHistoryEntry) => void;
+  /** Opens the confirmation. Absent, the row has no delete control. */
+  onRequestDelete?: (entry: WatchPartyHistoryEntry) => void;
 }) {
   const { t } = useTranslation();
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const showControls = foldedReason === undefined && entry.replayAvailable;
+  // Never on a broadcast that is on air: there is no finished recording to
+  // delete yet, and the server answers 409 for it anyway.
+  const canDelete = onRequestDelete !== undefined && entry.endedAt !== null;
   return (
-    <li data-testid="watch-party-history-row" className="px-3 py-2.5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="flex items-center gap-2 truncate text-sm font-semibold text-text">
-            <span className="truncate">{entry.title}</span>
-            {entry.endedAt === null && (
-              <span className="shrink-0 rounded-full bg-danger-soft px-1.5 py-0.5 text-[11px] font-semibold text-on-danger-soft">
-                {t("watchParty.history.live")}
-              </span>
-            )}
-          </p>
-          <p className="mt-0.5 truncate text-xs text-text-tertiary">
-            {metaLine(entry, t)}
-            {foldedReason === "short" && (
-              <>
-                {" · "}
-                {t("watchParty.history.restart")}
-              </>
-            )}
-            {foldedReason === "unavailable" && (
-              <>
-                {" · "}
-                {t("watchParty.history.unavailable")}
-              </>
-            )}
-          </p>
-        </div>
-        {showControls && (
-          <div className="flex shrink-0 items-center gap-3">
-            <Switch
-              label={t("watchParty.history.keepReplay")}
-              hideLabel
-              title={t("watchParty.history.keepReplay")}
-              checked={entry.keepReplay}
-              disabled={busy}
-              onCheckedChange={(checked) => onToggleKeepReplay(entry, checked)}
-            />
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={busy}
-              onClick={() => onWatch(entry)}
-            >
-              {t("watchParty.history.watch")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              data-testid="watch-party-history-download-toggle"
-              aria-expanded={downloadsOpen}
-              onClick={() => {
-                setDownloadsOpen((open) => !open);
-                if (!downloadsOpen) {
-                  // Asked on first open, never on render: pricing the files is
-                  // a bucket listing per broadcast on the server.
-                  onRequestDownloads(entry);
-                }
-              }}
-            >
-              {t("watchParty.history.download.open")}
-            </Button>
-          </div>
-        )}
-      </div>
-      {showControls && downloadsOpen && (
-        <WatchPartyDownloadPanel state={downloads} />
+    // The row folds shut by animating its grid track to 0fr, which works for
+    // any height (the download panel may be open) where a max-height would
+    // not. The padding lives INSIDE the clipped box, or it would stay behind.
+    <li
+      data-testid="watch-party-history-row"
+      data-exiting={exiting ? "" : undefined}
+      className={cn(
+        "grid transition-[grid-template-rows,opacity] duration-[var(--duration-base)] ease-[var(--ease-emphasized)] motion-reduce:transition-none",
+        exiting ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100",
       )}
+    >
+      <div className="min-h-0 overflow-hidden">
+        <div className="px-3 py-2.5">
+          {/* On a phone the controls drop under the title: beside it they left
+              the title a few characters wide. */}
+          <div className="flex items-center justify-between gap-x-3 gap-y-2 max-sm:flex-wrap">
+            <div className="min-w-0 max-sm:basis-full">
+              <p className="flex items-center gap-2 truncate text-sm font-semibold text-text">
+                <span className="truncate">{entry.title}</span>
+                {entry.endedAt === null && (
+                  <span className="shrink-0 rounded-full bg-danger-soft px-1.5 py-0.5 text-[11px] font-semibold text-on-danger-soft">
+                    {t("watchParty.history.live")}
+                  </span>
+                )}
+              </p>
+              <p className="mt-0.5 truncate text-xs text-text-tertiary">
+                {metaLine(entry, t)}
+                {foldedReason === "short" && (
+                  <>
+                    {" · "}
+                    {t("watchParty.history.restart")}
+                  </>
+                )}
+                {foldedReason === "unavailable" && (
+                  <>
+                    {" · "}
+                    {t("watchParty.history.unavailable")}
+                  </>
+                )}
+              </p>
+            </div>
+            {(showControls || canDelete) && (
+              <div className="flex shrink-0 items-center gap-3 max-sm:w-full max-sm:justify-end">
+                {showControls && (
+                  <>
+                    <Switch
+                      label={t("watchParty.history.keepReplay")}
+                      hideLabel
+                      title={t("watchParty.history.keepReplay")}
+                      checked={entry.keepReplay}
+                      disabled={busy}
+                      onCheckedChange={(checked) => onToggleKeepReplay(entry, checked)}
+                    />
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={() => onWatch(entry)}
+                    >
+                      {t("watchParty.history.watch")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      data-testid="watch-party-history-download-toggle"
+                      aria-expanded={downloadsOpen}
+                      onClick={() => {
+                        setDownloadsOpen((open) => !open);
+                        if (!downloadsOpen) {
+                          // Asked on first open, never on render: pricing the files is
+                          // a bucket listing per broadcast on the server.
+                          onRequestDownloads(entry);
+                        }
+                      }}
+                    >
+                      {t("watchParty.history.download.open")}
+                    </Button>
+                  </>
+                )}
+                {canDelete && (
+                  // Quiet until the pointer or the keyboard is on it: a
+                  // destructive secondary action must not be the loudest thing in
+                  // the row. Not disabled while `busy`, so a stuck toggle never
+                  // hides the way out; the dialog owns its own busy state.
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    data-testid="watch-party-history-delete"
+                    aria-label={t("watchParty.history.delete.open")}
+                    title={t("watchParty.history.delete.open")}
+                    className="-mr-1 h-8 w-8 hover:bg-danger-soft hover:text-on-danger-soft max-sm:h-10 max-sm:w-10"
+                    onClick={() => onRequestDelete(entry)}
+                  >
+                    <Trash2 className="h-4 w-4" aria-hidden />
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+          {showControls && downloadsOpen && (
+            <WatchPartyDownloadPanel state={downloads} />
+          )}
+        </div>
+      </div>
     </li>
   );
 }
@@ -374,9 +427,11 @@ export function WatchPartyHistoryList({
   error,
   busySessionId,
   downloads = {},
+  exitingIds,
   onToggleKeepReplay,
   onWatch,
   onRequestDownloads = () => {},
+  onRequestDelete,
 }: {
   broadcasts: WatchPartyHistoryEntry[];
   loading: boolean;
@@ -384,9 +439,13 @@ export function WatchPartyHistoryList({
   busySessionId: string | null;
   /** By `sessionId`. Missing means "nobody has opened that row's panel". */
   downloads?: Record<string, WatchPartyDownloadsState | undefined>;
+  /** Rows just deleted, folding away before they leave the list. */
+  exitingIds?: ReadonlySet<string>;
   onToggleKeepReplay: (entry: WatchPartyHistoryEntry, next: boolean) => void;
   onWatch: (entry: WatchPartyHistoryEntry) => void;
   onRequestDownloads?: (entry: WatchPartyHistoryEntry) => void;
+  /** Opens the delete confirmation. Absent, no row offers deleting. */
+  onRequestDelete?: (entry: WatchPartyHistoryEntry) => void;
 }) {
   const { t } = useTranslation();
   const [foldedOpen, setFoldedOpen] = useState(false);
@@ -420,9 +479,11 @@ export function WatchPartyHistoryList({
               entry={entry}
               busy={busySessionId === entry.sessionId}
               downloads={downloads[entry.sessionId]}
+              exiting={exitingIds?.has(entry.sessionId)}
               onToggleKeepReplay={onToggleKeepReplay}
               onWatch={onWatch}
               onRequestDownloads={onRequestDownloads}
+              onRequestDelete={onRequestDelete}
             />
           ))}
         </ul>
@@ -459,9 +520,11 @@ export function WatchPartyHistoryList({
                 busy={busySessionId === entry.sessionId}
                 foldedReason={reason}
                 downloads={downloads[entry.sessionId]}
+                exiting={exitingIds?.has(entry.sessionId)}
                 onToggleKeepReplay={onToggleKeepReplay}
                 onWatch={onWatch}
                 onRequestDownloads={onRequestDownloads}
+                onRequestDelete={onRequestDelete}
               />
             ))}
           </ul>
@@ -497,6 +560,18 @@ export function WatchPartyHistoryDialog({
   // (a poll already in flight) is dropped instead of re-populating
   // `downloads` and restarting the poll behind a closed dialog.
   const downloadsGeneration = useRef(0);
+  // Deleting a recording: the broadcast being asked about, the request in
+  // flight, why it failed, and the rows folding away after a success.
+  const [pendingDelete, setPendingDelete] =
+    useState<WatchPartyHistoryEntry | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [exitingIds, setExitingIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const exitTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const listRef = useRef<HTMLDivElement>(null);
+  const reducedMotion = usePrefersReducedMotion();
 
   const load = useCallback(() => {
     setLoading(true);
@@ -515,6 +590,14 @@ export function WatchPartyHistoryDialog({
       setPlayerError(null);
       downloadsGeneration.current += 1;
       setDownloads({});
+      setPendingDelete(null);
+      setDeleting(false);
+      setDeleteError(null);
+      for (const timer of exitTimers.current) {
+        clearTimeout(timer);
+      }
+      exitTimers.current.clear();
+      setExitingIds(new Set());
       return;
     }
     load();
@@ -658,6 +741,90 @@ export function WatchPartyHistoryDialog({
     }
   }
 
+  function requestDelete(entry: WatchPartyHistoryEntry) {
+    setDeleteError(null);
+    setPendingDelete(entry);
+  }
+
+  function cancelDelete() {
+    if (deleting) {
+      return;
+    }
+    setPendingDelete(null);
+    setDeleteError(null);
+  }
+
+  /** The row folds away, then leaves the list; under reduced motion it just
+   * leaves. Focus goes back into the list, since the button that opened the
+   * confirmation is gone with its row. */
+  function removeAfterExit(
+    sessionId: string,
+    fresh: WatchPartyHistoryEntry[] | null,
+  ) {
+    setDownloads((current) => {
+      const { [sessionId]: _gone, ...rest } = current;
+      return rest;
+    });
+    const commit = () => {
+      setBroadcasts((current) =>
+        fresh ?? current.filter((b) => b.sessionId !== sessionId),
+      );
+      setExitingIds((current) => {
+        const next = new Set(current);
+        next.delete(sessionId);
+        return next;
+      });
+      requestAnimationFrame(() => {
+        listRef.current
+          ?.querySelector<HTMLElement>(
+            "[data-testid='watch-party-history-delete'], button, a[href]",
+          )
+          ?.focus();
+      });
+    };
+    if (reducedMotion) {
+      commit();
+      return;
+    }
+    setExitingIds((current) => new Set(current).add(sessionId));
+    const timer = setTimeout(() => {
+      exitTimers.current.delete(timer);
+      commit();
+    }, DELETE_EXIT_MS);
+    exitTimers.current.add(timer);
+  }
+
+  async function confirmDelete() {
+    const entry = pendingDelete;
+    if (!entry || deleting) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await deleteWatchPartyHistoryBroadcast(
+        channelId,
+        entry.sessionId,
+      );
+      setPendingDelete(null);
+      removeAfterExit(entry.sessionId, res.broadcasts);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        // Somebody else deleted it first: it is gone either way.
+        setPendingDelete(null);
+        removeAfterExit(entry.sessionId, null);
+      } else {
+        setDeleteError(
+          err instanceof ApiError && err.status === 409
+            ? t("watchParty.history.delete.live")
+            : t("watchParty.history.delete.failed"),
+        );
+      }
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function watch(entry: WatchPartyHistoryEntry) {
     setBusySessionId(entry.sessionId);
     setPlayerError(null);
@@ -720,20 +887,31 @@ export function WatchPartyHistoryDialog({
                 {playerError}
               </p>
             )}
-            <WatchPartyHistoryList
-              broadcasts={broadcasts}
-              loading={loading}
-              error={error}
-              busySessionId={busySessionId}
-              downloads={downloads}
-              onToggleKeepReplay={(entry, next) =>
-                void toggleKeepReplay(entry, next)
-              }
-              onWatch={(entry) => void watch(entry)}
-              onRequestDownloads={requestDownloads}
-            />
+            <div ref={listRef}>
+              <WatchPartyHistoryList
+                broadcasts={broadcasts}
+                loading={loading}
+                error={error}
+                busySessionId={busySessionId}
+                downloads={downloads}
+                exitingIds={exitingIds}
+                onToggleKeepReplay={(entry, next) =>
+                  void toggleKeepReplay(entry, next)
+                }
+                onWatch={(entry) => void watch(entry)}
+                onRequestDownloads={requestDownloads}
+                onRequestDelete={requestDelete}
+              />
+            </div>
           </>
         )}
+        <DeleteBroadcastDialog
+          entry={pendingDelete}
+          busy={deleting}
+          error={deleteError}
+          onConfirm={() => void confirmDelete()}
+          onCancel={cancelDelete}
+        />
       </DialogBody>
     </Dialog>
   );
